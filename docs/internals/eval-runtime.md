@@ -373,6 +373,18 @@ native code and `eval()` give the same answers. With no eval bridge linked,
 each call folds to `0` at lowering time; `opcache_compile_file()`, whose job is
 to create an entry, links the interpreter by itself.
 
+Free-function registration carries the declaration's compiler-internal origin
+in bit 2 of the existing signature flags word. AST source mode sets the EIR
+function flag, and the target-aware registration preserves it for Magician.
+OPcache internal argument binding applies to generated preludes and fallback
+handlers; functions declared by the user keep their own signatures and reference
+semantics. Legacy registrations without the origin bit keep user semantics.
+
+Cached-script snapshots retain native `PathBuf` values. The borrowed-string FFI
+copies their encoded bytes into its thread-local buffer without a UTF-8
+conversion, so distinct Unix filenames remain distinct status keys and the
+reported paths can be passed back to invalidation.
+
 The integration suites are `tests/opcache_runtime_cache_tests.rs`,
 `opcache_file_cache_tests.rs`, `opcache_blacklist_tests.rs` and
 `opcache_strict_invalidate_tests.rs`; unit tests sit beside each module

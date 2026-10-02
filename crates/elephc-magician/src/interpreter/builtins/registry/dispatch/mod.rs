@@ -31,6 +31,9 @@ pub(in crate::interpreter) fn eval_builtin_with_values_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if eval_opcache_is_user_function(name, context) {
+        return Ok(None);
+    }
     // Every evaluated spelling meets here: `call_user_func`, `call_user_func_array`, `$f()`,
     // a spread or named direct call once bound, and a builtin used as a callback. A count PHP
     // refuses raises its `ArgumentCountError` before any handler runs.

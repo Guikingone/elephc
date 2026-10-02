@@ -167,6 +167,7 @@ fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<St
 /// Lowers one user-defined function declaration into an EIR function.
 pub(crate) fn lower_user_function(
     name: &str,
+    is_internal: bool,
     params: &AstParams,
     return_type: Option<&TypeExpr>,
     attributes: &[AttributeGroup],
@@ -193,6 +194,7 @@ pub(crate) fn lower_user_function(
         body_return_type.clone(),
     );
     function.params = function_params(&eir_signature);
+    function.flags.is_internal = is_internal;
     function.flags.by_ref_return = signature.by_ref_return;
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));

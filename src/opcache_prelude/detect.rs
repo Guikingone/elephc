@@ -292,13 +292,10 @@ fn fragment_mentions(name: &Name, args: &[Expr], target: Symbol<'_>) -> bool {
     // conditional branch that no longer reached its target across 1.8M lines of output. Any
     // `eval()` on a computed string paid that, which is most of them.
     //
-    // So an unreadable fragment is not a reference to any one name. The gap it left is closed
-    // by configuration instead, in `injection`: a binary whose OPcache configuration is not
-    // the CLI default gets all eight declarations when it runs an opaque `eval()`
-    // ([`program_has_opaque_eval`]), measured at about 6% more assembly for such a program,
-    // and a CLI-default binary keeps the interpreter's fallback, whose answers are exactly the
-    // CLI default's. The literal spellings, which are what programs actually write, are
-    // covered above.
+    // An unreadable fragment is not a reference to any one name. Instead, `injection` supplies
+    // all eight declarations for any eval in a non-default OPcache binary (`program_has_eval`).
+    // Literal fragments need the same protection when they compute their callable names.
+    // CLI-default binaries can keep the interpreter's fallback without extra declarations.
     args.iter().any(|arg| match &arg.kind {
         ExprKind::StringLiteral(source) => mentions_word(source, target.name),
         _ => false,
@@ -352,14 +349,10 @@ pub(crate) fn first_reference(program: &[Stmt], target: Symbol<'_>) -> Option<Sp
     program.iter().find_map(|stmt| stmt_refs(stmt, target))
 }
 
-/// Returns whether the program runs `eval()` on a source the compiler cannot read.
-///
-/// The match is `eval` with a first argument that is not a string literal, which is what an
-/// empty prefix filter selects (see [`ArgFilter`]). It errs toward `true` in the one harmless
-/// direction: a string literal spelling exactly `eval` (`function_exists('eval')`) counts too,
-/// and the only cost is OPcache declarations the program may not reach.
-pub(crate) fn program_has_opaque_eval(program: &[Stmt]) -> bool {
-    first_reference(program, Symbol::function_with_arg_prefixes("eval", &[])).is_some()
+/// Returns whether the program can run an eval fragment.
+/// Even a literal fragment can choose an OPcache callable from a computed name or runtime input.
+pub(crate) fn program_has_eval(program: &[Stmt]) -> bool {
+    first_reference(program, Symbol::function("eval")).is_some()
 }
 
 /// Returns whether the program already declares its own `target` function (at top level

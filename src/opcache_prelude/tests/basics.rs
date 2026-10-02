@@ -93,6 +93,36 @@ pub(super) fn skips_injection_when_unused() {
         assert_eq!(injected.len(), program.len());
     }
 
+/// Eval can compute every OPcache target, but only configured binaries need extra declarations.
+#[test]
+fn configured_eval_injects_all_opcache_targets() {
+    for (source, has_eval) in [
+        (r#"<?php eval('$f = getenv("TARGET"); return $f();');"#, true),
+        ("<?php eval(getenv('CODE'));", true),
+        ("<?php echo 1;", false),
+    ] {
+        for (web, overrides, configured) in [
+            (false, vec![], false),
+            (false, vec![("opcache.enable_cli".into(), "1".into())], true),
+            (true, vec![], true),
+        ] {
+            let injected = inject_for_test(
+                parse(source), PhpVersion::Php85, web, None, &[], &overrides, None, false,
+            ).0;
+            for name in [
+                "opcache_get_configuration", "opcache_get_status", "opcache_reset",
+                "opcache_invalidate", "opcache_compile_file", "opcache_is_script_cached",
+                "opcache_is_script_cached_in_file_cache", "opcache_jit_blacklist",
+            ] {
+                assert_eq!(
+                    detect::program_declares(&injected, name), has_eval && configured,
+                    "{name}, web={web}, overrides={overrides:?}, source={source}",
+                );
+            }
+        }
+    }
+}
+
     /// Injection fires when `opcache_get_configuration` is called.
     #[test]
 pub(super) fn injects_when_called() {

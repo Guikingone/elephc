@@ -103,7 +103,7 @@ pub(in crate::interpreter) fn eval_call(
     // by-values dispatch `call_user_func()` reaches when it does not — in both cases after
     // binding the arguments to the reference parameters and checking the internal-function
     // count, which the declaration's userland signature would answer differently.
-    if let Some(parameters) = eval_opcache_parameters(name) {
+    if let Some(parameters) = eval_opcache_parameters(name, context) {
         return eval_opcache_direct_call(name, parameters, args, context, scope, values);
     }
     if let Some(result) = eval_date_procedural_alias_call(name, args, context, scope, values)? {

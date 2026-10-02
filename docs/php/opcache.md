@@ -675,6 +675,11 @@ mtime (`0` once a forced invalidate discarded it), and `revalidate` is
 `last_used_timestamp + opcache.revalidate_freq` — present from an 8.3 target on,
 under the same per-version gate the manifest entries use.
 
+Runtime entries preserve the original Unix filename bytes in both the map key
+and `full_path`, including names that are not valid UTF-8. Distinct filenames
+remain distinct entries, and their reported paths can be passed to
+`opcache_invalidate()`.
+
 `opcache_get_status()` answers the same thing wherever it is **written**. The
 eval interpreter carries its own handler for the name, but it now prefers the
 program's own declaration when there is one — the prelude's body, which knows
@@ -687,15 +692,21 @@ A call the compiler cannot see at all — `eval(getenv('CODE'))`, or a fragment
 that assembles the name at run time — gets the same answer. The interpreter's
 handlers know only the CLI default (no `--web`, no `--ini opcache.*`), so a
 binary with any other OPcache configuration carries every OPcache declaration
-as soon as it contains an `eval()` whose source the compiler cannot read. A
-CLI-default binary carries none, and pays nothing: its handlers' answers are
+as soon as it contains an `eval()`, including literal fragments that compute a
+callable name or read one from runtime input. A CLI-default binary needs no
+additional declarations for eval: its handlers' answers are
 already that configuration's, plus whatever `ini_set()` changed at run time.
 
-Every eval spelling binds its arguments like PHP's internal function, whichever
-side answers: spreads are unpacked before the count is checked
+For the OPcache prelude and fallback handlers, every eval spelling, including
+variable calls, first-class callables and `call_user_func[_array]`, binds its
+arguments like PHP's internal function,
+whichever side answers: spreads are unpacked before the count is checked
 (`opcache_reset(...[1])` throws `ArgumentCountError`), named arguments use the
 reference parameter names, and an unknown or overwriting name throws PHP's
 `Error`.
+
+A user-declared function with an OPcache name keeps its own parameter names,
+arity and reference semantics through these same call routes.
 
 **Cost when there is no dynamic tier: none.** A program that never reaches the
 eval bridge cannot have a runtime cache, so the calls that would read it are

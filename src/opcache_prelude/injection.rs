@@ -137,20 +137,14 @@ fn inject_if_used_on_compiler_stack(
             || (detect::program_references(&program, "ini_set")
                 && !detect::program_declares(&program, "ini_set"));
 
-        // An OPcache function is wanted when the program names it, or when it can call it from
-        // an `eval()` source the compiler cannot read AND this binary's OPcache configuration
-        // is not the CLI default. In that case the interpreter would otherwise answer from its
-        // fallback, which knows only the CLI default: the PR #968 review compiled
-        // `eval(getenv(...))` with `--ini opcache.enable_cli=1` and got `false` from
-        // `opcache_get_status()` and `DISABLED` from `opcache_get_configuration()` right after
-        // `opcache_compile_file()` had cached a file, where reference reports a live cache.
-        // With the declarations present, eval calls them, and every spelling gets the answer
-        // the compiled code gets. A CLI-default binary keeps the fallback, whose answers are
-        // exactly the CLI default's, so ordinary `eval()` programs pay nothing.
-        let opaque_eval_reads_opcache =
-            !opcache_configuration_is_cli_default(web, overrides) && detect::program_has_opaque_eval(&program);
+        // Any eval fragment can select an OPcache callable at runtime, even when its source
+        // is a literal. A non-default binary must supply native declarations so those calls
+        // read its configured cache instead of the interpreter's CLI-default fallback.
+        // CLI-default binaries can keep that fallback without additional declarations.
+        let eval_reads_opcache =
+            !opcache_configuration_is_cli_default(web, overrides) && detect::program_has_eval(&program);
         let wanted = |name: &str| {
-            (detect::program_references(&program, name) || opaque_eval_reads_opcache)
+            (detect::program_references(&program, name) || eval_reads_opcache)
                 && !detect::program_declares(&program, name)
         };
 

@@ -49,7 +49,8 @@ struct Entry {
 /// A read-only view of one cached script, for the `opcache_get_status()` surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedScriptInfo {
-    pub full_path: String,
+    /// Canonical native path, preserving bytes that are not valid UTF-8 on Unix.
+    pub full_path: PathBuf,
     pub hits: u64,
     pub memory_consumption: usize,
     pub last_used_timestamp: i64,
@@ -919,7 +920,7 @@ pub fn cached_scripts() -> Vec<CachedScriptInfo> {
         .entries
         .iter()
         .map(|(path, entry)| CachedScriptInfo {
-            full_path: path.to_string_lossy().into_owned(),
+            full_path: path.clone(),
             hits: entry.hits,
             memory_consumption: entry.footprint,
             last_used_timestamp: entry.last_used,

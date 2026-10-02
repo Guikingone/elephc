@@ -60,6 +60,12 @@ impl NativeFunction {
         &self.name
     }
 
+    /// Returns whether the generated registration identifies a compiler-internal declaration.
+    /// Registrations without origin metadata retain user-function semantics.
+    pub fn is_internal(&self) -> bool {
+        self.shape.is_some_and(|shape| shape.is_internal)
+    }
+
     /// Returns the visible positional parameter count accepted by this callback.
     pub const fn param_count(&self) -> usize {
         self.param_count

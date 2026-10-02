@@ -194,6 +194,9 @@ pub(in crate::interpreter) fn eval_check_builtin_arity(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if eval_opcache_is_user_function(name, context) {
+        return Ok(());
+    }
     let Some((canonical, arity)) = eval_builtin_call_arity(name) else {
         return Ok(());
     };
@@ -216,7 +219,7 @@ pub(in crate::interpreter) fn eval_check_builtin_source_arity(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !eval_call_args_are_plain_positional(args) {
+    if eval_opcache_is_user_function(name, context) || !eval_call_args_are_plain_positional(args) {
         return Ok(());
     }
     let Some((canonical, arity)) = eval_builtin_call_arity(name) else {

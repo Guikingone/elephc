@@ -141,7 +141,7 @@ pub extern "C" fn __elephc_eval_opcache_rt_script_path(index: i64) -> BorrowedSt
     SCRIPT_PATH.with(|buffer| {
         let mut buffer = buffer.borrow_mut();
         buffer.clear();
-        buffer.extend_from_slice(path.as_bytes());
+        buffer.extend_from_slice(path.as_os_str().as_encoded_bytes());
         BorrowedStr {
             ptr: buffer.as_ptr(),
             len: buffer.len(),
@@ -222,6 +222,41 @@ mod tests {
         let path = __elephc_eval_opcache_rt_script_path(7);
         assert!(path.ptr.is_null());
         assert_eq!(path.len, 0);
+    }
+
+    /// Distinct non-UTF-8 Unix paths survive the snapshot and borrowed-string ABI unchanged.
+    /// These disk fixtures run on Linux; Apple APFS accepts only valid UTF-8 filenames.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cached_script_paths_preserve_raw_unix_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+        let _guard = crate::script_cache::store::lock_for_test();
+        crate::script_cache::set_config(crate::script_cache::ScriptCacheConfig {
+            enabled: true,
+            file_update_protection: 0,
+            ..crate::script_cache::ScriptCacheConfig::disabled()
+        });
+        let dir = std::env::temp_dir().join(format!("elephc-opcache-status-bytes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let mut expected = Vec::new();
+        for byte in [0xfe, 0xff] {
+            let mut name = b"byte-".to_vec();
+            name.push(byte);
+            name.extend_from_slice(b".php");
+            let path = dir.join(std::ffi::OsString::from_vec(name));
+            std::fs::write(&path, "<?php $x = 1;").unwrap();
+            assert!(crate::script_cache::compile_file(&path));
+            expected.push(path.as_os_str().as_encoded_bytes().to_vec());
+        }
+        let reported = (0..2).map(|index| {
+            let path = __elephc_eval_opcache_rt_script_path(index);
+            assert!(!path.ptr.is_null());
+            unsafe { std::slice::from_raw_parts(path.ptr, path.len) }.to_vec()
+        }).collect::<Vec<_>>();
+        assert_eq!(reported, expected);
+        assert_eq!(__elephc_eval_opcache_rt_stat(RT_STAT_SCRIPT_COUNT), 2);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Verifies a negative index is refused rather than wrapping into a valid slot.

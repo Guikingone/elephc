@@ -139,6 +139,7 @@ struct EvalNativeFunctionRegistration {
     name: String,
     signature: FunctionSig,
     bridge_supported: bool,
+    is_internal: bool,
 }
 
 /// A module-local method signature that can be registered with the eval context.

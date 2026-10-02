@@ -1,11 +1,11 @@
 //! Purpose:
-//! Runs a direct source call to one of the eight OPcache functions: the arguments are evaluated,
-//! unpacked and bound to the reference parameters, the internal-function count is checked, and
-//! the call goes to the binary's native declaration when it carries one, or else through the
-//! same by-values dispatch `call_user_func()` reaches.
+//! Binds and dispatches direct and callable invocations of the eight OPcache functions.
+//! Prelude and fallback routes use the reference parameter names and internal-function arity.
+//! User declarations retain their own signatures and reference semantics.
 //!
 //! Called from:
 //! - `crate::interpreter::expressions::calls::eval_call`.
+//! - Callable dispatch for variable calls, first-class callables and `call_user_func[_array]`.
 //!
 //! Key details:
 //! - ONE ROUTE FOR EVERY SPELLING. Each function used to have a direct handler of its own
@@ -31,8 +31,27 @@
 
 use super::*;
 
-/// The reference parameter names of an OPcache function, in order, or `None` for any other name.
-pub(in crate::interpreter) fn eval_opcache_parameters(name: &str) -> Option<&'static [&'static str]> {
+/// Returns internal OPcache parameters only when no user declaration owns the name.
+pub(in crate::interpreter) fn eval_opcache_parameters(
+    name: &str,
+    context: &ElephcEvalContext,
+) -> Option<&'static [&'static str]> {
+    let parameters = eval_opcache_parameter_names(name)?;
+    (!eval_opcache_is_user_function(name, context)).then_some(parameters)
+}
+
+/// Identifies OPcache names supplied by eval or native user declarations, rather than preludes.
+pub(in crate::interpreter) fn eval_opcache_is_user_function(
+    name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    eval_opcache_parameter_names(name).is_some()
+        && (context.function(name).is_some()
+            || context.native_function(name).is_some_and(|function| !function.is_internal()))
+}
+
+/// Returns the reference parameter names of an OPcache function, in declaration order.
+fn eval_opcache_parameter_names(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
         "opcache_get_configuration" | "opcache_reset" => &[],
         "opcache_get_status" => &["include_scripts"],
@@ -56,19 +75,32 @@ pub(in crate::interpreter) fn eval_opcache_direct_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
-        let bound = eval_bind_opcache_arguments(name, parameters, &arguments, context, values)?;
-        eval_check_builtin_arity(name, bound.len(), context, values)?;
-        if let Some(function) = context.native_function(name) {
-            let positional = bound
-                .into_iter()
-                .map(|value| EvaluatedCallArg { name: None, value, ref_target: None })
-                .collect();
-            let bound = bind_evaluated_native_function_args(&function, positional, context, values)?;
-            return eval_native_function_with_values(function, bound, context, values);
-        }
-        eval_builtin_with_values_from_scope(name, &bound, Some(scope), context, values)?
-            .ok_or(EvalStatus::UnsupportedConstruct)
+        eval_opcache_call_with_evaluated_args(
+            name, parameters, &arguments, Some(scope), context, values,
+        )
     })
+}
+
+/// Binds evaluated OPcache arguments before native or fallback dispatch.
+/// Argument handles are borrowed; the caller's evaluation lease owns their cleanup.
+pub(in crate::interpreter) fn eval_opcache_call_with_evaluated_args(
+    name: &str,
+    parameters: &[&str],
+    arguments: &[EvaluatedCallArg],
+    scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bound = eval_bind_opcache_arguments(name, parameters, arguments, context, values)?;
+    eval_check_builtin_arity(name, bound.len(), context, values)?;
+    if let Some(function) = context.native_function(name) {
+        let bound = bind_evaluated_native_function_args(
+            &function, positional_args(bound), context, values,
+        )?;
+        return eval_native_function_with_values(function, bound, context, values);
+    }
+    eval_builtin_with_values_from_scope(name, &bound, scope, context, values)?
+        .ok_or(EvalStatus::UnsupportedConstruct)
 }
 
 /// Places positional and named arguments in parameter order.

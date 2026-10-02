@@ -11,6 +11,27 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Callback selection preserves variadic argument names and their temporary return owners.
+#[test]
+fn execute_program_call_user_func_forwards_named_arguments() {
+    for call in [
+        r#"call_user_func("named", second: "b", first: "a")"#,
+        r#"call_user_func(callback: "named", second: "b", first: "a")"#,
+        r#"call_user_func(second: "b", first: "a", callback: "named")"#,
+    ] {
+        let program = parse_fragment(format!(
+            "function named($first, $second) {{ return $first . $second; }} return {call};"
+        ).as_bytes()).unwrap();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).unwrap();
+        assert_eq!(values.get(result), FakeValue::String("ab".into()), "{call}");
+        assert!(!result.is_borrowed());
+        values.release(result).unwrap();
+        assert!(values.cell_owners.values().all(|owners| *owners == 0), "{call}");
+    }
+}
+
 /// Verifies `call_user_func` inside eval can dispatch an eval-declared function.
 #[test]
 fn execute_program_call_user_func_dispatches_declared_function() {

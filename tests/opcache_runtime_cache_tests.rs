@@ -26,6 +26,45 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// Status preserves distinct raw Unix filenames and exposes keys that invalidate their entries.
+/// The disk fixtures run on Linux because Apple APFS rejects non-UTF-8 filenames.
+#[cfg(target_os = "linux")]
+#[test]
+fn status_preserves_non_utf8_paths_and_invalidation_keys() {
+    use std::os::unix::ffi::OsStringExt;
+    for flags in [&[][..], &["--no-ir-opt"][..]] {
+        let dir = make_test_dir("opcache_status_bytes");
+        for byte in [0xfe, 0xff] {
+            let mut name = b"byte-".to_vec();
+            name.push(byte);
+            name.extend_from_slice(b".php");
+            fs::write(dir.join(std::ffi::OsString::from_vec(name)), "<?php $x = 1;").unwrap();
+        }
+        fs::write(dir.join("main.php"), "<?php $code = getenv('REVIEW_CODE'); eval($code);").unwrap();
+        let binary = compile_with_flags(
+            &dir,
+            &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+            &[&["--php-version", "8.5"][..], flags].concat(),
+        );
+        let code = format!(r#"
+$a = '{base}/byte-' . chr(255) . '.php';
+$b = '{base}/byte-' . chr(254) . '.php';
+echo 'compiled=', opcache_compile_file($a) ? '1' : '0', opcache_compile_file($b) ? '1' : '0', "\n";
+echo 'cached=', opcache_is_script_cached($a) ? '1' : '0', opcache_is_script_cached($b) ? '1' : '0', "\n";
+$s = opcache_get_status();
+echo 'lookup=', isset($s['scripts'][$a]) ? '1' : '0', isset($s['scripts'][$b]) ? '1' : '0', "\n";
+echo 'num=', $s['opcache_statistics']['num_cached_scripts'], "\n";
+echo 'keys=', count($s['scripts']), "\n";
+echo 'paths=', $s['scripts'][$a]['full_path'] === $a ? '1' : '0', $s['scripts'][$b]['full_path'] === $b ? '1' : '0', "\n";
+echo 'invalidated=', opcache_invalidate($s['scripts'][$a]['full_path'], true) ? '1' : '0', opcache_invalidate($s['scripts'][$b]['full_path'], true) ? '1' : '0', "\n";
+echo 'remaining=', opcache_is_script_cached($a) ? '1' : '0', opcache_is_script_cached($b) ? '1' : '0', "\n";
+"#, base = dir.to_str().unwrap());
+        let (output, _) = run_binary_with_env(&binary, "REVIEW_CODE", &code);
+        assert_eq!(output, "compiled=11\ncached=11\nlookup=11\nnum=3\nkeys=3\npaths=11\ninvalidated=11\nremaining=00\n");
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// Creates an isolated temp dir unique across parallel test threads/processes, CANONICALIZED
 /// so the paths the probe builds match the spelling the cache stores.
 fn make_test_dir(prefix: &str) -> PathBuf {
@@ -747,8 +786,7 @@ echo 'num=', eval('$s = opcache_get_status(); return $s["opcache_statistics"]["n
     );
 }
 
-/// A forced `opcache_invalidate()` on a MANIFEST file answers the same whichever surface
-/// issued it — written natively, written in a literal fragment, or written in a computed one.
+/// A forced `opcache_invalidate()` on a manifest file agrees across native and eval calls.
 ///
 /// WHY THIS NEEDS ITS OWN TEST. The manifest tier's invalidate latch is a `static` inside
 /// the INJECTED NATIVE function, and the eval interpreter's own handler cannot reach it: it
@@ -761,19 +799,16 @@ echo 'num=', eval('$s = opcache_get_status(); return $s["opcache_statistics"]["n
 /// non-default binary began to inject every declaration: see
 /// `a_fragment_that_never_spells_the_name_reads_the_live_cache`.
 ///
-/// MEASURED against reference PHP 8.5: `before=1 after=0` for both spellings here.
-///
-/// A fragment whose text never spells the name at all — `eval('$f = "opcache_" .
-/// "invalidate"; $f($p, true);')` — is NOT covered and cannot be: no compile-time scan can
-/// see a name assembled at runtime. It is not a silent divergence either. That program
-/// stops with `Fatal error: eval() fragment uses an unsupported construct`, because the
-/// interpreter refuses a variable function call, which is a pre-existing limitation of
-/// `eval` rather than anything this surface decides.
+/// Literal fragments can also assemble their callable names at runtime. They need the
+/// declaration so their variable calls update the same manifest latch as native calls.
+/// Reference PHP 8.5 reports `before=1 after=0` across these spellings.
 #[test]
 fn a_forced_invalidate_agrees_across_every_surface_that_can_issue_it() {
     for (label, issue) in [
         ("native", r#"opcache_invalidate($p, true);"#),
         ("literal fragment", r#"eval("opcache_invalidate(\$p, true);");"#),
+        ("literal computed callable", r#"eval('$f = "opcache_" . "invalidate"; $f($p, true);');"#),
+        ("literal runtime callable", r#"eval('$f = getenv("REVIEW_FUNCTION"); $f($p, true);');"#),
     ] {
         let dir = make_test_dir("opcache_rt_surface_agreement");
         write_dynamic_fixture(
@@ -788,11 +823,12 @@ echo 'after=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
             ),
         );
 
-        let output = run_binary(&compile_with_flags(
+        let binary = compile_with_flags(
             &dir,
             &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
             &["--php-version", "8.5"],
-        ));
+        );
+        let (output, stderr) = run_binary_with_env(&binary, "REVIEW_FUNCTION", "opcache_invalidate");
 
         assert_eq!(
             field(&output, "before"),
@@ -802,7 +838,7 @@ echo 'after=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
         assert_eq!(
             field(&output, "after"),
             "0",
-            "{label}: the invalidate did not reach the manifest latch\n{output}"
+            "{label}: the invalidate did not reach the manifest latch\n{output}\n{stderr}"
         );
     }
 }
@@ -879,6 +915,32 @@ echo 'r=', (is_array(eval($code)) ? 'array' : 'false'), "\n";
     ));
 
     assert_eq!(field(&output, "r"), "array", "the computed spelling read the stale fallback:\n{output}");
+}
+
+/// A literal eval fragment can still choose its OPcache callable at runtime.
+/// Both computed and environment-provided names read the configured cache with either IR mode.
+#[test]
+fn literal_eval_with_runtime_callable_names_reads_the_configured_cache() {
+    let source = r#"<?php
+$computed = eval('$f = "opcache_get" . "_status"; return $f(false);');
+echo 'computed=', is_array($computed) ? 'array' : 'false', "\n";
+$from_env = eval('$f = getenv("REVIEW_FUNCTION"); return $f(false);');
+echo 'from_env=', is_array($from_env) ? 'array' : 'false', "\n";
+"#;
+    for mode in ["--ir-opt=on", "--ir-opt=off"] {
+        for (ini, expected) in [
+            (&["opcache.enable_cli=1"][..], "array"),
+            (&[][..], "false"),
+        ] {
+            let dir = make_test_dir("opcache_rt_literal_callable");
+            write_dynamic_fixture(&dir, source);
+            let binary = compile_with_flags(&dir, ini, &["--php-version", "8.5", mode]);
+            let (output, stderr) =
+                run_binary_with_env(&binary, "REVIEW_FUNCTION", "opcache_get_status");
+            assert_eq!(field(&output, "computed"), expected, "{mode}: {output}\n{stderr}");
+            assert_eq!(field(&output, "from_env"), expected, "{mode}: {output}\n{stderr}");
+        }
+    }
 }
 
 /// Every OPcache answer agrees inside a fully opaque `eval()` of a non-default binary.

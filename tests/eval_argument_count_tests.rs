@@ -75,9 +75,10 @@ fn run(binary: &Path, code: &str) -> Output {
         .expect("failed to run compiled binary")
 }
 
-/// Runs `code` and asserts its exact stdout, showing stderr on a mismatch.
+/// Runs `code` and asserts successful completion and exact stdout, showing stderr on a mismatch.
 fn assert_stdout(binary: &Path, code: &str, expected: &str) {
     let output = run(binary, code);
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         expected,
@@ -377,6 +378,101 @@ fn opcache_spread_and_named_arguments_bind_like_php() {
     assert_stdout(&native, named, "no scripts\n");
 }
 
+/// Named OPcache callable arguments use the same internal binding as direct calls.
+/// The opaque source exercises fallback and native dispatch, including caught errors.
+#[test]
+fn opcache_named_callable_arguments_use_internal_binding() {
+    let fallback = compile("eval_opcache_named_fallback", EVAL_ONLY, &[]);
+    let native = compile(
+        "eval_opcache_named_native",
+        EVAL_ONLY,
+        &["--ini", "opcache.enable_cli=1"],
+    );
+    let code: String = [
+        "$f = 'opcache_invalidate'; var_dump($f(filename: '/missing', force: true))",
+        "var_dump(call_user_func_array('opcache_invalidate', ['force' => true, 'filename' => '/missing']))",
+        "var_dump(call_user_func('opcache_invalidate', filename: '/missing', force: true))",
+        "var_dump(call_user_func(force: true, filename: '/missing', callback: 'opcache_invalidate'))",
+        "$f = opcache_invalidate(...); var_dump($f(...['filename' => '/missing', 'force' => true]))",
+        "$f = 'opcache_get_status'; $f(foo: 1)",
+        "call_user_func_array('opcache_get_status', ['foo' => 1])",
+        "call_user_func('opcache_get_status', foo: 1)",
+        "$f = 'opcache_invalidate'; $f(force: true)",
+        "call_user_func_array('opcache_invalidate', ['force' => true])",
+        "$f = 'opcache_invalidate'; $f('/a', filename: '/b')",
+        "call_user_func_array('opcache_invalidate', [0 => '/a', 'filename' => '/b'])",
+        "call_user_func('opcache_invalidate', callback: 'opcache_reset')",
+        "call_user_func(filename: '/missing')",
+    ]
+    .iter()
+    .map(|call| {
+        format!(
+            "try {{ {call}; }} catch (Error $e) {{ \
+             echo get_class($e), ': ', $e->getMessage(), \"\\n\"; }}\n"
+        )
+    })
+    .collect();
+    let expected = "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+                    Error: Unknown named parameter $foo\n\
+                    Error: Unknown named parameter $foo\n\
+                    Error: Unknown named parameter $foo\n\
+                    ArgumentCountError: opcache_invalidate(): Argument #1 ($filename) not passed\n\
+                    ArgumentCountError: opcache_invalidate(): Argument #1 ($filename) not passed\n\
+                    Error: Named parameter $filename overwrites previous argument\n\
+                    Error: Named parameter $filename overwrites previous argument\n\
+                    Error: Named parameter $callback overwrites previous argument\n\
+                    ArgumentCountError: call_user_func() expects at least 1 argument, 0 given\n";
+    assert_stdout(&fallback, &code, expected);
+    assert_stdout(&native, &code, expected);
+    let ordered = "function mark($label) { echo $label; return '/missing'; } \
+                   $f = 'opcache_invalidate'; \
+                   var_dump($f(force: mark('force '), filename: mark('filename ')));";
+    let expected_order = "force filename bool(false)\n";
+    assert_stdout(&fallback, ordered, expected_order);
+    assert_stdout(&native, ordered, expected_order);
+}
+
+/// User declarations with OPcache names retain their signatures and reference parameters on
+/// direct, variable, first-class and call_user_func routes, in default and configured binaries.
+#[test]
+fn opcache_user_declarations_keep_their_callable_semantics() {
+    let declarations = r#"
+function opcache_get_status(string $message, string $suffix = ''): string {
+    return $message . $suffix;
+}
+function opcache_reset(int &$counter): int { $counter += 1; return $counter; }
+"#;
+    let calls = r#"
+echo opcache_get_status(suffix: ':direct', message: 'own'), "\n";
+$f = 'opcache_get_status';
+echo $f(suffix: ':variable', message: 'own'), "\n";
+echo call_user_func_array($f, ['suffix' => ':array', 'message' => 'own']), "\n";
+echo call_user_func($f, suffix: ':callback', message: 'own'), "\n";
+$f = opcache_get_status(...);
+echo $f(suffix: ':first-class', message: 'own'), "\n";
+echo opcache_get_status('own', ':surplus', 'ignored'), "\n";
+$counter = 1;
+echo opcache_reset($counter), ':', $counter, "\n";
+$f = 'opcache_reset';
+echo $f(counter: $counter), ':', $counter, "\n";
+$f = opcache_reset(...);
+echo $f(counter: $counter), ':', $counter, "\n";
+echo call_user_func_array('opcache_reset', ['counter' => &$counter]), ':', $counter, "\n";
+echo call_user_func('opcache_reset', counter: $counter), ':', $counter, "\n";
+"#;
+    let expected = "own:direct\nown:variable\nown:array\nown:callback\nown:first-class\n\
+                    own:surplus\n2:2\n3:3\n4:4\n5:5\n6:5\n";
+    let source = format!("<?php\n{declarations}\n$code = getenv('REVIEW_CODE'); eval($code);");
+    for ini in [&[][..], &["--ini", "opcache.enable_cli=1"][..]] {
+        let binary = compile("eval_opcache_native_user", &source, ini);
+        assert_stdout(&binary, calls, expected);
+        fs::remove_dir_all(binary.parent().unwrap()).unwrap();
+    }
+    let binary = compile("eval_opcache_eval_user", EVAL_ONLY, &[]);
+    assert_stdout(&binary, &format!("{declarations}\n{calls}"), expected);
+    fs::remove_dir_all(binary.parent().unwrap()).unwrap();
+}
+
 /// Every argument an eval'd OPcache call evaluates is released, on the direct route and on the
 /// callable ones.
 ///
@@ -395,6 +491,13 @@ fn opcache_arguments_evaluated_in_eval_are_released() {
                     $f = 'opcache_compile_file';\n\
                     $f(str_repeat('w', 70000));\n\
                     call_user_func_array('opcache_invalidate', [str_repeat('v', 70000), true]);\n\
+                    $f = 'opcache_invalidate';\n\
+                    $f(force: true, filename: str_repeat('n', 70000));\n\
+                    call_user_func_array($f, ['force' => true, 'filename' => str_repeat('a', 70000)]);\n\
+                    call_user_func($f, filename: str_repeat('c', 70000));\n\
+                    $f = 'opcache_get_status';\n\
+                    try { $f(unknown: str_repeat('e', 70000)); } catch (Error $e) {}\n\
+                    try { call_user_func_array($f, ['unknown' => str_repeat('r', 70000)]); } catch (Error $e) {}\n\
                 }\n\
                 echo \"done\\n\";";
     let output = run(&binary, code);
