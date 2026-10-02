@@ -216,9 +216,11 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             | Op::StrBitOr
             | Op::StrBitXor
             | Op::StrSetOffset
-            | Op::StrCharAt
             | Op::StrInterpolate
     ))
+    // `StrCharAt` is not scratch: `lower_str_char_at` persists its one byte into an owned block,
+    // and skipping its release leaked that block on every `$s[$i]` read (`ord($s[$i])` in a loop
+    // leaked one block per character).
 }
 
 /// Lowers a pure ownership forwarding opcode by copying the operand into the result slot.

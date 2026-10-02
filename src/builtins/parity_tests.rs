@@ -97,6 +97,11 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         // Built from the program's classes; an empty program still declares the entry points.
         ("class_vars_prelude", crate::class_vars_prelude::declarations(&Vec::new())),
         ("implode_prelude", crate::implode_prelude::declarations()),
+        ("array_sum_prelude", crate::array_sum_prelude::declarations()),
+        (
+            "mbstring_prelude",
+            crate::mbstring_prelude::declarations(crate::mbstring_prelude::FUNCTIONS),
+        ),
         ("dynamic_define_prelude", crate::dynamic_define_prelude::declarations()),
         ("preg_array_prelude", crate::preg_array_prelude::declarations()),
         ("sodium_prelude", crate::sodium_prelude::declarations(true, true)),
@@ -213,16 +218,40 @@ const PRELUDE_SHADOWED_REGISTRY_BUILTINS: &[(&str, &str)] = &[(
 
 /// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,
 /// with the reason each exclusion is correct rather than an oversight.
-const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
-    "curl_file_create",
-    "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
-     is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
-     resolves through the native-class fallback, see elephc-magician's \
-     interpreter::builtins::curl module doc. A contract would need an eval binding that \
-     does not exist, or an EvalImplementationPending label that would be false because \
-     eval() can already call it. Consequence, accepted: the PHP comparison page counts \
-     the curl module 34/35 rather than 35/35.",
-)];
+const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[
+    (
+        "curl_file_create",
+        "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
+         is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
+         resolves through the native-class fallback, see elephc-magician's \
+         interpreter::builtins::curl module doc. A contract would need an eval binding that \
+         does not exist, or an EvalImplementationPending label that would be false because \
+         eval() can already call it. Consequence, accepted: the PHP comparison page counts \
+         the curl module 34/35 rather than 35/35.",
+    ),
+    ("mb_substr", MBSTRING_PRELUDE_REASON),
+    ("mb_strpos", MBSTRING_PRELUDE_REASON),
+    ("mb_stripos", MBSTRING_PRELUDE_REASON),
+    ("mb_strrpos", MBSTRING_PRELUDE_REASON),
+    ("mb_strripos", MBSTRING_PRELUDE_REASON),
+    ("mb_str_split", MBSTRING_PRELUDE_REASON),
+    ("mb_substr_count", MBSTRING_PRELUDE_REASON),
+    ("mb_strstr", MBSTRING_PRELUDE_REASON),
+    ("mb_stristr", MBSTRING_PRELUDE_REASON),
+    ("mb_strrchr", MBSTRING_PRELUDE_REASON),
+    ("mb_internal_encoding", MBSTRING_PRELUDE_REASON),
+    ("mb_check_encoding", MBSTRING_PRELUDE_REASON),
+    ("mb_str_pad", MBSTRING_PRELUDE_REASON),
+    ("mb_ucfirst", MBSTRING_PRELUDE_REASON),
+    ("mb_lcfirst", MBSTRING_PRELUDE_REASON),
+];
+
+/// Why the mbstring prelude's functions carry no shared contract yet.
+const MBSTRING_PRELUDE_REASON: &str =
+    "UTF-8-only fallbacks in crate::mbstring_prelude, injected only when a program calls one and \
+     declares no function of that name (so a polyfill keeps its own). A contract would publish \
+     the full mbstring signature (every encoding) and demand an eval() binding that the \
+     interpreter does not have; `extension_loaded('mbstring')` deliberately stays false.";
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///

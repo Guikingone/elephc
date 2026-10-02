@@ -709,6 +709,8 @@ impl Op {
             self,
             Acquire
                 | StrPersist
+                // `$s[$i]` is an owned one-byte copy (`lower_str_char_at` persists it).
+                | StrCharAt
                 | Call
                 | FunctionVariantCall
                 | ExternCall

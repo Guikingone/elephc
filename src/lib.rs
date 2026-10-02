@@ -134,6 +134,10 @@ mod parse_str_prelude;
 mod class_vars_prelude;
 /// `implode()` fallback for elements the native joiners cannot render.
 mod implode_prelude;
+/// `array_sum()` / `array_product()` fallback for arrays the native folds cannot sum.
+mod array_sum_prelude;
+/// UTF-8 mbstring functions with no native implementation.
+mod mbstring_prelude;
 /// Run-time constant table behind `define()` calls with a computed name.
 mod dynamic_define_prelude;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.

@@ -62,6 +62,15 @@ pub(super) fn persist_concat_lhs_if_rhs_can_reset(
     if !string_op_uses_scratch_storage(op) || !expr_can_reset_concat_storage(rhs) {
         return lhs;
     }
+    // A builtin's FRESH heap result cannot be overwritten by the right operand; copying it left
+    // the original unreleased (`mb_strtoupper($a) . f()` leaked one block per evaluation).
+    if ctx
+        .builder
+        .value_defining_instruction(lhs.value)
+        .is_some_and(runtime_call_string_is_fresh)
+    {
+        return lhs;
+    }
     ctx.emit_value(
         Op::StrPersist,
         vec![lhs.value],
@@ -86,10 +95,39 @@ pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
             | Op::StrBitOr
             | Op::StrBitXor
             | Op::StrSetOffset
-            | Op::StrCharAt
             | Op::StrInterpolate
             | Op::RuntimeCall
     )
+    // Not `StrCharAt`: `$s[$i]` is an owned one-byte copy (`lower_str_char_at` persists it), so
+    // persisting it again on a return or a store orphaned the first copy.
+}
+
+/// Returns whether a runtime call hands back a FRESH string the caller owns.
+///
+/// `string_op_uses_scratch_storage` answers by opcode, and `RuntimeCall` covers both builtins that
+/// format into the shared scratch buffer and builtins that allocate (`mb_strtoupper()`,
+/// `iconv()`, ...). Persisting a fresh result again at a return or a wrapper boundary orphaned
+/// the first copy: every `return mb_strtoupper($s);` leaked one block.
+pub(crate) fn runtime_call_string_is_fresh(inst: &crate::ir::Instruction) -> bool {
+    use crate::builtins::semantics::BuiltinResultOwnership;
+    use crate::ir::{Immediate, RuntimeCallTarget};
+    if inst.op != Op::RuntimeCall {
+        return false;
+    }
+    match &inst.immediate {
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => {
+            matches!(target.result_ownership(), BuiltinResultOwnership::Fresh)
+        }
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) => {
+            matches!(target.result_ownership(), BuiltinResultOwnership::Fresh)
+        }
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) => {
+            matches!(target.result_ownership(), BuiltinResultOwnership::Fresh)
+        }
+        // `UnaryString` targets (`strtoupper`, `trim`, ...) format into the concat arena: scratch,
+        // whatever the release side calls them.
+        _ => false,
+    }
 }
 
 /// Returns whether a string is a `Cast` of a non-string value, whose result is either scratch or

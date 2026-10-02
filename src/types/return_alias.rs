@@ -14,7 +14,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind};
 
 /// Describes which visible parameters a callable result may reuse as storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +132,7 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                 name,
                 params,
                 variadic,
+                variadic_by_ref,
                 by_ref_return,
                 body,
                 ..
@@ -142,6 +143,7 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                         params.iter().map(|(name, _, _, _)| name.as_str()),
                         variadic.as_deref(),
                         *by_ref_return,
+                        params.iter().any(|(_, _, _, by_ref)| *by_ref) || *variadic_by_ref,
                         body,
                     ),
                 );
@@ -172,6 +174,7 @@ fn collect_method_summaries(
                 method.params.iter().map(|(name, _, _, _)| name.as_str()),
                 method.variadic.as_deref(),
                 method.by_ref_return,
+                method.params.iter().any(|(_, _, _, by_ref)| *by_ref) || method.variadic_by_ref,
                 &method.body,
             )
         } else {
@@ -192,6 +195,7 @@ fn summarize_callable<'a>(
     params: impl Iterator<Item = &'a str>,
     variadic: Option<&str>,
     by_ref_return: bool,
+    by_ref_params: bool,
     body: &[Stmt],
 ) -> ReturnArgAlias {
     if by_ref_return {
@@ -206,8 +210,23 @@ fn summarize_callable<'a>(
         state.insert(name.to_string(), ReturnArgAlias::parameter(index));
     }
     let mut returned = ReturnArgAlias::None;
+    // A callee can rebind this body's locals only through a reference this body handed out, or
+    // through a by-reference parameter (checked per argument). Without either, a call to a user
+    // function cannot reach the tracked locals, so it no longer erases every summary: a body that
+    // built its result in a loop around a helper call (`mb_str_split()`'s prelude) was summarized
+    // `Unknown`, and its caller kept every argument temporary alive.
+    let previous = OPAQUE_CALLS_REACH_LOCALS.with(|flag| {
+        flag.replace(by_ref_params || crate::ast_usage::body_exposes_locals(body))
+    });
     analyze_body(body, &mut state, &mut returned);
+    OPAQUE_CALLS_REACH_LOCALS.with(|flag| flag.set(previous));
     returned
+}
+
+thread_local! {
+    /// Whether an opaque (user) call can rebind the summarized body's locals; see
+    /// `summarize_callable`.
+    static OPAQUE_CALLS_REACH_LOCALS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 /// Applies statement provenance effects and accumulates every reachable return path.
@@ -557,6 +576,27 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
             alias
         }
         ExprKind::Assignment { value, .. } => expr_alias(value, state),
+        // `.` copies both operands into a reservation of its own, and a comparison or logical
+        // operator answers a scalar, so neither can hand an argument's storage back. Leaving
+        // them `Unknown` made every caller keep the string it passed: `function f(string $s)
+        // { return $s . "!"; }` called with `(string) $mixed` leaked the cast copy per call.
+        ExprKind::BinaryOp {
+            op:
+                BinOp::Concat
+                | BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::StrictEq
+                | BinOp::StrictNotEq
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::LtEq
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or
+                | BinOp::Xor
+                | BinOp::Spaceship,
+            ..
+        } => ReturnArgAlias::None,
         ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
         | ExprKind::ArrayReference(_)
@@ -821,12 +861,13 @@ fn named_call_can_rebind_unlisted_locals(name: &str) -> bool {
     if matches!(name.as_str(), "isset" | "empty" | "unset" | "exit" | "die") {
         return false;
     }
-    crate::builtins::registry::lookup(&name).is_none_or(|definition| {
-        definition
+    match crate::builtins::registry::lookup(&name) {
+        Some(definition) => definition
             .params
             .iter()
-            .any(|(parameter, _)| parameter == "callback")
-    })
+            .any(|(parameter, _)| parameter == "callback"),
+        None => OPAQUE_CALLS_REACH_LOCALS.with(std::cell::Cell::get),
+    }
 }
 
 /// Replaces every tracked provenance with the conservative top element.

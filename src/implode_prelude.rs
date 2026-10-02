@@ -14,8 +14,10 @@
 //!   (`unsupported EIR backend feature: implode array element PHP type Object("T")`), and a
 //!   boxed object joined as an empty string where php calls `__toString()`:
 //!
+//!   ```text
 //!       $a = [new T("a"), 1];     echo implode(",", $a);
 //!       php     ia,1                 elephc  ,1
+//!   ```
 //!
 //! - Joining by concatenation reuses the compiler's own string conversion of each element, which
 //!   is php's: `__toString()` (or php's `Error` for an object without one), php's float format,

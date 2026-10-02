@@ -27,12 +27,21 @@ builtin! {
 /// Non-array arguments are rejected.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    match ty {
-        PhpType::Array(ref elem_ty) if **elem_ty == PhpType::Float => Ok(PhpType::Float),
-        PhpType::Array(_) => Ok(PhpType::Int),
-        PhpType::AssocArray { ref value, .. } if **value == PhpType::Float => Ok(PhpType::Float),
-        PhpType::AssocArray { .. } => Ok(PhpType::Int),
-        _ => Err(CompileError::new(
+    // Float elements fold to a float and int or bool elements to an int; any other element can
+    // produce either, which only `mixed` represents. Typing those `int` truncated `[1, 1.5]` to
+    // `2`. A value not known to be an array is still refused, as before.
+    let element = match ty.codegen_repr() {
+        PhpType::Array(element) => Some(element.codegen_repr()),
+        PhpType::AssocArray { value, .. } => Some(value.codegen_repr()),
+        _ => None,
+    };
+    match element {
+        Some(PhpType::Float) => Ok(PhpType::Float),
+        Some(PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Never | PhpType::Void) => {
+            Ok(PhpType::Int)
+        }
+        Some(_) => Ok(PhpType::Mixed),
+        None => Err(CompileError::new(
             cx.span,
             "array_sum() argument must be array",
         )),

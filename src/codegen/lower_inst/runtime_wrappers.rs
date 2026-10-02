@@ -332,9 +332,10 @@ fn persist_scratch_backed_wrapper_string(
         );
         return persisted;
     }
-    let scratch_backed = builder
-        .value_defining_instruction(value)
-        .is_some_and(|inst| crate::ir_lower::string_op_uses_scratch_storage(inst.op));
+    let scratch_backed = builder.value_defining_instruction(value).is_some_and(|inst| {
+        crate::ir_lower::string_op_uses_scratch_storage(inst.op)
+            && !crate::ir_lower::runtime_call_string_is_fresh(inst)
+    });
     if !scratch_backed {
         return result;
     }

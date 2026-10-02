@@ -1144,6 +1144,27 @@ pub fn inject_if_used(
     let needs_class_vars = usage.references("get_class_vars");
     // And so is `implode()` over objects or floats, which the native joiners cannot render.
     let needs_implode_values = usage.references("implode") || usage.references("join");
+    // And so are the mbstring functions without a native implementation, each only when the
+    // program calls it and does not declare its own (a polyfill keeps its definition).
+    let mut mbstring_functions: Vec<&str> = crate::mbstring_prelude::FUNCTIONS
+        .iter()
+        .copied()
+        .filter(|name| {
+            usage.references(name)
+                && !crate::mbstring_prelude::program_declares_anywhere(&program, name)
+        })
+        .collect();
+    if mbstring_functions
+        .iter()
+        .any(|name| matches!(*name, "mb_str_pad" | "mb_ucfirst" | "mb_lcfirst"))
+        && !mbstring_functions.contains(&"mb_substr")
+        && !crate::mbstring_prelude::program_declares_anywhere(&program, "mb_substr")
+    {
+        mbstring_functions.push("mb_substr");
+    }
+    // And so is `array_sum()` / `array_product()` over anything but a list of ints or floats.
+    let needs_array_sum_values =
+        usage.references("array_sum") || usage.references("array_product");
     // And so is a `define()` whose name is computed, which needs the run-time constant table.
     let needs_dynamic_define = usage.dynamic_define;
     if sources.is_empty()
@@ -1159,6 +1180,8 @@ pub fn inject_if_used(
         && !needs_is_callable_ext
         && !needs_class_vars
         && !needs_implode_values
+        && !needs_array_sum_values
+        && mbstring_functions.is_empty()
         && !needs_dynamic_define
     {
         return program;
@@ -1176,6 +1199,16 @@ pub fn inject_if_used(
     }
     if needs_implode_values {
         let declarations = crate::implode_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_array_sum_values {
+        let declarations = crate::array_sum_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if !mbstring_functions.is_empty() {
+        let declarations = crate::mbstring_prelude::declarations(&mbstring_functions);
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

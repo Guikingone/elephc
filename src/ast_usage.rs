@@ -52,6 +52,10 @@ pub(crate) struct Usage {
     pub(crate) dynamic_define: bool,
     /// Variables some closure captures by reference (`use (&$x)`) and writes through.
     pub(crate) ref_capture_writes: HashSet<String>,
+    /// Whether the subtree hands a reference to one of its locals to storage another callee can
+    /// reach: a `use (&$x)` capture, `$a = &$x`, `[&$x]`, `$o->p = &$x`, a by-reference
+    /// `foreach`, or a `global` binding.
+    pub(crate) exposes_locals: bool,
 }
 
 impl Usage {
@@ -67,6 +71,7 @@ impl Usage {
             .extend(other.array_reference_sources);
         self.dynamic_define |= other.dynamic_define;
         self.ref_capture_writes.extend(other.ref_capture_writes);
+        self.exposes_locals |= other.exposes_locals;
     }
 
     /// Returns true when a PHP function is referenced case-insensitively.
@@ -105,6 +110,14 @@ pub(crate) fn ref_capture_writes(statements: &[Stmt]) -> HashSet<String> {
     let mut usage = Usage::default();
     scan_program(statements, &mut usage);
     usage.ref_capture_writes
+}
+
+/// Returns whether a body gives another callee a way to rebind one of its locals; see
+/// [`Usage::exposes_locals`].
+pub(crate) fn body_exposes_locals(statements: &[Stmt]) -> bool {
+    let mut usage = Usage::default();
+    scan_program(statements, &mut usage);
+    usage.exposes_locals
 }
 
 /// Returns the variables a statement list stores into arrays as references.
@@ -270,12 +283,20 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             usage.dynamic_code_load = true;
             scan_expr(path, usage);
         }
+        StmtKind::Global { .. } => {
+            usage.exposes_locals = true;
+        }
         StmtKind::RefAssign { target, source, .. } => {
+            usage.exposes_locals = true;
             record_variable_name(usage, target);
             scan_expr(source, usage);
         }
+        StmtKind::PropertyRefAssign { object, source: value, .. } => {
+            usage.exposes_locals = true;
+            scan_expr(object, usage);
+            scan_expr(value, usage);
+        }
         StmtKind::PropertyAssign { object, value, .. }
-        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             scan_expr(object, usage);
             scan_expr(value, usage);
@@ -384,9 +405,10 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
-            ..
         } => {
+            usage.exposes_locals |= *value_by_ref;
             scan_expr(array, usage);
             if let Some(key_var) = key_var {
                 record_variable_name(usage, key_var);
@@ -479,7 +501,6 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
         | StmtKind::IncludeOnceMark { .. }
-        | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
@@ -572,6 +593,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             }
         }
         ExprKind::ArrayReference(inner) => {
+            usage.exposes_locals = true;
             if let ExprKind::Variable(name) = &inner.kind {
                 usage.array_reference_sources.insert(name.clone());
             }
@@ -652,6 +674,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(else_expr, usage);
         }
         ExprKind::Closure { params, body, capture_refs, .. } => {
+            usage.exposes_locals |= !capture_refs.is_empty();
             for name in capture_refs {
                 if crate::ir_lower::body_writes_local(body, name) {
                     usage.ref_capture_writes.insert(name.clone());

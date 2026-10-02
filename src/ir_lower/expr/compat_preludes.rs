@@ -217,6 +217,24 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // `array_sum()` / `array_product()` over anything but a list of ints or floats: the boxed
+    // folds only add integers, so a float in a mixed list or hash was truncated or lost.
+    if matches!(builtin.as_str(), "array_sum" | "array_product")
+        && args.len() == 1
+        && !numeric_fold_is_native(&materialized_expr_type_for_merge(ctx, &args[0]))
+    {
+        let helper = if builtin == "array_sum" {
+            crate::array_sum_prelude::ARRAY_SUM_VALUES_NAME
+        } else {
+            crate::array_sum_prelude::ARRAY_PRODUCT_VALUES_NAME
+        };
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(helper),
+            args,
+            expr,
+        ));
+    }
     if builtin == "array_unique"
         && args.len() == 1
         && match materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr() {
@@ -764,6 +782,16 @@ pub(super) fn lower_gradual_array_merge(
         args,
         expr,
     ))
+}
+
+/// Returns whether `array_sum()` / `array_product()` can fold this operand natively: only a list
+/// of ints, the one shape the runtime folds sum without losing anything (a float list was refused
+/// at compile time).
+fn numeric_fold_is_native(array_ty: &PhpType) -> bool {
+    matches!(
+        array_ty.codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Int
+    )
 }
 
 /// Returns whether `implode()`'s array operand holds elements only the prelude joins correctly.

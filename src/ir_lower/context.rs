@@ -3847,6 +3847,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             return false;
         }
+        // A string result reaches the caller through `__rt_str_persist`, which adopts a block in
+        // place only when it is a `.`-operator heap temporary; every other source is duplicated.
+        // The copy `(string) $mixed` hands an argument is never such a temporary, so no callee
+        // can return it: `function f(string $s) { return $s; }` given `f($untyped)` leaked it.
+        if result_type == PhpType::Str && self.value_is_owning_mixed_string_cast(argument) {
+            return false;
+        }
         match (&argument_type, &result_type) {
             // A string result is never a boxed argument's storage: every way a body turns a
             // boxed value into a string hands back its OWN reference -- `__rt_mixed_cast_string`
@@ -4453,7 +4460,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
-        if inst.op == Op::StrPersist {
+        if inst.op == Op::StrPersist || crate::ir_lower::runtime_call_string_is_fresh(inst) {
             return false;
         }
         if crate::ir_lower::expr::string_op_uses_scratch_storage(inst.op) {

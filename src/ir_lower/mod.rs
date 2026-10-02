@@ -36,6 +36,7 @@ pub(crate) use expr::body_contains_eval_call;
 /// so they persist a scratch-backed result instead of handing the arena pointer to a caller.
 pub(crate) use expr::body_writes_local;
 pub(crate) use expr::cast_string_needs_owned_persist;
+pub(crate) use expr::runtime_call_string_is_fresh;
 pub(crate) use expr::string_op_uses_scratch_storage;
 
 use std::fmt;

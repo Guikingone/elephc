@@ -55,3 +55,7 @@ mod mixed_receiver_call_results;
 mod reference_captures;
 #[path = "regressions/callback_elements_and_results.rs"]
 mod callback_elements_and_results;
+#[path = "regressions/numeric_folds.rs"]
+mod numeric_folds;
+#[path = "regressions/mbstring_and_string_ownership.rs"]
+mod mbstring_and_string_ownership;
