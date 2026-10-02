@@ -49,9 +49,9 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_callable_descriptor_release_done");          // other owners still keep the descriptor alive
 
     // -- set up cleanup frame --
-    emitter.instruction("sub sp, sp, #48");                                     // reserve descriptor cleanup spill slots
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across nested releases
-    emitter.instruction("add x29, sp, #32");                                    // establish a frame pointer for the helper
+    emitter.instruction("sub sp, sp, #64");                                     // reserve descriptor cleanup spill slots
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address across nested releases
+    emitter.instruction("add x29, sp, #48");                                    // establish a frame pointer for the helper
     emitter.instruction("str x0, [sp, #0]");                                    // save descriptor pointer for capture release and final free
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize capture index to zero
 
@@ -76,7 +76,7 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("mul x15, x12, x15");                                   // compute byte offset for this capture metadata entry
     emitter.instruction("add x14, x14, x15");                                   // x14 = capture metadata entry pointer
     emitter.instruction("ldr x15, [x14, #24]");                                 // load by-ref flag for this capture
-    emitter.instruction("cbnz x15, __rt_callable_descriptor_release_next");     // by-ref captures borrow an external cell and are not owned here
+    emitter.instruction("cbnz x15, __rt_callable_descriptor_release_ref");      // by-ref captures release only a share they marked as held
     emitter.instruction("ldr x15, [x14, #16]");                                 // load descriptor type tag for the by-value capture
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload descriptor pointer before reading the capture slot
     emitter.instruction("mov x10, #16");                                        // each runtime capture slot is 16 bytes
@@ -109,6 +109,47 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
 
     emitter.label("__rt_callable_descriptor_release_callable");
     emitter.instruction("bl __rt_callable_descriptor_release");                 // release nested dynamic callable descriptor captures recursively
+    emitter.instruction("b __rt_callable_descriptor_release_next");             // continue with the next capture slot
+
+    // -- a by-ref capture: claim the descriptor's share of the frame's cell, if it took one --
+    emitter.label("__rt_callable_descriptor_release_ref");
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload descriptor pointer before reading the capture slot
+    emitter.instruction("mov x10, #16");                                        // each runtime capture slot is 16 bytes
+    emitter.instruction("mul x10, x12, x10");                                   // compute capture slot offset after the descriptor header
+    emitter.instruction("add x10, x10, #64");                                   // skip the 64-byte static descriptor header
+    emitter.instruction("add x9, x9, x10");                                     // x9 = capture slot pointer
+    emitter.instruction("ldr x10, [x9, #8]");                                   // load the share marker written when the closure was created
+    emitter.instruction("cbz x10, __rt_callable_descriptor_release_next");      // a borrowed address is not the descriptor's to release
+    emitter.instruction("ldr x15, [x14, #16]");                                 // load the capture type tag, which is the cell's payload type
+    emitter.instruction("str x15, [sp, #32]");                                  // keep it across the claim call
+    emitter.instruction("ldr x0, [x9]");                                        // x0 = the shared reference cell
+    emitter.instruction("bl __rt_ref_cell_release_claim");                      // drop the descriptor's share; x0 = cell only for the last owner
+    emitter.instruction("cbz x0, __rt_callable_descriptor_release_next");       // the frame still holds the cell
+    emitter.instruction("str x0, [sp, #40]");                                   // keep the cell for its own free
+    emitter.instruction("ldr x15, [sp, #32]");                                  // reload the payload type tag
+    emitter.instruction("ldr x0, [x0]");                                        // x0 = the payload the cell owns
+    emitter.instruction("cmp x15, #1");                                         // a string payload?
+    emitter.instruction("b.eq __rt_callable_descriptor_release_ref_string");    // free the owned string bytes
+    emitter.instruction("cmp x15, #10");                                        // a nested callable descriptor?
+    emitter.instruction("b.eq __rt_callable_descriptor_release_ref_callable");  // release it through this helper
+    emitter.instruction("cmp x15, #4");                                         // indexed array, associative array, object, mixed box (4..7)?
+    emitter.instruction("b.lo __rt_callable_descriptor_release_ref_free");      // lower tags are scalars that own nothing
+    emitter.instruction("cmp x15, #7");                                         // past the heap-backed run?
+    emitter.instruction("b.ls __rt_callable_descriptor_release_ref_any");       // tags 4..7 release by runtime heap kind
+    emitter.instruction("cmp x15, #12");                                        // an erased iterable?
+    emitter.instruction("b.eq __rt_callable_descriptor_release_ref_any");       // it releases by runtime heap kind too
+    emitter.instruction("b __rt_callable_descriptor_release_ref_free");         // scalars own nothing
+    emitter.label("__rt_callable_descriptor_release_ref_string");
+    emitter.instruction("bl __rt_heap_free_safe");                              // free the string the cell owned
+    emitter.instruction("b __rt_callable_descriptor_release_ref_free");         // then the cell itself
+    emitter.label("__rt_callable_descriptor_release_ref_callable");
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the descriptor the cell owned
+    emitter.instruction("b __rt_callable_descriptor_release_ref_free");         // then the cell itself
+    emitter.label("__rt_callable_descriptor_release_ref_any");
+    emitter.instruction("bl __rt_decref_any");                                  // release the heap payload the cell owned
+    emitter.label("__rt_callable_descriptor_release_ref_free");
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the last-owner cell
+    emitter.instruction("bl __rt_heap_free");                                   // free the reference cell
 
     emitter.label("__rt_callable_descriptor_release_next");
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload current capture index after any nested release
@@ -120,8 +161,8 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.label("__rt_callable_descriptor_release_free");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload descriptor pointer for final heap free
     emitter.instruction("bl __rt_heap_free");                                   // return the runtime descriptor block to the heap allocator
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // tear down descriptor cleanup frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // tear down descriptor cleanup frame
 
     emitter.label("__rt_callable_descriptor_release_done");
     emitter.instruction("ret");                                                 // return after releasing or ignoring the descriptor
@@ -156,7 +197,7 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve caller frame pointer before descriptor cleanup
     emitter.instruction("mov rbp, rsp");                                        // establish a frame pointer for descriptor cleanup spills
-    emitter.instruction("sub rsp, 32");                                         // reserve descriptor pointer, count, table, and index slots
+    emitter.instruction("sub rsp, 48");                                         // reserve descriptor pointer, count, table, index, tag, and cell slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save descriptor pointer for capture release and final free
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize capture index to zero
 
@@ -182,7 +223,7 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, rcx");                                        // r11 = capture metadata entry pointer
     emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");                       // load by-ref flag for this capture
     emitter.instruction("test rcx, rcx");                                       // does this slot borrow an external reference cell?
-    emitter.instruction("jnz __rt_callable_descriptor_release_next");           // by-ref captures are not owned by the descriptor
+    emitter.instruction("jnz __rt_callable_descriptor_release_ref");            // by-ref captures release only a share they marked as held
     emitter.instruction("mov rdx, QWORD PTR [r11 + 16]");                       // load descriptor type tag for the by-value capture
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload descriptor pointer before reading the capture slot
     emitter.instruction("mov rcx, r10");                                        // copy index before scaling capture slot offset
@@ -214,6 +255,48 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_callable_descriptor_release_callable");
     emitter.instruction("call __rt_callable_descriptor_release");               // release nested dynamic callable descriptor captures recursively
+    emitter.instruction("jmp __rt_callable_descriptor_release_next");           // continue with the next capture slot
+
+    // -- a by-ref capture: claim the descriptor's share of the frame's cell, if it took one --
+    emitter.label("__rt_callable_descriptor_release_ref");
+    emitter.instruction("mov rcx, r10");                                        // copy index before scaling capture slot offset
+    emitter.instruction("shl rcx, 4");                                          // each runtime capture slot is 16 bytes
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload descriptor pointer before reading the capture slot
+    emitter.instruction("add rax, rcx");                                        // rax = descriptor + capture slot offset
+    emitter.instruction("mov rcx, QWORD PTR [rax + 72]");                       // load the share marker written when the closure was created
+    emitter.instruction("test rcx, rcx");                                       // did the descriptor take a share of the cell?
+    emitter.instruction("jz __rt_callable_descriptor_release_next");            // a borrowed address is not the descriptor's to release
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 16]");                       // load the capture type tag, which is the cell's payload type
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // keep it across the claim call
+    emitter.instruction("mov rax, QWORD PTR [rax + 64]");                       // rax = the shared reference cell
+    emitter.instruction("call __rt_ref_cell_release_claim");                    // drop the descriptor's share; rax = cell only for the last owner
+    emitter.instruction("test rax, rax");                                       // was that the last share?
+    emitter.instruction("jz __rt_callable_descriptor_release_next");            // the frame still holds the cell
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // keep the cell for its own free
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the payload type tag
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // rax = the payload the cell owns
+    emitter.instruction("cmp rdx, 1");                                          // a string payload?
+    emitter.instruction("je __rt_callable_descriptor_release_ref_string");      // free the owned string bytes
+    emitter.instruction("cmp rdx, 10");                                         // a nested callable descriptor?
+    emitter.instruction("je __rt_callable_descriptor_release_ref_callable");    // release it through this helper
+    emitter.instruction("cmp rdx, 4");                                          // indexed array, associative array, object, mixed box (4..7)?
+    emitter.instruction("jb __rt_callable_descriptor_release_ref_free");        // lower tags are scalars that own nothing
+    emitter.instruction("cmp rdx, 7");                                          // past the heap-backed run?
+    emitter.instruction("jbe __rt_callable_descriptor_release_ref_any");        // tags 4..7 release by runtime heap kind
+    emitter.instruction("cmp rdx, 12");                                         // an erased iterable?
+    emitter.instruction("je __rt_callable_descriptor_release_ref_any");         // it releases by runtime heap kind too
+    emitter.instruction("jmp __rt_callable_descriptor_release_ref_free");       // scalars own nothing
+    emitter.label("__rt_callable_descriptor_release_ref_string");
+    emitter.instruction("call __rt_heap_free_safe");                            // free the string the cell owned
+    emitter.instruction("jmp __rt_callable_descriptor_release_ref_free");       // then the cell itself
+    emitter.label("__rt_callable_descriptor_release_ref_callable");
+    emitter.instruction("call __rt_callable_descriptor_release");               // release the descriptor the cell owned
+    emitter.instruction("jmp __rt_callable_descriptor_release_ref_free");       // then the cell itself
+    emitter.label("__rt_callable_descriptor_release_ref_any");
+    emitter.instruction("call __rt_decref_any");                                // release the heap payload the cell owned
+    emitter.label("__rt_callable_descriptor_release_ref_free");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the last-owner cell
+    emitter.instruction("call __rt_heap_free");                                 // free the reference cell
 
     emitter.label("__rt_callable_descriptor_release_next");
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance to the next capture slot
@@ -222,7 +305,7 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_callable_descriptor_release_free");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload descriptor pointer for final heap free
     emitter.instruction("call __rt_heap_free");                                 // return the runtime descriptor block to the heap allocator
-    emitter.instruction("add rsp, 32");                                         // release descriptor cleanup spill slots
+    emitter.instruction("add rsp, 48");                                         // release descriptor cleanup spill slots
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
 
     emitter.label("__rt_callable_descriptor_release_done");

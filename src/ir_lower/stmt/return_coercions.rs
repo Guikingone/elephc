@@ -179,7 +179,7 @@ fn guard_generic_object_nominal_return(
         return value;
     }
     let data = ctx.intern_class_name(&target_name);
-    ctx.emit_value(
+    let guarded = ctx.emit_value(
         Op::RuntimeCall,
         vec![value.value],
         Some(Immediate::NominalObject {
@@ -189,7 +189,17 @@ fn guard_generic_object_nominal_return(
         return_type.clone(),
         effects_lookup::runtime_effects(),
         span,
-    )
+    );
+    // A boxed source is unboxed into an object the guard takes its own reference on, so an owning
+    // box is done with: `function f(mixed $m): Iterator { return $m->make(); }` leaked the box and
+    // the object it still held, and the iterator's destructor never ran.
+    if matches!(source_type, PhpType::Mixed | PhpType::Union(_))
+        && matches!(return_type.codegen_repr(), PhpType::Object(_))
+        && ctx.value_is_owning_temporary(value)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    guarded
 }
 
 

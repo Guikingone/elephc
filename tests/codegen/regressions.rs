@@ -47,3 +47,9 @@ mod nullable_receivers_and_spl_lists;
 mod dynamic_define_and_static_hashes;
 #[path = "regressions/untyped_getters_and_properties.rs"]
 mod untyped_getters_and_properties;
+#[path = "regressions/function_aliases.rs"]
+mod function_aliases;
+#[path = "regressions/mixed_receiver_call_results.rs"]
+mod mixed_receiver_call_results;
+#[path = "regressions/reference_captures.rs"]
+mod reference_captures;

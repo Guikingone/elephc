@@ -232,6 +232,10 @@ pub(super) fn acquire_borrowed_return_value(
             return value;
         }
     }
+    // `LoadRefCell` reads through a reference, so the cell keeps owning what it holds and the
+    // frame's owner slot releases it in the epilogue: `$a = &$s; return $a;` returned a string
+    // the epilogue had just freed, and so did a closure's `use (&$s) { return $s; }` once its
+    // creator released the cell.
     if !matches!(
         ctx.builder.value_defining_op(source),
         Some(
@@ -239,6 +243,7 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::HashGet
                 | Op::HashGetSilent
                 | Op::LoadLocal
+                | Op::LoadRefCell
                 | Op::PropGet
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet

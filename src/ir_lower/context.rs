@@ -105,6 +105,8 @@ pub(crate) enum StaticCallableBinding {
 #[derive(Debug, Clone)]
 pub(crate) struct ClosureCapture {
     pub value: ValueId,
+    /// The captured variable's name when it is captured by reference.
+    pub ref_name: Option<String>,
 }
 
 /// The program's global constants as one body sees them: the prescanned table, borrowed, plus
@@ -176,6 +178,7 @@ pub(crate) struct LoweringSnapshot {
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
     interior_ref_locals: HashMap<String, PhpType>,
+    capture_bound_locals: HashSet<String>,
     pending_ref_bridges: Vec<(crate::ir::ValueId, String, String)>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     foreach_int_key_locals: HashSet<String>,
@@ -416,6 +419,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
     interior_ref_locals: HashMap<String, PhpType>,
+    capture_bound_locals: HashSet<String>,
     pending_ref_bridges: Vec<(crate::ir::ValueId, String, String)>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     /// foreach loop-key locals whose source is a concretely-indexed array
@@ -584,6 +588,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
             interior_ref_locals: HashMap::new(),
+            capture_bound_locals: HashSet::new(),
             pending_ref_bridges: Vec::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
@@ -641,6 +646,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             fiber_start_sigs: self.fiber_start_sigs.clone(),
             ref_bound_locals: self.ref_bound_locals.clone(),
             interior_ref_locals: self.interior_ref_locals.clone(),
+            capture_bound_locals: self.capture_bound_locals.clone(),
             pending_ref_bridges: self.pending_ref_bridges.clone(),
             ref_cell_owner_locals: self.ref_cell_owner_locals.clone(),
             foreach_int_key_locals: self.foreach_int_key_locals.clone(),
@@ -685,6 +691,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.fiber_start_sigs = snapshot.fiber_start_sigs;
         self.ref_bound_locals = snapshot.ref_bound_locals;
         self.interior_ref_locals = snapshot.interior_ref_locals;
+        self.capture_bound_locals = snapshot.capture_bound_locals;
         self.pending_ref_bridges = snapshot.pending_ref_bridges;
         self.ref_cell_owner_locals = snapshot.ref_cell_owner_locals;
         self.foreach_int_key_locals = snapshot.foreach_int_key_locals;
@@ -1223,6 +1230,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // A new binding says nothing yet about WHAT it aliases; `foreach` re-marks an interior
         // element right after this call, and every other binding aliases a managed cell.
         self.interior_ref_locals.remove(name);
+        self.capture_bound_locals.remove(name);
+    }
+
+    /// Records that a local's only reference binding so far is a closure's `use (&$name)`.
+    ///
+    /// Such a cell belongs to this name alone, so a later capture that writes may still widen the
+    /// name to `Mixed` (the slot and its owner widen together). A cell shared with another name, a
+    /// caller or a global keeps the representation it was made with.
+    pub(crate) fn mark_capture_bound_local(&mut self, name: &str) {
+        self.capture_bound_locals.insert(name.to_string());
+    }
+
+    /// Returns true when the name's reference binding came only from closure captures.
+    pub(crate) fn is_capture_bound_local(&self, name: &str) -> bool {
+        self.capture_bound_locals.contains(name)
     }
 
     /// Records that a local may hold the address of an ELEMENT inside a container rather than
@@ -1248,6 +1270,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// [`Self::mark_interior_ref_local`].
     pub(crate) fn is_interior_ref_local(&self, name: &str) -> bool {
         self.interior_ref_locals.contains_key(name)
+    }
+
+    /// Returns the element representation an interior-reference local points at, if it is one.
+    pub(crate) fn interior_ref_element_type(&self, name: &str) -> Option<PhpType> {
+        self.interior_ref_locals.get(name).cloned()
     }
 
     /// Queues a copy-out: after the call consuming `marker`, `temp` is stored back into `var`.
@@ -1280,6 +1307,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn unmark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.remove(name);
         self.interior_ref_locals.remove(name);
+        self.capture_bound_locals.remove(name);
+        self.forget_static_closures_capturing(name);
+    }
+
+    /// Drops the static bindings of closures that capture `name` by reference.
+    ///
+    /// A statically bound `$f()` passes a by-reference capture as the address of the variable's
+    /// slot at the CALL, not the cell the closure captured. Once the name is unset or bound to
+    /// another reference the two differ: `$f = function () use (&$s) {...}; unset($s);
+    /// $s = "w"; $f();` showed the closure the new `$s`. The call then goes through the
+    /// descriptor, which holds the captured cell.
+    pub(crate) fn forget_static_closures_capturing(&mut self, name: &str) {
+        self.static_callable_locals.retain(|_, binding| {
+            !matches!(
+                binding,
+                StaticCallableBinding::Closure { captures, .. }
+                    if captures.iter().any(|capture| capture.ref_name.as_deref() == Some(name))
+            )
+        });
     }
 
     /// Returns true when a local is currently modeled as a by-reference alias.
@@ -3086,6 +3132,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits an idempotent promotion of an initialized local into an owned fallback ref-cell.
     pub(crate) fn promote_local_ref_cell(&mut self, name: &str, span: Option<Span>) {
+        self.promote_local_ref_cell_owner(name, span);
+    }
+
+    /// Promotes like [`Self::promote_local_ref_cell`] and returns the hidden owner slot, which
+    /// holds the cell only when this promotion created it at run time.
+    pub(crate) fn promote_local_ref_cell_owner(
+        &mut self,
+        name: &str,
+        span: Option<Span>,
+    ) -> LocalSlotId {
         let slot = self.declare_local(name, self.local_type(name));
         let fallback_ty = self.builder.local_php_type(slot);
         let owner_slot = self.declare_ref_cell_owner(name, fallback_ty.clone());
@@ -3105,6 +3161,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.mark_ref_bound_local(name);
         self.initialized_slots.insert(slot);
         self.initialized_slots.insert(owner_slot);
+        owner_slot
     }
 
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
@@ -3193,6 +3250,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // every alias operation a cell on all incoming paths.
         self.promote_local_ref_cell(source, span);
         self.clear_static_callable_local(target);
+        self.forget_static_closures_capturing(target);
         self.clear_reflection_class_local(target);
         self.clear_reflection_function_local(target);
         self.clear_reflection_property_local(target);
@@ -3254,6 +3312,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         self.clear_static_callable_local(target);
+        self.forget_static_closures_capturing(target);
         self.clear_fiber_start_sig(target);
         self.release_replaced_local_before_ref_alias(target, span);
         self.abandon_slot_of_another_representation(target, &value_type);
@@ -3523,6 +3582,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::DynamicObjectNewWithoutConstructorMixed
                     | Op::ReflectionMaterialize
                     | Op::ClosureNew
+                    // `Closure::bind`/`bindTo`/`call` copy the descriptor into a fresh block.
+                    | Op::ClosureBind
                     | Op::FirstClassCallableNew
                     | Op::CallableArrayNew
                     | Op::BufferNew
@@ -4020,7 +4081,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let php_type = self.builder.value_php_type(value);
         let php_type = php_type.codegen_repr();
         let op = self.builder.value_defining_op(value);
-        (matches!(php_type, PhpType::Mixed | PhpType::Union(_))
+        // A callable descriptor is not `is_refcounted()`, but the array and hash getters retain
+        // it all the same; read as borrowed, it was acquired again and the element read's own
+        // reference leaked, so a closure read out of an array (`$fs[0]()`) outlived the array.
+        (matches!(php_type, PhpType::Mixed | PhpType::Union(_) | PhpType::Callable)
             || (php_type.is_refcounted() && php_type != PhpType::Str))
             && matches!(
                 op,

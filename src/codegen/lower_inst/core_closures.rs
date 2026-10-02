@@ -127,6 +127,7 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
                 idx,
                 &PhpType::Int,
             );
+            emit_ref_capture_share(ctx, descriptor_reg, idx, ref_capture_owner_slot(ctx, *operand))?;
             continue;
         }
         ctx.load_value_to_result(*operand)?;
@@ -151,6 +152,72 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
     // Restored only after the descriptor has been moved into the result register, so the caller's
     // callee-saved value comes back and the closure still leaves in `result_reg`.
     abi::emit_pop_reg(ctx.emitter, descriptor_reg);
+    Ok(())
+}
+
+/// Returns the frame owner slot `ir_lower` recorded for a by-reference capture operand.
+fn ref_capture_owner_slot(ctx: &FunctionContext<'_>, operand: ValueId) -> Option<LocalSlotId> {
+    ctx.function.instructions.iter().find_map(|inst| match inst.immediate {
+        Some(Immediate::LocalSlot(owner))
+            if inst.op == Op::ClosureCapture && inst.operands.first() == Some(&operand) =>
+        {
+            Some(owner)
+        }
+        _ => None,
+    })
+}
+
+/// Records whether the descriptor holds a share of a by-reference capture's cell.
+///
+/// The cell pointer is in the integer result register. The descriptor retains it, and marks the
+/// capture slot's second word, only when the frame's owner slot holds that same pointer: the
+/// cell is then a heap block the frame promoted itself, which the frame and the descriptor can
+/// both claim-release, the last one freeing it. Any other address (a by-ref parameter, a by-ref
+/// `foreach` value pointing into array storage, a cell another owner slot holds) is borrowed as
+/// before and the marker stays zero.
+fn emit_ref_capture_share(
+    ctx: &mut FunctionContext<'_>,
+    descriptor_reg: &str,
+    capture_index: usize,
+    owner_slot: Option<LocalSlotId>,
+) -> Result<()> {
+    let marker_offset =
+        callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16 + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let Some(owner_slot) = owner_slot else {
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        abi::emit_store_to_address(ctx.emitter, result_reg, descriptor_reg, marker_offset);
+        return Ok(());
+    };
+    let owner_offset = ctx.local_offset(owner_slot)?;
+    let borrowed = ctx.next_label("ref_capture_borrowed");
+    let done = ctx.next_label("ref_capture_share_done");
+    let owner_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, owner_reg, owner_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, borrowed)); // a null cell has no share to take
+            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, owner_reg)); // is this the cell the frame's owner slot holds?
+            ctx.emitter.instruction(&format!("b.ne {}", borrowed));             // no: borrow the address as before
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // a null cell has no share to take
+            ctx.emitter.instruction(&format!("je {}", borrowed));               // borrow nothing
+            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, owner_reg)); // is this the cell the frame's owner slot holds?
+            ctx.emitter.instruction(&format!("jne {}", borrowed));              // no: borrow the address as before
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                       // the descriptor takes its own share of the frame's cell
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
+    abi::emit_store_to_address(ctx.emitter, result_reg, descriptor_reg, marker_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done)),      // the shared marker is set
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done)),     // the shared marker is set
+    }
+    ctx.emitter.label(&borrowed);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_store_to_address(ctx.emitter, result_reg, descriptor_reg, marker_offset);
+    ctx.emitter.label(&done);
     Ok(())
 }
 

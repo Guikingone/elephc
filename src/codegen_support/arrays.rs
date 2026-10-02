@@ -28,6 +28,10 @@ pub(crate) fn emit_array_value_type_stamp(
         PhpType::Mixed => 7,
         PhpType::Union(_) => 7,
         PhpType::Void => 8,
+        // Callable descriptors: `__rt_array_free_deep` and `__rt_array_clone_shallow` already
+        // release and retain tag-10 slots. Nothing stamped it, so an array of closures released
+        // none of them.
+        PhpType::Callable => 10,
         _ => return,
     };
     match emitter.target.arch {

@@ -45,6 +45,34 @@ fn preg_array_helper_for_callable(
 }
 
 /// Lowers one resolved static callable target to the corresponding EIR call opcode.
+/// Releases the argument temporaries of a statically bound `call_user_func*()` call.
+///
+/// The desugaring emits the same `Call` a direct call does but skipped its argument cleanup:
+/// `call_user_func_array($f, ['v' => $x, ...])` with a `mixed` parameter leaked the box made for
+/// `$x` (and what it held) on every call.
+fn release_static_callable_arg_temporaries(
+    ctx: &mut LoweringContext<'_, '_>,
+    function_name: &str,
+    operands: &[crate::ir::ValueId],
+    signature: Option<&FunctionSig>,
+    call: LoweredValue,
+    expr: &Expr,
+) {
+    let return_alias = ctx
+        .return_alias_summaries
+        .function(function_name)
+        .cloned()
+        .unwrap_or(ReturnArgAlias::Unknown);
+    release_owned_call_arg_temporaries_with_signature(
+        ctx,
+        operands,
+        Some(call.value),
+        &return_alias,
+        signature,
+        expr.span,
+    );
+}
+
 pub(super) fn lower_static_callable_call(
     ctx: &mut LoweringContext<'_, '_>,
     target: StaticCallableBinding,
@@ -60,14 +88,16 @@ pub(super) fn lower_static_callable_call(
             let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&function_name),
                 Some(expr.span),
-            ))
+            );
+            release_static_callable_arg_temporaries(ctx, &function_name, &operands, sig.as_ref(), call, expr);
+            Some(call)
         }
         StaticCallableBinding::ExternFunction(function_name) => {
             let sig = ctx
@@ -127,17 +157,21 @@ pub(super) fn lower_static_callable_call(
             captures,
         } => {
             let mut operands = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            let arg_operands = operands.clone();
             append_closure_capture_operands(&mut operands, &captures);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
             let data = ctx.intern_function_name(&name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
                 operands,
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
-            ))
+            );
+            // Only the call's own arguments: the appended captures are the closure's, not temps.
+            release_static_callable_arg_temporaries(ctx, &name, &arg_operands, Some(&signature), call, expr);
+            Some(call)
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
             Some(lower_static_method_call(ctx, &receiver, &method, callback_args, expr))
@@ -343,6 +377,7 @@ pub(super) fn build_bound_closure_binding(
         signature,
         captures: vec![ClosureCapture {
             value: new_this_value.value,
+            ref_name: None,
         }],
     };
     Some((bound, closure_value))

@@ -124,6 +124,20 @@ pub(super) fn lower_closure_with_context(
     let mut rebound_this_capture = false;
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
+        let mut ref_capture_owner = None;
+        // A by-reference `foreach` value points INTO the array's payload, whose element has the
+        // array's representation whatever the closure writes: widening it to `Mixed` made the
+        // closure store a box pointer into an `array<int>` slot (and read the int back as one),
+        // so `foreach ($a as &$v) { $f = function () use (&$v) { $v *= 10; }; $f(); }` crashed.
+        // Whether this name's cell, if any, is one only closure captures made: those widen with
+        // the name. Asked before this capture rebinds it.
+        let capture_owned_cell =
+            !ctx.is_ref_bound_local(capture) || ctx.is_capture_bound_local(capture);
+        let interior_element = if by_ref {
+            ctx.interior_ref_element_type(capture)
+        } else {
+            None
+        };
         let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
             // Top-level closure: no enclosing `$this`. Start with a null receiver
             // that `Closure::bind` overwrites; `Mixed` so members dispatch at
@@ -135,6 +149,18 @@ pub(super) fn lower_closure_with_context(
                 // capture parameter must instead retain the backing reference cell's physical
                 // representation: a reference stored in an array often owns a Mixed box even
                 // though the recursive local is logically callable.
+                Some(ctx.ref_cell_capture_storage_type(capture))
+            } else if let Some(element) = interior_element.clone() {
+                Some(element)
+            } else if by_ref
+                && (body_contains_eval || body_writes_local(body, capture))
+                && !capture_owned_cell
+            {
+                // The name already shares a cell (`$a = &$b`, a by-ref parameter, `global`), and
+                // that cell's representation was fixed when it was made: widening this one name
+                // to `Mixed` made the closure read and write a box where the cell holds the raw
+                // value the other names use. `$b = "q"; $a = &$b; function () use (&$a) {
+                // $a .= "r"; }` printed garbage for `$b`.
                 Some(ctx.ref_cell_capture_storage_type(capture))
             } else if by_ref && body_contains_eval {
                 ctx.set_local_type(capture, PhpType::Mixed);
@@ -163,17 +189,42 @@ pub(super) fn lower_closure_with_context(
             } else {
                 None
             };
+            // The frame owns the cell through a hidden owner slot, the way `$a = &$b` does, so
+            // the descriptor can take a share of it and the last of the two frees it. The cell
+            // used to be promoted at `ClosureNew` with no owner at all, and every
+            // `use (&$x)` leaked it.
+            // An interior address has no cell to own.
+            if by_ref
+                && self_ref_callable_capture != Some(capture.as_str())
+                && interior_element.is_none()
+            {
+                ref_capture_owner = Some(ctx.promote_local_ref_cell_owner(capture, Some(expr.span)));
+            }
             let captured = ctx.load_local(capture, Some(expr.span));
             let php_type = php_type_override
                 .unwrap_or_else(|| ctx.builder.value_php_type(captured.value));
             (captured, php_type)
         };
-        let immediate = by_ref.then_some(Immediate::I64(1));
+        // A by-ref capture whose frame owns the cell names that owner slot, so codegen can tell
+        // a cell it may share from an interior pointer (a by-ref `foreach` value, a parameter).
+        let immediate = match ref_capture_owner.take() {
+            Some(owner) => Some(Immediate::LocalSlot(owner)),
+            None => by_ref.then_some(Immediate::I64(1)),
+        };
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
         if by_ref {
             ctx.mark_ref_bound_local(capture);
+            // The capture is not a new binding: the name still points into the array.
+            if let Some(element) = interior_element {
+                ctx.mark_interior_ref_local(capture, element);
+            } else if capture_owned_cell {
+                ctx.mark_capture_bound_local(capture);
+            }
         }
-        captured_values.push(ClosureCapture { value: captured.value });
+        captured_values.push(ClosureCapture {
+            value: captured.value,
+            ref_name: by_ref.then(|| capture.clone()),
+        });
         capture_params.push((capture.clone(), php_type, by_ref));
     }
     // Closures keep the late-static class of their defining method just as PHP does. It is an
@@ -208,6 +259,7 @@ pub(super) fn lower_closure_with_context(
         );
         captured_values.push(ClosureCapture {
             value: called_class.value,
+            ref_name: None,
         });
         capture_params.push((called_class_param.to_string(), PhpType::Int, false));
     }

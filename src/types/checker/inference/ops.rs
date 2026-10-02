@@ -1465,11 +1465,23 @@ impl Checker {
                     .copied()
                     .unwrap_or(false)
                 && !sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                && sig.params[param_idx].1 == PhpType::Mixed
                 && actual_ty != PhpType::Never
             {
-                sig.params[param_idx].1 = actual_ty;
-                changed = true;
+                let current = &sig.params[param_idx].1;
+                if *current == PhpType::Mixed {
+                    sig.params[param_idx].1 = actual_ty;
+                    changed = true;
+                } else if !Self::types_compatible(current, &actual_ty)
+                    && !self.type_accepts(current, &actual_ty)
+                {
+                    // An untyped parameter accepts anything; the type an earlier call narrowed
+                    // it to is only the checker's guess. The closure itself is compiled with a
+                    // `mixed` parameter, so a later call with another type is ordinary PHP —
+                    // `$f = fn($x) => $x; $f("a"); $f(2);` was refused with
+                    // "callable $f parameter $x expects Str, got Int".
+                    sig.params[param_idx].1 = PhpType::Mixed;
+                    changed = true;
+                }
             }
             param_idx += 1;
         }

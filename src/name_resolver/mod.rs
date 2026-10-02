@@ -124,6 +124,13 @@ fn rewrite_callback_literal_args(
         .map(|(idx, arg)| {
             if callback_positions.contains(&idx) {
                 if let ExprKind::StringLiteral(raw_name) = &arg.kind {
+                    // A function alias names the function it stands for (`array_map('sizeof', ...)`).
+                    let bare = raw_name.strip_prefix('\\').unwrap_or(raw_name);
+                    if let Some(canonical) = canonical_function_alias(bare) {
+                        if !symbols.declares_function(bare) {
+                            return Expr::new(ExprKind::StringLiteral(canonical.to_string()), arg.span);
+                        }
+                    }
                     let resolved = names::resolve_function_name(
                         &parse_callback_name(raw_name),
                         current_namespace,
@@ -276,6 +283,19 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
 /// resolver rewrites.
 pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
     expressions::is_date_procedural_alias(name)
+}
+
+/// Returns the function a global PHP function alias (`sizeof`, `pos`, ...) names, if `name` is one.
+pub(crate) fn canonical_function_alias(name: &str) -> Option<&'static str> {
+    if name.contains('\\') {
+        return None;
+    }
+    expressions::canonical_function_alias(name)
+}
+
+/// Returns every PHP function alias name the resolver rewrites.
+pub(crate) fn function_alias_names() -> impl Iterator<Item = &'static str> {
+    expressions::FUNCTION_ALIASES.iter().map(|(alias, _)| *alias)
 }
 
 /// Recognizes an exact global date alias without giving explicitly namespaced strings fallback.

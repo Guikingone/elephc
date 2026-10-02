@@ -467,6 +467,8 @@ pub(super) fn lower_closure_bind_method(
                 Some(expr.span),
             );
             write_back_ref_bridges_after(ctx, bound.value, expr.span);
+            // `Closure::call` binds a throwaway copy just for this invocation.
+            crate::ir_lower::ownership::release_if_owned(ctx, bound, Some(expr.span));
             Some(result)
         }
         _ => None,

@@ -31,6 +31,7 @@ pub(in crate::codegen::lower_inst) fn callable_name_exists(
             name.trim_start_matches('\\'),
             strict_php,
         )
+        || crate::name_resolver::canonical_function_alias(name.trim_start_matches('\\')).is_some()
 }
 
 /// Checks whether a PHP symbol is present in an iterator of known names.

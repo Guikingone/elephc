@@ -156,7 +156,7 @@ fn ref_cell_target_slot(
             Op::BindRefCellPtr | Op::IterCurrentValueRef,
             Some(Immediate::LocalSlot(slot)),
         ) => Some(*slot),
-        (Op::ClosureCapture, Some(Immediate::I64(1))) => operands
+        (Op::ClosureCapture, Some(Immediate::I64(1) | Immediate::LocalSlot(_))) => operands
             .first()
             .copied()
             .and_then(|value| loaded_local_slot(function, value)),

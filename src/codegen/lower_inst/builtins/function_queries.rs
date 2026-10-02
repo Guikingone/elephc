@@ -75,6 +75,7 @@ pub(in crate::codegen::lower_inst) fn literal_function_exists(
         )
         || (!bare_name.contains('\\')
             && crate::name_resolver::is_date_procedural_alias(bare_name))
+        || crate::name_resolver::canonical_function_alias(bare_name).is_some()
 }
 
 /// One baked candidate for a dynamic `function_exists()` lookup: a declared name plus, for an
@@ -182,6 +183,7 @@ fn emit_function_exists_candidate_table(
 /// | `ctx.has_extern_function()`                     | `module.extern_decls`                            |
 /// | `is_php_visible_builtin_function()`             | `supported_builtin_function_names()`             |
 /// | `name_resolver::is_date_procedural_alias()`     | `name_resolver::date_procedural_alias_names()`   |
+/// | `name_resolver::canonical_function_alias()`     | `name_resolver::function_alias_names()`          |
 ///
 /// Names are de-duplicated case-insensitively with `php_symbol_key`, the same key the
 /// compile-time lookups use. Variant groups are collected first so that a name which is both a
@@ -223,6 +225,9 @@ fn dynamic_function_exists_candidates(
         push(name, None);
     }
     for name in crate::name_resolver::date_procedural_alias_names() {
+        push(name, None);
+    }
+    for name in crate::name_resolver::function_alias_names() {
         push(name, None);
     }
     candidates

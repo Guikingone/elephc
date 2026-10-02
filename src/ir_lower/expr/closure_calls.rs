@@ -106,8 +106,15 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     }
     if !has_dynamic_call_spread(args) {
         if let Some(callback) = static_assignment_callable_target(ctx, callee) {
-            lower_expr(ctx, callee);
-            if let Some(value) = lower_static_callable_call(ctx, callback, args, expr) {
+            let lowered_callee = lower_expr(ctx, callee);
+            let direct = lower_static_callable_call(ctx, callback, args, expr);
+            // The direct call bypasses the closure it read, and the fallback below reads it
+            // again: `$fs[0]()` read the element with its own reference and never dropped it, so
+            // the closure, and every object it captured, outlived the array.
+            if ctx.value_is_owning_temporary(lowered_callee) {
+                crate::ir_lower::ownership::release_if_owned(ctx, lowered_callee, Some(expr.span));
+            }
+            if let Some(value) = direct {
                 return value;
             }
         }

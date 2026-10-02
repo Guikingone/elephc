@@ -107,7 +107,7 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, x10");                                     // x9 = capture slot pointer
     emitter.instruction("str x9, [sp, #48]");                                   // save it across the helper calls below
     emitter.instruction("ldr x15, [x14, #24]");                                 // load the by-ref flag for this capture
-    emitter.instruction("cbnz x15, __rt_closure_bind_next");                    // a by-ref capture borrows an external cell: nothing to own or replace
+    emitter.instruction("cbnz x15, __rt_closure_bind_ref");                     // a by-ref capture is never replaced; it may hold a cell share
 
     // is this the capture named `this`?
     emitter.instruction("ldr x12, [x14, #8]");                                  // capture name length
@@ -137,6 +137,15 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // box (and retain) the receiver into a Mixed cell
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload the capture slot pointer
     emitter.instruction("str x0, [x9]");                                        // store the boxed Mixed receiver into the slot
+    emitter.instruction("b __rt_closure_bind_next");                            // this capture is done
+
+    // -- a by-ref capture the source holds a cell share for: the copy takes its own --
+    emitter.label("__rt_closure_bind_ref");
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload the capture slot pointer
+    emitter.instruction("ldr x10, [x9, #8]");                                   // the share marker, copied with the slot
+    emitter.instruction("cbz x10, __rt_closure_bind_next");                     // a borrowed address needs nothing
+    emitter.instruction("ldr x0, [x9]");                                        // the shared reference cell
+    emitter.instruction("bl __rt_incref");                                      // the copy takes its own share, released by descriptor_release
     emitter.instruction("b __rt_closure_bind_next");                            // this capture is done
 
     // -- take the copy's own reference, tag for tag with `descriptor_release` --
@@ -257,7 +266,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov [rsp+48], r8");                                    // save it across the helper calls below
     emitter.instruction("mov rax, [r10+24]");                                   // load the by-ref flag for this capture
     emitter.instruction("test rax, rax");                                       // is it a by-reference capture?
-    emitter.instruction("jnz __rt_closure_bind_next");                          // yes: it borrows an external cell, nothing to own or replace
+    emitter.instruction("jnz __rt_closure_bind_ref");                           // yes: never replaced; it may hold a cell share
 
     // is this the capture named `this`?
     emitter.instruction("mov rax, [r10+8]");                                    // capture name length
@@ -286,6 +295,16 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box (and retain) the receiver into a Mixed cell
     emitter.instruction("mov r8, [rsp+48]");                                    // reload the capture slot pointer
     emitter.instruction("mov [r8], rax");                                       // store the boxed Mixed receiver into the slot
+    emitter.instruction("jmp __rt_closure_bind_next");                          // this capture is done
+
+    // -- a by-ref capture the source holds a cell share for: the copy takes its own --
+    emitter.label("__rt_closure_bind_ref");
+    emitter.instruction("mov r8, [rsp+48]");                                    // reload the capture slot pointer
+    emitter.instruction("mov rax, [r8+8]");                                     // the share marker, copied with the slot
+    emitter.instruction("test rax, rax");                                       // does the source hold a share?
+    emitter.instruction("jz __rt_closure_bind_next");                           // a borrowed address needs nothing
+    emitter.instruction("mov rax, [r8]");                                       // the shared reference cell, in the register __rt_incref reads
+    emitter.instruction("call __rt_incref");                                    // the copy takes its own share, released by descriptor_release
     emitter.instruction("jmp __rt_closure_bind_next");                          // this capture is done
 
     // -- take the copy's own reference, tag for tag with `descriptor_release` --

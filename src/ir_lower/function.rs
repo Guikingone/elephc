@@ -1570,6 +1570,7 @@ fn seed_recursive_closure_binding(
         .iter()
         .map(|capture_name| ClosureCapture {
             value: ctx.load_local(capture_name, None).value,
+            ref_name: None,
         })
         .collect();
     ctx.bind_static_callable_local(

@@ -203,6 +203,31 @@ pub(super) fn store_method_call_result(
         }
         return Ok(());
     }
+    // A PHP method returns its value OWNED. Boxing a container or object for a `mixed` call site
+    // (every call on an untyped receiver dispatches this way) retained it for the box and kept the
+    // call's own reference too: `$m->make()` on an untyped `$m` leaked what it returned, and that
+    // object's destructor never ran. The box takes the call's reference instead. Strings keep the
+    // ordinary path: a call's string result may live in the concat scratch buffer.
+    if let Some(result) = inst.result {
+        let result_ty = ctx.value_php_type(result)?;
+        let return_ty = target.return_ty.codegen_repr();
+        if matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
+            && matches!(
+                return_ty,
+                PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Iterable
+                    | PhpType::Object(_)
+                    | PhpType::Callable
+            )
+        {
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &return_ty,
+            );
+            return ctx.store_result_value(result);
+        }
+    }
     store_call_result(ctx, inst, &target.return_ty)
 }
 

@@ -55,6 +55,31 @@ pub(super) fn lower_array_new(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
+/// Tags the array `__rt_array_push_int` returned as holding callable descriptors.
+///
+/// An array built empty (`$fs = []; $fs[] = function () {...};`) was allocated as `array<never>`
+/// and stayed untagged, so the descriptors it owned were never released with it. A destination
+/// already promoted to hash storage keeps per-entry tags and is left alone.
+fn emit_callable_array_stamp_after_push(ctx: &mut FunctionContext<'_>) {
+    let skip = ctx.next_label("callable_array_stamp_skip");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x10, [{}, #-8]", result_reg)); // load the packed heap kind word
+            ctx.emitter.instruction("and x10, x10, #0xff");                     // isolate the storage kind
+            ctx.emitter.instruction("cmp x10, #3");                             // hash storage keeps per-entry tags
+            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // leave a promoted hash untouched
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("movzx r10d, BYTE PTR [{} - 8]", result_reg)); // load the storage kind byte
+            ctx.emitter.instruction("cmp r10d, 3");                             // hash storage keeps per-entry tags
+            ctx.emitter.instruction(&format!("je {}", skip));                   // leave a promoted hash untouched
+        }
+    }
+    crate::codegen::emit_array_value_type_stamp(ctx.emitter, result_reg, &PhpType::Callable);
+    ctx.emitter.label(&skip);
+}
+
 /// Lowers an indexed-array length read by loading the first header word.
 pub(super) fn lower_array_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
@@ -2073,6 +2098,7 @@ fn lower_array_push_aarch64(
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            emit_callable_array_stamp_after_push(ctx);
         }
         PhpType::Float => {
             ctx.load_value_to_reg(value, "x1")?;
@@ -2141,6 +2167,7 @@ fn lower_array_push_x86_64(
             ctx.load_value_to_reg(array, "r11")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            emit_callable_array_stamp_after_push(ctx);
         }
         PhpType::Float => {
             ctx.load_value_to_reg(array, "r11")?;
@@ -2286,7 +2313,19 @@ fn lower_array_push_unboxed_mixed_aarch64(
     ctx.load_value_to_reg(value, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match elem_ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Callable => {
+            // The box keeps its descriptor; the array slot takes a reference of its own.
+            abi::emit_push_reg(ctx.emitter, "x1");
+            ctx.emitter.instruction("mov x0, x1");                              // retain the unboxed callable descriptor for the array slot
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            abi::emit_pop_reg(ctx.emitter, "x11");
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("mov x1, x11");                             // pass the retained descriptor to the append helper
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            emit_callable_array_stamp_after_push(ctx);
+        }
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.emitter.instruction("mov x11, x1");                             // keep the unboxed scalar payload while loading the array receiver
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x1, x11");                             // pass the unboxed scalar payload to the append helper
@@ -2329,7 +2368,19 @@ fn lower_array_push_unboxed_mixed_x86_64(
     ctx.load_value_to_reg(value, "rax")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match elem_ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Callable => {
+            // The box keeps its descriptor; the array slot takes a reference of its own.
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            ctx.emitter.instruction("mov rax, rdi");                            // retain the unboxed callable descriptor for the array slot
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rsi, r10");                            // pass the retained descriptor to the append helper
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            emit_callable_array_stamp_after_push(ctx);
+        }
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.emitter.instruction("mov r10, rdi");                            // keep the unboxed scalar payload while loading the array receiver
             ctx.load_value_to_reg(array, "r11")?;
             ctx.emitter.instruction("mov rsi, r10");                            // pass the unboxed scalar payload to the append helper
