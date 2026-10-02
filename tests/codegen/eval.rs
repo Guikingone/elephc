@@ -30503,3 +30503,30 @@ if ($w instanceof Wide) { echo readwide($w); }
     );
     assert_eq!(out, "2|7s");
 }
+
+/// Verifies that eval allows an exception subclass implementing a throwable interface.
+#[test]
+fn test_eval_allows_exception_subclass_implementing_throwable_interface() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface UserThrowable extends Throwable {} class Good extends RuntimeException implements UserThrowable {}');
+$e = new Good('boom');
+echo $e instanceof Throwable ? "throwable" : "no", "|", $e->getMessage(), "\n";
+"#,
+    );
+    assert_eq!(out, "throwable|boom\n");
+}
+
+/// An eval exception chain with TWO eval parents still resolves the inherited AOT `Throwable`
+/// methods through the nearest native ancestor (review follow-up for #1736).
+#[test]
+fn test_eval_resolves_inherited_aot_methods_through_two_eval_parents() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface UserThrowable extends Throwable {} class Mid extends RuntimeException implements UserThrowable {} class Lower extends Mid {} class Grand extends Lower {}');
+$g = new Grand('boom');
+echo $g instanceof Throwable ? "throwable" : "no", "|", $g->getMessage(), "\n";
+"#,
+    );
+    assert_eq!(out, "throwable|boom\n");
+}
