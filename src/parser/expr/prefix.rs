@@ -40,6 +40,13 @@ pub(super) fn parse_prefix(
 
     let span = tokens[*pos].1.span;
 
+    // Predefined tokens remain name segments before namespace or class access.
+    if crate::parser::stmt::token_as_import_name(&tokens[*pos].0, &tokens[*pos].1).is_some()
+        && matches!(tokens.get(*pos + 1), Some((Token::Backslash | Token::DoubleColon, _)))
+    {
+        return parse_named_expr(tokens, pos, span);
+    }
+
     // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\true`...: the lexer turns these predefined
     // constants into dedicated tokens, so the name parser never sees an identifier after the `\`
     // (#1307). The fully qualified spelling names the same global constant, so it parses as the
@@ -48,7 +55,14 @@ pub(super) fn parse_prefix(
     if tokens[*pos].0 == Token::Backslash {
         if let Some((next, metadata)) = tokens.get(*pos + 1) {
             let literal_constant = matches!(next, Token::True | Token::False | Token::Null);
-            if literal_constant || crate::parser::stmt::token_as_import_name(next, metadata).is_some() {
+            let continues_name = matches!(
+                tokens.get(*pos + 2),
+                Some((Token::Backslash | Token::DoubleColon | Token::LParen, _))
+            );
+            if literal_constant
+                || (crate::parser::stmt::token_as_import_name(next, metadata).is_some()
+                    && !continues_name)
+            {
                 *pos += 1;
                 let mut expr = parse_prefix(tokens, pos)?;
                 if let ExprKind::ConstRef(name) = &expr.kind {

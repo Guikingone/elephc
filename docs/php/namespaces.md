@@ -46,6 +46,9 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - A predefined constant can be written fully qualified too, as namespaced code often does to skip
   the namespace lookup: `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\STDERR`, `\true`, `\null`. Each
   names the same global constant as its bare spelling
+- Qualified names retain predefined-constant spellings as name segments: `\Demo\Math\NAN`
+  and `Math\PHP_EOL` read namespaced constants, not global predefined values. Class contexts
+  such as `new \INF`, `\INF::class`, and `\INF::method()` likewise treat the spelling as a name.
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity
