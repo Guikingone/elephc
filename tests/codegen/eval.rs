@@ -208,11 +208,11 @@ eval($code);
 fn test_eval_callable_invokers_are_shared_per_signature() {
     let dir = make_cli_test_dir("elephc_eval_callable_invokers_shared_per_signature");
     let source = r#"<?php
-function _eval_callable_cache_first(int $value): int {
+function __elephc_callable_cache_first(int $value): int {
     return $value + 1;
 }
 
-function _eval_callable_cache_second(int $value): int {
+function __elephc_callable_cache_second(int $value): int {
     return $value + 2;
 }
 
@@ -238,8 +238,8 @@ eval($code);
     let lines: Vec<_> = user_asm.lines().collect();
 
     let invoker_labels = [
-        elephc::names::function_symbol("_eval_callable_cache_first"),
-        elephc::names::function_symbol("_eval_callable_cache_second"),
+        elephc::names::function_symbol("__elephc_callable_cache_first"),
+        elephc::names::function_symbol("__elephc_callable_cache_second"),
     ]
     .into_iter()
     .map(|target| {
@@ -304,7 +304,7 @@ eval($code);
 }
 
 /// Verifies bridge-supported AOT callable targets use the dynamic descriptor path while an
-/// unregistered underscore-prefixed function retains its direct eval descriptor.
+/// unregistered compiler-internal-named function retains its direct eval descriptor.
 #[test]
 fn test_eval_callable_bridge_supported_targets_are_not_emitted_as_direct_cases() {
     let dir = make_cli_test_dir("elephc_eval_callable_bridge_supported_direct_cases");
@@ -313,7 +313,7 @@ function eval_callable_bridge_supported_function(int $value): int {
     return $value + 1;
 }
 
-function _eval_callable_unregistered(int $value): int {
+function __elephc_callable_unregistered(int $value): int {
     return $value + 2;
 }
 
@@ -392,18 +392,18 @@ eval($code);
         direct_invokers_for_target(&supported_symbol).is_empty(),
         "bridge-supported function must not retain a direct eval invoker"
     );
-    let unregistered_symbol = elephc::names::function_symbol("_eval_callable_unregistered");
+    let unregistered_symbol = elephc::names::function_symbol("__elephc_callable_unregistered");
     let unregistered_invokers = direct_invokers_for_target(&unregistered_symbol);
     assert_eq!(
         unregistered_invokers.len(),
         1,
-        "unregistered underscore function must retain exactly one direct eval invoker"
+        "unregistered compiler-internal function must retain exactly one direct eval invoker"
     );
     assert!(
         lines
             .iter()
             .any(|line| line.trim() == format!(".quad {unregistered_symbol}")),
-        "the unregistered underscore function should retain a direct descriptor entry"
+        "the unregistered compiler-internal function should retain a direct descriptor entry"
     );
 
     let _ = fs::remove_dir_all(&dir);
