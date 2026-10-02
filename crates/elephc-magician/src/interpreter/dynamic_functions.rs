@@ -63,6 +63,11 @@ pub(in crate::interpreter) fn eval_call_arg_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             let spread = eval_expr(arg.value(), context, caller_scope, values)?;
+            let spread = if values.type_tag(spread)? == EVAL_TAG_OBJECT {
+                super::array_literals::eval_spread_traversable_array(spread, context, values)?
+            } else {
+                spread
+            };
             if !values.is_array_like(spread)? {
                 return Err(EvalStatus::RuntimeFatal);
             }
@@ -80,6 +85,7 @@ pub(in crate::interpreter) fn eval_call_arg_values(
             saw_named = true;
             let (value, ref_target) =
                 eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+            let ref_target = call_arg_variable_target(arg.value(), ref_target, caller_scope);
             evaluated_args.push(EvaluatedCallArg {
                 name: Some(name.to_string()),
                 value,
@@ -98,6 +104,7 @@ pub(in crate::interpreter) fn eval_call_arg_values(
             eval_call_arg_value(arg.value(), context, caller_scope, values).map_err(|status| {
                 trace_call_arg_error(index, arg.value(), status, context)
             })?;
+        let ref_target = call_arg_variable_target(arg.value(), ref_target, caller_scope);
         evaluated_args.push(EvaluatedCallArg {
             name: None,
             value,
@@ -107,6 +114,33 @@ pub(in crate::interpreter) fn eval_call_arg_values(
     }
 
     Ok(evaluated_args)
+}
+
+/// Names the CALLER'S OWN variable as the write-back target of a by-reference call argument.
+///
+/// `eval_call_arg_value` resolves a variable that is itself a reference (a by-reference
+/// parameter, a `use (&$x)` capture) straight to the storage it aliases, which is what a closure
+/// capture or a `foreach` binding needs because they outlive the statement. A call argument does
+/// not: the call finishes before anything can rebind the name. Resolving it past the variable
+/// meant the callee's result reached the aliased storage but never the variable the call was
+/// written in, so `AA::pull($parameters, $k)` inside a closure left the closure's `$parameters`
+/// stale, and its end-of-call write-back then put the OLD array back over the caller's.
+/// `write_back_method_ref_target` follows the variable's own reference chain, so naming the
+/// variable still reaches the aliased storage.
+fn call_arg_variable_target(
+    expr: &EvalExpr,
+    target: Option<EvalReferenceTarget>,
+    caller_scope: &mut ElephcEvalScope,
+) -> Option<EvalReferenceTarget> {
+    match (expr, target) {
+        (EvalExpr::LoadVar(name), Some(_)) if caller_scope.reference_target(name).is_some() => {
+            Some(EvalReferenceTarget::Variable {
+                scope: crate::scope::EvalScopeRef::new(caller_scope),
+                name: name.clone(),
+            })
+        }
+        (_, target) => target,
+    }
 }
 
 /// Returns whether an expression builds a cell nobody else holds.
@@ -399,6 +433,16 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
                         values.release(key)?;
                         return Err(status);
                     }
+                };
+                // The compiled caller's by-reference argument is a marker CELL in the array slot,
+                // which `array_get` dereferences into a plain value. Without recovering it a
+                // by-ref closure parameter saw a copy: `tap($stack, fn (&$stack) => ...)` could
+                // never update the caller's variable, and warned about it first.
+                let ref_target = match ref_target {
+                    Some(target) => Some(target),
+                    None => values
+                        .array_invoker_marker_at(array, position)?
+                        .map(|(slot, source_tag)| EvalReferenceTarget::InvokerSlot { slot, source_tag }),
                 };
                 let (value, ref_target) =
                     eval_invoker_ref_arg_value_and_target(value, ref_target, values)?;

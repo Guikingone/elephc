@@ -32,6 +32,11 @@ unsafe extern "C" {
         value_ptr: *const u8,
         value_len: u64,
     ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_object_array_new(capacity: u64) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_object_array_push(
+        array: *mut RuntimeCell,
+        object: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_assoc_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_array_get(
         array: *mut RuntimeCell,

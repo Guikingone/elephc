@@ -325,6 +325,34 @@ fn eval_spread_object_entries(
     }
 }
 
+/// Materializes a spread `Traversable` as the array a call-site `...$iterable` unpacks.
+///
+/// `f(...$generator)` and `new C(...$iterator)` are valid php: integer keys are positional in
+/// iteration order whatever their value, string keys become named arguments. The call machinery
+/// only understood arrays, and read an object as an empty one -- `new Substitutions(...
+/// Inflectible::getIrregular())` built an inflector with no rules, so `Str::plural()` and
+/// `Str::singular()` died on the first call.
+pub(in crate::interpreter) fn eval_spread_traversable_array(
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let entries = eval_spread_object_entries(object, 0, context, values)?;
+    let mut array = values.assoc_new(entries.len())?;
+    let mut next = 0_i64;
+    for (key, value) in entries {
+        let key = if values.type_tag(key)? == EVAL_TAG_STRING {
+            key
+        } else {
+            let positional = values.int(next)?;
+            next += 1;
+            positional
+        };
+        array = values.array_set(array, key, value)?;
+    }
+    Ok(array)
+}
+
 /// Drops the builder's own reference on an element the literal has just stored.
 ///
 /// `__elephc_eval_value_array_set` increfs the value before the setter consumes it, so the array

@@ -483,6 +483,17 @@ pub(in crate::interpreter) fn eval_property_get_result(
         {
             return Ok(result);
         }
+        // `__get()` may live on a COMPILED ancestor: an eval class extending `Fluent` inherits
+        // the magic reader from the native class, and the class record only lists its own
+        // methods. Laravel's `ColumnDefinition extends Fluent` answered every `$column->type`
+        // with null, so no migration could name a column type.
+        if let Some(parent) = context.class_native_parent_name(&object_class_name) {
+            if let Some(result) =
+                eval_aot_magic_property_get(object, &parent, property_name, context, values)?
+            {
+                return Ok(result);
+            }
+        }
     }
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)
@@ -1341,6 +1352,19 @@ pub(super) fn eval_magic_property_set(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let Some((declaring_class, method)) = context.class_method(object_class_name, "__set") else {
+        // The magic writer may live on a COMPILED ancestor the class record does not list.
+        if let Some(parent) = context.class_native_parent_name(object_class_name) {
+            if eval_aot_method_dispatch_metadata_in_hierarchy(&parent, "__set", context, values)?
+                .is_some()
+            {
+                let name = values.string(property_name)?;
+                let result =
+                    eval_method_call_result(object, "__set", vec![name, value], context, values);
+                values.release(name)?;
+                values.release(result?)?;
+                return Ok(true);
+            }
+        }
         return Ok(false);
     };
     if method.is_static() || method.is_abstract() {
@@ -1369,6 +1393,20 @@ pub(super) fn eval_magic_property_isset(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<bool>, EvalStatus> {
     let Some((declaring_class, method)) = context.class_method(object_class_name, "__isset") else {
+        // The magic probe may live on a COMPILED ancestor the class record does not list.
+        if let Some(parent) = context.class_native_parent_name(object_class_name) {
+            if eval_aot_method_dispatch_metadata_in_hierarchy(&parent, "__isset", context, values)?
+                .is_some()
+            {
+                let name = values.string(property_name)?;
+                let answer = eval_method_call_result(object, "__isset", vec![name], context, values);
+                values.release(name)?;
+                let answer = answer?;
+                let truthy = values.truthy(answer)?;
+                values.release(answer)?;
+                return Ok(Some(truthy));
+            }
+        }
         return Ok(None);
     };
     if method.is_static() || method.is_abstract() {
@@ -1398,6 +1436,19 @@ pub(super) fn eval_magic_property_unset(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let Some((declaring_class, method)) = context.class_method(object_class_name, "__unset") else {
+        // The magic eraser may live on a COMPILED ancestor the class record does not list.
+        if let Some(parent) = context.class_native_parent_name(object_class_name) {
+            if eval_aot_method_dispatch_metadata_in_hierarchy(&parent, "__unset", context, values)?
+                .is_some()
+            {
+                let name = values.string(property_name)?;
+                let result =
+                    eval_method_call_result(object, "__unset", vec![name], context, values);
+                values.release(name)?;
+                values.release(result?)?;
+                return Ok(true);
+            }
+        }
         return Ok(false);
     };
     if method.is_static() || method.is_abstract() {

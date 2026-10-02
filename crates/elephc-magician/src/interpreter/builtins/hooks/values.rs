@@ -540,10 +540,14 @@ impl EvalValuesHook {
                     }
                     _ => return Err(EvalStatus::RuntimeFatal),
                 };
+                let flags = match evaluated_args.get(1) {
+                    Some(flags) => eval_int_value(*flags, values)?,
+                    None => EVAL_ENT_DEFAULT_FLAGS,
+                };
                 match name {
                     "html_entity_decode" => eval_html_entity_decode_result(value, values),
-                    "htmlentities" => eval_htmlentities_result(value, values),
-                    "htmlspecialchars" => eval_htmlspecialchars_result(value, values),
+                    "htmlentities" => eval_htmlentities_result_with_flags(value, flags, values),
+                    "htmlspecialchars" => eval_htmlspecialchars_with_flags(value, flags, values),
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }

@@ -330,6 +330,16 @@ pub(in crate::interpreter) fn dynamic_object_is_a(
     if eval_class_string_is_a(class.name(), target_class, exclude_self, declaring, values)? {
         return Ok(Some(true));
     }
+    // An eval-declared object is carried by a `stdClass` runtime object, so the AOT metadata
+    // fallback below would answer "yes" to `$obj instanceof stdClass` for EVERY class the
+    // interpreter declared. `Router::toResponse()` tests `$response instanceof stdClass` and then
+    // JSON-encoded a Blade `View` as `{}`. Only an explicit `extends stdClass` (answered above)
+    // makes such an object a `stdClass`.
+    if eval_class_like_name_matches("stdClass", target_class)
+        && context.class_native_parent_name(class.name()).is_none()
+    {
+        return Ok(Some(false));
+    }
     // A "no" from the eval tables is not proof. They hold what THIS request declared, and a
     // compiled ancestor or a compiled interface can be absent from them entirely -- the AOT
     // metadata is the other half of the world, and it is what a compiled class id resolves

@@ -101,6 +101,7 @@ fn eval_json_encode_result(
     eval_json_encode_append(
         value,
         values,
+        context,
         flags,
         depth as usize,
         0,
@@ -126,6 +127,7 @@ fn eval_json_encode_result(
 fn eval_json_encode_append(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    context: &mut ElephcEvalContext,
     flags: i64,
     depth_limit: usize,
     depth: usize,
@@ -156,6 +158,7 @@ fn eval_json_encode_append(
             eval_json_encode_append_indexed_array(
                 value,
                 values,
+                context,
                 flags,
                 depth_limit,
                 depth,
@@ -168,6 +171,7 @@ fn eval_json_encode_append(
             eval_json_encode_append_assoc(
                 value,
                 values,
+                context,
                 flags,
                 depth_limit,
                 depth,
@@ -180,6 +184,7 @@ fn eval_json_encode_append(
             eval_json_encode_append_object(
                 value,
                 values,
+                context,
                 flags,
                 depth_limit,
                 depth,
@@ -238,6 +243,7 @@ fn eval_json_encode_append_float(
 fn eval_json_encode_append_indexed_array(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    context: &mut ElephcEvalContext,
     flags: i64,
     depth_limit: usize,
     depth: usize,
@@ -278,6 +284,7 @@ fn eval_json_encode_append_indexed_array(
         eval_json_encode_append(
             element,
             values,
+            context,
             flags,
             depth_limit,
             depth + 1,
@@ -299,6 +306,7 @@ fn eval_json_encode_append_indexed_array(
 fn eval_json_encode_append_assoc(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    context: &mut ElephcEvalContext,
     flags: i64,
     depth_limit: usize,
     depth: usize,
@@ -360,6 +368,7 @@ fn eval_json_encode_append_assoc(
         eval_json_encode_append(
             element,
             values,
+            context,
             flags,
             depth_limit,
             depth + 1,
@@ -377,10 +386,21 @@ fn eval_json_encode_append_assoc(
     Ok(())
 }
 
+/// Returns whether an object value implements `JsonSerializable`.
+fn eval_json_object_is_serializable(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    dynamic_object_is_a(value, "JsonSerializable", false, context, values)?
+        .map_or_else(|| values.object_is_a(value, "JsonSerializable", false), Ok)
+}
+
 /// Appends one eval runtime object as a JSON object.
 fn eval_json_encode_append_object(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    context: &mut ElephcEvalContext,
     flags: i64,
     depth_limit: usize,
     depth: usize,
@@ -388,6 +408,30 @@ fn eval_json_encode_append_object(
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
+    // `JsonSerializable` objects are encoded as whatever `jsonSerialize()` returns; Laravel's
+    // `Collection`, `JsonResource` and `MessageBag` all rely on it. An object that returns
+    // itself is encoded as a plain object, which is also what php does.
+    if eval_json_object_is_serializable(value, context, values)? {
+        let result = eval_method_call_result(value, "jsonSerialize", Vec::new(), context, values)?;
+        let same_object = values.type_tag(result)? == EVAL_TAG_OBJECT
+            && values.object_identity(result)? == values.object_identity(value)?;
+        if !same_object {
+            let encoded = eval_json_encode_append(
+                result,
+                values,
+                context,
+                flags,
+                depth_limit,
+                depth,
+                arrays_seen,
+                error,
+                output,
+            );
+            let released = eval_release_value(context, values, result);
+            encoded?;
+            return released;
+        }
+    }
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
     let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
     output.push(b'{');
@@ -433,6 +477,7 @@ fn eval_json_encode_append_object(
         eval_json_encode_append(
             element,
             values,
+            context,
             flags,
             depth_limit,
             depth + 1,

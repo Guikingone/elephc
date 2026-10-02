@@ -145,7 +145,22 @@ fn execute_native_new_at(
         context.set_file_magic_override(Some(file.clone()));
         previous
     });
+    // A COMPILED frame constructing an eval-declared class publishes its lexical class instead of
+    // forwarding a scope; that class is the calling scope php judges the constructor from, so a
+    // PROTECTED constructor (brick/math's `BigNumber` building a `BigInteger`) is reachable.
+    let native_caller_class = context
+        .current_class_scope()
+        .is_none()
+        .then(crate::context::current_native_caller_class)
+        .flatten()
+        .filter(|class_name| !class_name.is_empty());
+    if let Some(class_name) = &native_caller_class {
+        context.push_class_scope(class_name.clone());
+    }
     let outcome = interpreter::execute_context_try_new_object_named_outcome(context, name, args, values);
+    if native_caller_class.is_some() {
+        context.pop_class_scope();
+    }
     if let Some((file, dir, line, file_override)) = previous {
         context.set_call_site(file, dir, line);
         context.set_file_magic_override(file_override);

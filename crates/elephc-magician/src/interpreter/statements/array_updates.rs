@@ -569,7 +569,10 @@ pub(in crate::interpreter) fn eval_destructure_into(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let tag = values.type_tag(array)?;
-    let readable = matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+    // An `ArrayAccess` object destructures through `offsetGet()`: `[$a, $b] = $collection->partition(...)`
+    // is how Blade's component attribute bag splits its attributes.
+    let readable = matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+        || (tag == EVAL_TAG_OBJECT && eval_array_access_object_matches(array, context, values)?);
     if !readable && tag != EVAL_TAG_NULL {
         values.warning(&format!(
             "Cannot use {} as array",

@@ -216,6 +216,9 @@ pub(in crate::interpreter) fn eval_call(
     if eval_is_get_defined_vars_intrinsic(name) {
         return eval_get_defined_vars_intrinsic(args, scope, values);
     }
+    if eval_is_compact_intrinsic(name) {
+        return eval_compact_intrinsic(args, context, scope, values);
+    }
     if let Some(function) = context.function(name).cloned() {
         return eval_dynamic_function(&function, args, context, scope, values);
     }
@@ -233,6 +236,12 @@ pub(in crate::interpreter) fn eval_call(
     }
     if name.eq_ignore_ascii_case("assert") {
         return eval_assert_call(args, context, scope, values);
+    }
+    if eval_is_mb_strimwidth_fallback(name) {
+        return eval_mb_strimwidth_fallback_call(args, context, scope, values);
+    }
+    if eval_is_version_compare_fallback(name) {
+        return eval_version_compare_fallback_call(args, context, scope, values);
     }
     note_eval_runtime_failure(format!("call to undefined function {name}()"), context);
     Err(EvalStatus::UnsupportedConstruct)

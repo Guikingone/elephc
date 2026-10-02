@@ -124,6 +124,7 @@ impl ElephcEvalContext {
         self.claimed_aot_include_classlikes.clear();
         self.include_execution_stack.clear();
         self.autoloading_classes.clear();
+        super::runtime_state::clear_global_autoloading_classes();
         self.function_stack.clear();
         self.class_stack.clear();
         self.called_class_stack.clear();

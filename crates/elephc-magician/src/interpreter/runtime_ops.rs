@@ -151,6 +151,37 @@ pub trait RuntimeValueOps {
         self.string_array_push(array, &String::from_utf8_lossy(value))
     }
 
+    /// Reports whether the element at `position` of an indexed array is a native by-reference
+    /// MARKER cell -- what a compiled caller stores for a variable it passes to a callable -- as
+    /// `(slot address, source tag)`. `array_get` dereferences markers, so only the raw slot tells.
+    /// Hosts whose arrays do not use the generated runtime's layout have none.
+    fn array_invoker_marker_at(
+        &mut self,
+        _array: RuntimeCellHandle,
+        _position: usize,
+    ) -> Result<Option<(usize, u64)>, EvalStatus> {
+        Ok(None)
+    }
+
+    /// Creates a runtime indexed-array cell specialized for raw object-pointer slots, the layout a
+    /// compiled `Class ...$items` variadic reads. Hosts without that layout build a Mixed array.
+    fn object_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.array_new(capacity)
+    }
+
+    /// Appends one object to an array made by `object_array_new`. The array retains the object;
+    /// the caller keeps its own reference.
+    fn object_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let index = self.array_len(array)?;
+        let key = self.int(index as i64)?;
+        let value = self.retain(object)?;
+        self.array_set(array, key, value)
+    }
+
     /// Creates a runtime associative-array cell with room for at least `capacity` elements.
     fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 

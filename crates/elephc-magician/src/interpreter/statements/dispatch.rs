@@ -401,7 +401,14 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_switch_stmt(expr, cases, context, scope, values)
         }
         EvalStmt::Throw(expr) => {
-            let thrown = eval_expr(expr, context, scope, values)?;
+            // The unwinding owns what it carries. `throw $exception;` re-throws a variable, whose
+            // read hands back the scope's own cell: letting that travel as the thrown value gave
+            // the variable and the unwind one reference between them, so once the catch scope
+            // dropped `$exception` the outer handler received freed memory ("int given" for a
+            // `Throwable` parameter). Laravel's route-binding middleware re-throws exactly so.
+            let thrown = crate::interpreter::expressions::eval_expr_value_for_consuming_store(
+                expr, context, scope, values,
+            )?;
             if values.type_tag(thrown)? != EVAL_TAG_OBJECT {
                 return Err(EvalStatus::RuntimeFatal);
             }
@@ -418,6 +425,16 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::UnsetVar { name } => {
             if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
+                eval_release_value(context, values, replaced)?;
+            }
+            Ok(EvalControl::None)
+        }
+        EvalStmt::UnsetDynamicVar { name } => {
+            // Blade's anonymous-component prologue runs `unset($$__key)`.
+            let name = crate::interpreter::expressions::eval_dynamic_member_name(
+                name, context, scope, values,
+            )?;
+            if let Some(replaced) = unset_scope_cell(scope, name) {
                 eval_release_value(context, values, replaced)?;
             }
             Ok(EvalControl::None)

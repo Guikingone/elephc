@@ -299,13 +299,18 @@ pub(in crate::interpreter) fn write_back_method_ref_args(
         let Some(param) = params.get(position) else {
             continue;
         };
-        if let Some(target) = bound_arg.ref_target.as_ref() {
+        if let Some(original_target) = bound_arg.ref_target.as_ref() {
             let Some(entry) = method_scope
                 .entry(param)
                 .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
             else {
                 continue;
             };
+            // A parameter rebound with `$param = &$other[...]` no longer aliases the caller's
+            // variable: what it holds now belongs to whatever it was rebound to, and the
+            // scope's CURRENT reference target names that storage. Writing it over the original
+            // turned `Arr::set($config, 'a.b', 1)` into `$config = ['b' => 1]`.
+            let target = method_scope.reference_target(param).unwrap_or(original_target);
             write_back_method_ref_target(target, entry.cell(), context, values)?;
         }
         write_back_method_variadic_ref_args(param, bound_arg, method_scope, context, values)?;

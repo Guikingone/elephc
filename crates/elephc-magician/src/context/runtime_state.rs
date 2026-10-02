@@ -20,6 +20,17 @@ static EVAL_AUTOLOAD_APPEND_SEQUENCE: std::sync::atomic::AtomicI64 =
 static EVAL_AUTOLOAD_PREPEND_SEQUENCE: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(0);
 
+thread_local! {
+    /// Classes whose autoload is running right now, across every eval context of the request.
+    static GLOBAL_AUTOLOADING_CLASSES: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Forgets every in-flight autoload attempt, at a request reset boundary.
+pub(crate) fn clear_global_autoloading_classes() {
+    GLOBAL_AUTOLOADING_CLASSES.with(|set| set.borrow_mut().clear());
+}
+
 /// Returns the next registration number for one callback.
 fn next_autoload_registration_sequence(prepend: bool) -> i64 {
     use std::sync::atomic::Ordering;
@@ -386,15 +397,27 @@ impl ElephcEvalContext {
     }
 
     /// Starts one class-autoload attempt and rejects recursive attempts for the same class.
+    ///
+    /// The guard is request-wide, not per context: every compiled frame that includes a file
+    /// opens a context of its own, so a loader that re-enters `interface_exists($class)` (nette's
+    /// `compatibility.php`, whose `interface_exists(IHtmlString::class)` guards a `class_alias`)
+    /// reached the autoloader again through a context that had never heard of the attempt, and
+    /// recursed until the stack ran out. php answers the nested lookup with `false`.
     pub(crate) fn begin_autoload_class(&mut self, class_name: &str) -> bool {
-        self.autoloading_classes
-            .insert(normalize_class_name(class_name))
+        let key = normalize_class_name(class_name);
+        if !GLOBAL_AUTOLOADING_CLASSES.with(|set| set.borrow_mut().insert(key.clone())) {
+            return false;
+        }
+        self.autoloading_classes.insert(key)
     }
 
     /// Ends one class-autoload attempt, including error paths.
     pub(crate) fn end_autoload_class(&mut self, class_name: &str) {
-        self.autoloading_classes
-            .remove(&normalize_class_name(class_name));
+        let key = normalize_class_name(class_name);
+        GLOBAL_AUTOLOADING_CLASSES.with(|set| {
+            set.borrow_mut().remove(&key);
+        });
+        self.autoloading_classes.remove(&key);
     }
 
     /// Transfers the active eval global scope to a context retained beyond its AOT frame.

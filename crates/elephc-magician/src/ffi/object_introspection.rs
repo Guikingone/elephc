@@ -243,12 +243,6 @@ unsafe fn eval_class_relation_inner(
     relation_kind: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
-        return EvalStatus::RuntimeFatal.code();
-    };
-    if context.abi_version() != ABI_VERSION {
-        return EvalStatus::AbiMismatch.code();
-    }
     if target.is_null() {
         return EvalStatus::RuntimeFatal.code();
     }
@@ -258,9 +252,34 @@ unsafe fn eval_class_relation_inner(
         CLASS_RELATION_USES => "class_uses",
         _ => return EvalStatus::RuntimeFatal.code(),
     };
+    // A compiled function with no context of its own asks with a null one: the class it names was
+    // declared by an eval somewhere else, so a fresh context that imports the process-global class
+    // metadata answers for it. `class_uses_recursive($model)` is such a helper.
+    let (context_ptr, created_context) = if ctx.is_null() {
+        let context = crate::ffi::context::__elephc_eval_context_new();
+        if context.is_null() {
+            return EvalStatus::RuntimeFatal.code();
+        }
+        (context, true)
+    } else {
+        (ctx, false)
+    };
+    let Some(context) = context_ptr.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        if created_context {
+            crate::ffi::context::finalize_eval_context_free(context_ptr);
+        }
+        return EvalStatus::AbiMismatch.code();
+    }
+    if created_context {
+        crate::context::sync_global_eval_aot_metadata(context);
+        context.sync_global_eval_classes();
+    }
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_class_relation(
+    let status = match interpreter::execute_context_class_relation(
         context,
         lookup,
         RuntimeCellHandle::from_raw(target),
@@ -268,7 +287,11 @@ unsafe fn eval_class_relation_inner(
     ) {
         Ok(result) => write_outcome(EvalOutcome::Value(result), out).code(),
         Err(status) => status.code(),
+    };
+    if created_context {
+        crate::ffi::context::finalize_eval_context_free(context_ptr);
     }
+    status
 }
 
 /// Runs the eval object relation ABI body after installing a panic boundary.

@@ -92,7 +92,27 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             return Ok(result);
         }
     }
-    if let Some(target) = context.closure_object_target(identity).cloned() {
+    // A closure created while another eval context ran (a macro registered during provider boot,
+    // then bound with `bindTo()` from the context a compiled frame opened for the request) is
+    // registered in its OWNER only; wrap that target so `bindTo`/`call`/`__invoke` reach it.
+    let closure_target = match context.closure_object_target(identity).cloned() {
+        Some(target) => Some(target),
+        None => match crate::interpreter::builtins::eval_foreign_closure_owner(
+            object, context, values,
+        )? {
+            Some(owner) => {
+                let owner_target = unsafe { owner.context_ptr().as_ref() }
+                    .and_then(|owner_context| owner_context.closure_object_target(identity))
+                    .cloned();
+                owner_target.map(|target| EvalClosureObjectTarget::ForeignContext {
+                    target: Box::new(target),
+                    owner,
+                })
+            }
+            None => None,
+        },
+    };
+    if let Some(target) = closure_target {
         if let Some(result) =
             eval_closure_object_method_result(target, method_name, evaluated_args.clone(), context, values)?
         {

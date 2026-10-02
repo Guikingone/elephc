@@ -215,6 +215,7 @@ impl Parser {
                     index: *index,
                 },
                 EvalExpr::LoadVar(name) => EvalStmt::UnsetVar { name },
+                EvalExpr::DynamicVar(name) => EvalStmt::UnsetDynamicVar { name: *name },
                 EvalExpr::PropertyGet { object, property } => EvalStmt::UnsetProperty {
                     object: *object,
                     property,
