@@ -113,6 +113,7 @@ pub(super) fn register_eval_native_function(
         &name_label,
         name_len,
         &eval_native_signature_shape(&registration.signature),
+        registration.is_internal,
     );
     let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
     let default_context = EvalNativeDefaultContext::global(ctx.module);

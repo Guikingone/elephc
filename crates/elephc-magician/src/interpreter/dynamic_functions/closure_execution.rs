@@ -77,6 +77,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     context.push_class_scope(String::new());
     context.push_called_class_scope(String::new());
     let bound_call = match bind_evaluated_function_args_with_ref_mode(
+        function.name(),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -368,6 +369,25 @@ struct EvalClosureBinding {
     called_class: String,
 }
 
+/// Returns the name PHP gives a closure in diagnostics.
+///
+/// PHP 8.4 names a closure after where it is declared, `{closure:<file>:<line>}`; earlier
+/// profiles print `{closure}`. Eval records the declaration line but neither the enclosing
+/// function (PHP names a closure declared inside `f` as `{closure:f():<line>}`) nor the eval
+/// site it was declared in, so this uses the current eval site. That is exact for a closure
+/// declared at the top level of the eval fragment calling it.
+fn eval_closure_display_name(function: &EvalFunction, context: &ElephcEvalContext) -> String {
+    let file = context.eval_file_magic();
+    match function.source_location() {
+        Some(location)
+            if crate::eval_php_profile::eval_php_minor_version() >= 4 && !file.is_empty() =>
+        {
+            format!("{{closure:{file}:{}}}", location.start_line())
+        }
+        _ => "{closure}".to_string(),
+    }
+}
+
 /// Returns the closure function's declared by-reference parameter flags.
 fn function_ref_flags(closure: &EvalClosure) -> &[bool] {
     closure.function().parameter_is_by_ref()
@@ -392,6 +412,7 @@ fn eval_closure_with_optional_binding(
         context.push_called_class_scope(binding.called_class.clone());
     }
     let bound_call = match bind_evaluated_function_args_with_ref_mode(
+        &eval_closure_display_name(function, context),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),

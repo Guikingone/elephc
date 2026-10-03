@@ -75,6 +75,12 @@ pub(crate) struct FinallyFrame {
     pub body: Vec<Stmt>,
     pub run_on_throw: bool,
     pub handler_cleanup: Option<(i64, Span)>,
+    /// Loop-stack length when the frame was pushed, so the loops enclosing the protected region
+    /// have indices `0..loop_depth` and the ones opened inside it start at `loop_depth`. A
+    /// `break`/`continue` whose target loop INDEX is strictly below `loop_depth` leaves the
+    /// region and must run the frame; one whose target index is `loop_depth` or more stays
+    /// inside and must not (`run_innermost_finally` skips when `loop_depth <= target`).
+    pub loop_depth: usize,
 }
 
 /// Compile-time callable target tracked for straight-line local FCC calls.
@@ -320,6 +326,16 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Loop-stack depth at each active `try` handler push; see
     /// `LoweringContext::loops_a_throw_would_leave`.
     pub try_loop_depths: Vec<usize>,
+    /// Exceptions a finalizer took from the in-flight cell and has not rethrown yet: the hidden
+    /// temp holding each, and the loop-stack and finally-stack depths its `finally` copy began
+    /// at. A jump that leaves the copy DISCARDS the exception, so `control_exit` releases it
+    /// there — see `stmt::exceptions::lower_catch_dispatch_with_finally`.
+    pub taken_finally_exceptions: Vec<(String, usize, usize)>,
+    /// Loop-stack indices whose cleanup the CURRENT exit path already emitted, so no later step
+    /// of the same path — an enclosing `finally` lowered inline, with its own exit — emits it
+    /// again. Loops inside a `finally` copy are cleaned before its exception is discarded; see
+    /// `stmt::control_exit::release_taken_exceptions`, the only writer.
+    pub exit_cleaned_loops: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     /// Per-local mutation generations used to distinguish a control-flow fact clear from an
     /// actual reassignment while lowering a try/catch region.
@@ -490,6 +506,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             loop_stack: Vec::new(),
             finally_stack: Vec::new(),
             try_loop_depths: Vec::new(),
+            taken_finally_exceptions: Vec::new(),
+            exit_cleaned_loops: Vec::new(),
             static_callable_locals: HashMap::new(),
             static_callable_local_epochs: HashMap::new(),
             function_global_names: HashMap::new(),
@@ -2906,6 +2924,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         }
         true
+    }
+
+    /// Releases an owned hidden temp's value and clears the slot, so the frame's own cleanup
+    /// finds nothing left to release.
+    pub(crate) fn release_owned_hidden_temp(&mut self, name: &str, span: Option<Span>) {
+        let Some(slot) = self.local_slots.get(name).copied() else {
+            return;
+        };
+        if self.builder.local_kind(slot) != LocalKind::OwnedTemp {
+            return;
+        }
+        self.emit_void(
+            Op::ReleaseLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(),
+            span,
+        );
+        self.clear_owned_hidden_temp(name, span);
     }
 
     /// Clears an owned hidden temp after its value has been loaded into SSA.

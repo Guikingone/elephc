@@ -511,7 +511,8 @@ fn validate_instruction_immediate(
         LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
         | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
-        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
+        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
+        | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
         BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
@@ -727,6 +728,7 @@ fn validate_opcode_rules(
         | LoadRefCell
         | LoadGlobal
         | LoadStaticLocal
+        | StaticLocalUninitialized
         | LoadStaticProperty
         | LoadStaticPropertyRefCell
         | LoadReflectionStaticProperty

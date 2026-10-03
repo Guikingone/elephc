@@ -16,6 +16,11 @@ pub(super) fn eval_named_callable_with_call_user_func_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(parameters) = eval_opcache_parameters(name, context) {
+        return eval_opcache_call_with_evaluated_args(
+            name, parameters, &positional_args(evaluated_args), None, context, values,
+        );
+    }
     if eval_builtin_uses_owned_arguments(name) {
         return eval_builtin_callback_with_arguments(name, positional_args(evaluated_args), false, context, values);
     }
@@ -80,6 +85,11 @@ pub(super) fn eval_named_callable_with_call_user_func_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(parameters) = eval_opcache_parameters(name, context) {
+        return eval_opcache_call_with_evaluated_args(
+            name, parameters, &evaluated_args, None, context, values,
+        );
+    }
     if evaluated_args
         .iter()
         .all(|arg| arg.name.is_none() && arg.ref_target.is_none())

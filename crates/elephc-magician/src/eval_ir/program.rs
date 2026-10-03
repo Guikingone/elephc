@@ -18,11 +18,44 @@ pub const EVAL_CLI_POPULATED_SUPERGLOBALS: [&str; 7] =
     ["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST"];
 
 /// Parsed eval fragment lowered into dynamic by-name statements.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalProgram {
     source_len: usize,
     statements: Vec<EvalStmt>,
+    #[serde(with = "cli_superglobal_names")]
     cli_superglobals: Vec<&'static str>,
+}
+
+/// Carries `cli_superglobals` through the `opcache.file_cache` store, which needs
+/// `Deserialize`: a `&'static str` cannot be read back from bytes, so the names are written
+/// as strings and mapped back onto [`EVAL_CLI_POPULATED_SUPERGLOBALS`] on read. A name
+/// outside that list is a decode error, so a foreign entry is refused rather than replayed
+/// without the superglobals its code expects.
+mod cli_superglobal_names {
+    /// Writes the names as a plain string sequence.
+    pub fn serialize<S: serde::Serializer>(
+        names: &Vec<&'static str>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(names, serializer)
+    }
+
+    /// Reads the names back as the static entries of the canonical list.
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<&'static str>, D::Error> {
+        let names: Vec<String> = serde::Deserialize::deserialize(deserializer)?;
+        names
+            .iter()
+            .map(|name| {
+                super::EVAL_CLI_POPULATED_SUPERGLOBALS
+                    .iter()
+                    .copied()
+                    .find(|known| known == name)
+                    .ok_or_else(|| serde::de::Error::custom("unknown CLI superglobal"))
+            })
+            .collect()
+    }
 }
 
 impl EvalProgram {
@@ -63,7 +96,7 @@ impl EvalProgram {
 }
 
 /// One source range inside the current eval fragment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvalSourceLocation {
     start_line: i64,
     end_line: i64,
