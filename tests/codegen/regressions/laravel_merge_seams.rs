@@ -92,3 +92,29 @@ try { echo constant("FIFTH" . $n); } catch (\Error $e) { echo $e->getMessage(), 
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "Undefined constant \"FOURTHY\"\nUndefined constant \"FIFTHY\"\n");
 }
+
+/// `iterator_to_array()` and `foreach` over an interpreter-declared `IteratorAggregate` reach its
+/// `getIterator()`. The bridge answers "definitely not" (2) when asked whether such an object is an
+/// `Iterator`, and the compiled probe read any non-zero answer as a yes: it called `rewind()` on
+/// the aggregate, and Laravel died on dotenv's `PhpOption\Some` at boot.
+#[test]
+fn test_iterator_to_array_over_an_interpreted_aggregate() {
+    let out = compile_and_run(
+        r#"<?php
+function grab($o) { return iterator_to_array($o); }
+function loop($o) { $r = []; foreach ($o as $k => $v) { $r[] = "$k=$v"; } return implode(",", $r); }
+eval('final class Opt implements IteratorAggregate {
+    public function __construct(private $v) {}
+    public function getIterator(): Traversable { return new ArrayIterator([$this->v]); }
+}
+final class Gen implements IteratorAggregate {
+    public function getIterator(): Traversable { yield "a" => 1; yield "b" => 2; }
+}');
+$o = eval('return new Opt("x");');
+$g = eval('return new Gen();');
+echo json_encode(grab($o)), json_encode(grab($g)), "\n";
+echo loop($o), "|", loop($g), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"x\"]{\"a\":1,\"b\":2}\n0=x|a=1,b=2\n");
+}

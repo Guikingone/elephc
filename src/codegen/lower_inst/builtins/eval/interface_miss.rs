@@ -53,7 +53,7 @@ pub(in crate::codegen::lower_inst) fn emit_eval_interface_method_on_miss(
     let boxed: EvalBoxedOperands = vec![EVAL_TEMP_CELL_OFFSET];
 
     emit_eval_boxed_temp_is_a_call(ctx, interface_name);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &not_implemented);
+    emit_branch_unless_is_a_match(ctx, &not_implemented);
 
     abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_STACK_BYTES); // an empty argument pack
@@ -133,8 +133,31 @@ pub(in crate::codegen::lower_inst) fn emit_branch_if_eval_saved_object_is_a(
     emit_eval_boxed_temp_is_a_call(ctx, interface_name);
     emit_release_eval_boxed_operands_keeping_int_answer(ctx, &[EVAL_TEMP_CELL_OFFSET]);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, matched_label);
+    let not_matched = ctx.next_label("eval_saved_object_not_matched");
+    emit_branch_unless_is_a_match(ctx, &not_matched);
+    abi::emit_jump(ctx.emitter, matched_label);
+    ctx.emitter.label(&not_matched);
     ctx.emitter.label(&not_owned);
+}
+
+/// Branches to `label` unless the `__elephc_eval_object_is_a` answer in the result register is 1.
+///
+/// A call made with no context gets 2 for an interpreted object that is definitely NOT an
+/// instance. Testing the answer for zero read that 2 as a match: every interpreted
+/// IteratorAggregate took the Iterator path, and `iterator_to_array()` called `rewind()` on it
+/// (Laravel's dotenv `Some` option, on every request), while a method-on-miss dispatch called an
+/// interface method the object does not implement.
+fn emit_branch_unless_is_a_match(ctx: &mut FunctionContext<'_>, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // 1 = the object is an instance of the interface
+            ctx.emitter.instruction(&format!("b.ne {}", label));                // 0 and 2 are both "not an instance"
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // 1 = the object is an instance of the interface
+            ctx.emitter.instruction(&format!("jne {}", label));                 // 0 and 2 are both "not an instance"
+        }
+    }
 }
 
 /// Asks the bridge whether the receiver boxed at `EVAL_TEMP_CELL_OFFSET` is a `target_class`.

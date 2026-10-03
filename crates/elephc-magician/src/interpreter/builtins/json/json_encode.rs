@@ -457,8 +457,6 @@ fn eval_json_encode_append_object(
             encoded?;
             return released;
         }
-        // An object that hands itself back holds the reference the call returned.
-        eval_release_value(context, values, serialized)?;
     }
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
     let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
