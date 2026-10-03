@@ -1380,7 +1380,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionClass::getTraitNames()` | `new ReflectionClass($class_name)` | Return trait names used directly by classes or traits |
 | `ReflectionClass::getTraits()` | `new ReflectionClass($class_name)` | Return directly used traits as name-keyed `ReflectionClass` objects |
 | `ReflectionClass::getTraitAliases()` | `new ReflectionClass($class_name)` | Return direct trait method aliases as an alias-name to `Trait::method` map |
-| `ReflectionClass::getMethods()` | `new ReflectionClass($class_name)` | Return `ReflectionMethod` objects for methods visible through the reflected class-like metadata |
+| `ReflectionClass::getMethods()` | `new ReflectionClass($class_name)` | Return `ReflectionMethod` objects for methods visible through the reflected class-like metadata. Interface lists preserve declaration order, including interleaved static methods, followed by inherited methods in parent order |
 | `ReflectionClass::getConstructor()` | `new ReflectionClass($class_name)` | Return the reflected constructor as a `ReflectionMethod`, or `null` when no constructor is visible |
 | `ReflectionClass::getParentClass()` | `new ReflectionClass($class_name)` | Return the reflected parent class as a `ReflectionClass`, or `false` when the reflected class-like symbol has no parent class |
 | `ReflectionClass::getProperties()` | `new ReflectionClass($class_name)` | Return `ReflectionProperty` objects for properties visible through the reflected class-like metadata |
