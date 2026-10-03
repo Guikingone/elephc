@@ -141,6 +141,10 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: call_object_destructor ---");
     emitter.label_global("__rt_call_object_destructor_body");
 
+    emitter.instruction("push rbp");                                            // preserve the caller frame for every normal and throwing exit
+    emitter.instruction("mov rbp, rsp");                                        // establish one shared frame before any branch reaches a callback
+    emitter.instruction("sub rsp, 16");                                         // reserve the object and transferred-Throwable spill slots
+
     emitter.instruction("test rdi, rdi");                                       // null receiver → nothing to destruct
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // skip the lookup for a null object
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // eax = object refcount (header offset -12)
@@ -255,6 +259,30 @@ mod tests {
 
         for instruction in ["mov r11, r10", "sub rsp, 32", "mov rdx, rsi", "mov rcx, rdi", "call r11", "add rsp, 32"] {
             assert!(eval_path.contains(instruction), "eval destructor callback needs MSx64 staging: {instruction}");
+        }
+    }
+
+    /// Every x86 branch that reaches `leave` owns the shared frame and both eval spill slots.
+    #[test]
+    fn x86_destructor_body_establishes_one_frame_before_any_exit_or_spill() {
+        for platform in [Platform::Linux, Platform::Windows] {
+            let mut emitter = Emitter::new(Target::new(platform, Arch::X86_64));
+            emit_call_object_destructor(&mut emitter);
+            let asm = emitter.output();
+            let body = asm
+                .split_once("__rt_call_object_destructor_body:")
+                .expect("destructor body")
+                .1;
+            let prologue = body.find("push rbp").expect("shared frame save");
+            let frame = body.find("mov rbp, rsp").expect("shared frame pointer");
+            let spills = body.find("sub rsp, 16").expect("shared spill allocation");
+            let first_branch = body.find("test rdi, rdi").expect("first body branch");
+            let first_spill = body.find("[rbp - 8]").expect("object spill");
+            let first_leave = body.find("leave").expect("shared epilogue");
+            assert!(prologue < frame && frame < spills && spills < first_branch, "{platform:?}");
+            assert!(spills < first_spill && prologue < first_leave, "{platform:?}");
+            assert_eq!(body.matches("push rbp").count(), 1, "{platform:?}");
+            assert_eq!(body.matches("leave").count(), 2, "{platform:?}");
         }
     }
 

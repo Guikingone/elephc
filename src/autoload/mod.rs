@@ -104,7 +104,6 @@ pub fn run_collecting_included(
 }
 
 /// Runs autoload expansion while applying conditional symbols to every physical file loaded.
-#[cfg(test)]
 #[allow(dead_code)]
 pub fn run_collecting_included_with_defines(
     program: Program,

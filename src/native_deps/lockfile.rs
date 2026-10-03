@@ -287,6 +287,20 @@ mod tests {
         assert_eq!(package.target[0].archives, ["lib/libelephc_libxml2_shim.a", "lib/libxml2.a"]);
     }
 
+    /// Verifies the committed regex example tracks both managed regex engines,
+    /// including Oniguruma's current recipe and Windows target plan.
+    #[test]
+    fn date_json_regex_example_lock_matches_current_catalog() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest =
+            ManifestDocument::load(&root.join("examples/date-json-regex/elephc.toml")).unwrap();
+        let lock = NativeLock::load(&root.join("examples/date-json-regex/elephc.lock")).unwrap();
+        lock.validate_current(&manifest).unwrap();
+        let oniguruma = lock.package("oniguruma").expect("Oniguruma is locked");
+        assert_eq!(oniguruma.recipe, 4);
+        assert!(oniguruma.target.iter().any(|target| target.name == "windows-x86_64"));
+    }
+
     /// Verifies every stale catalog dimension and unknown field fails closed.
     #[test]
     fn stale_or_extended_lock_is_rejected() {
