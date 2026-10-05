@@ -765,7 +765,8 @@ fn parse_instanceof_target(
     if matches!(&target, InstanceOfTarget::Name(_))
         && matches!(tokens.get(*pos), Some((Token::DoubleColon, _)))
         && tokens.get(*pos + 1).is_some_and(|(token, metadata)| {
-            crate::parser::keyword_name::bareword_name_from_token(token, metadata).is_some()
+            !matches!(token, Token::Class)
+                && crate::parser::keyword_name::bareword_name_from_token(token, metadata).is_some()
         })
     {
         if let Some((Token::LParen, metadata)) = tokens.get(*pos + 2) {

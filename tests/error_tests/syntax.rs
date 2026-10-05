@@ -859,6 +859,17 @@ fn test_error_unparenthesized_static_call_as_instanceof_target() {
     }
 }
 
+/// A class-name fetch followed by parentheses is not a static method call or a valid hint target.
+#[test]
+fn test_error_instanceof_class_fetch_is_not_a_method_call() {
+    for target in ["Foo::class()", "Foo::CLASS()", "self::class()"] {
+        expect_error(
+            &format!("<?php class Foo {{ function test($x) {{ return $x instanceof {target}; }} }}"),
+            "Expected ';'",
+        );
+    }
+}
+
 /// Constant-list diagnostics distinguish missing names and point comma successors at the bad token.
 #[test]
 fn test_error_class_constant_name_after_comma() {
