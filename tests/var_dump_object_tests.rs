@@ -1826,6 +1826,28 @@ fn reflection_subclass_hides_inherited_backing_slots() {
     assert_eq!(out, concat!("Mine\n", "object(Mine)#1 (0) {\n", "}\n",));
 }
 
+/// A `__debugInfo()` projection that reads a compiler backing slot
+/// (`return ['n' => $this->__name]`) must not publish that slot either: PHP's Reflection
+/// classes expose no `__name`, so the read is an undefined property (a warning plus a NULL
+/// entry). elephc drops the pair instead of rendering its private storage, so this fixture
+/// pins elephc's ACTUAL output (`object(Mine)#1 (0) {}`) against PHP's `["n"]=> NULL`.
+#[test]
+fn reflection_subclass_debug_info_projection_drops_backing_slots() {
+    let out = run_php(
+        "vd_reflection_subclass_debug_info_backing_slot",
+        concat!(
+            "<?php\n",
+            "class Mine extends ReflectionClass {\n",
+            "    public function __debugInfo(): array { return ['n' => $this->__name]; }\n",
+            "}\n",
+            "$m = new Mine('Mine');\n",
+            "echo (new ReflectionClass('Mine'))->getName(), \"\\n\";\n",
+            "var_dump($m);\n",
+        ),
+    );
+    assert_eq!(out, concat!("Mine\n", "object(Mine)#1 (0) {\n", "}\n",));
+}
+
 /// DIVERGENCE PIN. PHP exposes a public `name` property on `ReflectionFunction`,
 /// `ReflectionClass` and `ReflectionParameter` (and `name` + `class` on
 /// `ReflectionProperty`); elephc models only the private `__*` backing slots. Now that

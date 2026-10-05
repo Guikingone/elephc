@@ -3285,6 +3285,12 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         return projection
             .into_iter()
             .filter_map(|(key, prop_name)| {
+                // A projection that reads a compiler-only backing slot (`return ['n' => $this->__name]`
+                // in a Reflection subclass) must not publish that slot either: PHP answers the
+                // inaccessible name as an undefined property, not the compiler storage.
+                if is_reflection_backing_slot(class_info, class_name, &prop_name) {
+                    return None;
+                }
                 let (layout_index, (_, prop_ty)) = class_info
                     .properties
                     .iter()
