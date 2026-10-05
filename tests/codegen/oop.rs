@@ -62,6 +62,8 @@ mod class_relation_names;
 
 /// A property write whose receiver is statically `mixed` or an object union.
 mod mixed_receiver_property_writes;
+#[path = "oop/static_receiver_lifetime.rs"]
+mod static_receiver_lifetime;
 #[path = "oop/reflection_attribute_filter.rs"]
 mod reflection_attribute_filter;
 #[path = "oop/readonly_setter_review.rs"]

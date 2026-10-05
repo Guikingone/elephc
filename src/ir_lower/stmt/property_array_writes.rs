@@ -22,6 +22,15 @@ pub(super) fn lower_property_array_push(
     }, span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let object = lower_expr(ctx, object);
+    let receiver = property_write_receiver::PropertyWriteReceiver::for_array(ctx, object, property, span);
+    lower_property_array_push_value(ctx, receiver.value, property, value, span);
+    receiver.finish(ctx, span);
+}
+
+/// Mutates the array property while the caller holds its receiver lease.
+fn lower_property_array_push_value(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, value: &Expr, span: Span,
+) {
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
         lower_php_array_property_write(ctx, object, property, None, value, span, false);
         return;
@@ -141,6 +150,16 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     key_already_diagnosed: bool,
 ) {
     let object = lower_expr(ctx, object);
+    let receiver = property_write_receiver::PropertyWriteReceiver::for_array(ctx, object, property, span);
+    lower_property_array_assign_value(ctx, receiver.value, property, index, value, span, key_already_diagnosed);
+    receiver.finish(ctx, span);
+}
+
+/// Mutates the indexed property while the caller holds its receiver lease.
+fn lower_property_array_assign_value(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, index: &Expr,
+    value: &Expr, span: Span, key_already_diagnosed: bool,
+) {
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
         lower_php_array_property_write(
             ctx,

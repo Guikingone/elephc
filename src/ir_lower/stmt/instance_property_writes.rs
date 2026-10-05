@@ -39,21 +39,10 @@ pub(super) fn lower_property_assign(
         }
     }
     let object = lower_expr(ctx, object);
-    // Nullable static slots lend their boxed receiver. The RHS can replace that slot,
-    // so retain the box across evaluation and expose that lease to exception cleanup.
-    let retained_static_receiver = ctx.builder.value_defining_op(object.value) == Some(Op::LoadStaticProperty)
-        && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_));
-    let object = if retained_static_receiver {
-        crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, object, Some(span))
-    } else { object };
-    let receiver_pins = if retained_static_receiver {
-        crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span)
-    } else { Vec::new() };
+    let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+    let object = receiver.value;
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
-    // The outer pin protects the retained receiver only while the RHS may replace its
-    // static slot. Property stores and accessors publish their own throwing-window pins.
-    crate::ir_lower::expr::unpin_in_flight_owners(ctx, receiver_pins, span);
     // Preserve the original PHP tag until the initialization probe has chosen its branch.
     // Only an authorized first write reaches the backend's weak typed-property guard.
     let lowered_value = if readonly_write.is_some()
@@ -63,7 +52,7 @@ pub(super) fn lower_property_assign(
     } else { lowered_value };
     if let Some((overwrite_message, initialization_error)) = readonly_write {
         super::readonly_receiver_guard::guard_readonly_write_receiver(
-            ctx, object, lowered_value, property, span,
+            ctx, &receiver, lowered_value, property, span,
         );
         let data = ctx.intern_string(property);
         let initialized = ctx.emit_value(Op::PropInitialized, vec![object.value],
@@ -75,10 +64,10 @@ pub(super) fn lower_property_assign(
             else_target: initialize, else_args: Vec::new(),
         });
         ctx.builder.position_at_end(overwrite);
-        lower_readonly_write_error(ctx, object, lowered_value, &overwrite_message, span);
+        lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &overwrite_message, span);
         ctx.builder.position_at_end(initialize);
         if let Some(message) = initialization_error {
-            lower_readonly_write_error(ctx, object, lowered_value, &message, span);
+            lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &message, span);
             return;
         }
     }
@@ -100,19 +89,16 @@ pub(super) fn lower_property_assign(
     } else {
         lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
-    if ctx.value_is_owning_temporary(object) {
-        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
-    }
+    receiver.finish(ctx, span);
 }
 
 /// Releases independent evaluated operands before a readonly write throws its catchable Error.
 pub(super) fn lower_readonly_write_error(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, value: LoweredValue,
+    ctx: &mut LoweringContext<'_, '_>, receiver: property_write_receiver::PropertyWriteReceiver,
+    value: LoweredValue,
     message: &str, span: Span,
 ) {
-    if ctx.value_is_owning_temporary(object) {
-        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
-    }
+    receiver.finish(ctx, span);
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
