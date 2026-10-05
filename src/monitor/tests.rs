@@ -1442,6 +1442,47 @@ echo call_hot(1);
         ]);
     }
 
+    /// Declarations on the same line keep namespace and class ownership at each token.
+    #[test]
+    fn monitor_review_same_line_namespace_and_class_declarations() {
+        let source = "<?php namespace App\\One; function top() {} class Foo { function gen() { yield 1; } } function after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\top".into(), start: 1, end: 1 },
+            DeclRange { name: "App\\One\\Foo::gen".into(), start: 1, end: 1 },
+            DeclRange { name: "App\\One\\after".into(), start: 1, end: 1 },
+        ]);
+    }
+
+    /// Namespace declaration delimiters can follow their names on another line.
+    #[test]
+    fn monitor_review_multiline_namespace_delimiters() {
+        for delimiter in [";", "{"] {
+            let source = format!("<?php\nnamespace App\\One\n{delimiter}\nfunction inside() {{}}\n{}", if delimiter == "{" { "}" } else { "" });
+            assert_eq!(php_decl_ranges(&source), vec![
+                DeclRange { name: "App\\One\\inside".into(), start: 4, end: 4 },
+            ]);
+        }
+    }
+
+    /// A closing scope takes effect before a later declaration on the same source line.
+    #[test]
+    fn monitor_review_namespace_expires_within_closing_line() {
+        let source = "<?php\nnamespace App {\n function inside() {}\n} function after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\inside".into(), start: 3, end: 3 },
+            DeclRange { name: "after".into(), start: 4, end: 4 },
+        ]);
+    }
+
+    /// Comments and string contents cannot create namespace scopes or declaration braces.
+    #[test]
+    fn monitor_review_namespace_keywords_inside_comments_and_strings() {
+        let source = "<?php\nnamespace App\\One;\n// namespace Other;\n# namespace Another;\n/* namespace Block { */\n/* multi\nnamespace Hidden;\n*/\n$label = 'namespace Literal; } function fake() {}';\nfunction real() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\real".into(), start: 10, end: 10 },
+        ]);
+    }
+
     /// A semicolon namespace stays active even when its declaration has a trailing comment.
     #[test]
     fn monitor_review_semicolon_namespace_comment_keeps_scope() {
