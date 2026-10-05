@@ -266,9 +266,6 @@ impl Checker {
     fn resolve_function_variant_groups(&mut self, errors: &mut Vec<CompileError>) {
         let names: Vec<String> = self.function_variant_groups.keys().cloned().collect();
         for name in names {
-            if self.functions.contains_key(&name) {
-                continue;
-            }
             if let Err(error) =
                 self.ensure_function_variant_group_signature(&name, crate::span::Span::dummy())
             {
@@ -291,7 +288,12 @@ impl Checker {
         if let Some(error) = self.failed_variant_contracts.get(name) {
             return Err(error.clone());
         }
-        if self.functions.contains_key(name) {
+        if self.completed_function_signatures.contains(name)
+            || (self.functions.contains_key(name)
+                && self.function_variant_groups.get(name).is_some_and(|variants| {
+                    variants.iter().any(|variant| self.resolving_functions.contains(variant))
+                }))
+        {
             return Ok(());
         }
         let variants = self
@@ -340,8 +342,9 @@ impl Checker {
             self.resolve_function_signature(variant, &decl, param_types)?;
         }
 
-        // Failed body validation may leave a recursive placeholder in `functions`.
-        // Its type is not a resolved signature and must not invent a second diagnosis.
+        // In-flight and failed bodies both leave placeholders. An in-flight group is
+        // revisited after unchecked function resolution, rather than cached as complete.
+        // Failed bodies must not invent a signature disagreement from those placeholders.
         if variants.iter().any(|variant| !self.completed_function_signatures.contains(variant)) {
             return Ok(());
         }
@@ -376,6 +379,7 @@ impl Checker {
             }
         }
         self.functions.insert(name.to_string(), first);
+        self.completed_function_signatures.insert(name.to_string());
         Ok(())
     }
 
@@ -420,14 +424,17 @@ impl Checker {
         Ok(Some(sig))
     }
 
-    /// Emits one copy of each group-signature diagnosis while preserving other error ordering.
+    /// Emits one copy of each group or variant-declaration diagnosis in original error order.
     pub(super) fn deduplicate_variant_signature_errors(&self, errors: &mut Vec<CompileError>) {
         let messages: HashSet<_> = self.function_variant_groups.keys().map(|name| {
             format!("Function variants for '{}' must have identical signatures", name)
         }).collect();
+        let declaration_spans: HashSet<_> = self.function_variant_groups.values()
+            .flatten().filter_map(|variant| self.fn_decls.get(variant))
+            .map(|decl| decl.span).collect();
         let mut seen = HashSet::new();
         errors.retain(|error| {
-            !messages.contains(&error.message)
+            (!messages.contains(&error.message) && !declaration_spans.contains(&error.span))
                 || seen.insert((error.span, error.file.clone(), error.message.clone()))
         });
     }

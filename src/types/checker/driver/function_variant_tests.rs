@@ -125,3 +125,36 @@ fn variant_signature_inferred_placeholder_mismatch_can_recover() {
     let checked = crate::types::check(&program).expect("only declared contract failures are cached");
     assert_eq!(checked.functions["selected"].return_type, crate::types::PhpType::Str);
 }
+
+/// A group first visited from a variant body is compared after that body finishes.
+#[test]
+fn variant_signature_recursive_inferred_mismatch_without_top_level_call() {
+    let program = grouped_program("<?php\nfunction left_variant() { selected(); return 'left'; }\nfunction right_variant() { return 1; }");
+    for _ in 0..8 {
+        let errors = crate::types::check(&program).err().expect("completed variant returns disagree").flatten();
+        let mismatches: Vec<_> = errors.iter().filter(|error| error.message.contains("must have identical signatures")).collect();
+        assert_eq!(mismatches.len(), 1, "{errors:?}");
+        assert_eq!(mismatches[0].span.line, 3);
+    }
+}
+
+/// Matching variants replace a recursive placeholder even when no outer call visits the group.
+#[test]
+fn variant_signature_recursive_matching_returns_without_top_level_call() {
+    let program = grouped_program("<?php\nfunction left_variant() { selected(); return 'left'; }\nfunction right_variant() { return 'right'; }");
+    for _ in 0..8 {
+        let checked = crate::types::check(&program).expect("matching inferred variants remain valid");
+        assert_eq!(checked.functions["selected"].return_type, crate::types::PhpType::Str);
+    }
+}
+
+/// Contract preflight and unchecked resolution report each invalid declaration once.
+#[test]
+fn variant_signature_unknown_return_annotation_is_not_duplicated() {
+    let program = grouped_program("<?php\nfunction left_variant(): NotAClass { return null; }\nfunction right_variant(): NotAClass { return null; }\necho selected();");
+    let errors = crate::types::check(&program).err().expect("unknown return annotations must fail").flatten();
+    for line in [2, 3] {
+        let declarations: Vec<_> = errors.iter().filter(|error| error.span.line == line && error.message.contains("NotAClass")).collect();
+        assert_eq!(declarations.len(), 1, "{errors:?}");
+    }
+}
