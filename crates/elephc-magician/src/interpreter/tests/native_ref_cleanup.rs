@@ -163,10 +163,11 @@ fn native_function_binding_releases_named_args_when_an_earlier_required_slot_is_
         vec![EvaluatedCallArg { name: Some("b".into()), value: caller, ref_target: None }],
         &mut context, &mut values,
     );
-    assert!(matches!(outcome, Err(EvalStatus::RuntimeFatal)));
+    assert!(matches!(outcome, Err(EvalStatus::UncaughtThrowable)));
+    assert_argument_count_error(&mut context, &mut values);
     assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1);
     assert_eq!(values.cell_owners.values().sum::<usize>(), 1);
-    assert!(values.releases.is_empty(), "a borrowed caller operand must not be released here");
+    assert!(!values.releases.contains(&caller), "a borrowed caller operand must not be released here");
 }
 
 #[test]
@@ -185,10 +186,21 @@ fn variadic_native_function_binding_releases_named_args_with_an_earlier_required
         &mut context,
         &mut values,
     );
-    assert!(matches!(outcome, Err(EvalStatus::RuntimeFatal)));
+    assert!(matches!(outcome, Err(EvalStatus::UncaughtThrowable)));
+    assert_argument_count_error(&mut context, &mut values);
     assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1);
     assert_eq!(values.cell_owners.values().sum::<usize>(), 1);
-    assert!(values.releases.is_empty(), "a borrowed caller operand must not be released here");
+    assert!(!values.releases.contains(&caller), "a borrowed caller operand must not be released here");
+}
+
+/// Takes the pending throw a refused native binding scheduled, checks it is PHP's
+/// `ArgumentCountError`, and releases it so the ownership totals that follow count only the
+/// caller's cells. The message is pinned end to end by `tests/eval_argument_count_tests.rs`.
+fn assert_argument_count_error(context: &mut ElephcEvalContext, values: &mut FakeOps) {
+    let thrown = context.take_pending_throw().expect("a refused binding schedules its error");
+    let id = thrown.as_ptr() as usize;
+    assert_eq!(values.object_classes.get(&id).map(String::as_str), Some("ArgumentCountError"));
+    values.release(thrown).unwrap();
 }
 
 /// Failed marker allocation rolls back both earlier slots and the current raw or boxed lease.

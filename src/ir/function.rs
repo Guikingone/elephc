@@ -199,6 +199,8 @@ pub enum LocalKind {
 /// Function-level shape flags used by lowering and later codegen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FunctionFlags {
+    /// Whether compiler-internal source declared this function rather than the user's program.
+    pub is_internal: bool,
     pub is_main: bool,
     pub is_method: bool,
     pub is_closure: bool,

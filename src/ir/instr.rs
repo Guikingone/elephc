@@ -737,6 +737,10 @@ pub enum Op {
     LoadStaticLocal,
     StoreStaticLocal,
     InitStaticLocal,
+    /// Answers whether a static local's one-time initializer has not run yet: `I64` 1 before
+    /// the first `init_static_local` of the slot, 0 after. Lowering branches on it so the
+    /// initializer expression is evaluated only while the static is still unset.
+    StaticLocalUninitialized,
     LoadStaticProperty,
     /// Returns the address of a native static-property storage slot.
     ///
@@ -1205,6 +1209,7 @@ impl Op {
             LoadGlobal
             | LoadStaticProperty
             | StaticPropInitialized
+            | StaticLocalUninitialized
             | LoadReflectionStaticProperty
             | ReflectionStaticPropertyInitialized
             | ScopedConstantGet
@@ -1524,6 +1529,7 @@ impl Op {
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
+            StaticLocalUninitialized => "static_local_uninitialized",
             LoadStaticProperty => "load_static_property",
             LoadStaticPropertyRefCell => "load_static_property_ref_cell",
             StoreStaticProperty => "store_static_property",

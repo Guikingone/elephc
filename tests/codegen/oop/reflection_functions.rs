@@ -14,6 +14,47 @@
 
 use super::*;
 
+/// Layered diamond inheritance preserves method declaration order without duplicate names.
+#[test]
+fn test_reflection_interface_methods_layered_diamond() {
+    let mut source = String::from("<?php\ninterface Root { public function base(); }\n");
+    let mut parents = String::from("Root");
+    for layer in 0..3 {
+        source.push_str(&format!(
+            "interface Left{layer} extends {parents} {{}}\ninterface Right{layer} extends {parents} {{}}\n"
+        ));
+        parents = format!("Left{layer}, Right{layer}");
+    }
+    source.push_str(&format!(
+        "interface Leaf extends {parents} {{ public static function first(); public function last(); }}\n"
+    ));
+    source.push_str(
+        "foreach ((new ReflectionClass(Leaf::class))->getMethods() as $method) { echo $method->getName(), \",\"; }"
+    );
+    assert_eq!(compile_and_run(&source), "first,last,base,");
+}
+
+/// Interface methods retain declaration order across static methods, parents, and redeclarations.
+#[test]
+fn test_reflection_interface_methods_follow_declaration_order() {
+    let out = compile_and_run(r#"<?php
+interface ParentOne { public function inheritedOne(); public static function inheritedTwo(); }
+interface ParentTwo { public function other(); }
+interface Ordered extends ParentOne, ParentTwo {
+    public function zebra();
+    public static function alpha();
+    public function middle();
+    public function inheritedOne();
+    public static function beta();
+    public function last();
+}
+foreach ((new ReflectionClass(Ordered::class))->getMethods() as $method) {
+    echo $method->getName(), ",";
+}
+"#);
+    assert_eq!(out, "zebra,alpha,middle,inheritedOne,beta,last,inheritedTwo,other,");
+}
+
 /// Packed-or-hash storage reflects as one PHP type, with composite type methods called after narrowing.
 #[test]
 fn test_reflection_function_array_storage_has_one_php_type() {

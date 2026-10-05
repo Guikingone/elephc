@@ -150,6 +150,11 @@ pub(in crate::interpreter) fn eval_callable_with_values(
     if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
         return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
     }
+    if let Some(parameters) = eval_opcache_parameters(name, context) {
+        return eval_opcache_call_with_evaluated_args(
+            name, parameters, &positional_args(evaluated_args), None, context, values,
+        );
+    }
     if eval_builtin_uses_owned_arguments(name) {
         return eval_builtin_callback_with_arguments(name, positional_args(evaluated_args), false, context, values);
     }
@@ -185,6 +190,15 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
         return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+    }
+    if let Some(parameters) = eval_opcache_parameters(name, context) {
+        return eval_opcache_call_with_evaluated_args(
+            name, parameters, &evaluated_args, None, context, values,
+        );
+    }
+    // Check a known positional count before generic callable dispatch.
+    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+        eval_check_builtin_arity(name, evaluated_args.len(), context, values)?;
     }
     if eval_builtin_uses_owned_arguments(name) {
         return eval_builtin_callback_with_arguments(name, evaluated_args, true, context, values);
@@ -236,6 +250,14 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
             values,
         )?;
         return eval_native_function_with_values(function, evaluated_args, context, values);
+    }
+    // Legacy runtime handlers without registry signatures accept positional values only.
+    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+        let positional: Vec<RuntimeCellHandle> =
+            evaluated_args.iter().map(|arg| arg.value).collect();
+        if let Some(result) = eval_builtin_with_values(name, &positional, context, values)? {
+            return Ok(result);
+        }
     }
     Err(EvalStatus::UnsupportedConstruct)
 }

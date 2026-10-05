@@ -184,10 +184,20 @@ order for iteration.
 
 Includes follow PHP's cwd-first lookup and then fall back to the eval call-site
 directory. Included PHP files may contain normal `<?php ... ?>` blocks, raw text
-outside PHP tags is echoed, a `return` inside the included file becomes the
+outside PHP tags is echoed byte for byte, a `return` inside the included file becomes the
 include expression value, successful includes without `return` evaluate to `1`,
 repeated `*_once` includes evaluate to `true`, missing `include` returns
 `false` with warnings, and missing `require` aborts the eval fragment.
+
+An included file is parsed as one script, as PHP compiles it, so a template's
+blocks may span the tags: `<?php foreach ($rows as $r) { ?><li><?= $r ?></li><?php } ?>`,
+the alternative syntax (`<?php if ($x): ?>…<?php endif; ?>`) and a function whose
+body spans blocks all run. `<?=` echoes, `?>` swallows the one newline after it,
+`__LINE__` counts from the top of the file, and `<?php` opens code only before
+whitespace or the end of the file (the short `<?` stays text). A parse error
+anywhere in the file stops the include before any of it runs. The file's PHP
+blocks must be UTF-8; the text outside them may hold any bytes. Heredoc and
+nowdoc are not parsed in eval code, in an included file either.
 
 In eval, `get_included_files()` preserves first-inclusion order, with the first
 nonempty native call-site path retained as the main entry. A query inside a
@@ -1024,6 +1034,20 @@ where listed below unless a note says otherwise.
 | Constants | `define()`, `defined()` |
 
 ## Builtin notes
+
+A builtin called with an argument count PHP refuses throws a catchable
+`ArgumentCountError` with PHP's message (`strlen() expects exactly 1 argument,
+0 given`) on every spelling: direct calls, `call_user_func()`,
+`call_user_func_array()`, variable calls, spreads, and callbacks. The arguments
+are evaluated first, as PHP sends them before the callee checks the count. A
+count PHP accepts but an eval handler does not implement yet, such as
+`array_keys()` with a filter value, is still an eval runtime fatal. Eval-declared
+functions, methods, and closures, and compiled functions called from eval, throw
+`ArgumentCountError` when a required argument is missing (`Too few arguments to
+function f(), 0 passed and exactly 1 expected`). PHP's positional message also
+names the calling file and line (`0 passed in ... on line 1 and ...`); eval does
+not track the line of a running statement, so that clause is omitted. A compiled
+function is named by its lowercase registered name.
 
 Eval `settype()` mutates direct variables, array elements, object properties
 including dynamic property names, and static properties including dynamic

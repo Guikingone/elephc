@@ -10,6 +10,34 @@
 
 use super::*;
 
+/// The shape ABI distinguishes compiler-internal declarations from user and legacy callbacks.
+#[test]
+fn register_native_function_shape_preserves_declaration_origin() {
+    let mut ctx = ElephcEvalContext::new();
+    let name = b"opcache_reset";
+    let registered = unsafe {
+        __elephc_eval_register_native_function(
+            &mut ctx, name.as_ptr(), name.len() as u64,
+            1usize as *mut c_void, Some(fake_native_invoker), 0,
+        )
+    };
+    assert_eq!(registered, 1);
+    assert!(!ctx.native_function("opcache_reset").unwrap().is_internal());
+    for (flags, expected) in [
+        (crate::context::NATIVE_SHAPE_FLAG_INTERNAL, true),
+        (0, false),
+        (1 << 20, false),
+    ] {
+        let registered = unsafe {
+            __elephc_eval_register_native_function_shape(
+                &mut ctx, name.as_ptr(), name.len() as u64, 0, 0, flags,
+            )
+        };
+        assert_eq!(registered, 1);
+        assert_eq!(ctx.native_function("opcache_reset").unwrap().is_internal(), expected);
+    }
+}
+
 /// Verifies native AOT registration records function parameter metadata and defaults.
 #[test]
 fn register_native_function_reports_function_exists() {

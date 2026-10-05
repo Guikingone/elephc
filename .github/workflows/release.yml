@@ -172,7 +172,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14  # Apple Silicon runner
+            runner: macos-15  # Apple Silicon runner
           # Linux release builds run on ubuntu-22.04 (glibc 2.35) rather than
           # the ubuntu-24.04 generation CI tests on, so the published binaries
           # also run on older distros (Ubuntu 22.04, Debian 12, RHEL 9, ...).
@@ -298,7 +298,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu

@@ -21,6 +21,7 @@ pub(super) fn eval_native_function_registrations(
             name: function.name.clone(),
             signature: function_signature_from_eir(function),
             bridge_supported: function_signature_can_bridge_with_eval(function),
+            is_internal: function.flags.is_internal,
         })
         .collect()
 }

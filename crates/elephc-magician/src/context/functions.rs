@@ -235,12 +235,13 @@ impl ElephcEvalContext {
     pub fn define_native_function(
         &mut self,
         name: impl Into<String>,
-        function: NativeFunction,
+        mut function: NativeFunction,
     ) -> Result<(), NativeFunction> {
         let name = name.into();
         if self.functions.contains_key(&name) || self.native_functions.contains_key(&name) {
             return Err(function);
         }
+        function.name.clone_from(&name);
         self.native_functions.insert(name, function);
         Ok(())
     }

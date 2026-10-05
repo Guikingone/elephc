@@ -157,3 +157,23 @@ modes under the CI profile with zero retries. The eval-budget selector matches
 34 explicitly named eval ownership cases and excludes native `evaluation` and
 `spread_evaluation` cases. Build output is warning-free, temporary profiling was
 removed, and the global/compiled-program 60-second guards remain intact.
+
+## Integration with current main
+
+- [x] Resolve the overlapping MIME validation split using main's four test names.
+- [x] Reuse main's mbstring-family budget instead of retaining a duplicate x86_64 override.
+- [x] Revalidate the merged range pass, timeout regressions, and configuration.
+- [x] Prepare the integration commit and exact-head CI verification.
+- [ ] Confirm the complete supported-target CI matrix on the published head.
+
+Main now includes the same weak/strict native/eval MIME split and a bounded
+mbstring-family budget. The merge preserves these changes and every original
+assertion. The redundant earlier x86_64-only eval ownership override is removed;
+the nested-default opaque-eval budget remains scoped to its actual helper users.
+
+Post-merge validation passed with zero retries: 211 EIR unit tests, 34 codegen
+cases with the optimizer enabled (23 integer-range and 11 timeout regressions),
+and the same 11 timeout regressions with the optimizer disabled. The four slow
+eval fixtures finished in approximately 64 seconds within their bounded budget.
+The compiler and updated Magician library build without warnings, Nextest parses
+the merged configuration, and `git diff --check` is clean.

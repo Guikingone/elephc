@@ -12,6 +12,7 @@
 //!   evaluated, object, static, and call-array entry surfaces.
 
 mod array_dispatch;
+mod call_user_func;
 mod execution;
 mod object_dispatch;
 mod static_dispatch;
@@ -19,6 +20,7 @@ mod static_dispatch;
 use super::*;
 
 pub(in crate::interpreter) use array_dispatch::*;
+pub(in crate::interpreter) use call_user_func::*;
 pub(in crate::interpreter) use execution::*;
 use object_dispatch::*;
 use static_dispatch::*;

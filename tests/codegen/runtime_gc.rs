@@ -12,6 +12,12 @@
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
+#[path = "runtime_gc/large_unary_string_results.rs"]
+mod large_unary_string_results;
+#[path = "runtime_gc/static_local_initializers.rs"]
+mod static_local_initializers;
+#[path = "runtime_gc/ini_lookup_arguments.rs"]
+mod ini_lookup_arguments;
 #[path = "runtime_gc/mixed_string_cast_return.rs"]
 mod mixed_string_cast_return;
 #[path = "runtime_gc/object_cast.rs"]
@@ -147,6 +153,8 @@ mod serialize_magic_results;
 mod growth;
 #[path = "runtime_gc/heap.rs"]
 mod heap;
+#[path = "runtime_gc/implode_boxed_operand.rs"]
+mod implode_boxed_operand;
 #[path = "runtime_gc/heap_codegen.rs"]
 mod heap_codegen;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]

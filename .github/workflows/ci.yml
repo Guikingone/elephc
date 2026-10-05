@@ -52,7 +52,7 @@ jobs:
   # wait for a queued or slower macOS archive job.
   build-archive-macos-aarch64:
     name: Build & Archive Tests (macos-aarch64)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -576,7 +576,7 @@ jobs:
   non-codegen-tests-macos-aarch64:
     name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/8)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -698,7 +698,7 @@ jobs:
   web-tests-macos-aarch64:
     name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -817,7 +817,7 @@ jobs:
   codegen-tests-macos-aarch64:
     name: Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -1053,7 +1053,7 @@ jobs:
   pdo-codegen-tests-macos-aarch64:
     name: PDO Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -1205,7 +1205,7 @@ jobs:
   curl-codegen-tests-macos-aarch64:
     name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1464,7 +1464,7 @@ jobs:
   # or misses a framework/archive on either platform, fails here.
   curl-ios-compile-link:
     name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1525,7 +1525,7 @@ jobs:
   # libxml2, `-liconv`, or the SDK's zlib/bzip2 on either platform, fails here.
   xml-ios-compile-link:
     name: XML iOS Compile & Link (${{ matrix.elephc_target }})
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1584,7 +1584,7 @@ jobs:
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -1950,7 +1950,7 @@ jobs:
       matrix:
         include:
           - target: macos-aarch64
-            runner: macos-14
+            runner: macos-15
           - target: linux-x86_64
             runner: ubuntu-24.04
           - target: linux-aarch64
@@ -2259,7 +2259,7 @@ jobs:
 
   benchmark:
     name: Benchmark Suite
-    runs-on: macos-14  # Apple Silicon runner
+    runs-on: macos-15  # Apple Silicon runner
     # The benchmark suite does a full release build and only tracks trends, so it
     # runs on pushes to main rather than on every pull request.
     if: github.ref == 'refs/heads/main'

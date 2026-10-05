@@ -75,6 +75,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.push_called_class_scope(called_class_name.to_string());
     context.push_method_magic_scope(class_name, method);
     let binding = match bind_evaluated_function_args_with_ref_mode(
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -220,6 +221,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.push_called_class_scope(called_class_name.to_string());
     context.push_method_magic_scope(class_name, method);
     let binding = match bind_evaluated_function_args_with_ref_mode(
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),

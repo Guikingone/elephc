@@ -431,6 +431,7 @@ fn web_injection_survives_the_nesting_limit_on_a_small_embedder_stack() {
             elephc::php_version::PhpVersion::default(),
             &[],
             &mut inventory,
+            None,
         );
         let wrapped = matches!(
             ast.last().map(|stmt| &stmt.kind),

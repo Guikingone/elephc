@@ -47,7 +47,6 @@ mod comparisons;
 mod conversions;
 mod enums;
 pub(super) mod exceptions;
-pub(super) use exceptions::emit_type_error;
 mod mixed_narrowing;
 mod externs;
 mod floats;
@@ -353,6 +352,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadStaticLocal => static_locals::lower_load_static_local(ctx, &inst),
         Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, &inst),
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
+        Op::StaticLocalUninitialized => {
+            static_locals::lower_static_local_uninitialized(ctx, &inst)
+        }
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::LoadStaticPropertyRefCell => {
             static_properties::lower_load_static_property_ref_cell(ctx, &inst)

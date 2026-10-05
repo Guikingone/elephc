@@ -519,3 +519,51 @@ fn malformed_numeric_literals_are_refused() {
     assert_eq!(error("0x"), EvalParseError::InvalidNumber);
     assert_eq!(error("1e"), EvalParseError::InvalidNumber);
 }
+
+/// `\u{…}` is decoded to its codepoint's UTF-8 bytes, as reference PHP 8.5.10 decodes it.
+///
+/// The eval lexer had no `\u` arm and kept the six characters `\u{e9}`. Without a `{` the
+/// escape stays literal; an empty, non-hex or out-of-range body is refused.
+#[test]
+fn a_unicode_escape_is_decoded_to_utf8() {
+    assert_eq!(kinds("\"\\u{e9}\";")[0], string("é"));
+    assert_eq!(kinds("\"\\u{1F600}!\";")[0], string("😀!"));
+    assert_eq!(kinds("\"\\u41\";")[0], string("\\u41"));
+    assert_eq!(error("\"\\u{}\";"), EvalParseError::InvalidUtf8);
+    assert_eq!(error("\"\\u{zz}\";"), EvalParseError::InvalidUtf8);
+    assert_eq!(error("\"\\u{110000}\";"), EvalParseError::InvalidUtf8);
+}
+
+/// A `?>` in a line comment inside `{$…}` is refused, as reference PHP refuses it.
+///
+/// It ends the comment, then PHP mode, in the middle of the expression: PHP 8.5.10 raises a
+/// parse error for `"{$a[// ?>⏎"k"]}"`, and the eval lexer evaluated it to `v` (PR #968 review,
+/// two reviewers). A `?>` elsewhere in the capture is still an ordinary pair of characters.
+#[test]
+fn a_close_tag_in_a_line_comment_inside_an_interpolation_is_refused() {
+    assert_eq!(error("\"{$a[// ?>\n\"k\"]}\";"), EvalParseError::UnexpectedToken);
+    assert_eq!(error("\"{$a[# ?>\n\"k\"]}\";"), EvalParseError::UnexpectedToken);
+    assert_eq!(kinds("\"{$a[/* ?> */\"k\"]}\";"), kinds(r#""{$a["k"]}";"#));
+}
+
+/// A comment inside `{$…}` is inert to the eval lexer too: the fragment lexes exactly as it does
+/// without the comment. A quote or brace in the comment used to end the capture or open a string.
+///
+/// The empty comments pin a second defect: the capture skipped the first byte of a block
+/// comment's body, which for `/**/` is the closing star, so the scan ran past `*/` and the
+/// fragment failed to parse (PR #968 review; reference PHP 8.5.10 prints `v`).
+#[test]
+fn a_comment_inside_a_complex_interpolation_is_inert() {
+    let plain = kinds(r#""{$a["k"]}";"#);
+    for source in [
+        r#""{$a[/**/"k"]}";"#,
+        r#""{$a[/***/"k"]}";"#,
+        r#""{$a[/*/ */"k"]}";"#,
+        r#""{$a[/* " */ "k"]}";"#,
+        r#""{$a[/* } { */ "k"]}";"#,
+        "\"{$a[ // \" } '\n\"k\"]}\";",
+        "\"{$a[ # \" }\n\"k\"]}\";",
+    ] {
+        assert_eq!(kinds(source), plain, "{source}");
+    }
+}
