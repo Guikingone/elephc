@@ -143,7 +143,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14  # Apple Silicon runner
+            runner: macos-15  # Apple Silicon runner
           # Same glibc 2.35 generation as `release.yml`, so a nightly runs
           # wherever a release does (Ubuntu 22.04, Debian 12, RHEL 9, ...).
           - target: x86_64-unknown-linux-gnu
@@ -278,7 +278,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu

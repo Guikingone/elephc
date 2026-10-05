@@ -189,7 +189,7 @@ runner. A minimal GitHub Actions shape for the native-runner subset is:
 strategy:
   matrix:
     include:
-      - { runner: macos-14, target: macos-aarch64 }
+      - { runner: macos-15, target: macos-aarch64 }
       - { runner: ubuntu-24.04-arm, target: linux-aarch64 }
       - { runner: ubuntu-24.04, target: linux-x86_64 }
 env:

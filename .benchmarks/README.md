@@ -47,7 +47,7 @@ absolute median-time line chart, and an "× slower than C" ratio chart.
 The numbers are **not** produced locally. They come from the CI benchmark job:
 
 - Workflow: `.github/workflows/ci.yml`, job **"Benchmark Suite"** (runs on the
-  `macos-14` Apple Silicon runner).
+  `macos-15` Apple Silicon runner).
 - Generator: `scripts/benchmark_suite.py`, invoked as
   `--iterations 3 --warmup 1`, which compiles each case in
   `benchmarks/cases/` with the release `elephc` binary, runs it, and records the
