@@ -273,9 +273,11 @@ impl Span {
 
     /// Returns the union of two spans: the earlier start and the later end.
     ///
-    /// The merged span carries the EARLIER start's source identity, so a merge never loses
-    /// the included-file identity that keys source maps. A dummy operand (line 0) is ignored
-    /// so merging with a generated child never drags a real span to 0:0.
+    /// The merged span carries the EARLIER start's source identity and DROPS the other
+    /// operand's, so a merge across an included file keys as the file that supplied the earlier
+    /// start. A `dummy()` operand (line 0) is ignored so merging with a node built without a
+    /// source location never drags a real span to 0:0; a `synthetic()` span is NOT ignored,
+    /// because its line starts at `SYNTHETIC_LINE_BASE`.
     pub fn merge(self, other: Span) -> Span {
         if other.line == 0 {
             return self;
@@ -427,11 +429,11 @@ mod tests {
         assert_eq!(merged, Span::with_end(2, 5, 3, 4));
     }
 
-    /// A merged span keeps a DEFINED source identity: the earlier start's. Merging spans from
-    /// two included sources must not read back as root, and with distinct starts the identity
-    /// is independent of the operand order; a root operand on the start side still yields root
-    /// (issue #1293). Two starts at identical coordinates tie-break to the receiver, which no
-    /// parser path can produce across files.
+    /// A merged span keys as the EARLIER start's source and drops the other operand's: merging
+    /// spans from two included sources must not read back as root, and with distinct starts the
+    /// surviving identity is independent of the operand order; a root operand on the start side
+    /// still yields root (issue #1293). Two starts at identical coordinates tie-break to the
+    /// receiver, which no parser path can produce across files.
     #[test]
     fn merge_keeps_the_earlier_starts_source_identity() {
         let first = Span::new_in_source(2, 4, 5);
