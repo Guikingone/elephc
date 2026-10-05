@@ -464,9 +464,12 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   `class_parents()`, `class_implements()` and `class_exists()`, which reject a non-literal name at
   compile time instead of answering. One gap of its own: an enum declared in the compiled
   program does not carry its implicit `UnitEnum`/`BackedEnum` interfaces, so
-  `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP says `true`. This limitation does
-  also affects compiled `is_a()` and `is_subclass_of()` calls for an enum declared only inside
-  `eval()`: those calls consult the AOT class table, which does not contain the eval declaration.
+  `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP says `true`. This limitation also
+  affects compiled `is_a()` and `is_subclass_of()` calls with a class-name string for an enum
+  declared only inside `eval()`: those calls consult the AOT class table, which does not contain
+  the eval declaration. An enum case returned by `eval()` is an object subject instead;
+  compiled `is_a($case, "UnitEnum")` and `is_subclass_of($case, "UnitEnum")` use the dynamic
+  object bridge and report its implicit interfaces, including `BackedEnum` for a backed case.
   For a compiled enum with an `implements` clause,
   `class_implements()` lists only the directly declared interfaces; it omits their transitive
   parents and the implicit `UnitEnum`/`BackedEnum` interfaces. An enum declared inside `eval()`

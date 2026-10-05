@@ -888,8 +888,11 @@ and `BackedEnum` interfaces. Relation probes such as `is_a()` and
 Enums declared inside `eval()` do report transitive interface parents and
 `UnitEnum`, plus `BackedEnum` for backed enums, to probes executed inside `eval()`, like PHP.
 Compiled `class_implements()` also reports these interfaces for eval-declared enums.
-Compiled `is_a()` and `is_subclass_of()` calls still return `false` for an enum declared
-only inside `eval()`, because their relation lookup uses the AOT class table.
+Compiled `is_a()` and `is_subclass_of()` calls with a class-name string still return
+`false` for an enum declared only inside `eval()`, because those calls consult the
+AOT class table. Object subjects returned by `eval()` use the dynamic object bridge
+instead: `is_a($case, "UnitEnum")` and `is_subclass_of($case, "UnitEnum")` report
+the implicit enum interface, including `BackedEnum` for a backed case.
 `class_uses()` reports direct trait uses for eval-declared and generated/AOT
 classes, traits, and enums. `class_alias()` can
 alias eval-declared and generated/AOT
