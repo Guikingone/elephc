@@ -3063,6 +3063,27 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
         &format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));             // transfer boxed Mixed replacements as handles rather than payload words
+    // Release the concrete occupant this write replaces. The caller ref-cell holds a raw
+    // pointer for an array, hash, object or string, and overwriting it orphans that occupant.
+    // `__rt_decref_any` validates the pointer against the managed heap window, so a `.rodata`
+    // string the ownership analysis must not free is skipped; a scalar source tag carries no
+    // pointer and is left alone. A callable source tag (10) is heap-backed but is not released
+    // here: the eval bridge cannot stage a concrete callable ref-cell today.
+    let release_occupant = ctx.next_label("ref_marker_release_occupant");
+    let keep_occupant = ctx.next_label("ref_marker_keep_occupant");
+    for tag in [1u8, 4, 5, 6] {
+        ctx.emitter.instruction(&format!("cmp x12, #{}", tag));                 // heap-backed concrete occupant?
+        ctx.emitter.instruction(&format!("b.eq {}", release_occupant));         // release it before the overwrite
+    }
+    ctx.emitter.instruction(&format!("b {}", keep_occupant));                   // a scalar word has no occupant to release
+    ctx.emitter.label(&release_occupant);
+    ctx.emitter.instruction("stp x0, x10, [sp, #-16]!");                        // preserve the array result and ref-cell address
+    ctx.emitter.instruction("str x2, [sp, #-16]!");                             // preserve the fresh wrapper across the release
+    ctx.emitter.instruction("ldr x0, [x10]");                                   // the old occupant pointer
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    ctx.emitter.instruction("ldr x2, [sp], #16");                               // restore the fresh wrapper
+    ctx.emitter.instruction("ldp x0, x10, [sp], #16");                          // restore the array result and ref-cell address
+    ctx.emitter.label(&keep_occupant);
     ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement Mixed low payload word
     ctx.emitter.instruction("str x12, [x10]");                                  // write the replacement low word through the caller ref-cell
     ctx.emitter.instruction("ldr x12, [x2, #16]");                              // load the replacement Mixed high payload word
@@ -3120,6 +3141,27 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
         &format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("je {}", mixed_cell_label));               // transfer boxed Mixed replacements as handles rather than payload words
+    // See the AArch64 arm: release the replaced concrete occupant, range-checked so a
+    // `.rodata` string the ownership analysis must not free is skipped.
+    let release_occupant = ctx.next_label("ref_marker_release_occupant");
+    let keep_occupant = ctx.next_label("ref_marker_keep_occupant");
+    for tag in [1u8, 4, 5, 6] {
+        ctx.emitter.instruction(&format!("cmp r11, {}", tag));                  // heap-backed concrete occupant?
+        ctx.emitter.instruction(&format!("je {}", release_occupant));           // release it before the overwrite
+    }
+    ctx.emitter.instruction(&format!("jmp {}", keep_occupant));                 // a scalar word has no occupant to release
+    ctx.emitter.label(&release_occupant);
+    ctx.emitter.instruction("sub rsp, 32");                                     // reserve an aligned spill for the result, ref-cell and wrapper
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");                        // preserve the array result
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r10");                    // preserve the ref-cell address
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");                   // preserve the fresh wrapper
+    ctx.emitter.instruction("mov rax, QWORD PTR [r10]");                        // the old occupant pointer
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // restore the array result
+    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                    // restore the ref-cell address
+    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");                   // restore the fresh wrapper
+    ctx.emitter.instruction("add rsp, 32");                                     // release the aligned spill
+    ctx.emitter.label(&keep_occupant);
     ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement Mixed low payload word
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // write the replacement low word through the caller ref-cell
     ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 16]");                   // load the replacement Mixed high payload word
