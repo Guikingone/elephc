@@ -61,18 +61,54 @@ var_dump($t->s, $t->f);
     assert_eq!(out, "string(1) \"z\"\nfloat(2.5)\n");
 }
 
-/// Refined untyped slots fail closed when their runtime storage representation is ambiguous.
+/// A same-type write into a refined untyped slot now lands: PHP stores the value as-is, and the
+/// runtime tag matches the slot's refined representation.
 #[test]
-fn test_mixed_receiver_write_refuses_an_untyped_refined_property() {
-    let out = compile_and_run_capture(
+fn test_mixed_receiver_write_accepts_a_matching_refined_untyped_property() {
+    let out = compile_and_run(
         r#"<?php
 class T { public $u = 1; }
 function write(mixed $o): void { $o->u = 9; }
+$t = new T();
+write($t);
+var_dump($t->u);
+"#,
+    );
+    assert_eq!(out, "int(9)\n");
+}
+
+/// The issue's reproduction: int- and string-refined untyped properties both accept a same-type
+/// write through a `mixed` receiver, matching PHP's `6b`.
+#[test]
+fn test_mixed_receiver_write_reaches_untyped_refined_scalars() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public $pub = 3; public $s = "a"; }
+function direct(mixed $o): void { $o->pub = 6; $o->s = "b"; }
+$t = new T();
+direct($t);
+echo $t->pub, $t->s, "\n";
+"#,
+    );
+    assert_eq!(out, "6b\n");
+}
+
+/// A runtime type the refined slot cannot represent still fails closed rather than coercing it,
+/// which would diverge from PHP's store-as-is rule for an untyped property.
+#[test]
+fn test_mixed_receiver_write_refuses_a_mismatched_refined_untyped_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class T { public $u = 1; }
+function write(mixed $o): void { $o->u = "z"; }
         write(new T());
 "#,
     );
     let diagnostic = format!("{}{}", out.stdout, out.stderr);
-    assert!(!out.success, "untyped refined property write unexpectedly succeeded");
+    assert!(
+        !out.success,
+        "mismatched refined untyped property write unexpectedly succeeded"
+    );
     assert!(
         diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property T::$u"),
         "output: {}",
