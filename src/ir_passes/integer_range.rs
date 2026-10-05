@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Forward dataflow is edge-sensitive for signed integer comparisons.
+//! - CFG states omit implicit scalar top/literal facts; availability uses dominator-tree intervals.
 //! - Natural-loop block parameters with constant-step recurrences receive bounded induction
 //!   ranges, preventing abstract interpretation from unrolling loops one iteration at a time.
 //! - Every arithmetic proof uses `i128`; unknown or unsupported shapes keep PHP's checked
@@ -81,7 +82,7 @@ impl IntRange {
     }
 }
 
-/// Path-local integer facts at one block boundary.
+/// Path-local facts: scalar top and immutable literal ranges are implicit.
 type RangeState = HashMap<ValueId, IntRange>;
 
 /// Rewrites overflow-checked integer operations proven safe by range analysis.
@@ -122,12 +123,14 @@ fn analyze_block_entries(
 ) -> Option<Vec<Option<RangeState>>> {
     let dominance = compute_dominance(function);
     let loops = compute_loops(function, &dominance);
+    let availability = ValueAvailability::new(function, &dominance);
     let loop_headers: HashSet<BlockId> = loops.loops().iter().map(|lp| lp.header).collect();
     let mut states = vec![None; function.blocks.len()];
     let mut entry = RangeState::new();
     for &param in &function.block(function.entry)?.params {
         if value_is_i64(function, param) {
-            entry.insert(param, induction.get(&param).copied().unwrap_or(IntRange::full()));
+            set_range(function, &mut entry, param,
+                Some(induction.get(&param).copied().unwrap_or(IntRange::full())));
         }
     }
     states[function.entry.as_raw() as usize] = Some(entry);
@@ -167,7 +170,7 @@ fn analyze_block_entries(
                 induction,
                 &mut edge_state,
             );
-            retain_values_available_at(function, &dominance, edge.target, &mut edge_state);
+            retain_values_available_at(function, &availability, edge.target, &mut edge_state);
             if merge_entry_state(
                 function,
                 edge.target,
@@ -255,17 +258,53 @@ fn outgoing_edges(term: &Terminator) -> Vec<Edge> {
     }
 }
 
+/// Constant-time dominance queries for pruning many facts on deep CFG edges.
+struct ValueAvailability {
+    intervals: Vec<Option<(usize, usize)>>,
+}
+
+impl ValueAvailability {
+    /// Numbers the existing dominator tree iteratively, leaving unreachable blocks unnumbered.
+    fn new(function: &Function, dominance: &DominanceInfo) -> Self {
+        let mut intervals = vec![None; function.blocks.len()];
+        let mut clock = 0;
+        let mut work = vec![(function.entry, false)];
+        while let Some((block, exiting)) = work.pop() {
+            if exiting {
+                let (start, _) = intervals[block.as_raw() as usize].unwrap();
+                intervals[block.as_raw() as usize] = Some((start, clock));
+                clock += 1;
+            } else {
+                intervals[block.as_raw() as usize] = Some((clock, usize::MAX));
+                clock += 1;
+                work.push((block, true));
+                work.extend(dominance.children(block).iter().rev().map(|&child| (child, false)));
+            }
+        }
+        Self { intervals }
+    }
+
+    /// Matches dominance's reflexive rule, otherwise requiring a nested reachable tree interval.
+    fn dominates(&self, definition: BlockId, target: BlockId) -> bool {
+        if definition == target { return true; }
+        let Some((definition, target)) = self.intervals.get(definition.as_raw() as usize)
+            .copied().flatten().zip(self.intervals.get(target.as_raw() as usize).copied().flatten())
+        else { return false; };
+        definition.0 <= target.0 && target.1 <= definition.1
+    }
+}
+
 /// Drops SSA facts whose definitions are not available at the destination entry.
 fn retain_values_available_at(
     function: &Function,
-    dominance: &DominanceInfo,
+    availability: &ValueAvailability,
     target: BlockId,
     state: &mut RangeState,
 ) {
     state.retain(|value, _| match function.value(*value).map(|value| value.def) {
-        Some(ValueDef::BlockParam { block, .. }) => dominance.dominates(block, target),
+        Some(ValueDef::BlockParam { block, .. }) => availability.dominates(block, target),
         Some(ValueDef::Instruction { block, .. }) => {
-            block != target && dominance.dominates(block, target)
+            block != target && availability.dominates(block, target)
         }
         None => false,
     });
@@ -284,7 +323,7 @@ fn install_target_arguments(
     };
     let argument_ranges: Vec<Option<IntRange>> = args
         .iter()
-        .map(|value| state.get(value).copied())
+        .map(|value| range_for_value(function, state, *value))
         .collect();
     for (index, &param) in block.params.iter().enumerate() {
         state.remove(&param);
@@ -298,9 +337,7 @@ fn install_target_arguments(
                 .flatten()
                 .or(Some(IntRange::full()))
         });
-        if let Some(range) = range {
-            state.insert(param, range);
-        }
+        set_range(function, state, param, range);
     }
 }
 
@@ -351,6 +388,10 @@ fn merge_entry_state(
             *previous = joined;
             changed = true;
         }
+        if joined == IntRange::full() && value_is_i64(function, value) {
+            changed = true;
+            return false;
+        }
         true
     });
     changed
@@ -364,10 +405,30 @@ fn transfer_instruction(function: &Function, inst_id: InstId, state: &mut RangeS
     let Some(result) = inst.result else {
         return;
     };
-    if let Some(range) = instruction_range(function, inst, state) {
-        state.insert(result, range);
+    let range = instruction_range(function, inst, state);
+    set_range(function, state, result, range);
+}
+
+/// Stores only nonredundant facts, retaining full-domain boxed facts because they prove an integer tag.
+fn set_range(function: &Function, state: &mut RangeState, value: ValueId, range: Option<IntRange>) {
+    if let Some(range) = range.filter(|range| {
+        !value_is_i64(function, value) || (*range != IntRange::full() && literal_range(function, value).is_none())
+    }) {
+        state.insert(value, range);
     } else {
-        state.remove(&result);
+        state.remove(&value);
+    }
+}
+
+/// Reads a scalar literal's immutable point interval without carrying it along CFG edges.
+fn literal_range(function: &Function, value: ValueId) -> Option<IntRange> {
+    if !value_is_i64(function, value) { return None; }
+    let ValueDef::Instruction { inst, .. } = function.value(value)?.def else { return None; };
+    let instruction = function.instruction(inst)?;
+    match (instruction.op, instruction.immediate.as_ref()) {
+        (Op::ConstI64, Some(Immediate::I64(value))) => Some(IntRange::point(*value)),
+        (Op::ConstBool, Some(Immediate::Bool(value))) => Some(IntRange::point(i64::from(*value))),
+        _ => None,
     }
 }
 
@@ -428,7 +489,7 @@ fn instruction_range(
     }
 }
 
-/// Returns a known state range, or the full domain for any scalar I64 value.
+/// Returns an explicit fact, an implicit literal, or scalar I64's implicit full domain.
 fn range_for_value(
     function: &Function,
     state: &RangeState,
@@ -437,6 +498,7 @@ fn range_for_value(
     state
         .get(&value)
         .copied()
+        .or_else(|| literal_range(function, value))
         .or_else(|| value_is_i64(function, value).then_some(IntRange::full()))
 }
 
@@ -611,8 +673,8 @@ fn refine_comparison_edge(
         return Some(());
     };
     let (next_lhs, next_rhs) = refine_ranges(lhs_range, predicate, rhs_range)?;
-    state.insert(lhs, next_lhs);
-    state.insert(rhs, next_rhs);
+    set_range(function, state, lhs, Some(next_lhs));
+    set_range(function, state, rhs, Some(next_rhs));
     Some(())
 }
 

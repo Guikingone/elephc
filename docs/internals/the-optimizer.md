@@ -816,6 +816,14 @@ arithmetic. It recognizes constant-step loop-carried parameters in natural loops
 and combines their initial value, comparison bound, and update step to constrain
 induction variables on the loop body and back edge.
 
+CFG states store only nonredundant path facts. Immutable scalar literals are read
+from their defining instructions, and an absent scalar integer fact denotes the
+full signed domain. A full-domain boxed fact remains explicit because it also
+proves the integer runtime tag. This avoids copying literal and unconstrained
+scalar entries through every edge of large prelude functions.
+Fact availability uses an iterative numbering of the existing dominator tree,
+so pruning each value at a CFG edge does not walk the full dominator chain.
+
 Boolean casts normalize to `[0, 1]`; sharing the `I64` representation with integers
 does not make them identity conversions. Integer-sink specialization and numeric
 chain fusion require an actual PHP `int` cast, never a `bool` cast. Loop-invariant

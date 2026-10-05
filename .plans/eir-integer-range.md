@@ -128,3 +128,32 @@ Focused validation passed with zero retries: all 11 affected cases with the
 optimizer enabled and disabled, seven integer-range all-target tests, a
 warning-free build, configuration filter-name checks, and `git diff --check`.
 The full supported-target execution matrix remains the CI publication gate.
+
+## Remaining x86_64 timeout envelopes
+
+- [x] Inspect the seven new 60-second timeouts on head `22accea8d`.
+- [x] Reproduce redundant range facts and compare the pass's prelude analysis cost.
+- [x] Keep states sparse and use constant-time fact-availability queries without weakening overflow proofs.
+- [x] Split catalog ownership and MIME weak/strict native/eval cases, preserving every original assertion.
+- [x] Apply a bounded eval-ownership family budget instead of adding one exception per failed member.
+- [x] Validate the final focused optimizer-on/off cases and prepare publication.
+
+The preceding repairs passed; this run failed on different members of the same
+multi-compilation eval cohort. A native-named nested-property ownership helper
+also compiles two opaque eval programs, so it receives the existing core-eval
+budget. Ordinary native tests and the global guard retain their 60-second limit.
+
+The range analysis previously copied full-domain scalar facts and immutable
+literal facts through CFG edges. Regression fixtures reproduced 1,028 redundant
+entries in a state that can be empty. Sparse states recover those facts from
+types and literal definitions, while full-domain boxed facts remain explicit
+because they prove the integer tag. Iterative dominator-tree intervals avoid a
+full ancestor walk for each retained fact. Tests compare these queries with the
+original analysis on deep, unreachable, and 972 generated cyclic CFGs.
+
+Final focused validation passed: 211 EIR unit tests, 23 integer-range runtime and
+all-target regressions, and all 11 timeout replacement cases in both optimizer
+modes under the CI profile with zero retries. The eval-budget selector matches
+34 explicitly named eval ownership cases and excludes native `evaluation` and
+`spread_evaluation` cases. Build output is warning-free, temporary profiling was
+removed, and the global/compiled-program 60-second guards remain intact.

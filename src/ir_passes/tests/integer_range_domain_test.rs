@@ -7,6 +7,8 @@
 //! Key details:
 //! - Unsupported shared expressions must be cached as unknown.
 //! - Deep graphs must not consume the native call stack.
+//! - Scalar top and literal facts stay implicit instead of inflating CFG states.
+//! - Iterative fact-availability queries must match the original dominance analysis.
 
 use super::*;
 use crate::ir::Builder;
@@ -75,6 +77,130 @@ fn deep_expression_uses_bounded_call_stack() {
         &function, result, &HashMap::new(), &mut memo,
     ), Some(IntRange::point(20_001)));
     assert_eq!(memo.len(), 20_001);
+}
+
+/// A large sequence of unconstrained scalars does not populate every outgoing edge state.
+#[test]
+fn unconstrained_scalars_and_literals_keep_entry_states_sparse() {
+    let mut function = Function::new("sparse_unknowns".to_string(), IrType::Void, PhpType::Void);
+    let (next, one, unknown);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        next = builder.create_named_block("next", vec![(IrType::I64, PhpType::Int)]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let local = builder.add_local(Some("unknown".to_string()), IrType::I64,
+            PhpType::Int, crate::ir::LocalKind::PhpLocal);
+        for _ in 0..1_024 {
+            builder.emit_load_local(local, IrType::I64, PhpType::Int);
+        }
+        unknown = builder.emit_load_local(local, IrType::I64, PhpType::Int);
+        one = builder.emit_const_i64(1);
+        let sum = emit_scalar_binop(&mut builder, Op::ICheckedAddToInt, unknown, one);
+        builder.terminate(Terminator::Br { target: next, args: vec![sum] });
+        builder.position_at_end(next);
+        builder.terminate(Terminator::Return { value: None });
+    }
+    validate_function(&function).unwrap();
+    let states = analyze_block_entries(&function, &HashMap::new()).unwrap();
+    let state = states[next.as_raw() as usize].as_ref().unwrap();
+    assert!(state.is_empty(), "redundant facts inflated the state: {}", state.len());
+    assert_eq!(range_for_value(&function, state, unknown), Some(IntRange::full()));
+    assert_eq!(range_for_value(&function, state, one), Some(IntRange::point(1)));
+    assert!(collect_safe_candidates(&function, &states).is_empty());
+}
+
+/// An implicit literal still supplies a precise range through an explicit block argument.
+#[test]
+fn implicit_literal_arguments_preserve_checked_arithmetic_proofs() {
+    let mut function = Function::new("literal_argument".to_string(), IrType::I64, PhpType::Int);
+    let (next, literal, parameter, result);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        next = builder.create_named_block("next", vec![(IrType::I64, PhpType::Int)]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        literal = builder.emit_const_i64(7);
+        builder.terminate(Terminator::Br { target: next, args: vec![literal] });
+        builder.position_at_end(next);
+        parameter = builder.block_param(next, 0);
+        let one = builder.emit_const_i64(1);
+        result = emit_scalar_binop(&mut builder, Op::ICheckedAddToInt, parameter, one);
+        builder.terminate(Terminator::Return { value: Some(result) });
+    }
+    validate_function(&function).unwrap();
+    let states = analyze_block_entries(&function, &HashMap::new()).unwrap();
+    let state = states[next.as_raw() as usize].as_ref().unwrap();
+    assert_eq!(state.len(), 1);
+    assert_eq!(state.get(&parameter), Some(&IntRange::point(7)));
+    assert_eq!(range_for_value(&function, state, literal), Some(IntRange::point(7)));
+    assert!(IntegerRange.run(&mut function, &mut DataPool::default()));
+    let ValueDef::Instruction { inst, .. } = function.value(result).unwrap().def else {
+        panic!("arithmetic result is not an instruction");
+    };
+    assert_eq!(function.instruction(inst).unwrap().op, Op::IAdd);
+    validate_function(&function).unwrap();
+}
+
+/// A full-domain boxed fact still proves an integer tag, unlike an absent boxed fact.
+#[test]
+fn boxed_full_domain_facts_are_not_discarded() {
+    let mut function = Function::new("boxed_full".to_string(), IrType::Void, PhpType::Void);
+    let (next, boxed);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        next = builder.create_named_block("next", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let local = builder.add_local(Some("unknown".to_string()), IrType::I64,
+            PhpType::Int, crate::ir::LocalKind::PhpLocal);
+        let unknown = builder.emit_load_local(local, IrType::I64, PhpType::Int);
+        let zero = builder.emit_const_i64(0);
+        boxed = builder.emit(Op::ICheckedAdd, vec![unknown, zero], None,
+            IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+        builder.terminate(Terminator::Br { target: next, args: vec![] });
+        builder.position_at_end(next);
+        builder.emit(Op::Release, vec![boxed], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        builder.terminate(Terminator::Return { value: None });
+    }
+    validate_function(&function).unwrap();
+    let states = analyze_block_entries(&function, &HashMap::new()).unwrap();
+    let state = states[next.as_raw() as usize].as_ref().unwrap();
+    assert_eq!(state.len(), 1);
+    assert_eq!(state.get(&boxed), Some(&IntRange::full()));
+    assert_eq!(range_for_value(&function, &RangeState::new(), boxed), None);
+}
+
+/// Iterative dominance intervals agree with the original queries on deep and unreachable blocks.
+#[test]
+fn value_availability_matches_deep_dominance() {
+    let mut function = Function::new("deep_dominance".to_string(), IrType::Void, PhpType::Void);
+    let blocks;
+    {
+        let mut builder = Builder::new(&mut function);
+        blocks = (0..513).map(|index| builder.create_named_block(format!("block_{index}"), vec![])).collect::<Vec<_>>();
+        builder.set_entry(blocks[0]);
+        for pair in blocks[..512].windows(2) {
+            builder.position_at_end(pair[0]);
+            builder.terminate(Terminator::Br { target: pair[1], args: vec![] });
+        }
+        for &block in &blocks[511..] {
+            builder.position_at_end(block);
+            builder.terminate(Terminator::Return { value: None });
+        }
+    }
+    validate_function(&function).unwrap();
+    let dominance = compute_dominance(&function);
+    let availability = ValueAvailability::new(&function, &dominance);
+    for &anchor in &[blocks[0], blocks[3], blocks[511], blocks[512]] {
+        for &block in &blocks {
+            assert_eq!(availability.dominates(anchor, block), dominance.dominates(anchor, block));
+            assert_eq!(availability.dominates(block, anchor), dominance.dominates(block, anchor));
+        }
+    }
 }
 
 /// Samples narrow and wide intervals around zero, powers of two, and signed overflow limits.
@@ -276,6 +402,13 @@ fn check_loop_trace(mut x: i64, mut y: i64, mask: i64, descending: bool, split_l
         builder.terminate(Terminator::Return { value: None });
     }
     assert!(validate_function(&function).is_ok());
+    let dominance = compute_dominance(&function);
+    let availability = ValueAvailability::new(&function, &dominance);
+    for left in &function.blocks {
+        for right in &function.blocks {
+            assert_eq!(availability.dominates(left.id, right.id), dominance.dominates(left.id, right.id));
+        }
+    }
     IntegerRange.run(&mut function, &mut DataPool::default());
     assert!(validate_function(&function).is_ok());
     let op = |value| {
