@@ -730,8 +730,12 @@ impl OdbcConn {
 
     /// Opens either CLI flavor while retaining its distinct PDO identity.
     fn open(dsn: &str, flavor: CliFlavor) -> Result<Self, String> {
+        // Seed an EMPTY diagnostic, not a placeholder: a failure that never reaches an ODBC call
+        // (an empty access token, a rejected AccessToken/credentials combination, a missing
+        // driver) leaves this in place, and PDO's connection-level `errorInfo` then takes the
+        // prelude's `08006` fallback instead of publishing a synthetic `HY000`.
         remember_open_error(&ErrorState {
-            sqlstate: "HY000".to_string(),
+            sqlstate: String::new(),
             native_code: 0,
             message: "CLI connection initialization failed".to_string(),
         });
@@ -3632,6 +3636,17 @@ mod tests {
         let state = unsafe { std::ffi::CStr::from_ptr(crate::elephc_pdo_last_open_sqlstate()) };
         assert_eq!(state.to_str().unwrap(), "42S22");
         assert_eq!(crate::elephc_pdo_last_open_native_code(), 207);
+    }
+
+    /// A `sqlsrv:` failure that never reaches an ODBC call (an empty access token is rejected
+    /// while parsing the DSN) leaves the CLI diagnostic EMPTY, so the prelude applies its
+    /// `08006` fallback instead of publishing the old synthetic `HY000`.
+    #[cfg(feature = "sqlsrv")]
+    #[test]
+    fn sqlsrv_open_failure_without_a_cli_diagnostic_leaves_an_empty_sqlstate() {
+        let result = OdbcConn::open_sqlsrv("sqlsrv:Server=localhost;Database=app;AccessToken=");
+        assert!(result.is_err(), "an empty access token must be rejected");
+        assert_eq!(open_diagnostic(), (String::new(), 0));
     }
 
     /// Appends one driver-format length-prefixed UTF-16 classification field.
