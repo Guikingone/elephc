@@ -737,6 +737,12 @@ fn emit_refined_untyped_tag_guard(
             ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{}]", tag_reg, box_reg)); // boxed value runtime tag
         }
     }
+    // An object slot's reads use the refined class's property layout, so tag 6 alone is not
+    // enough: the payload must be an instance of that class (or a subclass). Any other class
+    // would be read back through the wrong offsets (issue #1319 review).
+    if let PhpType::Object(class_name) = slot.php_type.codegen_repr() {
+        return emit_refined_untyped_object_class_guard(ctx, box_reg, tag_reg, &class_name, store_label);
+    }
     for tag in tags {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -749,6 +755,55 @@ fn emit_refined_untyped_tag_guard(
         match ctx.emitter.target.arch {
             Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {}", store_label)), // take the store arm when the tag matches
             Arch::X86_64 => ctx.emitter.instruction(&format!("je {}", store_label)), // take the store arm when the tag matches
+        }
+    }
+    Ok(())
+}
+
+/// Branches to `store_label` when the boxed value is an instance of the refined class.
+///
+/// The runtime class id is walked up `_class_parent_ids`, so a subclass is accepted while an
+/// unrelated class falls through to the caller's refusal. `__rt_exception_matches` is the
+/// shared object-to-class matcher (the same walk `instanceof` and `catch` use); its class-target
+/// arm is exactly `is_a(object, class_id)`. A refined class with no emitted metadata leaves the
+/// refusal in place rather than guessing.
+fn emit_refined_untyped_object_class_guard(
+    ctx: &mut FunctionContext<'_>,
+    box_reg: &str,
+    tag_reg: &str,
+    class_name: &str,
+    store_label: &str,
+) -> Result<()> {
+    let Some(class_id) = ctx
+        .module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .map(|info| info.class_id)
+    else {
+        return Ok(()); // no emitted class metadata to match: keep the refusal
+    };
+    let done = ctx.next_label("refined_untyped_object_refuse");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #6", tag_reg));           // only an object payload can occupy an object slot
+            ctx.emitter.instruction(&format!("b.ne {}", done));                 // a non-object value falls through to the refusal
+            abi::emit_load_from_address(ctx.emitter, "x0", box_reg, 8);         // unbox the object pointer (boxed low word)
+            abi::emit_load_int_immediate(ctx.emitter, "x1", class_id as i64);   // the refined class the slot's layout belongs to
+            ctx.emitter.instruction("mov x2, #0");                              // kind 0 = class target, not an interface
+            abi::emit_call_label(ctx.emitter, "__rt_exception_matches");        // is_a(object, refined class): walks parent ids
+            ctx.emitter.instruction(&format!("cbnz x0, {}", store_label));      // the same class or a subclass can use this slot's layout
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 6", tag_reg));            // only an object payload can occupy an object slot
+            ctx.emitter.instruction(&format!("jne {}", done));                  // a non-object value falls through to the refusal
+            abi::emit_load_from_address(ctx.emitter, "rdi", box_reg, 8);        // unbox the object pointer (boxed low word)
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", class_id as i64);  // the refined class the slot's layout belongs to
+            ctx.emitter.instruction("xor edx, edx");                            // kind 0 = class target, not an interface
+            abi::emit_call_label(ctx.emitter, "__rt_exception_matches");        // is_a(object, refined class): walks parent ids
+            ctx.emitter.instruction("test eax, eax");                           // did the matcher accept the object's class?
+            ctx.emitter.instruction(&format!("jne {}", store_label));           // the same class or a subclass can use this slot's layout
+            ctx.emitter.label(&done);
         }
     }
     Ok(())

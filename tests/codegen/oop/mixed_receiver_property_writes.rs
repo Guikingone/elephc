@@ -116,6 +116,54 @@ function write(mixed $o): void { $o->u = "z"; }
     );
 }
 
+/// A runtime value of an UNRELATED class must be refused, not stored and then read back through
+/// the refined class's offsets (#1319 review). The slot's layout belongs to the refined class
+/// alone, so a foreign object would read the wrong words.
+#[test]
+fn test_mixed_receiver_write_refuses_a_mismatched_refined_untyped_object_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class A { public $x = 10; public $n = 3; }
+class B { public $n = 2; }
+class H { public $o; function __construct() { $this->o = new A(); } }
+function w(mixed $h, mixed $v): void { $h->o = $v; }
+$h = new H();
+w($h, new B());
+var_dump($h->o->n);
+"#,
+    );
+    let diagnostic = format!("{}{}", out.stdout, out.stderr);
+    assert!(
+        !out.success,
+        "an unrelated class into a refined object slot unexpectedly succeeded"
+    );
+    assert!(
+        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property H::$o"),
+        "output: {}",
+        diagnostic
+    );
+}
+
+/// A same-class or subclass runtime value still lands in the refined untyped object slot: the
+/// slot's layout is the refined class's, and a subclass shares that prefix (#1319 review).
+#[test]
+fn test_mixed_receiver_write_accepts_same_and_subclass_into_a_refined_untyped_object_property() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $x = 10; public $n = 3; }
+class Sub extends A { public $m = 5; }
+class H { public $o; function __construct() { $this->o = new A(); } }
+function w(mixed $h, mixed $v): void { $h->o = $v; }
+$h = new H();
+w($h, new A());
+var_dump($h->o->n);
+w($h, new Sub());
+var_dump($h->o->n, $h->o->x);
+"#,
+    );
+    assert_eq!(out, "int(3)\nint(3)\nint(10)\n");
+}
+
 /// Two classes declaring the same property name is what makes this a runtime dispatch rather than
 /// a static resolution: each receiver must reach ITS own slot.
 #[test]
