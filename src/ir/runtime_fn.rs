@@ -2316,6 +2316,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayDiffKey
                 | RuntimeFnId::ArrayIntersectAssoc
                 | RuntimeFnId::ArrayIntersectKey
+                // `array_merge_recursive` builds its result the same way, so a named operand's
+                // call-argument pin is released too; left behind, it leaked the whole first table.
+                | RuntimeFnId::ArrayMergeRecursive
                 | RuntimeFnId::ArrayFill
                 | RuntimeFnId::ArrayFillKeys
                 // Every `array_flip` lowering allocates its destination table before writing a

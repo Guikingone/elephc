@@ -281,3 +281,42 @@ echo $t, "\n";
     assert_eq!(out.stdout, "480\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies the key and pair set operations and `array_merge_recursive` release what they are
+/// handed, run in a loop under `--heap-debug`.
+///
+/// Two leaks: the five builtins sat in the default `MayAliasArguments` ownership bucket, so the
+/// call-argument pin on a named first operand was never released and `$a` leaked its whole table
+/// on every call; and `array_diff_assoc` / `array_intersect_assoc` never released the persisted
+/// string each compared string value renders to. The loop leaked 420 blocks.
+#[test]
+fn test_key_and_pair_set_operations_release_their_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function run(): string {
+    $out = [];
+    for ($i = 0; $i < 30; $i++) {
+        $a = ["x" => "k" . $i, "y" => "v", "z" => 3, "n" => 12.5];
+        $b = ["y" => "v", "z" => "3", "w" => "k" . $i, "n" => 12];
+        $out = [
+            json_encode(array_diff_key($a, $b)),
+            json_encode(array_intersect_key($a, $b)),
+            json_encode(array_diff_assoc($a, $b)),
+            json_encode(array_intersect_assoc($a, $b)),
+            json_encode(array_merge_recursive($a, $b)),
+        ];
+    }
+    return implode("|", $out);
+}
+echo run();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        r#"{"x":"k29"}|{"y":"v","z":3,"n":12.5}|{"x":"k29","n":12.5}|{"y":"v","z":3}|{"x":"k29","y":["v","v"],"z":[3,"3"],"n":[12.5,12],"w":"k29"}"#,
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
