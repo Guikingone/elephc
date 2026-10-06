@@ -90,6 +90,16 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'test(mbstring_regex) or test(mb_ereg_) or test(mbstring_catalog_forced_runtime_callable)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# These native-named nested-default probes actually run two opaque eval programs
+# through the core collection cleanup helper. Use that eval family's bounded budget.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
 # It legitimately runs ~65-70s, just over the global 60s cap, so it needs a
@@ -132,6 +142,17 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'binary(extension_loaded_tests) and test(=get_loaded_extensions_dynamic_flag_tracks_linked_bridges)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# This single compilation injects both PDO and mysqli preludes and links their shared
+# archive in an isolated cold cache. Both macOS attempts reached the 60s cap, so give
+# this exact combined-surface probe the existing PDO budget without changing its checks.
+[[profile.default.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=pdo_and_mysqli_usage_reports_both)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=pdo_and_mysqli_usage_reports_both)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # The `codegen::eval` fixtures compile, link (against the Magician staticlib), and

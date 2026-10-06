@@ -101,9 +101,8 @@ echo reloadOwnedLocal($code, "old");
     }
 }
 
-/// A first syntactic store after opaque eval retires any owner restored into that future local.
-#[test]
-fn first_post_eval_string_store_retires_the_runtime_reloaded_slot_on_all_targets() {
+/// Checks first-store retirement and assembly emission for one independently scheduled target.
+fn check_first_post_eval_string_store_retires_the_runtime_reloaded_slot(target: &str) {
     let source = r#"<?php
 function opaqueEvalFutureString(string $value): string { return $value; }
 function assignAfterOpaqueEval(string $source): string {
@@ -114,30 +113,58 @@ function assignAfterOpaqueEval(string $source): string {
 }
 echo assignAfterOpaqueEval('return null; // ' . $argc);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let function = module.functions.iter()
-            .find(|function| function.name == "assignAfterOpaqueEval").unwrap();
-        let eval = function.instructions.iter().position(|inst| {
-            inst.op == Op::LanguageConstructCall
-                && matches!(inst.immediate, Some(Immediate::ProfiledData { .. }))
-        }).expect("opaque eval call");
-        let local = function.locals.iter()
-            .find(|local| local.name.as_deref() == Some("future")).unwrap();
-        let slot = Some(Immediate::LocalSlot(local.id));
-        let store = function.instructions.iter().position(|inst| {
-            inst.op == Op::StoreLocal && inst.immediate == slot
-        }).expect("first future-local store");
-        assert!(eval < store, "{target}: the local is first assigned after eval");
-        assert_eq!(function.instructions[eval + 1..store].iter().filter(|inst| {
-            inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
-        }).count(), 1, "{target}: retire the owner runtime eval may have restored before the first store");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-    }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let function = module.functions.iter()
+        .find(|function| function.name == "assignAfterOpaqueEval").unwrap();
+    let eval = function.instructions.iter().position(|inst| {
+        inst.op == Op::LanguageConstructCall
+            && matches!(inst.immediate, Some(Immediate::ProfiledData { .. }))
+    }).expect("opaque eval call");
+    let local = function.locals.iter()
+        .find(|local| local.name.as_deref() == Some("future")).unwrap();
+    let slot = Some(Immediate::LocalSlot(local.id));
+    let store = function.instructions.iter().position(|inst| {
+        inst.op == Op::StoreLocal && inst.immediate == slot
+    }).expect("first future-local store");
+    assert!(eval < store, "{target}: the local is first assigned after eval");
+    assert_eq!(function.instructions[eval + 1..store].iter().filter(|inst| {
+        inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
+    }).count(), 1, "{target}: retire the owner runtime eval may have restored before the first store");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+/// The first post-eval string store retires the restored owner on macOS ARM64.
+#[test]
+fn first_post_eval_string_store_retires_the_runtime_reloaded_slot_macos() {
+    check_first_post_eval_string_store_retires_the_runtime_reloaded_slot("macos-aarch64");
+}
+
+/// The first post-eval string store retires the restored owner on iOS devices.
+#[test]
+fn first_post_eval_string_store_retires_the_runtime_reloaded_slot_ios_device() {
+    check_first_post_eval_string_store_retires_the_runtime_reloaded_slot("ios-arm64");
+}
+
+/// The first post-eval string store retires the restored owner on the iOS Simulator.
+#[test]
+fn first_post_eval_string_store_retires_the_runtime_reloaded_slot_ios_simulator() {
+    check_first_post_eval_string_store_retires_the_runtime_reloaded_slot("ios-sim-arm64");
+}
+
+/// The first post-eval string store retires the restored owner on Linux ARM64.
+#[test]
+fn first_post_eval_string_store_retires_the_runtime_reloaded_slot_linux_arm64() {
+    check_first_post_eval_string_store_retires_the_runtime_reloaded_slot("linux-aarch64");
+}
+
+/// The first post-eval string store retires the restored owner on Linux x86_64.
+#[test]
+fn first_post_eval_string_store_retires_the_runtime_reloaded_slot_linux_x86_64() {
+    check_first_post_eval_string_store_retires_the_runtime_reloaded_slot("linux-x86_64");
 }
 
 /// A scalar first store keeps its deferred retirement when later control flow widens the slot.
