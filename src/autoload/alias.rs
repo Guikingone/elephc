@@ -13,10 +13,13 @@
 //!   against the namespace and class imports in effect at the call, tracked with the name
 //!   resolver's own rules so both passes agree on the name.
 //! - Runtime-dynamic alias calls are left in the program and rejected by the checker.
+//! - Disabled autoload is diagnosed on eligible source forms before constant folding.
 //! - Resolver-created include wrappers still count as top-level for included-file aliases.
 //! - The alias is a subclass, not a true PHP runtime alias, so identity checks differ in documented cases.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+
+use crate::errors::CompileError;
 
 use crate::names::{php_symbol_key, Name, NameKind};
 use crate::parser::ast::{
@@ -172,33 +175,44 @@ fn positional_class_alias_args(stmt: &Stmt) -> Option<&[Expr]> {
     Some(args)
 }
 
-/// Records exact top-level calls whose names and positional shape permit collection.
-/// The autoload flag is deliberately excluded so only that independent limitation is diagnosed.
-pub(crate) fn constant_alias_call_sites(program: &Program) -> HashSet<usize> {
-    let mut sites = HashSet::new();
-    collect_constant_alias_call_sites(program, &mut sites);
-    sites
-}
-
-/// Mirrors only the collector's top-level wrapper traversal, not conditional or function bodies.
-fn collect_constant_alias_call_sites(program: &Program, sites: &mut HashSet<usize>) {
+/// Diagnoses disabled autoload only on source forms the collector itself accepts.
+///
+/// Run before constant folding: a ternary or cast that later becomes a literal
+/// must retain its unsupported source-shape diagnostic regardless of this flag.
+pub(super) fn validate_alias_autoload(program: &[Stmt]) -> Result<(), CompileError> {
     let scope = AliasScope::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::NamespaceBlock { body, .. } | StmtKind::IncludeOnceGuard { body, .. }
-                | StmtKind::Synthetic(body) => collect_constant_alias_call_sites(body, sites),
-            StmtKind::ExprStmt(expr) => {
+                | StmtKind::Synthetic(body) => validate_alias_autoload(body)?,
+            StmtKind::ExprStmt(_) => {
                 if positional_class_alias_args(stmt).is_some_and(|args| {
                     constant_class_name(&args[0], &scope).is_some()
                         && constant_class_name(&args[1], &scope).is_some()
+                        && args.get(2).is_some_and(|arg| literal_autoload_is_false(&arg.kind))
                 }) {
-                    sites.insert(expr as *const Expr as usize);
+                    return Err(CompileError::new(stmt.span, UNSUPPORTED_AUTOLOAD_FALSE));
                 }
             }
             _ => {}
         }
     }
+    Ok(())
 }
+
+/// Recognizes scalar literals PHP coerces to false for the autoload parameter.
+fn literal_autoload_is_false(kind: &ExprKind) -> bool {
+    match kind {
+        ExprKind::BoolLiteral(false) | ExprKind::IntLiteral(0) | ExprKind::Null => true,
+        ExprKind::FloatLiteral(value) => *value == 0.0,
+        ExprKind::StringLiteral(value) => value.is_empty() || value == "0",
+        _ => false,
+    }
+}
+
+/// Explains the collector's unsupported explicitly disabled autoload mode.
+const UNSUPPORTED_AUTOLOAD_FALSE: &str = "class_alias() does not support autoload=false in AOT mode; \
+    omit autoload or pass true";
 
 /// Folds a compile-time-constant class-name argument to its string value.
 ///
@@ -330,9 +344,9 @@ mod tests {
         crate::parser::parse(&tokens).unwrap().remove(0)
     }
 
-    /// Included and synthetic wrappers keep collector eligibility without relying on shared spans.
+    /// Included and synthetic wrappers preserve source eligibility before any constant folding.
     #[test]
-    fn alias_diagnostic_sites_preserve_wrapper_and_statement_identity() {
+    fn alias_autoload_diagnostics_preserve_top_level_wrappers() {
         let call = alias_statement();
         let span = call.span;
         let program = vec![
@@ -340,18 +354,17 @@ mod tests {
             Stmt::new(StmtKind::Synthetic(vec![call.clone()]), span),
             Stmt::new(StmtKind::IncludeOnceGuard { label: "review_include".into(), body: vec![call] }, span),
         ];
-        let sites = constant_alias_call_sites(&program);
-        assert_eq!(sites.len(), 3);
         for stmt in &program {
             let direct = match &stmt.kind {
                 StmtKind::Synthetic(body) | StmtKind::IncludeOnceGuard { body, .. } => &body[0],
                 _ => stmt,
             };
             assert_eq!(direct.span, span);
-            let StmtKind::ExprStmt(expr) = &direct.kind else { panic!("alias statement") };
-            assert!(sites.contains(&(expr as *const Expr as usize)));
+            assert_eq!(
+                validate_alias_autoload(std::slice::from_ref(stmt)).unwrap_err().message,
+                UNSUPPORTED_AUTOLOAD_FALSE,
+            );
         }
-        let cloned = program.clone();
-        assert!(sites.is_disjoint(&constant_alias_call_sites(&cloned)));
+        assert!(validate_alias_autoload(&program.clone()).is_err());
     }
 }

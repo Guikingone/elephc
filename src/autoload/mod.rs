@@ -12,7 +12,6 @@
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
 mod alias;
-pub(crate) use alias::constant_alias_call_sites;
 mod index;
 mod interpret;
 mod registry;
@@ -161,8 +160,10 @@ fn run_collecting_included_on_compiler_stack(
 
 /// Lower any top-level literal `class_alias()` calls left after another
 /// expansion pass, such as resolver includes or autoloaded files.
-pub fn collect_aliases(program: Program) -> Program {
-    alias::collect_aliases(program)
+/// Rejects explicitly disabled autoload on eligible source forms before constant folding.
+pub fn collect_aliases(program: Program) -> Result<Program, CompileError> {
+    alias::validate_alias_autoload(&program)?;
+    Ok(alias::collect_aliases(program))
 }
 
 /// Inserts PHP's built-in class-like names into `declared` so that references
@@ -220,7 +221,7 @@ fn load_autoloaded_file(
         path.parent().unwrap_or(base_dir),
         defines,
     )?;
-    let resolved = alias::collect_aliases(resolved);
+    let resolved = collect_aliases(resolved).map_err(|e| e.with_file(file_label.clone()))?;
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level

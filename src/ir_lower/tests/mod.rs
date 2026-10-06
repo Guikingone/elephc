@@ -120,7 +120,7 @@ fn try_lower_source_at_for_target(
     let (ast, _) =
         crate::resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines)
             .expect("resolver failed");
-    let ast = crate::autoload::collect_aliases(ast);
+    let ast = crate::autoload::collect_aliases(ast).expect("alias collection failed");
     let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
     let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     // Same injection order as `pipeline::compile`: mysqli after PDO, so the

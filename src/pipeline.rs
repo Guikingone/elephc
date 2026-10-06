@@ -148,7 +148,14 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
-    let ast = autoload::collect_aliases(ast);
+    let ast = match autoload::collect_aliases(ast) {
+        Ok(ast) => ast,
+        Err(error) => {
+            crate::progress::clear();
+            errors::report(&error);
+            process::exit(1);
+        }
+    };
     timings.record_since("resolve", phase_started);
 
     // Report how the PHP profile is observable in THIS program, while `ast` is still the

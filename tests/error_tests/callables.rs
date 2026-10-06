@@ -349,6 +349,47 @@ fn test_error_class_alias_autoload_diagnostic_requires_collectible_shape() {
     }
 }
 
+/// Named constants remain unsupported source forms regardless of the autoload flag.
+#[test]
+fn test_error_class_alias_named_constants_keep_source_shape_diagnostic() {
+    for flag in ["false", "true", "0", "0.0", "''", "'0'", "null"] {
+        for declarations in [
+            "const SOURCE = 'Original'; const ALIAS = 'Alias';",
+            "class Names { const SOURCE = 'Original'; const ALIAS = 'Alias'; }",
+        ] {
+            let (source, alias) = if declarations.starts_with("const") {
+                ("SOURCE", "ALIAS")
+            } else {
+                ("Names::SOURCE", "Names::ALIAS")
+            };
+            for names in [format!("{source}, 'Alias'"), format!("Original::class, {alias}"), format!("{source}, {alias}")] {
+                expect_error(
+                    &format!("<?php class Original {{}} {declarations} class_alias({names}, {flag});"),
+                    "class_alias() is only supported as a top-level statement with compile-time-constant class names",
+                );
+            }
+        }
+    }
+}
+
+/// Ternary and cast folding cannot make an originally unsupported alias call collectible.
+#[test]
+fn test_error_class_alias_folded_names_keep_source_shape_diagnostic() {
+    for flag in ["false", "true", "0", "0.0", "''", "'0'", "null"] {
+        for names in [
+            "false ? 'Nope' : 'Original', 'Alias'",
+            "(string)'Original', 'Alias'",
+            "Original::class, false ? 'Nope' : 'Alias'",
+            "Original::class, (string)'Alias'",
+        ] {
+            expect_error(
+                &format!("<?php class Original {{}} class_alias({names}, {flag});"),
+                "class_alias() is only supported as a top-level statement with compile-time-constant class names",
+            );
+        }
+    }
+}
+
 /// Every false literal on otherwise collectible constant-name forms gets the actionable flag error.
 #[test]
 fn test_error_class_alias_autoload_diagnostic_accepts_constant_name_forms() {

@@ -364,7 +364,7 @@ fn check_source_for_php_version(
 ) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
-    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used_for_version(

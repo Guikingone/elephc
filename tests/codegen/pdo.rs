@@ -2835,7 +2835,7 @@ echo ($actual === $previous ? "same" : "different") . "|" . $error->getCode();
 fn test_pdo_exception_internal_methods_keep_final_exception_metadata() {
     let tokens = elephc::lexer::tokenize("<?php new PDOException('x');").unwrap();
     let program = elephc::parser::parse(&tokens).unwrap();
-    let program = elephc::autoload::collect_aliases(program);
+    let program = elephc::autoload::collect_aliases(program).expect("alias collection failed");
     let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
     let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
     let program = elephc::name_resolver::resolve(program).unwrap();
@@ -2862,7 +2862,7 @@ fn test_pdo_exception_get_code_rejects_strict_user_interface_contracts() {
         let source = format!("<?php {declaration} class BadPdoError extends PDOException implements CodeContract {{}}");
         let tokens = elephc::lexer::tokenize(&source).unwrap();
         let program = elephc::parser::parse(&tokens).unwrap();
-        let program = elephc::autoload::collect_aliases(program);
+        let program = elephc::autoload::collect_aliases(program).expect("alias collection failed");
         let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
         let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
         let program = elephc::name_resolver::resolve(program).unwrap();
@@ -2879,7 +2879,7 @@ fn test_pdo_exception_get_code_accepts_inherited_throwable_contract() {
     let source = "<?php interface UserThrowable extends Throwable {} class GoodPdoError extends PDOException implements UserThrowable {}";
     let tokens = elephc::lexer::tokenize(source).unwrap();
     let program = elephc::parser::parse(&tokens).unwrap();
-    let program = elephc::autoload::collect_aliases(program);
+    let program = elephc::autoload::collect_aliases(program).expect("alias collection failed");
     let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
     let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
     let program = elephc::name_resolver::resolve(program).unwrap();
@@ -2961,7 +2961,7 @@ fn test_pdo_exception_subclass_cannot_override_final_get_code() {
     let source = "<?php class MyPdoError extends PDOException { public function getCode(): string|int { return 'HY000'; } }";
     let tokens = elephc::lexer::tokenize(source).unwrap();
     let program = elephc::parser::parse(&tokens).unwrap();
-    let program = elephc::autoload::collect_aliases(program);
+    let program = elephc::autoload::collect_aliases(program).expect("alias collection failed");
     let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
     let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
     let program = elephc::name_resolver::resolve(program).unwrap();

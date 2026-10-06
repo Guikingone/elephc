@@ -2347,7 +2347,7 @@ mod reachability_tests {
     fn injected(source: &str, force: bool) -> (Program, PreludeInventory, crate::types::CheckResult) {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         let program = crate::parser::parse(&tokens).expect("fixture must parse");
-        let program = crate::autoload::collect_aliases(program);
+        let program = crate::autoload::collect_aliases(program).expect("alias collection failed");
         let mut inventory = PreludeInventory::new();
         let program = super::inject_if_used(program, force, &mut inventory);
         let program = crate::name_resolver::resolve(program).expect("fixture must resolve");

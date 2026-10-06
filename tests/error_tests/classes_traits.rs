@@ -13,7 +13,7 @@ use super::*;
 fn expect_pdo_error(src: &str, expected_substr: &str) {
     let tokens = tokenize(src).expect("PDO diagnostic fixture must tokenize");
     let ast = parse(&tokens).expect("PDO diagnostic fixture must parse");
-    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::autoload::collect_aliases(ast).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).expect("PDO fixture names must resolve");
