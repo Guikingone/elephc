@@ -528,7 +528,7 @@ const ARRAY_PAD_LENGTH_TOO_LARGE_MESSAGE: &str =
 /// the signed argument here — before it reaches either helper — keeps both out of reach and
 /// raises PHP's catchable `ValueError` in their place. `$length` sits in the second ABI
 /// argument register for every pad helper on every supported target.
-fn emit_array_pad_length_guard(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_array_pad_length_guard(ctx: &mut FunctionContext<'_>) {
     let length_reg = match ctx.emitter.target.arch {
         Arch::AArch64 => "x1",
         Arch::X86_64 => "rsi",
