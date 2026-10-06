@@ -2435,6 +2435,10 @@ impl RuntimeFnId {
                 // the box is independently owned and never aliases the receiving array.
                 | RuntimeFnId::ArrayPtrKey
                 | RuntimeFnId::ArrayPtrValue
+                // `array_rand()` answers a machine integer or a box it just built around a fresh
+                // key or list, never a view of its operand; in the default bucket the box and an
+                // owned literal operand were never released.
+                | RuntimeFnId::ArrayRand
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::ArrayReduce
                 | RuntimeFnId::ArrayReplace
