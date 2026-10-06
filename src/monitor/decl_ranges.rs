@@ -40,10 +40,22 @@ pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
             }
         }
         if matches!(tokens[pos].0, Token::Class | Token::Interface | Token::Trait | Token::Enum) {
-            if let Some(name) = word_at(&tokens, pos + 1) {
+            if let Some(name) = tokens.get(pos + 1).and_then(|(token, metadata)| {
+                elephc::parser::name_part_from_token(token, metadata)
+            }) {
                 if let Some((open, end)) = declaration_extent(&tokens, pos + 2, &brace_ends, false) {
                     classes.push((qualify_name(&namespace, &name), end));
                     pos = open + 1;
+                    continue;
+                }
+            } else if tokens[pos].0 == Token::Class && (
+                pos > 0 && tokens[pos - 1].0 == Token::New
+                || pos > 1 && tokens[pos - 1].0 == Token::ReadOnly && tokens[pos - 2].0 == Token::New
+            ) {
+                // Anonymous-class names belong to the parser, not to source tokens.
+                // Skip their methods instead of inventing free-function virtual frames.
+                if let Some((_, end)) = declaration_extent(&tokens, pos + 1, &brace_ends, false) {
+                    pos = end + 1;
                     continue;
                 }
             }
@@ -124,7 +136,7 @@ fn declaration_extent(
     let mut header_depth = 0usize;
     for (pos, (token, _)) in tokens.iter().enumerate().skip(start) {
         match token {
-            Token::LParen | Token::LBracket => header_depth += 1,
+            Token::LParen | Token::LBracket | Token::AttrOpen => header_depth += 1,
             Token::RParen | Token::RBracket => header_depth = header_depth.saturating_sub(1),
             Token::LBrace if header_depth == 0 => {
                 return Some((pos, brace_ends[pos].unwrap_or(tokens.len() - 1)));

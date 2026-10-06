@@ -1515,6 +1515,64 @@ echo call_hot(1);
         ]);
     }
 
+    /// Parameter attributes cannot end a header at a closure default's opening brace.
+    #[test]
+    fn monitor_review_parameter_attribute_with_closure_default() {
+        let source = "<?php\nfunction attributed(#[A([1, 2])] $value = function () { return 1; }) {\n echo $value();\n}\nfunction after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "attributed".into(), start: 2, end: 4 },
+            DeclRange { name: "after".into(), start: 5, end: 5 },
+        ]);
+    }
+
+    /// A match expression inside an attributed parameter remains part of the header.
+    #[test]
+    fn monitor_review_parameter_attribute_with_match_default() {
+        let source = "<?php\nfunction attributed(#[A] $value = match (1) { 1 => 2, default => 3 }) {\n echo $value;\n}\nfunction after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "attributed".into(), start: 2, end: 4 },
+            DeclRange { name: "after".into(), start: 5, end: 5 },
+        ]);
+    }
+
+    /// An attributed anonymous-class default cannot replace its enclosing method's body.
+    #[test]
+    fn monitor_review_parameter_attribute_with_anonymous_class_default() {
+        let source = "<?php\nclass Holder {\n function attributed(#[A] $value = new class { function value() { return 1; } }) {\n  echo $value->value();\n }\n function after() {}\n}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "Holder::attributed".into(), start: 3, end: 5 },
+            DeclRange { name: "Holder::after".into(), start: 6, end: 6 },
+        ]);
+    }
+
+    /// Anonymous classes have no recoverable source name and must not invent virtual frames.
+    #[test]
+    fn monitor_review_anonymous_class_inheritance_is_not_a_name() {
+        let source = "<?php\nnamespace App;\n$first = new class extends Counter { function step() {} };\n$second = new class implements Foo { function step() {} };\n$third = new class(1) extends Counter implements Foo { function step() {} };\nfunction after() {}\nclass Named { function step() {} }";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\after".into(), start: 6, end: 6 },
+            DeclRange { name: "App\\Named::step".into(), start: 7, end: 7 },
+        ]);
+    }
+
+    /// Class-name literals must not cause subsequent declarations to be skipped.
+    #[test]
+    fn monitor_review_class_literal_does_not_hide_next_declaration() {
+        let source = "<?php $name = Counter::class; function after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "after".into(), start: 1, end: 1 },
+        ]);
+    }
+
+    /// Legal contextual keywords remain declaration names under the shared parser grammar.
+    #[test]
+    fn monitor_review_contextual_keyword_class_name() {
+        let source = "<?php namespace App; class enum { function match() {} }";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\enum::match".into(), start: 1, end: 1 },
+        ]);
+    }
+
     #[test]
     /// A sample landing on a line owned by another function grows a virtual
     /// frame for it, which is how inlined callees stay visible.
