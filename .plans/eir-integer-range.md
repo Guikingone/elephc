@@ -177,3 +177,28 @@ and the same 11 timeout regressions with the optimizer disabled. The four slow
 eval fixtures finished in approximately 64 seconds within their bounded budget.
 The compiler and updated Magician library build without warnings, Nextest parses
 the merged configuration, and `git diff --check` is clean.
+
+## Final macOS non-codegen timeout repair
+
+- [x] Verify the fresh 5/5 review and isolate the three remaining macOS timeout envelopes.
+- [x] Schedule each target independently for the two five-target ownership fixtures.
+- [x] Give the single combined PDO/mysqli compilation the existing exact PDO budget.
+- [x] Validate all ten target cases and the combined extension probe (optimizer on/off).
+- [ ] Publish the CI-only repair and confirm fresh exact-head CI.
+
+Run `37336788502` on head `63d737f6f` passed every Linux and iOS job and all
+but one macOS shard. Two tests enclosed five complete target compilations each;
+the third injected both database preludes into one cold-cache executable. All
+three were terminated twice at exactly 60 seconds, with no assertion failure.
+The target split preserves both original PHP sources, every ownership assertion,
+and assembly emission for all five supported targets. The combined extension
+probe keeps its original source and output check and receives a bounded
+180-second override in the default and CI profiles. The global guard is unchanged.
+
+Focused CI-profile validation passed with zero retries: all ten target cases
+both in parallel and serial scheduling, and the combined extension probe with
+optimization on (17.78 seconds) and off (15.04 seconds). Each serial target case
+finished in 7.94-12.22 seconds. The compiler build is warning-free, Nextest lists
+exactly ten replacement cases, both profile overrides match only the combined
+extension probe, and `git diff --check` is clean. Task-owned temporary files
+were removed after validation. Fresh full CI remains the readiness gate.
