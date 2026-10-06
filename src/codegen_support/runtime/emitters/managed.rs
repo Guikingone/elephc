@@ -144,6 +144,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_splice_str(emitter);
     arrays::emit_array_splice_insert_str(emitter);
     arrays::emit_array_diff_key(emitter);
+    arrays::emit_array_set_op_boxed(emitter);
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_array_to_hash(emitter);
     arrays::emit_array_to_hash_reverse(emitter);

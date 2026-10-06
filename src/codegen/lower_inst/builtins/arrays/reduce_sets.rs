@@ -133,6 +133,9 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Element types the value comparison cannot cast (objects, arrays, callables) keep an indexed
 /// result and the legacy identity-comparing helpers; the declared result decides which path runs.
 pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if super::boxed_set_ops::needs_rendering_scan(ctx, inst)? {
+        return super::boxed_set_ops::lower_array_diff_values(ctx, inst);
+    }
     if matches!(inst.result_php_type.codegen_repr(), PhpType::AssocArray { .. }) {
         return lower_value_set_op_to_hash(ctx, inst, "array_diff", 0);
     }
@@ -153,6 +156,9 @@ pub(crate) fn lower_array_intersect(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if super::boxed_set_ops::needs_rendering_scan(ctx, inst)? {
+        return super::boxed_set_ops::lower_array_intersect_values(ctx, inst);
+    }
     if matches!(inst.result_php_type.codegen_repr(), PhpType::AssocArray { .. }) {
         return lower_value_set_op_to_hash(ctx, inst, "array_intersect", 1);
     }

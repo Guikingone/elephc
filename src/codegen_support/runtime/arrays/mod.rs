@@ -26,6 +26,7 @@ mod array_clone_shallow;
 mod array_diff;
 mod array_diff_refcounted;
 mod array_diff_key;
+mod array_set_op_boxed;
 mod array_edge_key;
 mod array_ensure_unique;
 mod array_take_boxed;
@@ -243,6 +244,8 @@ pub use array_diff::emit_array_diff;
 pub use array_diff_refcounted::emit_array_diff_refcounted;
 /// Emit refcounted array difference helper.
 pub use array_diff_key::emit_array_diff_key;
+/// Emit the by-value set-operation scan over any array layout and element type.
+pub use array_set_op_boxed::{emit_array_set_op_boxed, MODE_DIFF, MODE_INTERSECT, MODE_UNIQUE};
 /// Emit array difference by key helper.
 pub use array_edge_key::emit_array_edge_key;
 /// Emit array first/last key helper (array_key_first / array_key_last).

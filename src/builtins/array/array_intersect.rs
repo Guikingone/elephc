@@ -33,11 +33,14 @@ builtin! {
 /// argument once for side effects. The result preserves the first-operand array shape.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return Err(CompileError::new(
-            cx.span,
-            &format!("{}() first argument must be array", cx.name),
-        ));
+    let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    for (ty, position) in [(&ty1, "first"), (&ty2, "second")] {
+        if !super::set_result::value_set_operand_may_hold_array(ty) {
+            return Err(CompileError::new(
+                cx.span,
+                &format!("{}() {position} argument must be array", cx.name),
+            ));
+        }
     }
     Ok(super::set_result::value_set_result_type(ty1))
 }

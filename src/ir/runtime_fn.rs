@@ -1207,7 +1207,13 @@ impl RuntimeFnId {
             // arbitrary PHP. Discarded calls must retain these observable effects.
             // I/O inside those callbacks is monitored at its own runtime boundary;
             // the join itself does not perform a network or blocking operation.
-            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip => crate::ir::Effects::from_bits_retain(
+            // The by-value set operations render every element as `(string)` does, so an
+            // object runs its `__toString` and an array warns; a non-array operand throws.
+            RuntimeFnId::Implode
+            | RuntimeFnId::ArrayFlip
+            | RuntimeFnId::ArrayDiff
+            | RuntimeFnId::ArrayIntersect
+            | RuntimeFnId::ArrayUnique => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
@@ -1216,11 +1222,9 @@ impl RuntimeFnId {
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
             RuntimeFnId::ArrayCombine |
-            RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |
             RuntimeFnId::ArrayFillKeys |
-            RuntimeFnId::ArrayIntersect |
             RuntimeFnId::ArrayIntersectAssoc |
             RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
@@ -1233,7 +1237,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayReplaceRecursive |
             RuntimeFnId::ArraySearch |
             RuntimeFnId::ArraySlice |
-            RuntimeFnId::ArrayUnique |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
             // `base64_decode()` only reads the subject's bytes and writes its answer into a
