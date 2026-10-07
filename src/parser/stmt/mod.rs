@@ -78,6 +78,13 @@ pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, Comp
     }
     let span = tokens[*pos].1.span;
 
+    // An empty statement (`;`) is valid PHP: it is legal on its own and is what a `?>` close tag
+    // leaves behind. It lowers to an empty synthetic statement, a no-op.
+    if tokens[*pos].0 == Token::Semicolon {
+        *pos += 1;
+        return Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span));
+    }
+
     let stmt = parse_stmt_dispatch(tokens, pos, span)?;
     attach_attributes_to_stmt(stmt, attributes, span)
 }

@@ -31,6 +31,11 @@ elephc hello.lfc
 ./hello
 ```
 
+A `.php` file is full PHP source. It opens with `<?php` (or the short echo tag `<?=`), may close
+with `?>`, and any text outside the tags — leading HTML, or HTML between a `?>` and the next
+`<?php` — is echoed verbatim, with exactly one newline right after `?>` swallowed. That is PHP's
+own rule: `<?php echo 1; ?>text` prints `1text`.
+
 The compiler writes the output binary next to the source file, using the source
 name without its extension (`hello.php` or `hello.lfc` → `hello`). Nothing else
 is produced by default — no intermediate object files are left behind, no cache
