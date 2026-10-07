@@ -18,14 +18,13 @@
 //!   Its annotations then form a generic declaration, just as on a free function. Method-local
 //!   type parameters do not enter the scope of other members, and native method syntax wins.
 //! - The lexer discards comments, so the doc comments are recovered from the SOURCE TEXT and
-//!   matched to declarations by line. That is how every PHPDoc consumer works, and it is why
-//!   this runs per physical file, while line numbers still mean what the file says: include
-//!   resolution splices without rebasing them.
+//!   matched to declaration tokens by line and column. This runs per physical file before
+//!   include resolution combines source files, so the original coordinates remain authoritative.
 //! - Types inside an annotation go through the ordinary type grammar (`parse_type_expr`), so
 //!   `array<string, Foo>` means one thing in the language and in a docblock, and gaining a
 //!   type form gains it in both.
 
-mod attributes;
+mod bindings;
 mod members;
 
 use std::collections::HashMap;
@@ -103,9 +102,8 @@ pub fn apply(program: Program, source: &str) -> Program {
 }
 
 /// Applies the doc comment that ends just above `stmt`, if any.
-fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<usize, DocBlock>) -> Stmt {
-    let owner_line = stmt.span.line as usize;
-    let block = blocks.get(&owner_line);
+fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt {
+    let block = blocks.get(&(stmt.span.line, stmt.span.col));
     match &mut stmt.kind {
         StmtKind::FunctionDecl {
             type_params,
@@ -145,7 +143,7 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<usize, DocBlock>) -> Stmt {
         } => {
             let extends_args = adopt_inherited(block, extends.as_ref());
             let type_params = adopt_generics(block, generics, extends_args, implements);
-            members::apply(&type_params, properties, methods, blocks, owner_line);
+            members::apply(&type_params, properties, methods, blocks);
         }
         StmtKind::InterfaceDecl {
             generics,
@@ -158,19 +156,17 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<usize, DocBlock>) -> Stmt {
             // everything annotated lands in `interface_args` — which is why `GenericDecl` says
             // `extends_args` is always empty for one.
             let type_params = adopt_generics(block, generics, Vec::new(), extends);
-            members::apply(&type_params, properties, methods, blocks, owner_line);
+            members::apply(&type_params, properties, methods, blocks);
         }
         StmtKind::TraitDecl {
             generics, properties, methods, ..
         } => {
             let type_params = adopt_generics(block, generics, Vec::new(), &[]);
-            members::apply(&type_params, properties, methods, blocks, owner_line);
+            members::apply(&type_params, properties, methods, blocks);
         }
-        // An enum declares no type parameters of its own, but its methods may, and PHPDoc is the
-        // only form `--strict-php` accepts for one. Its methods were skipped, so a bound on a
-        // method `@template` was never checked.
+        // Enums carry no class templates, but their methods may declare their own templates.
         StmtKind::EnumDecl { methods, .. } => {
-            members::apply(&[], &mut [], methods, blocks, owner_line);
+            members::apply(&[], &mut [], methods, blocks);
         }
         StmtKind::NamespaceBlock { body, .. } => {
             let nested = std::mem::take(body);
@@ -261,76 +257,9 @@ fn lookup_inherited<'a>(written: &Name, block: &'a DocBlock) -> Option<&'a Vec<T
         .map(|(_, args)| args)
 }
 
-/// Extracts every generic-bearing doc comment from `source`, keyed by the line of the first
-/// code line after it.
-///
-/// Keying by the FOLLOWING line is what associates a block with its declaration, and it is why
-/// blank lines between the two are skipped: `/** … */\n\nfunction f()` is idiomatic.
-///
-/// ATTRIBUTES are skipped for the same reason: the block belongs to the declaration, rather than
-/// the first attribute line. The lexer identifies the end of consecutive groups without treating
-/// brackets inside strings or comments as structural tokens. Its line map is built only once,
-/// and only when a collected docblock is followed by attributes.
-fn collect(source: &str) -> HashMap<usize, DocBlock> {
-    let mut blocks: HashMap<usize, DocBlock> = HashMap::new();
-    let lines: Vec<&str> = source.lines().collect();
-    let mut attribute_targets = None;
-    let mut index = 0usize;
-    while index < lines.len() {
-        if !lines[index].trim_start().starts_with("/**") {
-            index += 1;
-            continue;
-        }
-        let start = index;
-        while index < lines.len() && !lines[index].contains("*/") {
-            index += 1;
-        }
-        let end = index.min(lines.len().saturating_sub(1));
-        index += 1;
-        let closing = lines[end].find("*/");
-        // What follows `*/` on the closing line decides where the declaration is. Code there IS
-        // the declaration (`/** @template T */ class Box`); an attribute there starts the groups
-        // the declaration follows; a comment there is not code, so the declaration is below.
-        let after_close = lines[end]
-            .split_once("*/")
-            .map(|(_, after)| after.trim())
-            .unwrap_or("");
-        let attribute_after_close = after_close.starts_with("#[");
-        let comment_after_close = after_close.starts_with("//")
-            || after_close.starts_with("/*")
-            || (after_close.starts_with('#') && !attribute_after_close);
-        let mut target = if !after_close.is_empty() && !comment_after_close {
-            end
-        } else {
-            index
-        };
-        while target < lines.len() && lines[target].trim().is_empty() {
-            target += 1;
-        }
-        let attribute_starts_here = if target == end {
-            attribute_after_close
-        } else {
-            target < lines.len() && lines[target].trim_start().starts_with("#[")
-        };
-        if attribute_starts_here {
-            let targets = attribute_targets
-                .get_or_insert_with(|| attributes::declaration_lines(source));
-            target = targets.get(&target).copied().unwrap_or(lines.len());
-        }
-        if target >= lines.len() {
-            continue;
-        }
-        let mut comment_lines = lines[start..=end].to_vec();
-        if let Some(col) = closing {
-            *comment_lines.last_mut().expect("comment closing line") = &lines[end][..col + 2];
-        }
-        let block = parse_block(&comment_lines);
-        if !block.is_empty() {
-            // `Span` lines are 1-based.
-            blocks.insert(target + 1, block);
-        }
-    }
-    blocks
+/// Extracts generic-bearing doc comments keyed by their declaration token positions.
+fn collect(source: &str) -> HashMap<(u32, u32), DocBlock> {
+    bindings::collect(source)
 }
 
 /// Parses the annotations of one doc comment's lines.
@@ -558,7 +487,7 @@ mod tests {
     #[test]
     fn skips_blank_lines_before_the_declaration() {
         let blocks = collect("<?php\n/**\n * @template T\n */\n\n\nfunction f($a) {}\n");
-        assert!(blocks.contains_key(&7), "got keys {:?}", blocks.keys());
+        assert!(blocks.contains_key(&(7, 1)), "got keys {:?}", blocks.keys());
     }
 
     /// A doc comment with no `@template` carries no type parameter, so this pass leaves the
@@ -673,6 +602,39 @@ mod tests {
             };
             assert_eq!(generics.as_ref().expect("annotated class").type_params[0].name, "T");
         }
+    }
+
+    /// Sharing a class line does not give a method the class's template declaration.
+    #[test]
+    fn does_not_copy_a_class_template_to_a_same_line_method() {
+        let program = program_of("<?php\n/** @template T */\nclass Box { public function __construct(public T $value) {} public function id(T $v): T { return $v; } }\n");
+        let StmtKind::ClassDecl { generics, methods, .. } = &program[0].kind else {
+            panic!("expected a class");
+        };
+        assert!(generics.is_some());
+        assert!(methods.iter().all(|method| method.type_params.is_empty()));
+    }
+
+    /// Each inline method gets its own block, even after Unicode comments or with attributes.
+    #[test]
+    fn binds_inline_members_by_column() {
+        let program = program_of("<?php\n/* café */ class C { /** @template T */ #[Marker(\"]\")] public function id(T $v): T { return $v; } /** @template U */ public function other(U $v): U { return $v; } }\n");
+        let StmtKind::ClassDecl { generics, methods, .. } = &program[0].kind else {
+            panic!("expected a class");
+        };
+        assert!(generics.is_none());
+        assert_eq!(methods[0].type_params[0].name, "T");
+        assert_eq!(methods[1].type_params[0].name, "U");
+    }
+
+    /// Apparent annotations inside strings or line comments never become declaration metadata.
+    #[test]
+    fn ignores_docblock_markers_inside_strings_and_line_comments() {
+        let program = program_of("<?php\n$x = '/** @template T */';\n// /** @template U */\nclass C {}\n");
+        let StmtKind::ClassDecl { generics, .. } = &program[1].kind else {
+            panic!("expected a class");
+        };
+        assert!(generics.is_none());
     }
 
     /// `@template` on a class makes it a template, and its members' annotations name the type

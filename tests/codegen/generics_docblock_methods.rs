@@ -11,6 +11,20 @@
 
 use crate::support::*;
 
+/// Constructor and ordinary methods on the class line retain their class-scoped types.
+#[test]
+fn test_docblock_shared_class_and_method_line() {
+    let source = r#"<?php
+/** @template T */
+class Box { public function __construct(public T $value) {} public function id(T $v): T { return $v; } }
+$box = new Box(7);
+echo get_class($box), ":", $box->value, "|", $box->id(8);
+"#;
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box<int>:7|8");
+    }
+}
+
 /// A same-line class annotation determines the concrete class in both PHP modes.
 #[test]
 fn test_docblock_same_line_class_declaration() {
