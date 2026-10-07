@@ -146,6 +146,19 @@ class Identity
     }
 }
 
+// Enum methods bind their own templates while the case keeps its singleton identity.
+enum IdentityCase
+{
+    case One;
+
+    /**
+     * @template T
+     * @param T $value
+     * @return T
+     */
+    public function copy($value) { return $value; }
+}
+
 // A constructor template gives promoted properties concrete storage at each new expression.
 class Value
 {
@@ -171,7 +184,7 @@ $held = new IntHolder(21);
 
 echo $held->doubled(), '|', $held->read(), "\n";
 echo firstOf([10, 20]), '|', firstOf(['x', 'y']), "\n";
-echo (new Identity())->copy(7), '|', (new Identity())->copy('seven'), "\n";
+echo (new Identity())->copy(7), '|', IdentityCase::One->copy('seven'), "\n";
 $constructedNumber = new Value(7);
 $constructedText = new Value('eight');
 echo $constructedNumber->value + 1, '|', strtoupper($constructedText->value), "\n";

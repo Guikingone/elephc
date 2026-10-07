@@ -3,7 +3,7 @@
 //! Keeps class scope separate from templates bound by an individual method call.
 //!
 //! Called from:
-//! - `crate::docblock::apply_to_stmt()` for class, interface and trait members.
+//! - `crate::docblock::apply_to_stmt()` for class, interface, trait and enum members.
 //!
 //! Key details:
 //! - Native method templates take precedence over PHPDoc.

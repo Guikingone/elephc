@@ -239,7 +239,7 @@ pub(super) fn resolve_decl_stmt(
                 })
                 .collect();
             let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
-            Ok(Some(Stmt::with_attributes(
+            let resolved = Stmt::with_attributes(
                 StmtKind::EnumDecl {
                     name: canonical_name_for_decl(namespace, name),
                     // The interface arguments NAME classes, and they resolve through the same
@@ -260,7 +260,8 @@ pub(super) fn resolve_decl_stmt(
                 },
                 stmt.span,
                 stmt_attributes,
-            )))
+            );
+            Ok(Some(type_params::restore(resolved, &[], namespace, imports, symbols)))
         }
         StmtKind::PackedClassDecl { name, fields } => {
             let resolved_fields = fields

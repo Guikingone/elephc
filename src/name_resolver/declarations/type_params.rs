@@ -30,7 +30,8 @@ pub(super) fn restore(
     let has_method_templates = match &stmt.kind {
         StmtKind::ClassDecl { methods, .. }
         | StmtKind::InterfaceDecl { methods, .. }
-        | StmtKind::TraitDecl { methods, .. } => {
+        | StmtKind::TraitDecl { methods, .. }
+        | StmtKind::EnumDecl { methods, .. } => {
             methods.iter().any(|method| !method.type_params.is_empty())
         }
         _ => false,

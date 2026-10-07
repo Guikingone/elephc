@@ -14,6 +14,7 @@ mod generics;
 mod generics_constructors;
 mod generics_named_spreads;
 mod generics_docblock_methods;
+mod generics_docblock_enums;
 mod preprocessor;
 mod namespaces;
 mod null_sentinel;

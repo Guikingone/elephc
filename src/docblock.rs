@@ -637,6 +637,18 @@ mod tests {
         assert!(generics.is_none());
     }
 
+    /// Enum methods adopt their own template parameters and annotated types.
+    #[test]
+    fn adopts_enum_method_templates() {
+        let program = program_of("<?php\nenum Id {\n case A;\n /**\n  * @template T of int\n  * @param T $value\n  * @return T\n  */\n public function id($value) { return $value; }\n}\n");
+        let StmtKind::EnumDecl { methods, .. } = &program[0].kind else {
+            panic!("expected an enum");
+        };
+        assert_eq!(methods[0].type_params.len(), 1);
+        assert_eq!(methods[0].type_params[0].bound, Some(TypeExpr::Int));
+        assert_eq!(methods[0].params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
+    }
+
     /// `@template` on a class makes it a template, and its members' annotations name the type
     /// parameter it declared.
     #[test]

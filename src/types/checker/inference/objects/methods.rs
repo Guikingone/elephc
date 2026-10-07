@@ -926,6 +926,13 @@ impl Checker {
             return Ok(PhpType::Callable);
         }
         if let Some(enum_info) = self.enums.get(class_name).cloned() {
+            let has_signature = self.classes.get(class_name)
+                .is_some_and(|info| info.static_methods.contains_key(&php_symbol_key(method)));
+            if !has_signature {
+                if let Some(return_ty) = self.infer_generic_method_call(class_name, method, args, expr, env)? {
+                    return Ok(return_ty);
+                }
+            }
             return self
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
         }

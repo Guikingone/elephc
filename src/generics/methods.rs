@@ -65,6 +65,7 @@ pub fn collect(program: &Program) -> HashMap<(String, String), MethodTemplate> {
     templates
 }
 
+/// Collects method templates from top-level owners and nested namespace declarations.
 fn collect_into(stmts: &[Stmt], templates: &mut HashMap<(String, String), MethodTemplate>) {
     for stmt in stmts {
         match &stmt.kind {
@@ -199,6 +200,7 @@ fn attach(
     instantiated: &str,
     bindings: &Bindings,
 ) -> bool {
+    /// Visits nested owners while attaching or stripping concrete method declarations.
     fn visit(
         stmts: &mut [Stmt],
         class_key: &str,
@@ -297,6 +299,7 @@ impl crate::magic_constants::walker::Pass for Rename {
         crate::parser::ast::ExprKind::MagicConstant(mc)
     }
 
+    /// Uses the concrete method selected for the current call site.
     fn transform_method_call_name(&self, method: String, span: Span) -> String {
         match self.site_scope.resolve(&self.names, span) {
             Some(instantiated) => instantiated.clone(),
@@ -304,42 +307,52 @@ impl crate::magic_constants::walker::Pass for Rename {
         }
     }
 
+    /// Tracks the lexical class used to identify method call sites.
     fn enter_class(&mut self, name: &str) {
         self.site_scope.enter_class(name);
     }
 
+    /// Restores the enclosing lexical class after visiting its members.
     fn leave_class(&mut self) {
         self.site_scope.leave_class();
     }
 
+    /// Tracks the trait scope used when its methods are flattened into classes.
     fn enter_trait(&mut self, name: &str) {
         self.site_scope.enter_trait(name);
     }
 
+    /// Restores the enclosing scope after visiting trait members.
     fn leave_trait(&mut self) {
         self.site_scope.leave_trait();
     }
 
+    /// Tracks the enclosing function for call-site specialization keys.
     fn enter_function(&mut self, name: &str) {
         self.site_scope.enter_function(name);
     }
 
+    /// Restores the enclosing body scope after a function.
     fn leave_function(&mut self) {
         self.site_scope.leave_body();
     }
 
+    /// Tracks the enclosing method for call-site specialization keys.
     fn enter_method(&mut self, name: &str, _type_params: &[crate::parser::ast::TypeParam]) {
         self.site_scope.enter_method(name);
     }
 
+    /// Restores the enclosing body scope after a method.
     fn leave_method(&mut self) {
         self.site_scope.leave_body();
     }
 
+    /// Tracks the nested closure scope for call-site specialization keys.
     fn enter_closure(&mut self, span: Span) {
         self.site_scope.enter_closure(span);
     }
 
+    /// Restores the enclosing body scope after a closure.
     fn leave_closure(&mut self) {
         self.site_scope.leave_body();
     }
@@ -360,6 +373,7 @@ impl crate::magic_constants::walker::Pass for Substitute {
         crate::parser::ast::ExprKind::MagicConstant(mc)
     }
 
+    /// Substitutes the concrete method bindings at every visited type position.
     fn transform_type(&self, ty: TypeExpr, _span: Span) -> TypeExpr {
         ty.substitute_type_params(&self.bindings)
     }
@@ -371,6 +385,7 @@ impl crate::magic_constants::walker::Pass for Substitute {
 /// with no representation, so it must never reach lowering. The difference is only that a method
 /// template lives on a class that DOES survive, so the class is kept and the method dropped.
 pub fn strip_templates(program: Program) -> Program {
+    /// Visits nested owners while attaching or stripping concrete method declarations.
     fn visit(stmts: &mut Vec<Stmt>) {
         for stmt in stmts.iter_mut() {
             match &mut stmt.kind {
