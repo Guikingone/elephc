@@ -117,7 +117,7 @@ fn interface_self_return_conforms(
     required_return: &PhpType,
     actual_return: &PhpType,
 ) -> bool {
-    match (required_return, actual_return) {
+    let self_conforms = |expected: &PhpType| match (expected, actual_return) {
         (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
             actual_name == &class.name
                 && (expected_name == interface_name
@@ -128,6 +128,12 @@ fn interface_self_return_conforms(
                     }))
         }
         _ => false,
+    };
+    // The required return may be a UNION (`RecursiveIterator|null`, `RecursiveIterator|false`, …):
+    // the class's own name conforms when ANY member it narrows is the interface (or its ancestor).
+    match required_return {
+        PhpType::Union(members) => members.iter().any(|member| self_conforms(member)),
+        other => self_conforms(other),
     }
 }
 
