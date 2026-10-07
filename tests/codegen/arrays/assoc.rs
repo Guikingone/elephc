@@ -9,6 +9,56 @@
 
 use crate::support::*;
 
+/// A reference created in the loop can advance the counter through another local.
+#[test]
+fn test_reference_counter_alias_inside_loop_takes_hash_storage() {
+    let source = r#"<?php
+$a = [];
+for ($i = 0; $i < 4; $i++) {
+    $r = &$i;
+    $r += 2;
+    $a[$i] = $i;
+}
+echo json_encode($a);
+"#;
+    assert_eq!(compile_and_run(source), "{\"2\":2,\"5\":5}");
+}
+
+/// References established before the loop invalidate the counter's packed-storage proof.
+#[test]
+fn test_reference_counter_alias_before_loop_takes_hash_storage() {
+    let source = r#"<?php
+$i = 0;
+$r = &$i;
+$a = [];
+for ($i = 0; $i < 4; $i++) {
+    $r += 2;
+    $a[$i] = $i;
+}
+echo json_encode($a);
+"#;
+    assert_eq!(compile_and_run(source), "{\"2\":2,\"5\":5}");
+}
+
+/// Foreach key and value variables can each overwrite the surrounding loop's counter.
+#[test]
+fn test_foreach_counter_rebinding_takes_hash_storage() {
+    let source = r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) {
+    foreach ([7] as $i) {}
+    $a[$i] = $i;
+}
+$b = [];
+for ($j = 0; $j < 3; $j++) {
+    foreach ([7 => 1] as $j => $value) {}
+    $b[$j] = $j;
+}
+echo json_encode($a), "|", json_encode($b);
+"#;
+    assert_eq!(compile_and_run(source), "{\"7\":7}|{\"7\":7}");
+}
+
 // --- Phase 12: v0.6 — Associative arrays, switch, match ---
 
 /// Compiles a PHP script with two static string-keyed entries and verifies the first value is echoed.

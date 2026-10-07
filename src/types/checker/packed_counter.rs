@@ -249,13 +249,7 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
     }
     match &stmt.kind {
         StmtKind::Continue(levels) => *levels <= loop_depth,
-        // `$r = &$i;` aliases the counter: `$r += 2` then advances it with no write to `$i`.
-        StmtKind::RefAssign { source, .. } if argument_names_counter(source, counter) => false,
-        // A `foreach` binding the counter as its key or value rebinds it once per element.
-        StmtKind::Foreach {
-            key_var, value_var, ..
-        } if value_var == counter || key_var.as_deref() == Some(counter) => false,
-        // So does a `catch` that names it.
+        // A catch binding reassigns its exception variable when its body runs.
         StmtKind::Try { catches, .. }
             if catches
                 .iter()
@@ -265,8 +259,10 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
         }
         StmtKind::Assign { name, .. }
         | StmtKind::TypedAssign { name, .. }
-        | StmtKind::RefAssign { target: name, .. }
         | StmtKind::StaticVar { name, .. } => name != counter,
+        StmtKind::RefAssign { target, source } => {
+            target != counter && !argument_names_counter(source, counter)
+        }
         StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => {
             !vars.iter().any(|var| var == counter)
         }
@@ -312,9 +308,12 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
             body_preserves_counter(stmts, counter, loop_depth)
         }
         StmtKind::While { body, .. }
-        | StmtKind::DoWhile { body, .. }
-        | StmtKind::Foreach { body, .. } => {
+        | StmtKind::DoWhile { body, .. } => {
             body_preserves_counter(body, counter, loop_depth + 1)
+        }
+        StmtKind::Foreach { key_var, value_var, body, .. } => {
+            value_var != counter && key_var.as_deref() != Some(counter)
+                && body_preserves_counter(body, counter, loop_depth + 1)
         }
         StmtKind::For {
             init, update, body, ..

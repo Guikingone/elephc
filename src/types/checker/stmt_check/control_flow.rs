@@ -116,6 +116,7 @@ fn promoted_by_ref_foreach_root_type(ty: &PhpType) -> Option<PhpType> {
     }
 }
 
+/// Widens local or static property storage when foreach exposes mutable element references.
 fn widen_by_ref_foreach_source_storage(
     checker: &mut Checker,
     source: &Expr,
@@ -1151,6 +1152,7 @@ impl Checker {
         }
     }
 
+    /// Checks a loop body with its control-flow depth and conservative property narrowings.
     fn check_break_continue_target_body(
         &mut self,
         body: &[Stmt],
