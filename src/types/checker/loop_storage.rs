@@ -81,6 +81,8 @@ pub fn loop_carried_storage_types(
     }
     let mut foreach_keys = HashSet::new();
     collect_foreach_key_names(body, &mut foreach_keys);
+    let mut foreach_values = HashSet::new();
+    collect_foreach_value_names(body, &mut foreach_values);
 
     let mut fixed = entry.clone();
     let mut whole_mixed_sources = HashSet::new();
@@ -97,6 +99,7 @@ pub fn loop_carried_storage_types(
             &mut fixed,
             packed_counter,
             &foreach_keys,
+            &foreach_values,
             infer_value,
         );
         if fixed == previous {
@@ -167,6 +170,7 @@ fn apply_array_write_evidence(
     env: &mut TypeEnv,
     packed_counter: Option<&str>,
     foreach_keys: &HashSet<&str>,
+    foreach_values: &HashSet<&str>,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) {
     for write in writes {
@@ -190,7 +194,17 @@ fn apply_array_write_evidence(
             // The same rule `check_array_assign` applies, and it has to be applied HERE too: this
             // pass fixes the storage for the whole loop and emits the conversion, so a decision it
             // makes alone is the one the body then has to live with.
-            let unbounded_integer_key = matches!(key_type.as_ref(), Some(PhpType::Int))
+            // A `foreach` VALUE is any element of its iterable, so nothing bounds it against the
+            // array's length either. This pass often has no type for it (`Mixed`), and the write
+            // then reached `ArraySetMixedKey`, which keeps an integer key on packed storage and
+            // zero-filled the gap: `foreach ([7] as $k) {} $a[$k] = $k;` in a loop built
+            // `[null × 7, 7]` where php has `[7 => 7]`.
+            let foreach_value_key = matches!(
+                &index.kind,
+                ExprKind::Variable(name) if foreach_values.contains(name.as_str())
+            );
+            let unbounded_integer_key = (matches!(key_type.as_ref(), Some(PhpType::Int))
+                || foreach_value_key)
                 && array_is_still_empty
                 && !write.skippable
                 && !index_is_trusted_counter(index, packed_counter, foreach_keys)
@@ -769,6 +783,23 @@ fn index_is_trusted_counter(
         return false;
     };
     foreach_keys.contains(name.as_str()) || packed_counter == Some(name.as_str())
+}
+
+/// Collects every local bound as a `foreach` VALUE anywhere in a loop body.
+fn collect_foreach_value_names<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str>) {
+    for statement in statements {
+        if let StmtKind::Foreach {
+            value_var, body, ..
+        } = &statement.kind
+        {
+            out.insert(value_var.as_str());
+            collect_foreach_value_names(body, out);
+            continue;
+        }
+        for nested in nested_statement_bodies(statement) {
+            collect_foreach_value_names(nested, out);
+        }
+    }
 }
 
 /// Collects every local bound as a `foreach` KEY anywhere in a loop body.

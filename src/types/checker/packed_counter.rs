@@ -39,7 +39,9 @@ pub(crate) struct PackedLoopCounter {
 /// - the update is `$i++` or `++$i`, so each iteration advances by exactly one;
 /// - the CONDITION does not write the counter, which `($i = 3) < 4` does before any write runs;
 /// - the body neither `continue`s past a write nor assigns the counter again, either of which
-///   would let the counter run ahead of the array's length.
+///   would let the counter run ahead of the array's length. Rebinding it through `foreach` or
+///   `catch`, aliasing it with `=&`, or passing it bare to a call counts as assigning it, and the
+///   caller rejects a counter a reference already reaches when the loop starts.
 ///
 /// A condition that only READS is still ignored on purpose: stopping the loop earlier ends the
 /// array at a shorter length rather than leaving a hole in it.
@@ -247,6 +249,20 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
     }
     match &stmt.kind {
         StmtKind::Continue(levels) => *levels <= loop_depth,
+        // `$r = &$i;` aliases the counter: `$r += 2` then advances it with no write to `$i`.
+        StmtKind::RefAssign { source, .. } if argument_names_counter(source, counter) => false,
+        // A `foreach` binding the counter as its key or value rebinds it once per element.
+        StmtKind::Foreach {
+            key_var, value_var, ..
+        } if value_var == counter || key_var.as_deref() == Some(counter) => false,
+        // So does a `catch` that names it.
+        StmtKind::Try { catches, .. }
+            if catches
+                .iter()
+                .any(|clause| clause.variable.as_deref() == Some(counter)) =>
+        {
+            false
+        }
         StmtKind::Assign { name, .. }
         | StmtKind::TypedAssign { name, .. }
         | StmtKind::RefAssign { target: name, .. }

@@ -857,6 +857,10 @@ impl Checker {
                 // body runs at, so a write under an `if` — which could skip a slot — is not
                 // covered. Saved and restored so a nested loop's counter cannot outlive it.
                 let saved_packed_counter = self.packed_loop_counter.take();
+                // A counter a reference already reaches is not provable from the body: `$r = &$i`
+                // before the loop lets `$r += 2` inside it advance `$i` with nothing in the body
+                // naming `$i`. `ref_aliased_locals` holds every local of this body a reference
+                // can reach, permanently, so such a counter takes hash storage.
                 self.packed_loop_counter =
                     crate::types::checker::packed_counter::packed_for_counter(
                         init.as_deref(),
@@ -864,7 +868,8 @@ impl Checker {
                         update.as_deref(),
                         body,
                         self.local_conditional_depth,
-                    );
+                    )
+                    .filter(|counter| !self.ref_aliased_locals.contains(&counter.name));
                 // Cloned first: the stabilizer takes `&mut Checker`, so the name cannot be
                 // borrowed out of `self` across the call.
                 let packed_counter_name = self

@@ -1225,3 +1225,42 @@ echo json_encode($a);
     );
     assert_eq!(out, "{\"2\":2,\"5\":5}");
 }
+
+/// A reference alias can advance the counter with nothing in the body naming it.
+///
+/// `$r = &$i` inside the body and the same alias made before the loop both let `$r += 2` skip
+/// slots; the proof only saw assignments to `$i`, kept packed storage, and zero-filled the gaps.
+#[test]
+fn test_reference_aliased_counter_takes_hash_storage() {
+    for (setup, step) in [("", "$r = &$i; $r += 2;"), ("$i = 0; $r = &$i;", "$r += 2;")] {
+        let source = format!(
+            r#"<?php
+$a = [];
+{setup}
+for ($i = 0; $i < 4; $i++) {{
+    {step}
+    $a[$i] = $i;
+}}
+echo json_encode($a);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "{\"2\":2,\"5\":5}", "{setup} {step}");
+    }
+}
+
+/// A `foreach` value is any element of its iterable, so indexing a still-empty array by it inside
+/// a loop takes hash storage, whether or not it rebinds the `for` counter.
+#[test]
+fn test_foreach_value_index_inside_a_loop_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) { foreach ([7] as $i) {} $a[$i] = $i; }
+$b = [];
+$n = 0;
+while ($n < 1) { foreach ([7] as $k) {} $b[$k] = $k; $n++; }
+echo json_encode($a), "|", json_encode($b);
+"#,
+    );
+    assert_eq!(out, "{\"7\":7}|{\"7\":7}");
+}
