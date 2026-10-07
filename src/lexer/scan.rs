@@ -1,14 +1,18 @@
 //! Purpose:
 //! Owns the main PHP token scanning loop and dispatches literal-specific scanners.
-//! Skips whitespace/comments and emits structural, operator, keyword, and literal tokens.
+//! Skips whitespace/comments, handles PHP/HTML tag boundaries, and emits structural,
+//! operator, keyword, and literal tokens.
 //!
 //! Called from:
 //! - `crate::lexer::tokenize()`.
 //!
 //! Key details:
 //! - Multi-character operators and PHP opening tags must be recognized before shorter prefixes.
+//! - `?>` and the inline HTML after it are lowered by `super::inline_html`; a one-line comment
+//!   ends at `?>` as well as at the end of the line, as PHP's scanner does.
 
 use super::cursor::Cursor;
+use super::inline_html;
 use super::literals;
 use super::token::{spanned, SpannedToken, Token, TokenMetadata};
 use crate::errors::CompileError;
@@ -16,13 +20,14 @@ use crate::source::SourceMode;
 
 /// Scans the full PHP source into a stream of syntax tokens with source metadata.
 ///
-/// Requires `<?php` as the first five characters. Dispatches to `literals` for
-/// strings (which may contain interpolation), heredoc/nowdoc, numbers, variables,
-/// and keywords. Returns `Token::Eof` at end-of-input.
+/// PHP source may begin with inline HTML before the first `<?php`/`<?=` open tag and may
+/// interleave HTML through `?>` close tags; each HTML run is lowered to an `echo` statement.
+/// Dispatches to `literals` for strings (which may contain interpolation), heredoc/nowdoc,
+/// numbers, variables, and keywords. Returns `Token::Eof` at end-of-input.
 ///
 /// # Errors
-/// Returns `CompileError` when PHP mode lacks its opening tag, LFC contains a
-/// physical PHP tag at a code boundary, or either mode contains invalid syntax.
+/// Returns `CompileError` when LFC contains a physical PHP tag at a code boundary, or either
+/// mode contains invalid syntax.
 pub fn scan_tokens(
     source: &str,
     mode: SourceMode,
@@ -44,22 +49,30 @@ pub(super) fn scan_tokens_in_source(
 
     let span = cursor.span();
     if mode.requires_open_tag() {
-        skip_whitespace_and_comments(&mut cursor);
-        let span = cursor.span();
-        if cursor.remaining().starts_with("<?php") {
+        // A PHP file may open with inline HTML (or be entirely HTML), with `<?php`/`<?=`
+        // appearing later. The structural `OpenTag` is always emitted first because the parser
+        // requires it, and leading HTML becomes an `echo` ahead of the first statement.
+        tokens.push(spanned(Token::OpenTag, span));
+        if inline_html::at_php_open_tag(cursor.remaining()) {
             for _ in 0..5 {
                 cursor.advance();
             }
-            tokens.push(spanned(Token::OpenTag, span));
+        } else if inline_html::at_short_echo_tag(cursor.remaining()) {
+            for _ in 0..3 {
+                cursor.advance();
+            }
+            tokens.push(spanned(Token::Echo, span));
         } else {
-            return Err(CompileError::new(span, "Expected '<?php' at start of file"));
+            inline_html::scan_leading_html(&mut cursor, &mut tokens);
         }
     } else {
         tokens.push(spanned(Token::OpenTag, span));
     }
 
     loop {
-        skip_whitespace_and_comments(&mut cursor);
+        // In PHP mode a line comment ends at a `?>` close tag; in LFC mode there is no HTML
+        // mode, so tag-shaped text in a comment stays ordinary data.
+        skip_whitespace_and_comments(&mut cursor, mode.requires_open_tag());
 
         if cursor.is_eof() {
             tokens.push(spanned(Token::Eof, cursor.span()));
@@ -75,6 +88,11 @@ pub(super) fn scan_tokens_in_source(
                 span,
                 "PHP opening and closing tags are not valid in .lfc source files",
             ));
+        } else if cursor.remaining().starts_with("?>") {
+            // A close tag ends the current statement and switches to inline HTML until the
+            // next open tag: the close tag is a `;` and the HTML is an `echo`, exactly as in a
+            // file. In LFC mode the branch above already rejected it.
+            inline_html::scan_close_tag(&mut cursor, &mut tokens);
         } else if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
@@ -113,7 +131,10 @@ pub(super) fn scan_tokens_in_source(
 /// Skips all whitespace, `//` line comments, `#` line comments (but not `#[` attribute
 /// groups), and `/* */` block comments. Uses `continue` to re-check after each comment
 /// type so adjacent comment forms are all skipped.
-fn skip_whitespace_and_comments(cursor: &mut Cursor) {
+///
+/// `stop_at_close_tag` is true in PHP mode, where a one-line comment ends at a `?>` as well
+/// as at the end of the line; LFC mode passes false so tag-shaped comment text stays data.
+fn skip_whitespace_and_comments(cursor: &mut Cursor, stop_at_close_tag: bool) {
     loop {
         while let Some(ch) = cursor.peek() {
             if ch.is_ascii_whitespace() {
@@ -124,17 +145,13 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         if cursor.remaining().starts_with("//") {
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor, stop_at_close_tag);
             continue;
         }
 
         if cursor.remaining().starts_with('#') && !cursor.remaining().starts_with("#[") {
             // PHP line comment introduced by `#` (but `#[` opens an attribute group).
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor, stop_at_close_tag);
             continue;
         }
 
@@ -155,6 +172,24 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         break;
+    }
+}
+
+/// Advances past one `//` or `#` line comment, including its trailing newline.
+///
+/// When `stop_at_close_tag` is set (PHP mode), the comment ends at the end of the line OR at a
+/// `?>` close tag, whichever comes first, as PHP's rule says: `// note ?>HTML` prints `HTML`,
+/// so the close tag is left for the main loop to turn into a statement terminator and the HTML
+/// that follows. In LFC mode it is false, so a `?>` inside a comment stays comment text.
+fn skip_line_comment(cursor: &mut Cursor, stop_at_close_tag: bool) {
+    loop {
+        if cursor.is_eof() || (stop_at_close_tag && cursor.remaining().starts_with("?>")) {
+            return;
+        }
+        match cursor.advance() {
+            Some('\n') | None => return,
+            Some(_) => {}
+        }
     }
 }
 

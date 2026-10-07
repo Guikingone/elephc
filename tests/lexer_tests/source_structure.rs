@@ -48,10 +48,130 @@ fn test_consecutive_comments() {
 
 // --- Complex tokens ---
 
-/// Verifies missing `<?php` open tag produces a lex error.
+/// Verifies a source with no `<?php` open tag is inline HTML, exactly as PHP treats it:
+/// the whole file is echoed, so the structural `OpenTag` is followed by an `echo` of the
+/// literal text.
 #[test]
-fn test_missing_open_tag() {
-    assert!(tokenize("echo \"hi\";").is_err());
+fn test_missing_open_tag_is_inline_html() {
+    let t = tokens("echo \"hi\";");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("echo \"hi\";".to_string()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies leading inline HTML before the first `<?php` becomes an `echo` ahead of the code.
+#[test]
+fn test_leading_inline_html_is_echoed_before_code() {
+    let t = tokens("<!doctype html>\n<?php echo 1;");
+    assert_eq!(t[0], Token::OpenTag);
+    assert_eq!(t[1], Token::Echo);
+    assert_eq!(t[2], Token::StringLiteral("<!doctype html>\n".to_string()));
+    assert_eq!(t[3], Token::Semicolon);
+    assert_eq!(t[4], Token::Echo);
+}
+
+/// Verifies a `?>` close tag lowers to `;` and the HTML after it to an `echo`, with the one
+/// newline directly after the tag swallowed.
+#[test]
+fn test_close_tag_lowers_to_semicolon_and_html() {
+    let t = tokens("<?php echo \"a\"; ?>\nHTML\n<?php echo \"b\"; ?>");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("a".to_string()),
+            Token::Semicolon,
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("HTML\n".to_string()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("b".to_string()),
+            Token::Semicolon,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `<?=` opens code and implies `echo`.
+#[test]
+fn test_short_echo_tag_implies_echo() {
+    let t = tokens("<?= 1 ?>");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `<?php` opens code only when followed by a separator, so `<?phpX` stays HTML.
+#[test]
+fn test_php_prefix_without_separator_is_html() {
+    let t = tokens("<?phpX");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("<?phpX".to_string()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies a block that spans the tags keeps its structure: `if (1) { ?>IN<?php }`.
+#[test]
+fn test_html_inside_a_block_keeps_structure() {
+    let t = tokens("<?php if (1) { ?>IN<?php }");
+    assert_eq!(t[0], Token::OpenTag);
+    assert_eq!(t[1], Token::If);
+    assert!(t.iter().any(|token| {
+        matches!(token, Token::StringLiteral(value) if value == "IN")
+    }));
+    assert!(t.contains(&Token::RBrace));
+}
+
+/// Verifies a `//` comment ends at `?>`, so the close tag and the HTML after it are lexed.
+#[test]
+fn test_line_comment_ends_at_close_tag() {
+    let t = tokens("<?php // note ?>HTML");
+    assert!(t.iter().any(|token| {
+        matches!(token, Token::StringLiteral(value) if value == "HTML")
+    }));
+}
+
+/// Verifies a `#` comment ends at `?>` too.
+#[test]
+fn test_hash_comment_ends_at_close_tag() {
+    let t = tokens("<?php # note ?>HTML");
+    assert!(t.iter().any(|token| {
+        matches!(token, Token::StringLiteral(value) if value == "HTML")
+    }));
+}
+
+/// Verifies a `?>` inside a string or a `/* */` comment is ordinary data, not a close tag.
+#[test]
+fn test_close_tag_inside_string_or_block_comment_is_data() {
+    let t = tokens("<?php echo \"?> <?php\"; /* ?> */ echo 1;");
+    assert!(t.iter().any(|token| {
+        matches!(token, Token::StringLiteral(value) if value == "?> <?php")
+    }));
+    assert_eq!(t.last(), Some(&Token::Eof));
 }
 
 /// Verifies an unterminated double-quoted string produces a lex error.

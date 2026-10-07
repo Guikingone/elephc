@@ -9,11 +9,20 @@
 
 use super::*;
 
-/// Verifies the error diagnostic for missing open tag.
+/// Verifies a source with no `<?php` open tag is inline HTML, not an error: PHP echoes the
+/// whole file, so `echo "hi";` outside a tag is literal output.
 #[test]
-fn test_error_missing_open_tag() {
-    // PHP code starting outside an open tag produces a "missing open tag" error.
-    expect_error("echo \"hi\";", "<?php");
+fn test_tagless_source_is_inline_html() {
+    assert!(
+        check_source("echo \"hi\";").is_ok(),
+        "a tagless source is inline HTML in PHP and must compile"
+    );
+}
+
+/// Verifies `<?= ?>` — a short echo tag with no expression — is still a syntax error.
+#[test]
+fn test_error_short_echo_without_expression() {
+    expect_error("<?= ?>", "Unexpected token");
 }
 
 /// Verifies the error diagnostic for unterminated string.

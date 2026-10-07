@@ -137,6 +137,13 @@ fn parse_stmt_dispatch(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     match &tokens[*pos].0 {
+        // An empty statement (`;`) is valid PHP and is what a `?>` close tag lowers to. It has
+        // no effect, so it parses to an empty synthetic block: `foreach ($a as $v);`,
+        // `if ($c);`, and the `; ;` a close tag after a `;`-terminated statement produces.
+        Token::Semicolon => {
+            *pos += 1;
+            Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
+        }
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
         // `clone $o;` and PHP 8.5's `clone($o, $overrides);` are ordinary expression statements
