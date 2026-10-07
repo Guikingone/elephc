@@ -1945,6 +1945,51 @@ echo $a->get() + 1, "|", $p->get() + 1;
     assert_eq!(out, "8|8");
 }
 
+/// Brackets in attribute strings and comments cannot end the group or consume its declaration.
+#[test]
+fn test_docblock_generics_survive_brackets_inside_attributes() {
+    for argument in [
+        r#""close ]""#,
+        r#"'open ['"#,
+        r#""escaped \" ]""#,
+        r#""label" /* ] */"#,
+        r#"["nested" => ["close ]"]]"#,
+    ] {
+        let source = format!(
+            r#"<?php
+/** @template T */
+#[Marker(
+    {argument}
+)]
+class Box {{
+    /** @param T $value */
+    public function __construct(private $value) {{}}
+    /** @return T */
+    public function get() {{ return $this->value; }}
+}}
+$box = new Box<int>(7);
+echo $box->get() + 1, "|", get_class($box);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "8|Box<int>", "{argument}");
+    }
+}
+
+/// Consecutive groups may share the declaration's line and still follow a generic docblock.
+#[test]
+fn test_docblock_generics_survive_same_line_attribute_groups() {
+    let out = compile_and_run(
+        r#"<?php
+/** @template T */
+#[First("]")] #[Second("[")] class Box {
+    public function __construct(int $value) {}
+}
+echo get_class(new Box<int>(7));
+"#,
+    );
+    assert_eq!(out, "Box<int>");
+}
+
 // --- Generic traits ---
 //
 // `trait Holder<T>` is a template like a generic class: each `use Holder<int>` instantiates an

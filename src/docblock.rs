@@ -24,6 +24,8 @@
 //!   `array<string, Foo>` means one thing in the language and in a docblock, and gaining a
 //!   type form gains it in both.
 
+mod attributes;
+
 use std::collections::HashMap;
 
 use crate::names::Name;
@@ -327,14 +329,14 @@ fn apply_member_type(
 /// Keying by the FOLLOWING line is what associates a block with its declaration, and it is why
 /// blank lines between the two are skipped: `/** … */\n\nfunction f()` is idiomatic.
 ///
-/// ATTRIBUTES are skipped for the same reason. `/** @template T */ #[Marker] class Box {}` files
-/// the block against the attribute's line, while `apply_to_stmt` looks the declaration's line up —
-/// the block is silently lost and the class is treated as non-generic. `#[` is unambiguous in PHP
-/// 8 (a bare `#` is a line comment) and a group may span lines, so the walk follows its bracket
-/// depth rather than assuming one line per attribute.
+/// ATTRIBUTES are skipped for the same reason: the block belongs to the declaration, rather than
+/// the first attribute line. The lexer identifies the end of consecutive groups without treating
+/// brackets inside strings or comments as structural tokens. Its line map is built only once,
+/// and only when a collected docblock is followed by attributes.
 fn collect(source: &str) -> HashMap<usize, DocBlock> {
     let mut blocks: HashMap<usize, DocBlock> = HashMap::new();
     let lines: Vec<&str> = source.lines().collect();
+    let mut attribute_targets = None;
     let mut index = 0usize;
     while index < lines.len() {
         if !lines[index].trim_start().starts_with("/**") {
@@ -348,27 +350,13 @@ fn collect(source: &str) -> HashMap<usize, DocBlock> {
         let end = index.min(lines.len().saturating_sub(1));
         index += 1;
         let mut target = index;
-        loop {
-            while target < lines.len() && lines[target].trim().is_empty() {
-                target += 1;
-            }
-            if target >= lines.len() || !lines[target].trim_start().starts_with("#[") {
-                break;
-            }
-            let mut depth = 0i32;
-            while target < lines.len() {
-                for ch in lines[target].chars() {
-                    match ch {
-                        '[' => depth += 1,
-                        ']' => depth -= 1,
-                        _ => {}
-                    }
-                }
-                target += 1;
-                if depth <= 0 {
-                    break;
-                }
-            }
+        while target < lines.len() && lines[target].trim().is_empty() {
+            target += 1;
+        }
+        if target < lines.len() && lines[target].trim_start().starts_with("#[") {
+            let targets = attribute_targets
+                .get_or_insert_with(|| attributes::declaration_lines(source));
+            target = targets.get(&target).copied().unwrap_or(lines.len());
         }
         if target >= lines.len() {
             continue;
@@ -562,12 +550,14 @@ mod tests {
         apply(program, source)
     }
 
+    /// Collects the sole generic docblock in a source fixture.
     fn block_of(source: &str) -> DocBlock {
         let blocks = collect(source);
         assert_eq!(blocks.len(), 1, "expected exactly one generic doc comment");
         blocks.into_values().next().expect("one block")
     }
 
+    /// Reads a template and the parameter and return annotations that refer to it.
     #[test]
     fn reads_a_template_param_and_return() {
         let block = block_of(
@@ -649,6 +639,7 @@ mod tests {
         assert!(parse_type("int|").is_none());
     }
 
+    /// Applies generic function annotations as concrete AST type declarations.
     #[test]
     fn applies_the_annotation_to_the_declaration() {
         let source =
@@ -926,6 +917,22 @@ mod tests {
             panic!("expected a function declaration");
         };
         assert_eq!(*variadic_type, Some(TypeExpr::Named(Name::unqualified("T"))));
+    }
+
+    /// Tagless files retain generic annotations across attributes with nonstructural brackets.
+    #[test]
+    fn applies_generic_docblocks_after_attributes_in_lfc_sources() {
+        let source = "/** @template T */\n#[Marker(\n    ']'\n)]\nclass Box {}";
+        let tokens = crate::lexer::tokenize_with_mode(source, crate::source::SourceMode::Lfc)
+            .expect("tokenizes");
+        let program = apply(crate::parser::parse(&tokens).expect("parses"), source);
+        let StmtKind::ClassDecl { generics, .. } = &program[0].kind else {
+            panic!("expected a class declaration");
+        };
+        assert_eq!(
+            generics.as_ref().expect("class became a template").type_params[0].name,
+            "T"
+        );
     }
 
 }
