@@ -21,20 +21,25 @@ pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
     let mut classes: Vec<(String, usize)> = Vec::new();
     let mut namespace = String::new();
     let mut namespace_end = None;
+    let mut namespace_stack = Vec::new();
     let mut pos = 0;
     while pos < tokens.len() {
-        if namespace_end.is_some_and(|end| pos > end) {
-            namespace.clear();
-            namespace_end = None;
+        while namespace_end.is_some_and(|end| pos > end) {
+            (namespace, namespace_end) = namespace_stack.pop().unwrap_or_default();
         }
         while classes.last().is_some_and(|(_, end)| pos > *end) {
             classes.pop();
         }
         if tokens[pos].0 == Token::Namespace && declaration_boundary(&tokens, pos) {
             if let Some((name, delimiter)) = namespace_declaration(&tokens, pos + 1) {
+                let braced = tokens[delimiter].0 == Token::LBrace;
+                if braced || namespace_end.is_some() {
+                    namespace_stack.push((namespace, namespace_end));
+                }
                 namespace = name;
-                namespace_end = (tokens[delimiter].0 == Token::LBrace)
-                    .then(|| brace_ends[delimiter].unwrap_or(tokens.len() - 1));
+                if braced {
+                    namespace_end = Some(brace_ends[delimiter].unwrap_or(tokens.len() - 1));
+                }
                 pos = delimiter + 1;
                 continue;
             }
@@ -66,7 +71,7 @@ pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
                 if tokens.get(name_pos + 1).is_some_and(|(token, _)| *token == Token::LParen) {
                     if let Some((_, end)) = declaration_extent(&tokens, name_pos + 1, &brace_ends, true) {
                         let name = match classes.last() {
-                            Some((class, _)) => format!("{class}::{name}"),
+                            Some((class, _)) => format!("{class}::{}", elephc::names::php_symbol_key(&name)),
                             None => qualify_name(&namespace, &name),
                         };
                         ranges.push(DeclRange {

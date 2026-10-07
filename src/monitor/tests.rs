@@ -1442,6 +1442,30 @@ echo call_hot(1);
         ]);
     }
 
+    /// Method segments match canonical emitted symbols without changing source function case.
+    #[test]
+    fn monitor_followup_method_symbol_case() {
+        let source = "<?php namespace App; function FreeName() {} class Widget { function getName() {} function yieldValues() { yield 1; } }";
+        let names = php_decl_ranges(source).into_iter().map(|range| range.name).collect::<Vec<_>>();
+        assert_eq!(names, ["App\\FreeName", "App\\Widget::getname", "App\\Widget::yieldvalues"]);
+    }
+
+    /// Nested braced namespaces restore their outer attribution and then the root namespace.
+    #[test]
+    fn monitor_followup_nested_braced_namespace_restoration() {
+        let source = "<?php namespace Root; namespace Outer { function before() {} namespace Inner { function nested() {} } function after() {} } function rootAgain() {}";
+        let names = php_decl_ranges(source).into_iter().map(|range| range.name).collect::<Vec<_>>();
+        assert_eq!(names, ["Outer\\before", "Inner\\nested", "Outer\\after", "Root\\rootAgain"]);
+    }
+
+    /// An inner semicolon namespace ends with its containing braced namespace.
+    #[test]
+    fn monitor_followup_nested_semicolon_namespace_restoration() {
+        let source = "<?php namespace Root; namespace Outer { namespace Inner { namespace Deep; function nested() {} } function after() {} namespace Last; function last() {} } function rootAgain() {}";
+        let names = php_decl_ranges(source).into_iter().map(|range| range.name).collect::<Vec<_>>();
+        assert_eq!(names, ["Deep\\nested", "Outer\\after", "Last\\last", "Root\\rootAgain"]);
+    }
+
     /// Declarations on the same line keep namespace and class ownership at each token.
     #[test]
     fn monitor_review_same_line_namespace_and_class_declarations() {
