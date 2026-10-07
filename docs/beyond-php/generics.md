@@ -691,10 +691,13 @@ instantiation carries as many method instantiations as its call sites ask for. B
 same way they do on a function — `idOf<E : Entity>($e)` is checked at the call, against the class
 table.
 
-The type arguments are always INFERRED, because there is no syntax for writing them at a call
-site: `$b->map<string>(…)` would have to be told apart from `$b->map < $x`, which is valid PHP.
-So a type parameter has to be MENTIONED by a parameter for anything to bind it. A bare `callable`
-mentions nothing, which is what typed callables are for.
+Method type arguments may be INFERRED from the arguments or written explicitly, just as on a
+generic function: `$p->withRight<string>("two")` selects `U = string`. Written arguments follow
+the same bounds and default rules described in
+[Writing the type arguments at the call](#writing-the-type-arguments-at-the-call).
+
+For inference, a type parameter has to be MENTIONED by a parameter. A bare `callable` mentions
+nothing, which is what typed callables are for; alternatively, write the method's type arguments.
 
 ### Generic traits
 
