@@ -248,3 +248,74 @@ fn test_docblock_method_templates_example_runs_in_both_modes() {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), expected, "{flags:?}");
     }
 }
+
+/// A doc comment closed on the declaration's own line still binds to it, and a member sharing
+/// the class's line does not adopt the class's `@template`.
+///
+/// `collect` keyed every block to the line AFTER `*/`, so `/** @template T */ class Box` lost
+/// its template and `new Box<int>(7)` was refused. With the class and its constructor on one
+/// line, the class block was also copied onto the constructor, which then expected no argument.
+#[test]
+fn test_docblock_on_the_declaration_line_binds_to_it() {
+    let sources = [
+        "<?php\n/** @template T */ class Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n/** @template T */\nclass Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+    ];
+    // Without `--strict-php` only: the written `new Box<int>` is an elephc extension it refuses.
+    for source in sources {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
+    }
+}
+
+/// An enum method's PHPDoc template specializes per call and enforces its bound, like a class's.
+///
+/// Enum methods were skipped, so `@template T of int` was never checked on `Id::A->id("seven")`.
+#[test]
+fn test_docblock_method_templates_on_enum_methods() {
+    let template = r#"<?php
+enum Id {
+    case A;
+    /**
+     * @template T of int
+     * @param T $v
+     * @return T
+     */
+    public function id($v) { return $v; }
+}
+echo Id::A->id(ARG);
+"#;
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(
+            compile_cli_file_and_run_with_flags(&template.replace("ARG", "7"), flags),
+            "7",
+            "{flags:?}"
+        );
+        let error =
+            compile_cli_file_with_flags_expect_failure(&template.replace("ARG", "\"seven\""), flags);
+        assert!(error.contains("does not satisfy its bound int"), "{error}");
+    }
+}
+
+/// A constructor's PHPDoc `@template` is ignored, as php ignores it, so the class still builds.
+///
+/// Adopting it made the constructor a template that was then stripped, and `new Box(5)` reported
+/// that the constructor expects no arguments.
+#[test]
+fn test_docblock_template_on_a_constructor_is_ignored() {
+    let source = r#"<?php
+class Box {
+    public $value;
+    /**
+     * @template T
+     * @param T $value
+     */
+    public function __construct($value) { $this->value = $value; }
+}
+echo (new Box(5))->value, "|", (new Box("x"))->value;
+"#;
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "5|x", "{flags:?}");
+    }
+}

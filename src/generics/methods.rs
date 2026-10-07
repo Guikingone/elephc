@@ -72,7 +72,8 @@ fn collect_into(stmts: &[Stmt], templates: &mut HashMap<(String, String), Method
             // attached to the trait, and trait flattening then copies it into every using class
             // exactly as it copies an ordinary method.
             StmtKind::ClassDecl { name, methods, .. }
-            | StmtKind::TraitDecl { name, methods, .. } => {
+            | StmtKind::TraitDecl { name, methods, .. }
+            | StmtKind::EnumDecl { name, methods, .. } => {
                 collect_declared(name, methods, templates)
             }
             StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
@@ -208,7 +209,8 @@ fn attach(
         for stmt in stmts.iter_mut() {
             match &mut stmt.kind {
                 StmtKind::ClassDecl { name, methods, .. }
-                | StmtKind::TraitDecl { name, methods, .. } => {
+                | StmtKind::TraitDecl { name, methods, .. }
+                | StmtKind::EnumDecl { name, methods, .. } => {
                     if super::classes::template_key(name) != class_key {
                         continue;
                     }
@@ -375,7 +377,9 @@ pub fn strip_templates(program: Program) -> Program {
                 StmtKind::ClassDecl { methods, .. } => {
                     methods.retain(|method| method.type_params.is_empty());
                 }
-                StmtKind::InterfaceDecl { methods, .. } | StmtKind::TraitDecl { methods, .. } => {
+                StmtKind::InterfaceDecl { methods, .. }
+                | StmtKind::TraitDecl { methods, .. }
+                | StmtKind::EnumDecl { methods, .. } => {
                     methods.retain(|method| method.type_params.is_empty());
                 }
                 StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => visit(body),

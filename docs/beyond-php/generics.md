@@ -700,6 +700,11 @@ the same bounds and default rules described in
 For inference, a type parameter has to be MENTIONED by a parameter. A bare `callable` mentions
 nothing, which is what typed callables are for; alternatively, write the method's type arguments.
 
+A constructor is the exception: it cannot declare type parameters of its own. One would type the
+object being built (`public T $value` is a property), which makes it a class parameter in all but
+name, so `public function __construct<T>(…)` is refused with that advice — declare `class Box<T>`
+instead.
+
 ### Generic traits
 
 A trait may declare type parameters, and a class uses it at concrete types:
@@ -992,8 +997,13 @@ echo $identity->copy(7), '|', $identity->copy('seven');   // 7|seven
 ```
 
 The two calls specialize `copy<int>` and `copy<string>`. This works with and without
-`--strict-php`, including static methods and methods declared in traits. Method templates also
-support bounds, defaults and variadic annotations such as `@param T ...$values`.
+`--strict-php`, including static methods and methods declared in traits and enums. Method
+templates also support bounds, defaults and variadic annotations such as `@param T ...$values`.
+A doc comment binds to the declaration that follows it, including one on the same line after
+`*/` (`/** @template T */ class Box`).
+
+A `@template` on a constructor is ignored, as php ignores it, for the reason the native form is
+refused: put it on the class.
 
 In a generic class, a method can refer to the class's `T` and declare a separate `U` of its own.
 `U` is bound at the method call and does not enter the scope of properties or sibling methods.

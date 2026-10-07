@@ -399,7 +399,8 @@ pub fn arguments_in_declaration_order(
     let mut slots: Vec<Option<crate::parser::ast::Expr>> = vec![None; param_names.len()];
     let mut surplus: Vec<crate::parser::ast::Expr> = Vec::new();
     let mut next_positional = 0usize;
-    for arg in args {
+    let expanded = expand_static_spreads(args);
+    for arg in &expanded {
         if let crate::parser::ast::ExprKind::NamedArg { name, value } = &arg.kind {
             if let Some(index) = param_names.iter().position(|param| param == name) {
                 slots[index] = Some((**value).clone());
@@ -417,6 +418,52 @@ pub fn arguments_in_declaration_order(
     }
     slots.extend(surplus.into_iter().map(Some));
     slots
+}
+
+/// Replaces each spread of an array LITERAL with the arguments it stands for.
+///
+/// The shared call planner already expands `...["v" => "abc", "n" => 1]` into named arguments, so
+/// a non-generic call binds them by name. Inference saw one positional `Spread` instead, which
+/// filled the first slot with the whole array and left `<T>` undetermined. A string key becomes a
+/// named argument and any other entry a positional one, in source order. A spread whose source is
+/// not a literal is kept as written: its keys are not known here.
+fn expand_static_spreads(args: &[crate::parser::ast::Expr]) -> Vec<crate::parser::ast::Expr> {
+    use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
+    let named = |key: &Expr, value: &Expr| match &key.kind {
+        ExprKind::StringLiteral(name) => Expr::new(
+            ExprKind::NamedArg {
+                name: name.clone(),
+                value: Box::new(value.clone()),
+            },
+            value.span,
+        ),
+        _ => value.clone(),
+    };
+    let mut out = Vec::with_capacity(args.len());
+    for arg in args {
+        let ExprKind::Spread(source) = &arg.kind else {
+            out.push(arg.clone());
+            continue;
+        };
+        match &source.kind {
+            ExprKind::ArrayLiteral(values) => out.extend(values.iter().cloned()),
+            ExprKind::ArrayLiteralAssoc(entries) => {
+                out.extend(entries.iter().map(|(key, value)| named(key, value)))
+            }
+            ExprKind::ArrayLiteralMixed(entries)
+                if entries
+                    .iter()
+                    .all(|entry| !matches!(entry, ArrayEntry::Spread(_))) =>
+            {
+                out.extend(entries.iter().map(|entry| match entry {
+                    ArrayEntry::Keyed(key, value) => named(key, value),
+                    ArrayEntry::Value(value) | ArrayEntry::Spread(value) => value.clone(),
+                }))
+            }
+            _ => out.push(arg.clone()),
+        }
+    }
+    out
 }
 
 /// Returns the declared type at one ordered argument position.

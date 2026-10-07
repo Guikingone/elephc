@@ -2241,3 +2241,42 @@ echo (new C())->id(5), "|", (new C())->id("x"), "|", (new D())->id(7), "|", (new
     assert_eq!(out.stdout, "5|x|7|4");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A spread array literal binds type parameters by its keys on the function, method and
+/// construction paths, as it binds the arguments themselves.
+///
+/// Inference paired the whole `...[…]` with the first parameter, so `<T>` was reported as not
+/// determined, while the shared call planner expands the same spread into named arguments and a
+/// non-generic call printed `abc`.
+#[test]
+fn test_spread_literal_arguments_bind_type_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function box<T>(int $n, T $v): T { return $v; }
+class C { public static function box<T>(int $n, T $v): T { return $v; } }
+class Box<T> { public function __construct(public int $n, public T $v) {} }
+echo box(...["v" => "abc", "n" => 1]), "|", C::box(...["v" => "def", "n" => 2]), "|",
+    (new Box(...["v" => "ghi", "n" => 3]))->v, "|", box(...[4, "jkl"]);
+"#,
+    );
+    assert_eq!(out, "abc|def|ghi|jkl");
+}
+
+/// A native constructor type parameter is refused with the fix named, not erased.
+///
+/// Monomorphized as a method template, the constructor was stripped and `new Box(5)` reported
+/// that it expects no arguments; a promoted parameter typed `T` failed earlier as an unknown type.
+#[test]
+fn test_native_constructor_type_parameters_are_refused() {
+    let error = compile_cli_file_with_flags_expect_failure(
+        "<?php\nclass Box { public function __construct<T>(public T $value) {} }\n\
+         echo (new Box(5))->value;\n",
+        &[],
+    );
+    assert!(
+        error.contains("A constructor cannot declare its own type parameters")
+            && error.contains("class Box<T>"),
+        "{error}"
+    );
+    assert!(!error.contains("Unexpected token"), "{error}");
+}

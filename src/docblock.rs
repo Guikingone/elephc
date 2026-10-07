@@ -104,7 +104,8 @@ pub fn apply(program: Program, source: &str) -> Program {
 
 /// Applies the doc comment that ends just above `stmt`, if any.
 fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<usize, DocBlock>) -> Stmt {
-    let block = blocks.get(&(stmt.span.line as usize));
+    let owner_line = stmt.span.line as usize;
+    let block = blocks.get(&owner_line);
     match &mut stmt.kind {
         StmtKind::FunctionDecl {
             type_params,
@@ -144,7 +145,7 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<usize, DocBlock>) -> Stmt {
         } => {
             let extends_args = adopt_inherited(block, extends.as_ref());
             let type_params = adopt_generics(block, generics, extends_args, implements);
-            members::apply(&type_params, properties, methods, blocks);
+            members::apply(&type_params, properties, methods, blocks, owner_line);
         }
         StmtKind::InterfaceDecl {
             generics,
@@ -157,13 +158,19 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<usize, DocBlock>) -> Stmt {
             // everything annotated lands in `interface_args` — which is why `GenericDecl` says
             // `extends_args` is always empty for one.
             let type_params = adopt_generics(block, generics, Vec::new(), extends);
-            members::apply(&type_params, properties, methods, blocks);
+            members::apply(&type_params, properties, methods, blocks, owner_line);
         }
         StmtKind::TraitDecl {
             generics, properties, methods, ..
         } => {
             let type_params = adopt_generics(block, generics, Vec::new(), &[]);
-            members::apply(&type_params, properties, methods, blocks);
+            members::apply(&type_params, properties, methods, blocks, owner_line);
+        }
+        // An enum declares no type parameters of its own, but its methods may, and PHPDoc is the
+        // only form `--strict-php` accepts for one. Its methods were skipped, so a bound on a
+        // method `@template` was never checked.
+        StmtKind::EnumDecl { methods, .. } => {
+            members::apply(&[], &mut [], methods, blocks, owner_line);
         }
         StmtKind::NamespaceBlock { body, .. } => {
             let nested = std::mem::take(body);
@@ -280,7 +287,12 @@ fn collect(source: &str) -> HashMap<usize, DocBlock> {
         }
         let end = index.min(lines.len().saturating_sub(1));
         index += 1;
-        let mut target = index;
+        // Code after `*/` on the closing line IS the declaration: `/** @template T */ class Box`
+        // keyed the block to the line below and the class was compiled as non-generic.
+        let code_after_close = lines[end]
+            .split_once("*/")
+            .is_some_and(|(_, after)| !after.trim().is_empty());
+        let mut target = if code_after_close { end } else { index };
         while target < lines.len() && lines[target].trim().is_empty() {
             target += 1;
         }
