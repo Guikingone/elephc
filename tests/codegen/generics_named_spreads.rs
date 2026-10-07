@@ -73,3 +73,27 @@ echo box(...["v" => word(), "n" => number()]);
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "vnabc");
     }
 }
+
+/// A positional unpack after a named one starts after the named parameter, as the call planner
+/// places it, on the function, method and construction paths.
+///
+/// Inference filled the first free slot instead, so `show(...["b" => 8], ...["Q"])` read `$a`
+/// for `<T>` (left undetermined) where the call puts "Q" in `$c`, and a longer tail bound `<T>`
+/// to the next integer and then refused "Q".
+#[test]
+fn test_positional_unpack_after_named_unpack_binds_from_the_planner_cursor() {
+    let out = compile_and_run(
+        r#"<?php
+function show<T>(int $a = 1, int $b = 2, T $c = "z") { return "$a/$b/$c"; }
+function longer<T>(int $a = 1, int $b = 2, T $c = "z", int $d = 0) { return "$a/$b/$c/$d"; }
+function hole<T>(int $a = 1, int $b = 2, int $c = 3, T $d = "z") { return "$a/$b/$c/$d"; }
+class C { public static function show<T>(int $a = 1, int $b = 2, T $c = "z") { return "$a/$b/$c"; } }
+class Box<T> { public function __construct(public int $a = 1, public int $b = 2, public T $c = "z") {} }
+$box = new Box(...["b" => 8], ...["S"]);
+echo show(...["b" => 8], ...["Q"]), "|", C::show(...["b" => 8], ...["R"]), "|",
+    "$box->a/$box->b/$box->c", "|", longer(...["b" => 8], ...["Q", 4]), "|",
+    hole(7, ...["c" => 9], ...["Q"]);
+"#,
+    );
+    assert_eq!(out, "1/8/Q|1/8/R|1/8/S|1/8/Q/4|7/2/9/Q");
+}

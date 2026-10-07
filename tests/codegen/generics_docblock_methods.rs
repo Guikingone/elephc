@@ -373,3 +373,36 @@ fn test_docblock_closing_line_trailing_comment_or_attribute() {
         assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
     }
 }
+
+/// An ordinary `/* … */` between a docblock and its declaration does not discard the docblock,
+/// whether it shares the closing line, spans several lines or precedes an attribute group.
+///
+/// The gap scan replaced the docblock it had seen with whatever block comment came next, so the
+/// declaration was compiled as non-generic or its `@template` bound was never checked.
+#[test]
+fn test_block_comment_between_docblock_and_declaration_keeps_the_template() {
+    let class_sources = [
+        "<?php\n/** @template T */ /* kept */ class Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n/** @template T */\n/*\n * kept\n */\nclass Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n#[Attribute]\nclass Marker {}\n/** @template T */\n/* kept */\n#[Marker]\n\
+         class Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+    ];
+    for source in class_sources {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
+    }
+    let bounded = r#"<?php
+/**
+ * @template T of int
+ * @param T $v
+ * @return T
+ */
+/* kept */
+function id($v) { return $v; }
+echo id("seven");
+"#;
+    let error = compile_cli_file_with_flags_expect_failure(bounded, &[]);
+    assert!(error.contains("does not satisfy its bound int"), "{error}");
+}

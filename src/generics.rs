@@ -405,29 +405,27 @@ pub fn arguments_in_declaration_order(
     let mut positional_surplus: Vec<crate::parser::ast::Expr> = Vec::new();
     let mut named_surplus: Vec<crate::parser::ast::Expr> = Vec::new();
     let expanded = expand_static_spreads(args);
-    // Named arguments first, then positional ones into the slots they leave free, which is where
-    // the call planner puts them. For an ordinary call the two orders agree, since a named
-    // argument never targets a slot a positional one filled. For a spread that mixes key kinds
-    // (`...["a" => "x", 1 => 2]`) only this order binds `<T>` from the argument the call passes.
+    // Source order, with the call planner's cursor: a positional argument takes the cursor's slot,
+    // and a named one moves the cursor past the parameter it binds (`StaticNamedCursor`). So
+    // `show(...["b" => 8], ...["Q"])` puts "Q" in `$c` and leaves `$a` to its default, as the
+    // call binds it. Filling the first free slot instead put "Q" in `$a` and inferred `<T>` from
+    // the wrong argument. A written `name:` argument can be followed by nothing positional, so
+    // moving the cursor for it too changes nothing.
+    let mut cursor = 0usize;
     for arg in &expanded {
         if let crate::parser::ast::ExprKind::NamedArg { name, value } = &arg.kind {
             match param_names.iter().position(|param| param == name) {
-                Some(index) => slots[index] = Some((**value).clone()),
+                Some(index) => {
+                    slots[index] = Some((**value).clone());
+                    cursor = cursor.max(index + 1);
+                }
                 None => named_surplus.push((**value).clone()),
             }
-        }
-    }
-    let mut next_free = 0usize;
-    for arg in &expanded {
-        if matches!(arg.kind, crate::parser::ast::ExprKind::NamedArg { .. }) {
             continue;
         }
-        while next_free < slots.len() && slots[next_free].is_some() {
-            next_free += 1;
-        }
-        if next_free < slots.len() {
-            slots[next_free] = Some(arg.clone());
-            next_free += 1;
+        if cursor < slots.len() {
+            slots[cursor] = Some(arg.clone());
+            cursor += 1;
         } else {
             positional_surplus.push(arg.clone());
         }

@@ -90,7 +90,13 @@ fn last_docblock(mut gap: &str) -> Option<&str> {
             gap = gap.find('\n').map_or("", |end| &gap[end + 1..]);
         } else if gap.starts_with("/*") {
             let end = gap.find("*/")? + 2;
-            last = gap.starts_with("/**").then_some(&gap[..end]);
+            // Only a docblock replaces the one already seen. An ordinary `/* … */` between the
+            // docblock and its declaration, on one line or several, is skipped like `//` is; it
+            // used to clear `last`, and the declaration lost its `@template`. `/**/` is an
+            // empty ordinary comment, not a docblock.
+            if gap.starts_with("/**") && !gap.starts_with("/**/") {
+                last = Some(&gap[..end]);
+            }
             gap = &gap[end..];
         } else {
             return None;
