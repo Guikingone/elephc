@@ -191,7 +191,7 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             array_object_construct_body(),
         ),
-        method_with_body("getIterator", Vec::new(), Some(named_type("ArrayIterator")), array_object_get_iterator_body()),
+        method_with_body("getIterator", Vec::new(), Some(named_type("Iterator")), array_object_get_iterator_body()),
         method_with_body("count", Vec::new(), Some(TypeExpr::Int), array_count_body()),
         method_with_body(
             "offsetExists",
