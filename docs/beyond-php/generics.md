@@ -10,8 +10,9 @@ its own specialized version, so a container costs what writing it out by hand co
 
 > **Strict mode:** the native syntax is an elephc extension with no PHP equivalent, and
 > [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects it. The PHPStan
-> docblock form below is ordinary PHP and is accepted. A bare `array` hint is untouched either
-> way.
+> docblock form below is valid PHP and is accepted. **Supported generic PHPDoc annotations are
+> compiler input:** they affect type checking, storage selection and specialization with or
+> without `--strict-php`. An unannotated bare `array` hint is untouched either way.
 
 ## Quick start
 
@@ -866,9 +867,11 @@ here nothing was taken.
 
 ## Writing it in plain PHP
 
-elephc reads `@template`, `@param` and `@return` directly. An annotated file compiles to the
-same monomorphic instantiations as native syntax — and stays valid PHP, so it still runs on
-php-src and still passes `--strict-php`:
+elephc reads supported generic `@template`, `@param` and `@return` annotations directly. php-src
+ignores these docblocks as comments; elephc gives them compilation semantics in both ordinary
+mode and `--strict-php`. They drive type checking and generate specialized functions and classes,
+including their concrete storage layouts and the [runtime class identities](#a-class) described
+below. The annotated source stays valid PHP:
 
 ```php
 <?php
