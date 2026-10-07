@@ -475,6 +475,10 @@ fn parse_expr_bp_inner(
                     .expect("recognized null append property chain");
                 continue;
             }
+            if op == AssignmentOperator::Assign {
+                lhs = super::plain_assignment_expression(lhs, rhs, span);
+                continue;
+            }
             if is_non_local_assignment_target(&lhs) {
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 
