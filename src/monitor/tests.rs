@@ -1442,12 +1442,52 @@ echo call_hot(1);
         ]);
     }
 
-    /// Method segments match canonical emitted symbols without changing source function case.
+    /// Declaration ranges retain source spelling for exact instrumentation names.
     #[test]
     fn monitor_followup_method_symbol_case() {
         let source = "<?php namespace App; function FreeName() {} class Widget { function getName() {} function yieldValues() { yield 1; } }";
         let names = php_decl_ranges(source).into_iter().map(|range| range.name).collect::<Vec<_>>();
-        assert_eq!(names, ["App\\FreeName", "App\\Widget::getname", "App\\Widget::yieldvalues"]);
+        assert_eq!(names, ["App\\FreeName", "App\\Widget::getName", "App\\Widget::yieldValues"]);
+        assert!(same_sampled_declaration(&names[1], "App\\Widget::getname"));
+        assert!(same_sampled_declaration(&names[2], "App\\Widget::yieldvalues"));
+        assert!(!same_sampled_declaration(&names[1], "Other\\Widget::getname"));
+        assert!(!same_sampled_declaration(&names[1], "App\\widget::getname"));
+        assert!(!same_sampled_declaration(&names[1], "App\\Widget::other"));
+        assert!(!same_sampled_declaration(&names[0], "App\\freename"));
+    }
+
+    /// Exact captures retain the measured calls and costs of mixed-case methods.
+    #[test]
+    fn monitor_followup_exact_source_method_case() {
+        use std::io::Write;
+        struct SourceFixture(std::path::PathBuf);
+        impl Drop for SourceFixture {
+            /// Removes only this test's source fixture, including on assertion failures.
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "elephc-monitor-exact-method-{}-{nonce}.php", std::process::id()
+        ));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(&path).expect("create source fixture");
+        let fixture = SourceFixture(path);
+        file.write_all(b"<?php\nnamespace App;\nclass Widget {\n function getName() { return 1; }\n}\n")
+            .expect("write source fixture");
+        drop(file);
+        let mut graph = instr_graph();
+        graph.nodes[1].name = "App\\Widget::getName".into();
+        attach_exact_source(&mut graph, fixture.0.to_str().expect("source path"));
+        let lines = graph.lines.as_ref().expect("attached source");
+        assert_eq!(lines.funcs.len(), 1, "measured method disappeared from source view");
+        let method = &lines.funcs[0];
+        assert_eq!((method.name.as_str(), method.start, method.end, method.calls),
+            ("App\\Widget::getName", 4, 4, 1200));
+        assert_eq!(method.self_pct, 99.0);
+        assert_eq!(method.incl_pct, 99.0);
     }
 
     /// Nested braced namespaces restore their outer attribution and then the root namespace.
@@ -1627,7 +1667,7 @@ echo call_hot(1);
                         .iter()
                         .find(|range| range.start <= *line && *line <= range.end)
                     {
-                        if owner.name != demangle(&frame.symbol) {
+                        if !same_sampled_declaration(&owner.name, &demangle(&frame.symbol)) {
                             rewritten.push(Frame {
                                 symbol: format!("inlined:{}", owner.name),
                                 address: None,

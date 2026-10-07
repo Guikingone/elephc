@@ -7,6 +7,7 @@
 //! Key details:
 //! - Lexer tokens exclude comments and keep braces in strings out of scope tracking.
 //! - Scope boundaries use token positions, including multiple declarations on one line.
+//! - Names retain source spelling so exact instrumentation can attach measured calls.
 //! - Unlexable source yields no virtual frames rather than guessed declaration names.
 
 use elephc::lexer::{SpannedToken, Token};
@@ -71,7 +72,7 @@ pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
                 if tokens.get(name_pos + 1).is_some_and(|(token, _)| *token == Token::LParen) {
                     if let Some((_, end)) = declaration_extent(&tokens, name_pos + 1, &brace_ends, true) {
                         let name = match classes.last() {
-                            Some((class, _)) => format!("{class}::{}", elephc::names::php_symbol_key(&name)),
+                            Some((class, _)) => format!("{class}::{name}"),
                             None => qualify_name(&namespace, &name),
                         };
                         ranges.push(DeclRange {

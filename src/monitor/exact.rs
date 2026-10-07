@@ -570,6 +570,16 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
     out
 }
 
+/// Matches source declarations to sampled symbols, which fold only method names.
+pub(crate) fn same_sampled_declaration(source: &str, symbol: &str) -> bool {
+    match (source.rsplit_once("::"), symbol.rsplit_once("::")) {
+        (Some((source_class, source_method)), Some((symbol_class, symbol_method))) => {
+            source_class == symbol_class && source_method.eq_ignore_ascii_case(symbol_method)
+        }
+        _ => source == symbol,
+    }
+}
+
 /// Rewrites sample stacks so a PHP frame sampled on a line owned by ANOTHER
 /// function's declaration range grows a virtual `(inlined)` child frame — the
 /// call boundary the inliner erased, recovered from the source span it kept.
@@ -619,7 +629,7 @@ pub(crate) fn inject_inlined_frames(
                 .iter()
                 .find(|range| range.start <= *line && *line <= range.end)
             {
-                if owner.name != own_name {
+                if !same_sampled_declaration(&owner.name, &own_name) {
                     rewritten.push(Frame {
                         symbol: format!("inlined:{}", owner.name),
                         address: None,
