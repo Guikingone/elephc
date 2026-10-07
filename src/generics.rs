@@ -396,6 +396,7 @@ pub fn infer_bindings_with_args(
 /// variadic — keeps its source order after the declared slots, which is the order the variadic
 /// collects them in. A slot no argument fills stays `None`: its default is not an argument, and
 /// inference must not read a type from one.
+/// Static associative unpacks use the shared call planner's expansion before matching names.
 pub fn arguments_in_declaration_order(
     param_names: &[String],
     args: &[crate::parser::ast::Expr],
@@ -851,6 +852,22 @@ pub fn instantiated_name(base: &str, bindings: &[(String, TypeExpr)]) -> String 
 mod tests {
     use super::*;
     use crate::parser::ast::Variance;
+
+    /// A static named unpack binds by parameter name instead of occupying a positional slot.
+    #[test]
+    fn named_spreads_are_ordered_before_generic_inference() {
+        let tokens = crate::lexer::tokenize("<?php f(...[\"v\" => \"abc\", \"n\" => 1]);").expect("tokens");
+        let program = crate::parser::parse(&tokens).expect("program");
+        let crate::parser::ast::StmtKind::ExprStmt(expr) = &program[0].kind else {
+            panic!("expected a call");
+        };
+        let crate::parser::ast::ExprKind::FunctionCall { args, .. } = &expr.kind else {
+            panic!("expected a function call");
+        };
+        let ordered = arguments_in_declaration_order(&["n".into(), "v".into()], args);
+        assert!(matches!(ordered[0].as_ref().map(|expr| &expr.kind), Some(crate::parser::ast::ExprKind::IntLiteral(1))));
+        assert!(matches!(ordered[1].as_ref().map(|expr| &expr.kind), Some(crate::parser::ast::ExprKind::StringLiteral(value)) if value == "abc"));
+    }
 
     /// Wraps a declared parameter type for inference fixtures.
     fn param(ty: TypeExpr) -> Option<TypeExpr> {
