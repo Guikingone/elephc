@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Declaration names become canonical before type checking and codegen symbol collection.
+//! - Generic parameter names remain bare in their declaration and method scopes.
+
+mod type_params;
 
 use crate::errors::CompileError;
 use crate::names::{canonical_name_for_decl, php_symbol_key};
@@ -26,59 +29,6 @@ fn declared_type_params(generics: &Option<Box<GenericDecl>>) -> &[TypeParam] {
         .as_ref()
         .map(|generics| generics.type_params.as_slice())
         .unwrap_or(&[])
-}
-
-/// Restores the bare spelling of each type parameter after namespace resolution.
-///
-/// `T` is not a class: it resolves against its own declaration's type parameter list, never
-/// against the namespace. The resolver cannot know that while it canonicalizes names, so
-/// `class Box<T>` written inside `namespace App` comes back with every `T` qualified to
-/// `App\T` — a class nothing declares, which the checker then reports as an unknown type.
-/// Mapping that spelling back is what makes a generic declaration mean the same thing inside a
-/// namespace as at the top level.
-///
-/// The rewrite is exactly what a type parameter SHADOWING a same-named class should do, so a
-/// real `App\T` is correctly invisible inside `Box<T>`'s body.
-///
-/// Applied to the already-resolved declaration, and through the same substitution helper
-/// instantiation uses, so it reaches every type position rather than the signature alone.
-fn restore_type_parameter_names(
-    stmt: Stmt,
-    type_params: &[TypeParam],
-    namespace: Option<&str>,
-    imports: &Imports,
-    symbols: &Symbols,
-) -> Stmt {
-    let bindings: Vec<(String, crate::parser::ast::TypeExpr)> = type_params
-        .iter()
-        .filter_map(|param| {
-            let bare = crate::names::Name::unqualified(&param.name);
-            let resolved = resolve_type_expr(
-                &crate::parser::ast::TypeExpr::Named(bare),
-                namespace,
-                imports,
-                symbols,
-            );
-            let crate::parser::ast::TypeExpr::Named(resolved) = resolved else {
-                return None;
-            };
-            // At the top level the name is already bare and substituting it for itself would
-            // be a no-op walk over the whole declaration.
-            if resolved.as_str() == param.name {
-                return None;
-            }
-            Some((
-                resolved.as_str().to_string(),
-                crate::parser::ast::TypeExpr::Named(crate::names::Name::unqualified(&param.name)),
-            ))
-        })
-        .collect();
-    if bindings.is_empty() {
-        return stmt;
-    }
-    crate::generics::substitute_in_body(vec![stmt], &bindings)
-        .pop()
-        .expect("substituting one declaration yields one declaration")
 }
 
 /// Resolves every name inside a declaration's generic half.
@@ -120,6 +70,7 @@ fn resolve_type_params(
         .collect()
 }
 
+/// Resolves a generic declaration's bounds, defaults and inherited type arguments.
 fn resolve_generic_decl(
     generics: &Option<Box<GenericDecl>>,
     namespace: Option<&str>,
@@ -198,7 +149,7 @@ pub(super) fn resolve_decl_stmt(
                 stmt.span,
                 stmt_attributes,
             );
-            Ok(Some(restore_type_parameter_names(
+            Ok(Some(type_params::restore(
                 resolved,
                 type_params,
                 namespace,
@@ -248,7 +199,7 @@ pub(super) fn resolve_decl_stmt(
                 stmt.span,
                 stmt_attributes,
             );
-            Ok(Some(restore_type_parameter_names(
+            Ok(Some(type_params::restore(
                 resolved,
                 declared_type_params(generics),
                 namespace,
@@ -355,7 +306,7 @@ pub(super) fn resolve_decl_stmt(
                 stmt.span,
                 stmt_attributes,
             );
-            Ok(Some(restore_type_parameter_names(
+            Ok(Some(type_params::restore(
                 resolved,
                 declared_type_params(generics),
                 namespace,
@@ -388,7 +339,7 @@ pub(super) fn resolve_decl_stmt(
                 stmt.span,
                 stmt_attributes,
             );
-            Ok(Some(restore_type_parameter_names(
+            Ok(Some(type_params::restore(
                 resolved,
                 declared_type_params(generics),
                 namespace,
@@ -491,6 +442,10 @@ fn resolve_methods(
                 // type parameters do, or the bound names a class that does not exist.
                 type_params: resolve_type_params(&method.type_params, namespace, imports, symbols),
                 params: resolve_params(&method.params, namespace, imports, symbols),
+                variadic_type: method
+                    .variadic_type
+                    .as_ref()
+                    .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
                 param_attributes: method
                     .param_attributes
                     .iter()

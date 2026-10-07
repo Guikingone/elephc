@@ -132,6 +132,20 @@ function firstOf(array $items)
     return $items[0];
 }
 
+// A method can declare its own template without making its class generic.
+class Identity
+{
+    /**
+     * @template T
+     * @param T $value
+     * @return T
+     */
+    public function copy($value)
+    {
+        return $value;
+    }
+}
+
 $number = new Box(41);
 $number->set($number->get() + 1);
 $word = new Box('hi');
@@ -147,6 +161,7 @@ $held = new IntHolder(21);
 
 echo $held->doubled(), '|', $held->read(), "\n";
 echo firstOf([10, 20]), '|', firstOf(['x', 'y']), "\n";
+echo (new Identity())->copy(7), '|', (new Identity())->copy('seven'), "\n";
 
 // One divergence is worth knowing about, and it is monomorphization rather than this surface:
 // the template does not exist at runtime. Under php-src `Box` is an ordinary class; compiled by

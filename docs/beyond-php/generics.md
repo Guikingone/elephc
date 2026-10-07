@@ -944,10 +944,10 @@ instantiation you inherit is not the same as declaring a parameter.
 `examples/generics-docblock/main.php` is the whole surface in one file that `php` runs and
 elephc compiles; `examples/generics/` is the native equivalent, which php-src cannot parse.
 
-Inside a generic class, only an annotation that MENTIONS one of its type parameters is honoured.
-`@param int $n` on a method of `Box<T>` stays the ordinary PHPStan annotation it is anywhere
-else — `@template` on the class does not promote a whole body of comments into declarations the
-compiler enforces.
+For properties and methods without their own `@template`, only an annotation that MENTIONS a
+class type parameter is honoured. `@param int $n` on an ordinary method of `Box<T>` stays a
+PHPStan annotation: `@template` on the class does not promote every member comment into a
+declaration the compiler enforces.
 
 A promoted constructor parameter is retyped together with the property it promotes, which is one
 declaration in the source and two in the AST.
@@ -959,8 +959,8 @@ native `class Holder<T>` behaves the same way.
 
 Rules that keep an existing codebase safe:
 
-- A doc comment with no `@template` changes nothing. `@param`/`@return` alone carry no type
-  parameter, and acting on them would re-type every annotated PHP file in the world.
+- Outside a generic class, a doc comment with no `@template` changes nothing. Within a generic
+  class, member annotations apply only when they mention a class type parameter.
 - An annotation the language has no type for — `non-empty-list<T>` and similar PHPStan forms —
   is ignored rather than failing the compile of a file that is valid PHP.
 - Written syntax wins over an annotation, so a file can migrate one declaration at a time. For a
@@ -969,6 +969,36 @@ Rules that keep an existing codebase safe:
 
 Types inside an annotation go through the ordinary type grammar, so `array<string, Foo>` means
 one thing in the language and in a docblock.
+
+### A method
+
+A method may declare its own `@template`, even when its class is not generic. Its `@param` and
+`@return` annotations become the method's signature, just as on a generic function:
+
+```php
+<?php
+class Identity
+{
+    /**
+     * @template T
+     * @param T $value
+     * @return T
+     */
+    public function copy($value) { return $value; }
+}
+
+$identity = new Identity();
+echo $identity->copy(7), '|', $identity->copy('seven');   // 7|seven
+```
+
+The two calls specialize `copy<int>` and `copy<string>`. This works with and without
+`--strict-php`, including static methods and methods declared in traits. Method templates also
+support bounds, defaults and variadic annotations such as `@param T ...$values`.
+
+In a generic class, a method can refer to the class's `T` and declare a separate `U` of its own.
+`U` is bound at the method call and does not enter the scope of properties or sibling methods.
+If a method already declares native type parameters, its written signature takes precedence
+over the docblock.
 
 ## Limitations
 

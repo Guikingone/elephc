@@ -4,7 +4,7 @@
 //! rewritten in elephc's native syntax.
 //!
 //! Called from:
-//! - `crate::source::finalize_physical_program`, per physical file, before the strict audit.
+//! - `crate::source::finalize_physical_program`, per physical file, after the strict audit.
 //!
 //! Key details:
 //! - This is the portable surface. `@template T`, `@param array<T> $a` and `@return T` mean
@@ -13,9 +13,10 @@
 //!   still passes `--strict-php`.
 //! - A class says the same four things: `@template` its parameters, `@var`/`@param`/`@return`
 //!   its members' types, and `@extends`/`@implements` the instantiation it inherits. Inside one,
-//!   only an annotation MENTIONING a type parameter is honoured — a member's doc comment carries
-//!   no `@template` of its own, so without that test annotating a class would re-type its whole
-//!   body.
+//!   an ordinary member annotation must mention a class type parameter to be honoured.
+//! - A method may declare its own `@template` parameters even in a non-generic class or trait.
+//!   Its annotations then form a generic declaration, just as on a free function. Method-local
+//!   type parameters do not enter the scope of other members, and native method syntax wins.
 //! - The lexer discards comments, so the doc comments are recovered from the SOURCE TEXT and
 //!   matched to declarations by line. That is how every PHPDoc consumer works, and it is why
 //!   this runs per physical file, while line numbers still mean what the file says: include
@@ -25,12 +26,13 @@
 //!   type form gains it in both.
 
 mod attributes;
+mod members;
 
 use std::collections::HashMap;
 
 use crate::names::Name;
 use crate::parser::ast::{
-    ClassMethod, ClassProperty, GenericDecl, Program, Stmt, StmtKind, TypeExpr, TypeParam,
+    GenericDecl, Program, Stmt, StmtKind, TypeExpr, TypeParam,
     Variance,
 };
 
@@ -73,10 +75,8 @@ impl DocBlock {
 
     /// Returns whether this doc comment carries nothing this pass could ever act on.
     ///
-    /// A member's doc comment carries no `@template` — the class above it declared the type
-    /// parameters — so [`Self::declares_generics`] cannot be the filter that decides which
-    /// blocks are worth keeping. What decides whether a member annotation is HONOURED is
-    /// whether its type mentions one of those parameters; see [`apply_member_type`].
+    /// Properties and ordinary methods can refer to a class template without declaring their
+    /// own `@template`, so [`Self::declares_generics`] cannot filter out those annotations.
     fn is_empty(&self) -> bool {
         self.type_params.is_empty()
             && self.params.is_empty()
@@ -89,8 +89,8 @@ impl DocBlock {
 
 /// Applies generic doc-comment annotations in `source` to the declarations of `program`.
 ///
-/// A declaration that already carries native type parameters is left untouched: written syntax
-/// wins over an annotation, so a file can migrate one function at a time.
+/// A function or method that already carries native type parameters is left untouched: written
+/// syntax wins over an annotation, so a file can migrate one declaration at a time.
 pub fn apply(program: Program, source: &str) -> Program {
     let blocks = collect(source);
     if blocks.is_empty() {
@@ -144,7 +144,7 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<usize, DocBlock>) -> Stmt {
         } => {
             let extends_args = adopt_inherited(block, extends.as_ref());
             let type_params = adopt_generics(block, generics, extends_args, implements);
-            apply_to_members(&type_params, properties, methods, blocks);
+            members::apply(&type_params, properties, methods, blocks);
         }
         StmtKind::InterfaceDecl {
             generics,
@@ -157,7 +157,13 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<usize, DocBlock>) -> Stmt {
             // everything annotated lands in `interface_args` — which is why `GenericDecl` says
             // `extends_args` is always empty for one.
             let type_params = adopt_generics(block, generics, Vec::new(), extends);
-            apply_to_members(&type_params, properties, methods, blocks);
+            members::apply(&type_params, properties, methods, blocks);
+        }
+        StmtKind::TraitDecl {
+            generics, properties, methods, ..
+        } => {
+            let type_params = adopt_generics(block, generics, Vec::new(), &[]);
+            members::apply(&type_params, properties, methods, blocks);
         }
         StmtKind::NamespaceBlock { body, .. } => {
             let nested = std::mem::take(body);
@@ -246,81 +252,6 @@ fn lookup_inherited<'a>(written: &Name, block: &'a DocBlock) -> Option<&'a Vec<T
                 .is_some_and(|candidate| candidate.eq_ignore_ascii_case(written))
         })
         .map(|(_, args)| args)
-}
-
-/// Applies the doc comments of a generic declaration's own members.
-///
-/// `type_params` are the CLASS's, because a member's doc comment carries no `@template` of its
-/// own. That is also why only an annotation MENTIONING one of them is honoured: `@param int $n`
-/// inside a generic class is the same ordinary PHPStan annotation it is anywhere else, and
-/// `@template` on the class must not silently promote every annotation in the body into a type
-/// declaration the compiler enforces.
-fn apply_to_members(
-    type_params: &[String],
-    properties: &mut [ClassProperty],
-    methods: &mut [ClassMethod],
-    blocks: &HashMap<usize, DocBlock>,
-) {
-    if type_params.is_empty() {
-        return;
-    }
-    for property in properties.iter_mut() {
-        let Some(block) = blocks.get(&(property.span.line as usize)) else {
-            continue;
-        };
-        if let Some(annotated) = &block.var_type {
-            apply_member_type(&mut property.type_expr, annotated, type_params);
-        }
-    }
-    let mut promoted: Vec<(String, TypeExpr)> = Vec::new();
-    for method in methods.iter_mut() {
-        let Some(block) = blocks.get(&(method.span.line as usize)) else {
-            continue;
-        };
-        let is_constructor = method.name.eq_ignore_ascii_case("__construct");
-        for (name, declared, _, _) in method.params.iter_mut() {
-            let Some(annotated) = block.params.get(name) else {
-                continue;
-            };
-            if apply_member_type(declared, annotated, type_params) && is_constructor {
-                promoted.push((name.clone(), annotated.clone()));
-            }
-        }
-        if let Some(annotated) = method
-            .variadic
-            .as_ref()
-            .and_then(|name| block.params.get(name))
-        {
-            apply_member_type(&mut method.variadic_type, annotated, type_params);
-        }
-        if let Some(annotated) = &block.return_type {
-            apply_member_type(&mut method.return_type, annotated, type_params);
-        }
-    }
-    // A promoted constructor parameter is ALSO a property, which the parser built from the same
-    // written type. Retyping one and not the other leaves the class disagreeing with itself:
-    // `new Box(5)` would infer `T = int` from the parameter and store into a `mixed` field.
-    for property in properties.iter_mut().filter(|property| property.is_promoted) {
-        if let Some((_, annotated)) = promoted.iter().find(|(name, _)| *name == property.name) {
-            property.type_expr = Some(annotated.clone());
-        }
-    }
-}
-
-/// Replaces one member's declared type with its annotation, and reports whether it did.
-///
-/// The `mentions_type_param` test is the whole gate on member annotations; see
-/// [`apply_to_members`].
-fn apply_member_type(
-    declared: &mut Option<TypeExpr>,
-    annotated: &TypeExpr,
-    type_params: &[String],
-) -> bool {
-    if !annotated.mentions_type_param(type_params) {
-        return false;
-    }
-    *declared = Some(annotated.clone());
-    true
 }
 
 /// Extracts every generic-bearing doc comment from `source`, keyed by the line of the first
@@ -933,6 +864,69 @@ mod tests {
             generics.as_ref().expect("class became a template").type_params[0].name,
             "T"
         );
+    }
+
+    /// A method's template carries bounds, defaults, fixed parameters and a variadic element type.
+    #[test]
+    fn adopts_a_methods_own_template_without_a_class_template() {
+        let program = program_of(concat!(
+            "<?php\nclass C {\n",
+            "/**\n * @template T of Entity\n * @template U = string\n",
+            " * @param T $value\n * @param U ...$labels\n * @return int\n */\n",
+            "public function id($value, ...$labels) { return 1; }\n}\n",
+        ));
+        let StmtKind::ClassDecl { generics, methods, .. } = &program[0].kind else {
+            panic!("expected a class declaration");
+        };
+        assert!(generics.is_none(), "a method template must not make the class generic");
+        let method = &methods[0];
+        assert_eq!(method.type_params.len(), 2);
+        assert_eq!(method.type_params[0].name, "T");
+        assert_eq!(method.type_params[0].bound, Some(TypeExpr::Named(Name::unqualified("Entity"))));
+        assert_eq!(method.type_params[1].default, Some(TypeExpr::Str));
+        assert_eq!(method.params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
+        assert_eq!(method.variadic_type, Some(TypeExpr::Named(Name::unqualified("U"))));
+        assert_eq!(method.return_type, Some(TypeExpr::Int));
+    }
+
+    /// Native method declarations retain their written types even when PHPDoc disagrees.
+    #[test]
+    fn native_method_templates_win_over_docblock_templates() {
+        let program = program_of(concat!(
+            "<?php\nclass C {\n",
+            "/**\n * @template T\n * @param string $value\n * @return string\n */\n",
+            "public function id<U>(U $value): U { return $value; }\n}\n",
+        ));
+        let StmtKind::ClassDecl { methods, .. } = &program[0].kind else {
+            panic!("expected a class declaration");
+        };
+        let u = TypeExpr::Named(Name::unqualified("U"));
+        assert_eq!(methods[0].type_params[0].name, "U");
+        assert_eq!(methods[0].params[0].1, Some(u.clone()));
+        assert_eq!(methods[0].return_type, Some(u));
+    }
+
+    /// A method template does not introduce its names into properties or sibling methods.
+    #[test]
+    fn method_template_names_do_not_leak_to_other_members() {
+        let program = program_of(concat!(
+            "<?php\n/** @template T */\nclass C {\n",
+            "/** @var U */\nprivate $other;\n",
+            "/**\n * @template U\n * @param T $left\n * @param U $right\n * @return U\n */\n",
+            "public function choose($left, $right) { return $right; }\n",
+            "/**\n * @param U $value\n * @return U\n */\n",
+            "public function unrelated($value) { return $value; }\n}\n",
+        ));
+        let StmtKind::ClassDecl { properties, methods, .. } = &program[0].kind else {
+            panic!("expected a class declaration");
+        };
+        assert_eq!(properties[0].type_expr, None);
+        assert_eq!(methods[0].type_params[0].name, "U");
+        assert_eq!(methods[0].params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
+        assert_eq!(methods[0].params[1].1, Some(TypeExpr::Named(Name::unqualified("U"))));
+        assert!(methods[1].type_params.is_empty());
+        assert_eq!(methods[1].params[0].1, None);
+        assert_eq!(methods[1].return_type, None);
     }
 
 }

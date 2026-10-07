@@ -265,8 +265,26 @@ class C {
     /** @return T */
     public function get() { return $this->value; }
 }
+class Identity {
+    /**
+     * @template V
+     * @param V $value
+     * @return V
+     */
+    public function id($value) { return $value; }
+    /**
+     * @template V
+     * @param V $value
+     * @return V
+     */
+    public static function copy($value) { return $value; }
+}
 $number = identity((new C(7))->get());
 $text = identity((new C("seven"))->get());
+$method_number = (new Identity())->id(7);
+$method_text = (new Identity())->id("seven");
+$static_number = Identity::copy(9);
+$static_text = Identity::copy("nine");
 "#;
     for strict in [false, true] {
         let _guard = strict.then(elephc::strict_php::scoped_enable);
@@ -294,6 +312,16 @@ $text = identity((new C("seven"))->get());
             Some(&types::PhpType::Str),
             "strict={strict}"
         );
+        for name in ["method_number", "static_number"] {
+            assert_eq!(
+                result.global_env.get(name), Some(&types::PhpType::Int), "{name}, strict={strict}"
+            );
+        }
+        for name in ["method_text", "static_text"] {
+            assert_eq!(
+                result.global_env.get(name), Some(&types::PhpType::Str), "{name}, strict={strict}"
+            );
+        }
     }
 }
 

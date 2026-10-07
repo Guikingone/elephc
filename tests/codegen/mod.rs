@@ -11,6 +11,7 @@ mod exceptions;
 mod fibers;
 mod buffers;
 mod generics;
+mod generics_docblock_methods;
 mod preprocessor;
 mod namespaces;
 mod null_sentinel;
