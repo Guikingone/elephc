@@ -60,6 +60,13 @@ fn call_arg_plan_error(
                 callee_desc
             ),
         ),
+        CallArgPlanError::PositionalAfterNamedUnpack { span } => CompileError::new(
+            span,
+            &format!(
+                "{} cannot use positional argument after named argument during unpacking",
+                callee_desc
+            ),
+        ),
         CallArgPlanError::SpreadAfterNamed { span } => {
             spread_after_named_error(span, callee_desc)
         }
@@ -152,6 +159,7 @@ impl Checker {
             | CallArgPlanError::Duplicate { span, .. }
             | CallArgPlanError::PositionalAfterNamed { span }
             | CallArgPlanError::PositionalAfterSpread { span }
+            | CallArgPlanError::PositionalAfterNamedUnpack { span }
             | CallArgPlanError::MissingRequired { span, .. } => {
                 CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
             }

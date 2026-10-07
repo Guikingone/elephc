@@ -2284,19 +2284,45 @@ fn test_native_constructor_type_parameters_are_refused() {
 /// A spread classifies its keys as the call planner does and binds `<T>` from the argument the
 /// call actually passes.
 ///
-/// An integer-like string key (`"0"`) is positional, and positional entries fill the slots the
-/// named ones leave free. Every string key used to become a named argument and positional entries
-/// filled from slot zero, so `<T>` was reported undetermined or inferred from the wrong value.
+/// An integer-like string key (`"0"`) is positional. Every string key used to become a named
+/// argument, so `<T>` was reported undetermined.
 #[test]
 fn test_spread_keys_bind_type_parameters_like_the_call_planner() {
     let out = compile_and_run(
         r#"<?php
 function box<T>(T $v, int $n): string { return $v . ":" . $n; }
 class C { public static function box<T>(T $v, int $n): string { return $v . ":" . $n; } }
-function show<T>(T $a, int $b): string { return $a . ":" . $b; }
-echo box(...["0" => "abc", "n" => 1]), "|", C::box(...["0" => "def", "n" => 2]), "|",
-    show(...["a" => "x", 1 => 2]);
+echo box(...["0" => "abc", "n" => 1]), "|", C::box(...["0" => "def", "n" => 2]);
 "#,
     );
-    assert_eq!(out, "abc:1|def:2|x:2");
+    assert_eq!(out, "abc:1|def:2");
+}
+
+/// An unpacked array that supplies a positional entry after a named one is refused, as php
+/// refuses it, on ordinary and generic calls.
+///
+/// The planner hoisted positional entries ahead of named ones, so `show(...["a" => "x", 1 => 2])`
+/// printed `x:2` where php throws "Cannot use positional argument after named argument during
+/// unpacking". The rule is per array: php accepts a SEPARATE later unpack of positional values,
+/// and the valid orders still bind as php binds them.
+#[test]
+fn test_positional_after_named_unpack_is_refused() {
+    for call in [
+        "function show(string $a, int $b): string { return $a . \":\" . $b; }\necho show(...[\"a\" => \"x\", 1 => 2]);",
+        "function show<T>(T $a, int $b): string { return $a . \":\" . $b; }\necho show(...[\"a\" => \"x\", 1 => 2]);",
+    ] {
+        let error = compile_cli_file_with_flags_expect_failure(&format!("<?php\n{call}\n"), &[]);
+        assert!(
+            error.contains("cannot use positional argument after named argument during unpacking"),
+            "{call}: {error}"
+        );
+    }
+    let out = compile_and_run(
+        r#"<?php
+function show(string $a, int $b): string { return $a . ":" . $b; }
+echo show(...[0 => "x", "b" => 2]), "|", show(...["0" => "y", "b" => 3]), "|",
+    show(...["z"], ...["b" => 4]), "|", show(...["a" => "w"], ...[5]);
+"#,
+    );
+    assert_eq!(out, "x:2|y:3|z:4|w:5");
 }
