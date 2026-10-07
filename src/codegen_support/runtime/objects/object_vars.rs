@@ -12,6 +12,8 @@
 //!   slots never escape; its modeled public `name` property is still projected.
 //! - Protected filtering uses each descriptor row's declaring class, and copied
 //!   dynamic-property names are normalized with PHP array-key semantics.
+//! - A declared slot tagged Mixed (7) whose cell pointer is zero or the null sentinel (an
+//!   untyped property that is null) projects canonical null instead of boxing a dangling cell.
 //! - Incomplete objects use class id `-2` and own their original class name at
 //!   offsets 8/16 plus an opaque boxed-Mixed property hash at offset 24.
 
@@ -19,7 +21,9 @@ use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
+use crate::codegen_support::sentinels::{
+    emit_branch_if_null_container, emit_resolve_tagged_scalar_property_tag, NULL_SENTINEL,
+};
 
 /// Emits `__rt_object_to_hash(object, cast_mode, scope_class_id)` for the active target.
 ///
@@ -175,6 +179,16 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_object_to_hash_next");                       // skip or advance the current property via `__rt_object_to_hash_next`
     emitter.instruction("mov x0, x16");                                         // prepare the projection argument or result with `mov x0, x16`
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
+    // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
+    emitter.instruction("cmp x0, #7");                                          // does the slot hold a boxed Mixed cell pointer?
+    emitter.instruction("b.ne __rt_object_to_hash_box");                        // other tags box their payload directly
+    emit_branch_if_null_container(emitter, "x1", "x9", "__rt_object_to_hash_null_slot");
+    emitter.instruction("b __rt_object_to_hash_box");                           // a live cell boxes as before
+    emitter.label("__rt_object_to_hash_null_slot");
+    emitter.instruction("mov x0, #8");                                          // runtime tag 8 = canonical PHP null
+    abi::emit_load_int_immediate(emitter, "x1", NULL_SENTINEL);                 // null payload uses the shared in-band sentinel
+    emitter.instruction("mov x2, #0");                                          // null carries no high payload word
+    emitter.label("__rt_object_to_hash_box");
     emitter.instruction("bl __rt_mixed_from_value");                            // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov x3, x0");                                          // prepare the projection argument or result with `mov x3, x0`
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the result-hash slot for `ldr x0, [sp, #16]`
@@ -381,6 +395,16 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_object_to_hash_next_x");                       // skip or advance the current property via `__rt_object_to_hash_next_x`
     emitter.instruction("mov rax, r15");                                        // prepare the projection argument or result with `mov rax, r15`
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
+    // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
+    emitter.instruction("cmp rax, 7");                                          // does the slot hold a boxed Mixed cell pointer?
+    emitter.instruction("jne __rt_object_to_hash_box_x");                       // other tags box their payload directly
+    emit_branch_if_null_container(emitter, "rdi", "r11", "__rt_object_to_hash_null_slot_x");
+    emitter.instruction("jmp __rt_object_to_hash_box_x");                       // a live cell boxes as before
+    emitter.label("__rt_object_to_hash_null_slot_x");
+    emitter.instruction("mov eax, 8");                                          // runtime tag 8 = canonical PHP null
+    abi::emit_load_int_immediate(emitter, "rdi", NULL_SENTINEL);                // null payload uses the shared in-band sentinel
+    emitter.instruction("xor esi, esi");                                        // null carries no high payload word
+    emitter.label("__rt_object_to_hash_box_x");
     emitter.instruction("call __rt_mixed_from_value");                          // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov rcx, rax");                                        // prepare the projection argument or result with `mov rcx, rax`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rdi, QWORD PTR [rbp - 24]`
@@ -475,6 +499,23 @@ mod tests {
             assert!(asm.contains("_class_reflection_parameter_cast_public_flags"));
             assert!(asm.contains("__rt_object_to_hash_visibility"));
             assert!(asm.contains("__rt_object_to_hash_next"));
+        }
+    }
+
+    /// A Mixed-tagged declared slot with no cell projects canonical null on every target
+    /// instead of boxing a dangling cell pointer.
+    #[test]
+    fn null_mixed_property_slots_project_canonical_null_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_object_to_hash(&mut emitter);
+            let asm = emitter.output();
+            let suffix = if name == "linux-x86_64" { "_x" } else { "" };
+            let null_slot = asm.find(&format!("__rt_object_to_hash_null_slot{suffix}:")).unwrap();
+            let boxing = asm.find(&format!("__rt_object_to_hash_box{suffix}:")).unwrap();
+            assert!(null_slot < boxing, "{name}: the null arm must fall into the shared boxing call");
+            let guard = &asm[..null_slot];
+            assert!(guard.rfind(if suffix.is_empty() { "cmp x0, #7" } else { "cmp rax, 7" }).is_some(), "{name}");
         }
     }
 }
