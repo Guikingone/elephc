@@ -78,7 +78,10 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             properties: array_object_properties(),
             methods: spl_array_object_methods(),
             attributes: Vec::new(),
-            constants: Vec::new(),
+            constants: vec![
+                class_const("STD_PROP_LIST", 1),
+                class_const("ARRAY_AS_PROPS", 2),
+            ],
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
         },
@@ -181,6 +184,9 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             vec![
                 param_default("array", array_type(), empty_array_expr()),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
+                // PHP's third argument names the iterator class `getIterator()` returns; elephc
+                // always returns an `ArrayIterator`, so it is accepted and ignored.
+                param_default("iteratorClass", TypeExpr::Str, string_expr("ArrayIterator")),
             ],
             Some(TypeExpr::Void),
             array_object_construct_body(),
