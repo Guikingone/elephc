@@ -145,3 +145,58 @@ fn inline_html_preserves_private_use_characters() {
     let out = compile_and_run("A\u{e000}B<?php echo 1;");
     assert_eq!(out, "A\u{e000}B1");
 }
+
+/// A file-initial `#!` shebang is not part of the output; a later `#!` is ordinary HTML.
+#[test]
+fn inline_html_leading_shebang_is_dropped() {
+    let out = compile_and_run("#!/usr/bin/env php\n<?php echo \"hi\";");
+    assert_eq!(out, "hi");
+
+    let out = compile_and_run("hello\n#!/usr/bin/env php\n<?php echo \"X\";");
+    assert_eq!(out, "hello\n#!/usr/bin/env php\nX");
+
+    // A CRLF shebang is dropped as a unit; a bare `\r` is shebang content.
+    let out = compile_and_run("#!/usr/bin/env php\r\n<?php echo \"hi\";");
+    assert_eq!(out, "hi");
+    let out = compile_and_run("#!/usr/bin/env php\rbar\n<?php echo \"X\";");
+    assert_eq!(out, "X");
+
+    // A BOM before `#!` makes the line ordinary HTML: PHP recognizes a shebang only at the raw
+    // first two bytes. (The BOM byte itself is dropped, as it is for any source.)
+    let out = compile_and_run("\u{feff}#!/usr/bin/env php\n<?php echo \"b\";");
+    assert_eq!(out, "#!/usr/bin/env php\nb");
+}
+
+/// An empty statement before `declare(strict_types=1)` does not move it out of first position.
+#[test]
+fn inline_html_empty_statement_before_declare_is_allowed() {
+    let out = compile_and_run("<?php ; declare(strict_types=1); echo 1;");
+    assert_eq!(out, "1");
+
+    let out = compile_and_run("<?php ?>\n<?php declare(strict_types=1); echo 1;");
+    assert_eq!(out, "1");
+}
+
+/// A `declare` (block form) may precede a namespace, matching PHP's "or after any declare call".
+#[test]
+fn inline_html_declare_block_before_namespace_is_allowed() {
+    let out = compile_and_run("<?php declare(ticks=1) { echo 1; } namespace A; echo \"ok\";");
+    assert_eq!(out, "1ok");
+}
+
+/// `declare(strict_types=1)` is allowed after an earlier `declare`, in either form.
+#[test]
+fn inline_html_declare_before_strict_types_is_allowed() {
+    let out = compile_and_run("<?php declare(ticks=1); declare(strict_types=1); echo 1;");
+    assert_eq!(out, "1");
+
+    let out = compile_and_run("<?php declare(ticks=1) { } declare(strict_types=1); echo 1;");
+    assert_eq!(out, "1");
+}
+
+/// A `//` comment ends at a bare `\r`, so the statement after it still runs.
+#[test]
+fn inline_html_line_comment_ends_at_carriage_return() {
+    let out = compile_and_run("<?php echo 1; // c\recho 2;");
+    assert_eq!(out, "12");
+}

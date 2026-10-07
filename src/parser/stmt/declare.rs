@@ -8,9 +8,9 @@
 //! Key details:
 //! - `strict_types` is recorded on the parser's per-file source profile
 //!   (`crate::source::declare_strict_types`), which stamps every statement parsed afterwards.
-//!   PHP requires the directive to be a file's first statement, so "afterwards" is exactly
-//!   "the rest of this file"; the type checker reads the stamp back per statement to pick
-//!   between PHP's strict and coercive parameter binding.
+//!   PHP places the directive at the head of the file — after only empty statements and earlier
+//!   `declare` calls — so "afterwards" is exactly "the rest of this file"; the type checker reads
+//!   the stamp back per statement to pick between PHP's strict and coercive parameter binding.
 //! - Every other directive (`ticks`, `encoding`) is compile-time syntax only.
 //! - Bodies lower through `Synthetic` so they execute in the enclosing scope.
 
@@ -41,7 +41,11 @@ pub(super) fn parse_declare(
         "Expected ')' after declare directives",
     )?;
 
-    if strict_types.is_some() && declare_pos != 1 {
+    // PHP accepts `strict_types` as the file's very first statement, or after only empty
+    // statements and earlier `declare` calls (either form): `<?php ; declare(strict_types=1);`
+    // and `<?php declare(ticks=1); declare(strict_types=1);` both print `1`. A real statement
+    // before it — inline HTML included, and anything inside a body — is not.
+    if strict_types.is_some() && !only_declares_and_empty_statements_before(tokens, declare_pos) {
         return Err(CompileError::new(
             span,
             "strict_types declaration must be the very first statement in the script",
@@ -81,6 +85,84 @@ pub(super) fn parse_declare(
     };
 
     Ok(Stmt::new(StmtKind::Synthetic(body), span))
+}
+
+/// Returns whether only empty statements and complete earlier `declare` statements sit between
+/// the open tag and `declare_pos`, PHP's condition for placing `strict_types`.
+///
+/// Scanning tokens (rather than the top-level statement list) also rejects a `declare` nested
+/// inside a function, class, or `declare` block: the enclosing body's `{`/keyword is not an empty
+/// statement or a preceding `declare`.
+fn only_declares_and_empty_statements_before(tokens: &[SpannedToken], declare_pos: usize) -> bool {
+    let mut pos = 1;
+    while pos < declare_pos {
+        match &tokens[pos].0 {
+            Token::Semicolon => pos += 1,
+            Token::Declare => match skip_declare_statement(tokens, pos) {
+                Some(next) if next <= declare_pos => pos = next,
+                _ => return false,
+            },
+            _ => return false,
+        }
+    }
+    pos == declare_pos
+}
+
+/// Returns the token index just past a complete `declare (...)` statement, or `None` when the
+/// tokens at `start` do not spell one.
+///
+/// Handles the `;`, `{ … }` and `: … enddeclare ;` forms. The bare single-statement form is not
+/// recognized, so `strict_types` after it stays rejected, matching the previous behavior.
+fn skip_declare_statement(tokens: &[SpannedToken], start: usize) -> Option<usize> {
+    let mut pos = start + 1;
+    if !matches!(tokens.get(pos)?.0, Token::LParen) {
+        return None;
+    }
+    let mut depth = 0usize;
+    while let Some((token, _)) = tokens.get(pos) {
+        match token {
+            Token::LParen => depth += 1,
+            Token::RParen => {
+                depth -= 1;
+                if depth == 0 {
+                    pos += 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+        pos += 1;
+    }
+    match &tokens.get(pos)?.0 {
+        Token::Semicolon => Some(pos + 1),
+        Token::LBrace => {
+            let mut braces = 0usize;
+            while let Some((token, _)) = tokens.get(pos) {
+                match token {
+                    Token::LBrace => braces += 1,
+                    Token::RBrace => {
+                        braces -= 1;
+                        if braces == 0 {
+                            return Some(pos + 1);
+                        }
+                    }
+                    _ => {}
+                }
+                pos += 1;
+            }
+            None
+        }
+        Token::Colon => {
+            while let Some((token, _)) = tokens.get(pos) {
+                if matches!(token, Token::EndDeclare) {
+                    return Some(pos + 2);
+                }
+                pos += 1;
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Parses one or more directive/literal pairs.

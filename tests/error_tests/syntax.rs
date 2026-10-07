@@ -25,6 +25,37 @@ fn test_error_short_echo_without_expression() {
     expect_error("<?= ?>", "Unexpected token");
 }
 
+/// Verifies a namespace declaration after a real statement is rejected, as PHP's fatal is:
+/// leading inline HTML counts as a statement, so `<?php namespace Foo;` after it fails.
+#[test]
+fn test_error_namespace_after_statement() {
+    for source in [
+        "<?php echo 1; namespace Foo; echo 2;",
+        "<b>\n<?php namespace Foo; echo 2;",
+    ] {
+        expect_error(
+            source,
+            "Namespace declaration statement has to be the very first statement",
+        );
+    }
+}
+
+/// Verifies `strict_types` placement is not reopened once a real statement, a namespace, inline
+/// HTML, or a nested body has intervened, even after an earlier `declare`.
+#[test]
+fn test_error_strict_types_after_a_real_statement() {
+    for source in [
+        "<?php declare(ticks=1); echo 1; declare(strict_types=1); echo 2;",
+        "<?php echo 1; declare(ticks=1); declare(strict_types=1); echo 2;",
+        "<?php declare(ticks=1); namespace A; declare(strict_types=1); echo 1;",
+        "<?php declare(ticks=1); function f() { declare(strict_types=1); } echo 1;",
+        "<?php declare(ticks=1) { declare(strict_types=1); } echo 1;",
+        "<?php declare(ticks=1); ?>text<?php declare(strict_types=1); echo 1;",
+    ] {
+        expect_error(source, "strict_types declaration must be the very first statement");
+    }
+}
+
 /// Verifies the error diagnostic for unterminated string.
 #[test]
 fn test_error_unterminated_string() {

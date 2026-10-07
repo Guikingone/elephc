@@ -174,6 +174,58 @@ fn test_close_tag_inside_string_or_block_comment_is_data() {
     assert_eq!(t.last(), Some(&Token::Eof));
 }
 
+/// Verifies a file-initial `#!` shebang is dropped through its newline, but a later `#!` is
+/// ordinary inline HTML.
+#[test]
+fn test_shebang_is_dropped_only_at_the_start() {
+    let t = tokens("#!/usr/bin/env php\n<?php echo 1;");
+    assert_eq!(t[0], Token::OpenTag);
+    assert_eq!(t[1], Token::Echo);
+    assert_eq!(t[2], Token::IntLiteral(1));
+
+    let t = tokens("hello\n#!/usr/bin/env php\n<?php echo 1;");
+    assert!(t.iter().any(|token| {
+        matches!(token, Token::StringLiteral(value) if value == "hello\n#!/usr/bin/env php\n")
+    }));
+
+    // A CRLF shebang is consumed as a unit.
+    let t = tokens("#!/usr/bin/env php\r\n<?php echo 1;");
+    assert_eq!(t[1], Token::Echo);
+
+    // A bare `\r` is shebang content: the shebang ends at the next `\n`, not at the `\r`.
+    let t = tokens("#!/usr/bin/env php\rbar\n<?php echo 1;");
+    assert_eq!(t[1], Token::Echo);
+
+    // With no `\n` at all, the shebang consumes the whole file.
+    assert_eq!(
+        tokens("#!/usr/bin/env php\r<?php echo 1;"),
+        vec![Token::OpenTag, Token::Eof]
+    );
+}
+
+/// Verifies a shebang with no trailing newline is dropped entirely.
+#[test]
+fn test_shebang_at_end_of_input_is_dropped() {
+    assert_eq!(tokens("#!/usr/bin/env php"), vec![Token::OpenTag, Token::Eof]);
+}
+
+/// Verifies a BOM before `#!` makes the line ordinary inline HTML: PHP recognizes a shebang only
+/// at the raw first two bytes.
+#[test]
+fn test_bom_before_shebang_stays_html() {
+    let t = tokens("\u{feff}#!/usr/bin/env php\n<?php echo 1;");
+    assert!(t.iter().any(|token| {
+        matches!(token, Token::StringLiteral(value) if value == "#!/usr/bin/env php\n")
+    }));
+}
+
+/// Verifies a `//` or `#` line comment ends at a bare `\r` as well as at `\n`.
+#[test]
+fn test_line_comment_ends_at_carriage_return() {
+    let t = tokens("<?php echo 1; // c\recho 2;");
+    assert_eq!(t.iter().filter(|token| **token == Token::Echo).count(), 2);
+}
+
 /// Verifies an unterminated double-quoted string produces a lex error.
 #[test]
 fn test_unterminated_string() {

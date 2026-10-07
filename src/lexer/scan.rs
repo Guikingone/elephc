@@ -41,11 +41,22 @@ pub(super) fn scan_tokens_in_source(
     mode: SourceMode,
     source_id: u32,
 ) -> Result<Vec<SpannedToken>, CompileError> {
+    // PHP recognizes a shebang only when the file's RAW first two bytes are `#!`; a leading BOM
+    // (or any other byte) makes the line ordinary inline HTML, which is emitted.
+    let starts_with_shebang = source.starts_with("#!");
+
     // A leading UTF-8 byte-order mark (U+FEFF) is ignored, matching editors that save PHP
     // files as BOM-prefixed UTF-8; stripping it keeps the `<?php` open tag at the start.
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut cursor = Cursor::new_in_source(source, source_id);
     let mut tokens = Vec::new();
+
+    // PHP drops a shebang only when the file starts with `#!`, through the following `\n` or the
+    // end of input; a later `#!` is ordinary text. LFC mode treats `#!` as an ordinary `#`
+    // comment, which the scanner already skips.
+    if mode.requires_open_tag() && starts_with_shebang {
+        skip_shebang(&mut cursor);
+    }
 
     let span = cursor.span();
     if mode.requires_open_tag() {
@@ -175,6 +186,20 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor, stop_at_close_tag: bool) {
     }
 }
 
+/// Consumes a file-initial `#!` shebang line, through its terminating `\n` or the end of input.
+///
+/// PHP drops the first line of a file only when it begins with `#!`; the `#!` is then not part
+/// of the output. It ends only at `\n`: a bare `\r` is shebang content, and a shebang with no
+/// `\n` at all consumes the whole file. A `#!` anywhere else is ordinary inline HTML.
+fn skip_shebang(cursor: &mut Cursor) {
+    loop {
+        match cursor.advance() {
+            Some('\n') | None => return,
+            Some(_) => {}
+        }
+    }
+}
+
 /// Advances past one `//` or `#` line comment, including its trailing newline.
 ///
 /// When `stop_at_close_tag` is set (PHP mode), the comment ends at the end of the line OR at a
@@ -187,7 +212,7 @@ fn skip_line_comment(cursor: &mut Cursor, stop_at_close_tag: bool) {
             return;
         }
         match cursor.advance() {
-            Some('\n') | None => return,
+            Some('\n' | '\r') | None => return,
             Some(_) => {}
         }
     }
