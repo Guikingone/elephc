@@ -2,13 +2,13 @@
 //! The `--strict-php` AST audit pass: walks a parsed user program and reports a
 //! `CompileError` for every elephc-only construct (`ifdef`, `packed class`,
 //! `extern`, `ptr_cast<T>`, `buffer_new<T>`, typed local declarations,
-//! `ptr`/`buffer<T>` type annotations, and compiler-reserved `__elephc_*` names)
+//! `ptr`/`buffer<T>` type annotations, native generic declarations, and compiler-reserved
+//! `__elephc_*` names)
 //! in every expression position, including PHP attribute arguments.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` — on the main file right after parsing, and on
-//!   the resolved program (which includes `include`/`require`d user files) before
-//!   any compiler prelude is injected, so injected compiler code is never audited.
+//! - `crate::source::finalize_physical_program()` for each physical PHP file before
+//!   PHPDoc annotations and conditional compilation, excluding compiler-generated preludes.
 //! - Integration tests through `crate::strict_php::check`.
 //!
 //! Key details:
@@ -461,6 +461,13 @@ fn audit_class_members(
         }
     }
     for method in methods {
+        if !method.type_params.is_empty() {
+            reject(
+                errors,
+                method.span,
+                "generic methods are an elephc extension and are not valid PHP",
+            );
+        }
         audit_attribute_groups(&method.attributes, errors);
         for groups in &method.param_attributes {
             audit_attribute_groups(groups, errors);

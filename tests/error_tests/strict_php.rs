@@ -1,7 +1,8 @@
 //! Purpose:
 //! Integration tests for `--strict-php` diagnostics: extension builtins hidden
 //! from user programs, user redeclaration of extension names, and the
-//! undefined-function hint pointing at the disabled extension.
+//! undefined-function hint pointing at the disabled extension. Covers the syntax audit
+//! and PHPDoc generic semantics after physical-file processing.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -228,6 +229,72 @@ fn test_audit_rejects_generic_function() {
         "<?php function identity<T>(T $value): T { return $value; }",
         "generic functions are an elephc extension",
     );
+}
+
+/// Native method templates are extensions in every shared class-like member list.
+#[test]
+fn test_audit_rejects_generic_methods() {
+    for declaration in [
+        "class C { public function id<T>(T $value): T { return $value; } }",
+        "class C { public static function id<T>(T $value): T { return $value; } }",
+        "interface C { public function id<T>(T $value): T; }",
+        "trait C { public function id<T>(T $value): T { return $value; } }",
+        "enum C { case One; public function id<T>(T $value): T { return $value; } }",
+    ] {
+        expect_audit_violation(
+            &format!("<?php {declaration}"),
+            "generic methods are an elephc extension",
+        );
+    }
+}
+
+/// Supported PHPDoc generics on functions, classes and members stay active in either strict mode.
+#[test]
+fn test_docblock_generics_remain_active_with_and_without_strict_php() {
+    let source = r#"<?php
+/**
+ * @template U
+ * @param U $value
+ * @return U
+ */
+function identity($value) { return $value; }
+/** @template T */
+class C {
+    /** @param T $value */
+    public function __construct(private $value) {}
+    /** @return T */
+    public function get() { return $this->value; }
+}
+$number = identity((new C(7))->get());
+$text = identity((new C("seven"))->get());
+"#;
+    for strict in [false, true] {
+        let _guard = strict.then(elephc::strict_php::scoped_enable);
+        let ast = parse(&tokenize(source).expect("tokenizes")).expect("parses");
+        let ast = elephc::source::finalize_physical_program(
+            ast,
+            source,
+            Path::new("generic-methods.php"),
+            elephc::source::SourceMode::Php,
+            &HashSet::new(),
+        )
+        .expect("PHPDoc must pass the physical-file audit");
+        let ast = elephc::name_resolver::resolve(ast).expect("resolves names");
+        let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {
+            types::check_with_options_and_bounds(program, types::CheckOptions::default(), bounds)
+        })
+        .expect("annotated declarations must specialize");
+        assert_eq!(
+            result.global_env.get("number"),
+            Some(&types::PhpType::Int),
+            "strict={strict}"
+        );
+        assert_eq!(
+            result.global_env.get("text"),
+            Some(&types::PhpType::Str),
+            "strict={strict}"
+        );
+    }
 }
 
 /// A `@template` docblock is valid PHP — the annotations are comments — so `--strict-php` must
