@@ -423,6 +423,7 @@ impl Checker {
             }
             if promoted {
                 self.functions.remove(name);
+                self.completed_function_signatures.remove(name);
                 self.ensure_function_variant_group_signature(name, crate::span::Span::dummy())?;
             }
             return Ok(());
@@ -813,6 +814,7 @@ echo unpackSpareName(keepsSpareName(...)), ':', positionalOnlyTail(1, 2);
 function variant_tail_left(string $head, ...$rest): string { return $head; }
 function variant_tail_right(string $head, ...$rest): string { return $head; }
 $callback = vArIaNt_TaIl(...);
+$second = variant_tail(...);
 "#;
         let tokens = crate::lexer::tokenize(source).expect("tokenize");
         let mut program = crate::parser::parse(&tokens).expect("parse");
@@ -827,22 +829,17 @@ $callback = vArIaNt_TaIl(...);
             crate::span::Span::dummy(),
         ));
 
-        let checked = crate::types::checker::check_types(
-            &program,
-            Target::parse("linux-x86_64").expect("supported target"),
-        )
-        .expect("a statically inventoried variant group is a valid first-class callable");
-        let tail = checked
-            .functions
-            .get("variant_tail")
-            .expect("the group signature is materialized during callable resolution")
-            .params
-            .last()
-            .expect("the variadic occupies the last parameter slot");
-        assert_eq!(
-            tail.1,
-            crate::types::signatures::descriptor_variadic_container(),
-            "the group and its variants must use the descriptor-safe tail container",
-        );
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let checked = crate::types::checker::check_types(
+                &program, Target::parse(target).expect("supported target"),
+            ).expect("a promoted variant group remains a valid first-class callable");
+            for name in ["variant_tail", "variant_tail_left", "variant_tail_right"] {
+                let tail = checked.functions.get(name)
+                    .expect("promotion must rebuild the completed group signature")
+                    .params.last().expect("the variadic occupies the last parameter slot");
+                assert_eq!(tail.1, crate::types::signatures::descriptor_variadic_container(),
+                    "{target}: {name} must use the descriptor-safe tail container");
+            }
+        }
     }
 }
