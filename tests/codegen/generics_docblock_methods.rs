@@ -439,3 +439,32 @@ fn test_star_banner_comment_keeps_the_docblock_above_it() {
                   $b = new Box(7);\necho get_class($b), \":\", $b->v;\n";
     assert_eq!(compile_cli_file_and_run_with_flags(second, &[]), "Box:7");
 }
+
+/// A comment is scanned and classified the way php's lexer does: the opener is consumed before
+/// the closer is searched for, and only a space, tab, LF or CR after `/**` makes a docblock.
+///
+/// `/*/ kept */` ended at its own opener and its tail was read as code, and a form feed, vertical
+/// tab or non-breaking space after `/**` was taken for a docblock; both dropped the `@template`
+/// above them.
+#[test]
+fn test_comment_scan_follows_the_php_lexer() {
+    let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */\n";
+    for comment in ["/*/ kept */", "/*/** kept */"] {
+        let source =
+            format!("<?php\n{bound}{comment}\nfunction id($v) {{ return $v; }}\necho id(\"seven\");\n");
+        let error = compile_cli_file_with_flags_expect_failure(&source, &[]);
+        assert!(error.contains("does not satisfy its bound int"), "{comment}: {error}");
+    }
+    for comment in ["/*/*/", "/**\u{0c}*/", "/**\u{0b}*/", "/**\u{a0}*/"] {
+        let source = format!(
+            "<?php\n/** @template T */\n{comment}\n\
+             class Box {{ public function __construct(public T $v) {{}} }}\n\
+             $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n"
+        );
+        assert_eq!(
+            compile_cli_file_and_run_with_flags(&source, &[]),
+            "Box<int>:7",
+            "{comment:?}"
+        );
+    }
+}

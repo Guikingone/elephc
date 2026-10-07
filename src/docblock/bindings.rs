@@ -89,7 +89,10 @@ fn last_docblock(mut gap: &str) -> Option<&str> {
         if gap.starts_with("//") || gap.starts_with('#') {
             gap = gap.find('\n').map_or("", |end| &gap[end + 1..]);
         } else if gap.starts_with("/*") {
-            let end = gap.find("*/")? + 2;
+            // The opener is consumed before the closer is searched for, as php's lexer does: in
+            // `/*/ kept */` the `*` of `/*` and the `/` after it are not a closer, so finding `*/`
+            // from the start ended the comment at its third byte and read the rest as code.
+            let end = gap[2..].find("*/")? + 4;
             // Only a docblock replaces the one already seen. An ordinary `/* … */` between the
             // docblock and its declaration, on one line or several, is skipped like `//` is; it
             // used to clear `last`, and the declaration lost its `@template`.
@@ -105,13 +108,15 @@ fn last_docblock(mut gap: &str) -> Option<&str> {
 
 /// Returns whether a comment starting `gap` is a docblock as php's lexer defines one.
 ///
-/// `T_DOC_COMMENT` is `/**` followed by whitespace. `/***` banners and the empty `/**/` are
-/// ordinary `T_COMMENT`s, and `ReflectionFunction::getDocComment()` skips them, so they must not
-/// replace the real docblock above them.
+/// `T_DOC_COMMENT` is `/**` followed by a space, tab, LF or CR. `/***` banners and the empty
+/// `/**/` are ordinary `T_COMMENT`s, and `ReflectionFunction::getDocComment()` skips them, so they
+/// must not replace the real docblock above them.
 fn is_docblock(gap: &str) -> bool {
+    // php's rule is `"/**"[ \n\r\t]`: a form feed, a vertical tab or a non-breaking space after
+    // the opener makes an ordinary comment, which `getDocComment()` ignores too.
     gap.strip_prefix("/**")
         .and_then(|rest| rest.chars().next())
-        .is_some_and(char::is_whitespace)
+        .is_some_and(|next| matches!(next, ' ' | '\t' | '\n' | '\r'))
 }
 
 /// Skips consecutive attribute groups and returns the declaration's first token.

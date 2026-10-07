@@ -1314,3 +1314,23 @@ echo json_encode($a), "|", json_encode($b);
     );
     assert_eq!(out, "{\"7\":7}|{\"7\":7}");
 }
+
+/// A `foreach` value written inside the `foreach` body takes hash storage too.
+///
+/// That write is marked skippable, and the skippable writes were exempt from the unbounded-key
+/// rule, so `foreach ([7] as $k) { $a[$k] = $k; }` inside a `for` or `while` built a packed array
+/// zero-filled up to 7.
+#[test]
+fn test_foreach_value_written_in_the_foreach_body_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 1; $i++) { foreach ([7] as $k) { $a[$k] = $k; } }
+$b = [];
+$n = 0;
+while ($n < 1) { foreach ([7] as $k) { $b[$k] = $k; } $n++; }
+echo json_encode($a), "|", json_encode($b);
+"#,
+    );
+    assert_eq!(out, "{\"7\":7}|{\"7\":7}");
+}

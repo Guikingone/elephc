@@ -203,10 +203,12 @@ fn apply_array_write_evidence(
                 &index.kind,
                 ExprKind::Variable(name) if foreach_values.contains(name.as_str())
             );
-            let unbounded_integer_key = (matches!(key_type.as_ref(), Some(PhpType::Int))
+            // Not even a write the loop may skip escapes it: one inside the `foreach` body is
+            // marked skippable, yet `foreach ([7] as $k) { $a[$k] = $k; }` still lands at 7.
+            let unbounded_integer_key = ((matches!(key_type.as_ref(), Some(PhpType::Int))
+                && !write.skippable)
                 || foreach_value_key)
                 && array_is_still_empty
-                && !write.skippable
                 && !index_is_trusted_counter(index, packed_counter, foreach_keys)
                 && array_key_contiguity_is_unproven(index);
             literal_string_key || unbounded_integer_key
