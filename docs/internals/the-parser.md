@@ -149,7 +149,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `EnumDecl { name, backing_type, cases, implements, trait_uses, methods, constants }` | `enum Status: int { case Ok = 1; case Err = 2; }` — `trait_uses` holds `use Trait;` clauses inside the enum body, flattened into enum method metadata by the checker |
 | `PackedClassDecl { name, fields }` | `packed class Vec2 { public float $x; public float $y; }` |
 | `InterfaceDecl { name, extends, properties, methods, constants }` | `interface Named extends Stringable { public string $name { get; } public function name(): string; }` |
-| `TraitDecl { name, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` |
+| `TraitDecl { name, generics, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` — `generics` holds the type parameters of `trait Holder<T>`, `None` for an ordinary trait |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `StaticPropertyAssign { receiver, property, value }` | `Counter::$count = 10;`, `self::$count = 10;` |
 | `StaticPropertyArrayPush { receiver, property, value }` | `Counter::$items[] = 10;`, `self::$items[] = 10;` |
@@ -257,7 +257,7 @@ invalid forms such as `?T|U` and normalize accepted declarations.
 | `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `param_attributes`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface, including source-order parameter attribute groups |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
-| `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
+| `TraitUse` | `trait_names`, `type_args`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body; `type_args` holds the type arguments of `use Holder<int>`, aligned with `trait_names` |
 | `TraitAdaptation` | `Alias { trait_name: Option<Name>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<Name>, method, instead_of: Vec<Name> }` | PHP-style trait conflict resolution and aliasing |
 | `UseItem` / `UseKind` | `kind`, `name`, `alias` | Namespace import entries for `use`, `use function`, `use const`, and group-use declarations |
 | `CallableTarget` | `Function(Name)`, `StaticMethod { receiver, method }`, `Method { object, method }` | Structured target of first-class callable syntax such as `foo(...)` or `Cls::bar(...)` |
