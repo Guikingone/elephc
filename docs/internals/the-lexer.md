@@ -58,6 +58,8 @@ The cursor automatically tracks line and column — when it sees a `\n`, it incr
 
 `Span` stays 16 bytes, so it has no separate field for the source file. For a token of an included file, `end_col` also carries that file's source identity (`Span::new_in_source`): bit 31 marks the packed form, bits 16 to 29 hold the identity, and bits 0 to 15 hold the end column. A pair that does not fit (an end column past 65535, as on a long minified line, or an identity past 16383) goes to a process-wide table instead: bit 30 is set and the low bits index the exact `(source identity, end column)` pair. A pair always gets the same index and entries are never removed, so equal positions still compare equal and spans stay usable as map keys. A root-file end column is stored bare unless it reaches bit 31, where it is interned with identity 0. Read positions through `Span::end_column()` and `Span::source_id()`, never the raw `end_col` field.
 
+A literal `eval` fragment parsed at EIR lowering carries its own identity from `Span::fresh_synthetic_source_id()`: a counter separate from the include one that `Span::reset_source_ids` rewinds per include-resolution unit, and starting above the packed identity range. A fragment span therefore cannot alias the root file's or an included file's coordinates in span-keyed maps such as `builtin_call_types`.
+
 ## The Scanner
 
 **File:** `src/lexer/scan.rs`
