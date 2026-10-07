@@ -1168,3 +1168,60 @@ echo json_encode($c);
     );
     assert_eq!(out, "[20,40,60]|[0,1,2]");
 }
+
+/// A call can advance the counter through a reference without an assignment at the call site.
+#[test]
+fn test_by_ref_counter_function_calls_take_hash_storage() {
+    for call in ["bump($i)", "bump(value: $i)"] {
+        let source = format!(
+            r#"<?php
+function bump(&$value) {{ $value += 2; }}
+$a = [];
+for ($i = 0; $i < 4; $i++) {{
+    {call};
+    $a[$i] = $i;
+}}
+echo count($a), ":", json_encode($a);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "2:{\"2\":2,\"5\":5}", "{call}");
+    }
+}
+
+/// Instance, static and closure calls can all bind the counter to a reference parameter.
+#[test]
+fn test_by_ref_counter_method_and_closure_calls_take_hash_storage() {
+    for call in ["$b->bump($i)", "Bump::advance($i)", "$f($i)"] {
+        let source = format!(
+            r#"<?php
+class Bump {{
+    public function bump(&$value): void {{ $value += 2; }}
+    public static function advance(&$value): void {{ $value += 2; }}
+}}
+$b = new Bump();
+$f = function (&$value): void {{ $value += 2; }};
+$a = [];
+for ($i = 0; $i < 4; $i++) {{
+    {call};
+    $a[$i] = $i;
+}}
+echo json_encode($a);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "{\"2\":2,\"5\":5}", "{call}");
+    }
+}
+
+/// A reference mutation in the condition runs before the first indexed write too.
+#[test]
+fn test_by_ref_counter_condition_call_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function advance(&$value): bool { $value += 2; return $value < 7; }
+$a = [];
+for ($i = 0; advance($i); $i++) { $a[$i] = $i; }
+echo json_encode($a);
+"#,
+    );
+    assert_eq!(out, "{\"2\":2,\"5\":5}");
+}

@@ -10,9 +10,8 @@
 //! - Packed storage has no keys: slot `n` IS key `n`, so a write past the logical end zero-fills
 //!   the gap, where php would have promoted the array to a hash. Every write this module cannot
 //!   bound against the array's length takes hash storage instead.
-//! - Both directions of an imperfect answer are safe. Accepting too much keeps the storage elephc
-//!   already chose, so nothing gets worse than it is today; rejecting too much costs a hash where
-//!   packed would have done, which is what php itself would have used.
+//! - The proof must reject every possible counter mutation. Rejecting a safe loop costs hash
+//!   storage; accepting an unsafe loop invents entries in gaps that PHP leaves absent.
 
 use std::collections::HashSet;
 
@@ -321,15 +320,16 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
 ///
 /// The walk has to be deep: `f($i++)` and `($i = 3) < 4` both advance the counter from inside a
 /// larger expression, and matching only the outermost node saw a `FunctionCall` and a `BinaryOp`.
-/// Accepting one of those is not a harmless imprecision — it keeps packed storage for an index
+/// Accepting one of those is not a harmless imprecision: it keeps packed storage for an index
 /// that has already run past the array's length, which is the zero-filled gap php never has.
 ///
-/// KNOWN HOLE, and the reason this is a `bool` and not a proof: a by-reference argument
-/// (`bump($i)` where `bump(&$x)`) writes the counter with no assignment node to find. This pass
-/// is syntactic and has no callee signature to consult, so such a loop keeps whatever storage it
-/// gets today. Closure bodies are likewise not descended into, matching the shared walker.
+/// A direct counter argument can bind a reference parameter without an assignment node at the
+/// call site. This syntactic pass has no callee signatures, so it conservatively rejects these
+/// calls, including named arguments. Calls on unrelated variables can still preserve the proof.
 fn expr_preserves_counter(expr: &Expr, counter: &str) -> bool {
-    if assignment_target_name(expr).is_some_and(|name| name == counter) {
+    if assignment_target_name(expr).is_some_and(|name| name == counter)
+        || call_may_alias_counter(expr, counter)
+    {
         return false;
     }
     let mut preserved = true;
@@ -337,6 +337,35 @@ fn expr_preserves_counter(expr: &Expr, counter: &str) -> bool {
         preserved = preserved && expr_preserves_counter(child, counter);
     });
     preserved
+}
+
+/// Returns whether a call can pass the counter's storage to a reference parameter.
+fn call_may_alias_counter(expr: &Expr, counter: &str) -> bool {
+    let args = match &expr.kind {
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::ExprCall { args, .. }
+        | ExprKind::MethodCall { args, .. }
+        | ExprKind::NullsafeMethodCall { args, .. }
+        | ExprKind::NullsafeDynamicMethodCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
+        | ExprKind::NewDynamic { args, .. }
+        | ExprKind::NewDynamicObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => args,
+        _ => return false,
+    };
+    args.iter().any(|arg| argument_names_counter(arg, counter))
+}
+
+/// Unwraps a named argument before checking whether it names the counter local.
+fn argument_names_counter(arg: &Expr, counter: &str) -> bool {
+    match &arg.kind {
+        ExprKind::NamedArg { value, .. } => argument_names_counter(value, counter),
+        ExprKind::Variable(name) => name == counter,
+        _ => false,
+    }
 }
 
 /// Returns the local one expression writes directly, if it writes one.
