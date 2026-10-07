@@ -397,70 +397,61 @@ pub fn arguments_in_declaration_order(
     args: &[crate::parser::ast::Expr],
 ) -> Vec<Option<crate::parser::ast::Expr>> {
     let mut slots: Vec<Option<crate::parser::ast::Expr>> = vec![None; param_names.len()];
-    let mut surplus: Vec<crate::parser::ast::Expr> = Vec::new();
-    let mut next_positional = 0usize;
+    let mut positional_surplus: Vec<crate::parser::ast::Expr> = Vec::new();
+    let mut named_surplus: Vec<crate::parser::ast::Expr> = Vec::new();
     let expanded = expand_static_spreads(args);
+    // Named arguments first, then positional ones into the slots they leave free, which is where
+    // the call planner puts them. For an ordinary call the two orders agree, since a named
+    // argument never targets a slot a positional one filled. For a spread that mixes key kinds
+    // (`...["a" => "x", 1 => 2]`) only this order binds `<T>` from the argument the call passes.
     for arg in &expanded {
         if let crate::parser::ast::ExprKind::NamedArg { name, value } = &arg.kind {
-            if let Some(index) = param_names.iter().position(|param| param == name) {
-                slots[index] = Some((**value).clone());
-                continue;
+            match param_names.iter().position(|param| param == name) {
+                Some(index) => slots[index] = Some((**value).clone()),
+                None => named_surplus.push((**value).clone()),
             }
-            surplus.push((**value).clone());
-            continue;
         }
-        if next_positional < slots.len() {
-            slots[next_positional] = Some(arg.clone());
-            next_positional += 1;
-            continue;
-        }
-        surplus.push(arg.clone());
     }
-    slots.extend(surplus.into_iter().map(Some));
+    let mut next_free = 0usize;
+    for arg in &expanded {
+        if matches!(arg.kind, crate::parser::ast::ExprKind::NamedArg { .. }) {
+            continue;
+        }
+        while next_free < slots.len() && slots[next_free].is_some() {
+            next_free += 1;
+        }
+        if next_free < slots.len() {
+            slots[next_free] = Some(arg.clone());
+            next_free += 1;
+        } else {
+            positional_surplus.push(arg.clone());
+        }
+    }
+    slots.extend(positional_surplus.into_iter().chain(named_surplus).map(Some));
     slots
 }
 
-/// Replaces each spread of an array LITERAL with the arguments it stands for.
+/// Expands the spreads whose keys are known at compile time, exactly as the call planner does.
 ///
-/// The shared call planner already expands `...["v" => "abc", "n" => 1]` into named arguments, so
-/// a non-generic call binds them by name. Inference saw one positional `Spread` instead, which
-/// filled the first slot with the whole array and left `<T>` undetermined. A string key becomes a
-/// named argument and any other entry a positional one, in source order. A spread whose source is
-/// not a literal is kept as written: its keys are not known here.
+/// The planner (`call_args::expand_static_assoc_spread_args`) turns an associative literal into
+/// arguments by `static_assoc_spread_key`: an integer-like key, `"0"` included, stays positional
+/// and any other string key becomes named. A list literal is flattened to positional arguments.
+/// Inference has to read the same arguments the call will bind, or it infers `<T>` from a slot
+/// the call never fills. Any other spread is kept as written: its keys are not known here.
 fn expand_static_spreads(args: &[crate::parser::ast::Expr]) -> Vec<crate::parser::ast::Expr> {
-    use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
-    let named = |key: &Expr, value: &Expr| match &key.kind {
-        ExprKind::StringLiteral(name) => Expr::new(
-            ExprKind::NamedArg {
-                name: name.clone(),
-                value: Box::new(value.clone()),
-            },
-            value.span,
-        ),
-        _ => value.clone(),
-    };
+    use crate::parser::ast::ExprKind;
     let mut out = Vec::with_capacity(args.len());
-    for arg in args {
-        let ExprKind::Spread(source) = &arg.kind else {
-            out.push(arg.clone());
-            continue;
-        };
-        match &source.kind {
-            ExprKind::ArrayLiteral(values) => out.extend(values.iter().cloned()),
-            ExprKind::ArrayLiteralAssoc(entries) => {
-                out.extend(entries.iter().map(|(key, value)| named(key, value)))
-            }
-            ExprKind::ArrayLiteralMixed(entries)
-                if entries
-                    .iter()
-                    .all(|entry| !matches!(entry, ArrayEntry::Spread(_))) =>
-            {
-                out.extend(entries.iter().map(|entry| match entry {
-                    ArrayEntry::Keyed(key, value) => named(key, value),
-                    ArrayEntry::Value(value) | ArrayEntry::Spread(value) => value.clone(),
-                }))
-            }
-            _ => out.push(arg.clone()),
+    for arg in crate::types::call_args::expand_static_assoc_spread_args(args) {
+        match &arg.kind {
+            ExprKind::Spread(source) => match &source.kind {
+                ExprKind::ArrayLiteral(values)
+                    if !values.iter().any(|value| matches!(value.kind, ExprKind::Spread(_))) =>
+                {
+                    out.extend(values.iter().cloned())
+                }
+                _ => out.push(arg),
+            },
+            _ => out.push(arg),
         }
     }
     out

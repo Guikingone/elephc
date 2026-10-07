@@ -2280,3 +2280,23 @@ fn test_native_constructor_type_parameters_are_refused() {
     );
     assert!(!error.contains("Unexpected token"), "{error}");
 }
+
+/// A spread classifies its keys as the call planner does and binds `<T>` from the argument the
+/// call actually passes.
+///
+/// An integer-like string key (`"0"`) is positional, and positional entries fill the slots the
+/// named ones leave free. Every string key used to become a named argument and positional entries
+/// filled from slot zero, so `<T>` was reported undetermined or inferred from the wrong value.
+#[test]
+fn test_spread_keys_bind_type_parameters_like_the_call_planner() {
+    let out = compile_and_run(
+        r#"<?php
+function box<T>(T $v, int $n): string { return $v . ":" . $n; }
+class C { public static function box<T>(T $v, int $n): string { return $v . ":" . $n; } }
+function show<T>(T $a, int $b): string { return $a . ":" . $b; }
+echo box(...["0" => "abc", "n" => 1]), "|", C::box(...["0" => "def", "n" => 2]), "|",
+    show(...["a" => "x", 1 => 2]);
+"#,
+    );
+    assert_eq!(out, "abc:1|def:2|x:2");
+}

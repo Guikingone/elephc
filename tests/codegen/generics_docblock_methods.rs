@@ -319,3 +319,23 @@ echo (new Box(5))->value, "|", (new Box("x"))->value;
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "5|x", "{flags:?}");
     }
 }
+
+/// Only a declaration after `*/` takes the doc comment's line: a trailing comment does not, and a
+/// trailing attribute group leads to the declaration that follows it.
+///
+/// Any text after `*/` used to key the block to the closing line, so `/** @template T */ #[Marker]`
+/// and `/** @template T */ // note` above `class …` left the class non-generic.
+#[test]
+fn test_docblock_closing_line_trailing_comment_or_attribute() {
+    let sources = [
+        "<?php\n#[Attribute]\nclass Marker {}\n/** @template T */ #[Marker]\n\
+         class Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n/** @template T */ // kept\n\
+         class Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+    ];
+    for source in sources {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
+    }
+}

@@ -287,16 +287,31 @@ fn collect(source: &str) -> HashMap<usize, DocBlock> {
         }
         let end = index.min(lines.len().saturating_sub(1));
         index += 1;
-        // Code after `*/` on the closing line IS the declaration: `/** @template T */ class Box`
-        // keyed the block to the line below and the class was compiled as non-generic.
-        let code_after_close = lines[end]
+        // What follows `*/` on the closing line decides where the declaration is. Code there IS
+        // the declaration (`/** @template T */ class Box`); an attribute there starts the groups
+        // the declaration follows; a comment there is not code, so the declaration is below.
+        let after_close = lines[end]
             .split_once("*/")
-            .is_some_and(|(_, after)| !after.trim().is_empty());
-        let mut target = if code_after_close { end } else { index };
+            .map(|(_, after)| after.trim())
+            .unwrap_or("");
+        let attribute_after_close = after_close.starts_with("#[");
+        let comment_after_close = after_close.starts_with("//")
+            || after_close.starts_with("/*")
+            || (after_close.starts_with('#') && !attribute_after_close);
+        let mut target = if !after_close.is_empty() && !comment_after_close {
+            end
+        } else {
+            index
+        };
         while target < lines.len() && lines[target].trim().is_empty() {
             target += 1;
         }
-        if target < lines.len() && lines[target].trim_start().starts_with("#[") {
+        let attribute_starts_here = if target == end {
+            attribute_after_close
+        } else {
+            target < lines.len() && lines[target].trim_start().starts_with("#[")
+        };
+        if attribute_starts_here {
             let targets = attribute_targets
                 .get_or_insert_with(|| attributes::declaration_lines(source));
             target = targets.get(&target).copied().unwrap_or(lines.len());
