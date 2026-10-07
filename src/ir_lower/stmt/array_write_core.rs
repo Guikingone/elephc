@@ -318,6 +318,38 @@ pub(super) fn lower_boxed_array_set(
     }
 }
 
+/// Stores operands that the caller already evaluated while preserving boxed-writer unwind roots.
+pub(super) fn lower_boxed_array_set_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: LoweredValue,
+    index: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    let mut roots = Vec::new();
+    let mut root = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
+        let (operand, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, operand, span);
+        if let Some(owner) = owner {
+            roots.push(owner);
+        }
+        operand
+    };
+    let array = root(ctx, array);
+    let index = root(ctx, index);
+    let value = root(ctx, value);
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![array.value, index.value, value.value],
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
+        Op::RuntimeCall.default_effects(),
+        Some(span),
+    );
+    for root in roots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
+    }
+}
+
 /// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.
 pub(super) fn coerce_buffer_set_value(
     ctx: &mut LoweringContext<'_, '_>,
