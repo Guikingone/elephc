@@ -29,6 +29,7 @@ builtin! {
 /// both class names are compile-time constants. A call in another context, or one whose names
 /// are only known at run time (a variable, `$object::class`), is not supported and is rejected
 /// here with a message naming the forms that are accepted.
+/// The collector diagnoses disabled autoload on eligible source forms before folding.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Err(CompileError::new(cx.span, UNSUPPORTED_CALL_SHAPE))
 }

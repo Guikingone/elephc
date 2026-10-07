@@ -311,7 +311,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let (autoload_registry, ast) = elephc::autoload::Registry::build(&dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let resolved =
         elephc::pdo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -397,7 +397,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let ast = elephc::conditional::apply(ast, &define_set);
     let (resolved, included_files) =
         elephc::resolver::resolve_collecting_includes(ast, base_dir).expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
@@ -498,7 +498,7 @@ fn compile_and_run_files_with_defines_per_argv(
         &define_set,
     )
     .expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
@@ -601,7 +601,7 @@ pub(crate) fn compile_files_error_message(
         let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
         let resolved =
             elephc::resolver::resolve(ast, base_dir).map_err(|e| e.message.clone())?;
-        let resolved = elephc::autoload::collect_aliases(resolved);
+        let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
         let resolved = elephc::name_resolver::resolve(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::func_args::desugar(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::optimize::fold_constants(resolved);
@@ -646,7 +646,7 @@ pub(crate) fn check_files_diagnostics(
         let ast = elephc::parser::parse(&tokens).map_err(|e| e.message.clone())?;
         let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
         let resolved = elephc::resolver::resolve(ast, base_dir).map_err(|e| e.message.clone())?;
-        let resolved = elephc::autoload::collect_aliases(resolved);
+        let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
         let resolved = elephc::name_resolver::resolve(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::func_args::desugar(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::optimize::fold_constants(resolved);
@@ -702,7 +702,7 @@ pub(crate) fn compile_files_fails_with_defines(
             defines.iter().map(|define| (*define).to_string()).collect();
         let ast = elephc::conditional::apply(ast, &define_set);
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
-        let resolved = elephc::autoload::collect_aliases(resolved);
+        let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
         let resolved = elephc::name_resolver::resolve(resolved)?;
         let resolved = elephc::func_args::desugar(resolved)?;
         let resolved = elephc::optimize::fold_constants(resolved);
@@ -731,7 +731,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let (resolved, included_files) =
         elephc::resolver::resolve_collecting_includes(ast, &dir).expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.

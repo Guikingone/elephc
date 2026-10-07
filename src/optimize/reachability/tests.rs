@@ -1193,7 +1193,7 @@ fn prune_keeps_dynamic_call_magic_on_live_class() {
 #[test]
 fn curl_prelude_dispatches_only_user_callables() {
     let program = parse("<?php $ch = curl_init('https://example.com'); echo curl_exec($ch);");
-    let program = crate::autoload::collect_aliases(program);
+    let program = crate::autoload::collect_aliases(program).expect("alias collection failed");
     let mut inventory = PreludeInventory::new();
     let program = crate::curl_prelude::inject_if_used(program, true, &mut inventory);
     let program = crate::name_resolver::resolve(program).expect("fixture must resolve");

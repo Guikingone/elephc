@@ -1268,6 +1268,7 @@ mod throw_access_site_tests {
     use crate::types::{ThrowAccessInfo, ThrowAccessKind};
     use std::collections::HashMap;
 
+    /// Builds a readonly write violation for throw-site identity regression tests.
     fn readonly_violation(span: Span) -> ThrowAccessInfo {
         ThrowAccessInfo {
             span,
