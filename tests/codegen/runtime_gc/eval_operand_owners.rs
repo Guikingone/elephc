@@ -480,6 +480,61 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A typed by-reference variadic element write reaches the CONCRETE ref-cell marker arm, which
+/// must release the heap occupant it replaces (issue #1289): a heap string here, so a blanket
+/// free would also have to skip `.rodata`. The write-back publishes through the marker each loop.
+#[test]
+fn test_core_eval_native_typed_variadic_reference_writeback_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeBinderTypedVariadic(string &...$items): void { $items[0] = $items[0] . "!"; }
+$source = '
+for ($i = 0; $i < 3; $i++) {
+    $text = str_repeat("x", 8);
+    $fn = "nativeBinderTypedVariadic";
+    $fn($text);
+    echo strlen($text), ":", $text, "|";
+    unset($text);
+} // ' . $argc;
+eval($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout, "9:xxxxxxxx!|9:xxxxxxxx!|9:xxxxxxxx!|",
+        "{}", out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An `iterable` by-reference variadic element write reaches the same concrete ref-cell marker arm
+/// for arrays (tag 4), hashes (tag 5) and Iterator objects (tag 6), each of which must release the
+/// heap occupant it replaces (issue #1289 review).
+#[test]
+fn test_core_eval_native_iterable_variadic_reference_writeback_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeBinderIterableVariadic(iterable &...$items): void { $items[0] = [1, 2, 3]; }
+$source = '
+for ($i = 0; $i < 3; $i++) {
+    $arr = [9, 9];
+    $hash = ["a" => 1, "b" => 2];
+    $it = new ArrayIterator([7, 8]);
+    $fn = "nativeBinderIterableVariadic";
+    $fn($arr); echo count($arr), "|";
+    $fn($hash); echo count($hash), "|";
+    $fn($it); echo count($it), "|";
+    unset($arr, $hash, $it);
+} // ' . $argc;
+eval($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout, "3|3|3|3|3|3|3|3|3|",
+        "{}", out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Top-level eval replaces initial process-global boxes without leaking them or stealing local owners.
 #[test]
 fn test_core_eval_top_level_process_globals_retire_initial_storage() {
