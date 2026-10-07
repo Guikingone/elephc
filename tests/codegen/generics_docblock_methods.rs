@@ -11,6 +11,23 @@
 
 use crate::support::*;
 
+/// A same-line class annotation determines the concrete class in both PHP modes.
+#[test]
+fn test_docblock_same_line_class_declaration() {
+    let source = r#"<?php
+/** @template T */ class Box {
+    public function __construct(public T $value) {}
+}
+$box = new Box<int>(7);
+echo get_class($box), ":", $box->value;
+"#;
+    assert_eq!(compile_and_run(source), "Box<int>:7");
+    let portable = source.replace("Box<int>(7)", "Box(7)");
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(&portable, flags), "Box<int>:7");
+    }
+}
+
 /// An ordinary class method specializes its returned container at each call's concrete type.
 #[test]
 fn test_docblock_method_templates_specialize_with_and_without_strict_php() {

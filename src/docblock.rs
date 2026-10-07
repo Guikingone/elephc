@@ -287,6 +287,7 @@ fn collect(source: &str) -> HashMap<usize, DocBlock> {
         }
         let end = index.min(lines.len().saturating_sub(1));
         index += 1;
+        let closing = lines[end].find("*/");
         // What follows `*/` on the closing line decides where the declaration is. Code there IS
         // the declaration (`/** @template T */ class Box`); an attribute there starts the groups
         // the declaration follows; a comment there is not code, so the declaration is below.
@@ -319,7 +320,11 @@ fn collect(source: &str) -> HashMap<usize, DocBlock> {
         if target >= lines.len() {
             continue;
         }
-        let block = parse_block(&lines[start..=end]);
+        let mut comment_lines = lines[start..=end].to_vec();
+        if let Some(col) = closing {
+            *comment_lines.last_mut().expect("comment closing line") = &lines[end][..col + 2];
+        }
+        let block = parse_block(&comment_lines);
         if !block.is_empty() {
             // `Span` lines are 1-based.
             blocks.insert(target + 1, block);
@@ -653,6 +658,21 @@ mod tests {
         let block = block_of("<?php\n/** @template T */\nfunction f($a) {}\n");
         assert_eq!(block.type_params.len(), 1);
         assert_eq!(block.type_params[0].name, "T");
+    }
+
+    /// Code after the closing marker belongs to the same docblock, without losing its tags.
+    #[test]
+    fn binds_a_declaration_on_the_docblock_closing_line() {
+        for source in [
+            "<?php\n/** @template T */ class Box {}\n",
+            "<?php\n/**\n * @template T\n */ class Box {}\n",
+        ] {
+            let program = program_of(source);
+            let StmtKind::ClassDecl { generics, .. } = &program[0].kind else {
+                panic!("expected a class");
+            };
+            assert_eq!(generics.as_ref().expect("annotated class").type_params[0].name, "T");
+        }
     }
 
     /// `@template` on a class makes it a template, and its members' annotations name the type
