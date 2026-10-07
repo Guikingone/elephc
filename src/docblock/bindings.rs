@@ -92,9 +92,8 @@ fn last_docblock(mut gap: &str) -> Option<&str> {
             let end = gap.find("*/")? + 2;
             // Only a docblock replaces the one already seen. An ordinary `/* … */` between the
             // docblock and its declaration, on one line or several, is skipped like `//` is; it
-            // used to clear `last`, and the declaration lost its `@template`. `/**/` is an
-            // empty ordinary comment, not a docblock.
-            if gap.starts_with("/**") && !gap.starts_with("/**/") {
+            // used to clear `last`, and the declaration lost its `@template`.
+            if is_docblock(gap) {
                 last = Some(&gap[..end]);
             }
             gap = &gap[end..];
@@ -102,6 +101,17 @@ fn last_docblock(mut gap: &str) -> Option<&str> {
             return None;
         }
     }
+}
+
+/// Returns whether a comment starting `gap` is a docblock as php's lexer defines one.
+///
+/// `T_DOC_COMMENT` is `/**` followed by whitespace. `/***` banners and the empty `/**/` are
+/// ordinary `T_COMMENT`s, and `ReflectionFunction::getDocComment()` skips them, so they must not
+/// replace the real docblock above them.
+fn is_docblock(gap: &str) -> bool {
+    gap.strip_prefix("/**")
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(char::is_whitespace)
 }
 
 /// Skips consecutive attribute groups and returns the declaration's first token.

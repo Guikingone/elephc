@@ -406,3 +406,36 @@ echo id("seven");
     let error = compile_cli_file_with_flags_expect_failure(bounded, &[]);
     assert!(error.contains("does not satisfy its bound int"), "{error}");
 }
+
+/// A `/***` banner is an ordinary comment, as php's lexer reads it, so it does not replace the
+/// docblock above it; a real docblock below still does.
+///
+/// Any comment starting `/**` counted as a docblock, so a `/*** kept */` line or a `/***` banner
+/// dropped the `@template`: the class compiled as non-generic, and a function, static method or
+/// enum method lost its `of int` bound.
+#[test]
+fn test_star_banner_comment_keeps_the_docblock_above_it() {
+    let banner = "<?php\n/** @template T */\n/***\n * banner\n */\n\
+                  class Box { public function __construct(public T $v) {} }\n\
+                  $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n";
+    assert_eq!(compile_cli_file_and_run_with_flags(banner, &[]), "Box<int>:7");
+    let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */\n/*** kept */\n";
+    for source in [
+        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
+        format!(
+            "<?php\nclass R {{\n{bound}public static function id($v) {{ return $v; }}\n}}\n\
+             echo R::id(\"seven\");\n"
+        ),
+        format!(
+            "<?php\nenum Id {{\n    case A;\n{bound}public function id($v) {{ return $v; }}\n}}\n\
+             echo Id::A->id(\"seven\");\n"
+        ),
+    ] {
+        let error = compile_cli_file_with_flags_expect_failure(&source, &[]);
+        assert!(error.contains("does not satisfy its bound int"), "{source}: {error}");
+    }
+    let second = "<?php\n/** @template T */\n/** plain */\n\
+                  class Box { public function __construct(public $v) {} }\n\
+                  $b = new Box(7);\necho get_class($b), \":\", $b->v;\n";
+    assert_eq!(compile_cli_file_and_run_with_flags(second, &[]), "Box:7");
+}
