@@ -260,7 +260,7 @@ impl Checker {
                             expr.span,
                             &format!(
                                 "'{}' needs a type argument for <{}>, which has no default",
-                                template.declared_name, param.name
+                                template.declared_name, generics::parameter_name(&param.name)
                             ),
                         ))
                     }
@@ -323,7 +323,7 @@ impl Checker {
                 &format!(
                     "Constructing '{}' cannot determine <{}> from a {} argument, which says \
                      nothing about what it holds; write it: new {}<...>(...)",
-                    template.declared_name, param, uninformative, template.declared_name
+                    template.declared_name, generics::parameter_name(param), uninformative, template.declared_name
                 ),
             ));
         }
@@ -356,7 +356,7 @@ impl Checker {
                     &format!(
                         "Constructing '{}' binds type parameter <{}> to {}, which does not \
                          satisfy its bound {}",
-                        template.declared_name, param.name, argument_ty, bound_ty
+                        template.declared_name, generics::parameter_name(&param.name), argument_ty, bound_ty
                     ),
                 ));
             }
@@ -443,7 +443,7 @@ fn describe_static_call_error(
         generics::InferError::Unconstrained(param) => format!(
             "'{}::{}' does not determine type parameter <{}>; no parameter mentions it, so \
              write it: {}<...>::{}(...)",
-            class_name, method, param, class_name, method
+            class_name, method, generics::parameter_name(param), class_name, method
         ),
         generics::InferError::Conflict {
             param,
@@ -452,15 +452,15 @@ fn describe_static_call_error(
         } => format!(
             "'{}::{}' binds type parameter <{}> to both {} and {}; write the one you meant: \
              {}<...>::{}(...)",
-            class_name, method, param, first, second, class_name, method
+            class_name, method, generics::parameter_name(param), first, second, class_name, method
         ),
         generics::InferError::Unspellable { param, ty } => format!(
             "'{}::{}' would bind type parameter <{}> to {}, which has no generic spelling",
-            class_name, method, param, ty
+            class_name, method, generics::parameter_name(param), ty
         ),
         generics::InferError::TooDeep { param, ty } => format!(
             "'{}::{}' instantiates its class at an ever-deeper type: <{}> reached {}",
-            class_name, method, param, ty
+            class_name, method, generics::parameter_name(param), ty
         ),
     }
 }
@@ -475,7 +475,7 @@ fn describe_construction_error(class_name: &str, error: &generics::InferError) -
         generics::InferError::Unconstrained(param) => format!(
             "Constructing '{}' does not determine type parameter <{}>; no constructor parameter \
              mentions it, so write it: new {}<...>(...)",
-            class_name, param, class_name
+            class_name, generics::parameter_name(param), class_name
         ),
         generics::InferError::Conflict {
             param,
@@ -484,18 +484,18 @@ fn describe_construction_error(class_name: &str, error: &generics::InferError) -
         } => format!(
             "Constructing '{}' binds type parameter <{}> to both {} and {}; write the one you \
              meant: new {}<...>(...)",
-            class_name, param, first, second, class_name
+            class_name, generics::parameter_name(param), first, second, class_name
         ),
         generics::InferError::Unspellable { param, ty } => format!(
             "Constructing '{}' would bind type parameter <{}> to {}, which has no generic \
              spelling; write a type that does: new {}<...>(...)",
-            class_name, param, ty, class_name
+            class_name, generics::parameter_name(param), ty, class_name
         ),
         generics::InferError::TooDeep { param, ty } => format!(
             "Constructing '{}' instantiates itself at an ever-deeper type: <{}> reached {}. A \
              class whose own constructor builds it at a type made from its type parameter has \
              no finite set of instantiations",
-            class_name, param, ty
+            class_name, generics::parameter_name(param), ty
         ),
     }
 }

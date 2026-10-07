@@ -2262,23 +2262,17 @@ echo box(...["v" => "abc", "n" => 1]), "|", C::box(...["v" => "def", "n" => 2]),
     assert_eq!(out, "abc|def|ghi|jkl");
 }
 
-/// A native constructor type parameter is refused with the fix named, not erased.
-///
-/// Monomorphized as a method template, the constructor was stripped and `new Box(5)` reported
-/// that it expects no arguments; a promoted parameter typed `T` failed earlier as an unknown type.
+/// Native constructor type parameters specialize the class and retain promoted storage.
 #[test]
-fn test_native_constructor_type_parameters_are_refused() {
-    let error = compile_cli_file_with_flags_expect_failure(
-        "<?php\nclass Box { public function __construct<T>(public T $value) {} }\n\
-         echo (new Box(5))->value;\n",
-        &[],
+fn test_native_constructor_type_parameters_specialize_the_class() {
+    let source = "<?php\nclass Box { public function __construct<T>(public T $value) {} }\n\
+         $number = new Box(5); $text = new Box(\"x\");\n\
+         echo get_class($number), \":\", $number->value, \"|\",\n\
+             get_class($text), \":\", $text->value;\n";
+    assert_eq!(
+        compile_cli_file_and_run_with_flags(source, &[]),
+        "Box<int>:5|Box<string>:x"
     );
-    assert!(
-        error.contains("A constructor cannot declare its own type parameters")
-            && error.contains("class Box<T>"),
-        "{error}"
-    );
-    assert!(!error.contains("Unexpected token"), "{error}");
 }
 
 /// A spread classifies its keys as the call planner does and binds `<T>` from the argument the

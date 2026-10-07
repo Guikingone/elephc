@@ -20,6 +20,8 @@
 //!   a function that does not exist.
 
 pub mod classes;
+mod constructors;
+pub(crate) use constructors::parameter_name;
 pub mod methods;
 mod site_scope;
 mod splice;
@@ -87,14 +89,15 @@ where
     // are written, not inferred, so instantiating them is pure syntax. Doing it here rather than
     // in the pipeline is what keeps the two in step — an instantiated FUNCTION body can name
     // `Box<T>`, which only becomes the concrete `Box<int>` once the checker has bound `T`.
-    let class_templates = classes::collect(&program);
+    let program = constructors::lift(program);
+    let mut class_templates = classes::collect(&program);
     // A variance marker is a promise about the DECLARATION, so it is checked once, here, before
     // anything is spliced. Checking it per instantiation would name a class the programmer never
     // wrote, and checking it after splicing would be too late to name the member at fault.
     variance::verify(&class_templates)?;
-    let first = classes::instantiate(
+    let first = constructors::instantiate(
         program,
-        &class_templates,
+        &mut class_templates,
         &classes::InferredConstructions::default(),
     )?;
     let program = first.program;
@@ -162,7 +165,7 @@ where
         // `Box<T>` among them has become a `Box<int>` that needs its own class. This is also
         // where the checker's `new Box(5)` inferences are adopted: the class it asked for is
         // spliced and the construction is renamed to it.
-        let round = classes::instantiate(program, &class_templates, &inferred)?;
+        let round = constructors::instantiate(program, &mut class_templates, &inferred)?;
         program = round.program;
         context.class_type_argument_bounds.extend(round.obligations);
         for warning in round.warnings {
@@ -176,6 +179,7 @@ where
         // Rebuilt from the program as it now stands: the classes just spliced in carry their
         // template's generic methods, and a call on one of them can only find them from here.
         context.method_templates = methods::collect(&program);
+        context.class_templates = class_templates.signatures();
         rounds += 1;
         if rounds >= MAX_INSTANTIATION_ROUNDS {
             return Err(crate::errors::CompileError::new(
@@ -848,6 +852,7 @@ mod tests {
     use super::*;
     use crate::parser::ast::Variance;
 
+    /// Wraps a declared parameter type for inference fixtures.
     fn param(ty: TypeExpr) -> Option<TypeExpr> {
         Some(ty)
     }
@@ -862,10 +867,12 @@ mod tests {
         }
     }
 
+    /// Builds a named type parameter reference for inference fixtures.
     fn t(name: &str) -> TypeExpr {
         TypeExpr::Named(Name::unqualified(name))
     }
 
+    /// Infers a scalar argument binding for a bare type parameter.
     #[test]
     fn binds_a_bare_type_parameter_from_the_argument() {
         let bindings = infer_bindings(
@@ -877,6 +884,7 @@ mod tests {
         assert_eq!(bindings, vec![("T".to_string(), TypeExpr::Int)]);
     }
 
+    /// Infers a binding through an indexed array element type.
     #[test]
     fn binds_through_an_array_element_type() {
         let bindings = infer_bindings(
@@ -888,6 +896,7 @@ mod tests {
         assert_eq!(bindings, vec![("T".to_string(), TypeExpr::Str)]);
     }
 
+    /// Infers the key and value type parameters of an associative array.
     #[test]
     fn binds_both_halves_of_an_associative_array() {
         let bindings = infer_bindings(
@@ -923,6 +932,7 @@ mod tests {
         assert_eq!(bindings, vec![("T".to_string(), TypeExpr::Int)]);
     }
 
+    /// Rejects conflicting argument types for the same type parameter.
     #[test]
     fn two_positions_disagreeing_is_a_conflict() {
         let err = infer_bindings(
@@ -934,6 +944,7 @@ mod tests {
         assert!(matches!(err, InferError::Conflict { .. }));
     }
 
+    /// Accepts matching bindings from multiple argument positions.
     #[test]
     fn two_positions_agreeing_is_fine() {
         let bindings = infer_bindings(
@@ -945,6 +956,7 @@ mod tests {
         assert_eq!(bindings, vec![("T".to_string(), TypeExpr::Int)]);
     }
 
+    /// Rejects a type parameter without an argument or default binding.
     #[test]
     fn a_type_parameter_no_argument_mentions_is_unconstrained() {
         let err = infer_bindings(&[tp("T")], &[param(TypeExpr::Int)], &[PhpType::Int])
@@ -992,6 +1004,7 @@ mod tests {
         assert_eq!(bindings, vec![("T".to_string(), TypeExpr::Int)]);
     }
 
+    /// Includes concrete arguments in readable instantiation names.
     #[test]
     fn instantiated_names_are_distinct_and_readable() {
         let int = instantiated_name("identity", &[("T".to_string(), TypeExpr::Int)]);
@@ -1001,6 +1014,7 @@ mod tests {
         assert_ne!(int, string);
     }
 
+    /// Preserves distinct instantiations through assembly symbol mangling.
     #[test]
     fn instantiated_names_mangle_to_distinct_symbols() {
         let int = crate::names::mangle_fqn(&instantiated_name(
@@ -1015,6 +1029,7 @@ mod tests {
         assert!(int.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
     }
 
+    /// Substitutes parameters in every nested type expression position.
     #[test]
     fn substitution_rewrites_every_position() {
         let bindings = vec![("T".to_string(), TypeExpr::Int)];

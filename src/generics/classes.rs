@@ -139,6 +139,13 @@ pub struct StaticMethodSignature {
 }
 
 impl Templates {
+    /// Retains newly exposed constructor templates alongside the original class templates.
+    pub(super) fn extend(&mut self, other: Self) {
+        self.by_name.extend(other.by_name);
+        self.generic_functions.extend(other.generic_functions);
+        self.conditional.extend(other.conditional);
+    }
+
     /// Returns the constructor signature of every template, for call-site inference.
     pub fn signatures(&self) -> Vec<TemplateSignature> {
         self.by_name
@@ -604,7 +611,7 @@ impl Instantiate<'_> {
                             &format!(
                                 "'{}' needs a type argument for <{}>, which has no default",
                                 name.as_str(),
-                                param.name
+                                super::parameter_name(&param.name)
                             ),
                         ));
                         return None;
@@ -625,7 +632,7 @@ impl Instantiate<'_> {
                         StmtKind::TraitDecl { .. } => "trait",
                         _ => "class",
                     },
-                    parameter: param.name.clone(),
+                    parameter: super::parameter_name(&param.name).to_string(),
                     bound: bound.substitute_type_params(&bindings),
                     argument: argument.clone(),
                     span,
@@ -639,10 +646,12 @@ impl Instantiate<'_> {
 }
 
 impl Pass for Instantiate<'_> {
+    /// Preserves magic constants while walking generic class mentions.
     fn transform_magic(&self, _span: Span, mc: MagicConstant) -> ExprKind {
         ExprKind::MagicConstant(mc)
     }
 
+    /// Rewrites concrete types while leaving template-scoped types deferred.
     fn transform_type(&self, ty: TypeExpr, span: Span) -> TypeExpr {
         if self.in_template > 0 {
             return ty;
@@ -650,6 +659,7 @@ impl Pass for Instantiate<'_> {
         self.rewrite(ty, span)
     }
 
+    /// Uses the concrete class selected for this construction site.
     fn transform_class_reference(&self, class_name: Name, span: Span) -> Name {
         match self.site_scope.resolve(self.new_names, span) {
             Some(instantiated) => Name::unqualified(instantiated),
@@ -657,6 +667,7 @@ impl Pass for Instantiate<'_> {
         }
     }
 
+    /// Tracks the enclosing class and defers template-scoped mentions.
     fn enter_class(&mut self, name: &str) {
         if self.templates.contains_key(&template_key(name)) {
             self.in_template += 1;
@@ -665,6 +676,7 @@ impl Pass for Instantiate<'_> {
         self.site_scope.enter_class(name);
     }
 
+    /// Tracks the function scope and defers generic function bodies.
     fn enter_function(&mut self, name: &str) {
         if self.generic_functions.contains(&template_key(name)) {
             self.in_template += 1;
@@ -672,11 +684,13 @@ impl Pass for Instantiate<'_> {
         self.site_scope.enter_function(name);
     }
 
+    /// Restores the enclosing scope after a function body.
     fn leave_function(&mut self) {
         self.in_template = self.in_template.saturating_sub(1);
         self.site_scope.leave_body();
     }
 
+    /// Tracks whether this method introduces an unresolved template scope.
     fn enter_method(&mut self, name: &str, type_params: &[TypeParam]) {
         // A generic METHOD is a template for the same reason a generic function is: `Box<U>` in
         // its signature names no class until a call binds `U`, and instantiating it here would
@@ -694,6 +708,7 @@ impl Pass for Instantiate<'_> {
         self.site_scope.enter_method(name);
     }
 
+    /// Restores template depth and call-site scope after a method.
     fn leave_method(&mut self) {
         if self.method_templates.pop().unwrap_or(false) {
             self.in_template = self.in_template.saturating_sub(1);
@@ -701,14 +716,17 @@ impl Pass for Instantiate<'_> {
         self.site_scope.leave_body();
     }
 
+    /// Tracks the nested closure scope used to identify construction sites.
     fn enter_closure(&mut self, span: Span) {
         self.site_scope.enter_closure(span);
     }
 
+    /// Restores the enclosing call-site scope after a closure.
     fn leave_closure(&mut self) {
         self.site_scope.leave_body();
     }
 
+    /// Restores the enclosing class and template depth.
     fn leave_class(&mut self) {
         // Only a template incremented it, and the walker pairs every enter with a leave, so a
         // saturating decrement cannot drift: an ordinary class leaves the counter at zero.
@@ -717,6 +735,7 @@ impl Pass for Instantiate<'_> {
         self.site_scope.leave_class();
     }
 
+    /// Defers unresolved trait templates and records their lexical scope.
     fn enter_trait(&mut self, name: &str) {
         // `trait Holder<T> { private Box<T> $b; }` names `Box<T>`, concrete only once a `use`
         // binds `T` — the same reason a class template's body is left alone. A trait is not an
@@ -727,6 +746,7 @@ impl Pass for Instantiate<'_> {
         self.site_scope.enter_trait(name);
     }
 
+    /// Restores template depth and lexical scope after a trait.
     fn leave_trait(&mut self) {
         // Paired with `enter_trait` by the walker, and traits do not nest, so the saturating
         // decrement is exact for the same reason `leave_class`'s is.

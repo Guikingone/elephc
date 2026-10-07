@@ -146,6 +146,16 @@ class Identity
     }
 }
 
+// A constructor template gives promoted properties concrete storage at each new expression.
+class Value
+{
+    /**
+     * @template T
+     * @param T $value
+     */
+    public function __construct(public $value) {}
+}
+
 $number = new Box(41);
 $number->set($number->get() + 1);
 $word = new Box('hi');
@@ -162,6 +172,9 @@ $held = new IntHolder(21);
 echo $held->doubled(), '|', $held->read(), "\n";
 echo firstOf([10, 20]), '|', firstOf(['x', 'y']), "\n";
 echo (new Identity())->copy(7), '|', (new Identity())->copy('seven'), "\n";
+$constructedNumber = new Value(7);
+$constructedText = new Value('eight');
+echo $constructedNumber->value + 1, '|', strtoupper($constructedText->value), "\n";
 
 // One divergence is worth knowing about, and it is monomorphization rather than this surface:
 // the template does not exist at runtime. Under php-src `Box` is an ordinary class; compiled by

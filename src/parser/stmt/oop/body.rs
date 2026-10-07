@@ -687,18 +687,6 @@ fn parse_class_like_method(
     } else {
         promoted_assignments.into_iter().chain(body).collect()
     };
-    // A constructor's type parameter would type the object it builds (`public T $value` is a
-    // property), so it is a CLASS parameter in all but name, and `new` has one constructor to
-    // call. Monomorphizing it as a method left the class without a constructor, and `new Box(5)`
-    // reported "expects 0 arguments". Refused once the whole method is consumed, so parsing
-    // resumes after it rather than inside it.
-    if !type_params.is_empty() && method_name.eq_ignore_ascii_case("__construct") {
-        return Err(CompileError::new(
-            span,
-            "A constructor cannot declare its own type parameters; declare them on the class \
-             instead: class Box<T> { public function __construct(T $value) {} }",
-        ));
-    }
     Ok((
         ClassMethod {
             type_params,

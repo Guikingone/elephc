@@ -40,8 +40,7 @@ pub(super) fn apply(
         if !method.type_params.is_empty() {
             continue;
         }
-        let is_template = block.declares_generics()
-            && !method.name.eq_ignore_ascii_case("__construct");
+        let is_template = block.declares_generics();
         if is_template {
             method.type_params = block.type_params.clone();
         }

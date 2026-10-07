@@ -700,10 +700,10 @@ the same bounds and default rules described in
 For inference, a type parameter has to be MENTIONED by a parameter. A bare `callable` mentions
 nothing, which is what typed callables are for; alternatively, write the method's type arguments.
 
-A constructor is the exception: it cannot declare type parameters of its own. One would type the
-object being built (`public T $value` is a property), which makes it a class parameter in all but
-name, so `public function __construct<T>(…)` is refused with that advice — declare `class Box<T>`
-instead.
+A constructor may declare its own type parameters. They are inferred from `new` arguments and
+specialize the constructed class, including any promoted properties. See
+[constructor templates](#a-method) for the portable PHPDoc form and class
+specialization rules.
 
 ### Generic traits
 
@@ -1002,13 +1002,34 @@ templates also support bounds, defaults and variadic annotations such as `@param
 A doc comment binds to the declaration that follows it, including one on the same line after
 `*/` (`/** @template T */ class Box`).
 
-A `@template` on a constructor is ignored, as php ignores it, for the reason the native form is
-refused: put it on the class.
-
 In a generic class, a method can refer to the class's `T` and declare a separate `U` of its own.
 `U` is bound at the method call and does not enter the scope of properties or sibling methods.
 If a method already declares native type parameters, its written signature takes precedence
 over the docblock.
+
+A constructor can also declare `@template`. Its arguments specialize the constructed class,
+so promoted properties use the same concrete types as the constructor parameters:
+
+```php
+<?php
+class Value
+{
+    /**
+     * @template T
+     * @param T $value
+     */
+    public function __construct(public $value) {}
+}
+
+$number = new Value(7);       // Value<int>
+$text = new Value('seven');   // Value<string>
+echo $number->value + 1, '|', strtoupper($text->value);   // 8|SEVEN
+```
+
+The native equivalent is `public function __construct<T>(public T $value) {}`. If the class
+has its own type parameters, they bind first, followed by the constructor's parameters.
+For example, `new Pair<int>(7, 'seven')` with a constructor-local `U` creates
+`Pair<int><string>`. The constructor retains the name `__construct` in each concrete class.
 
 ## Limitations
 

@@ -274,7 +274,7 @@ class Repo {
 #[test]
 fn test_docblock_method_templates_example_runs_in_both_modes() {
     let source = include_str!("../../examples/generics-docblock/main.php");
-    let expected = "42|hi|ok\n7|ab\n42|21\n10|x\n7|seven\nBox<int>|Box<string>|Pair<int>\n";
+    let expected = "42|hi|ok\n7|ab\n42|21\n10|x\n7|seven\n8|EIGHT\nBox<int>|Box<string>|Pair<int>\n";
     for flags in [&[][..], &["--strict-php"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), expected, "{flags:?}");
     }
@@ -329,12 +329,9 @@ echo Id::A->id(ARG);
     }
 }
 
-/// A constructor's PHPDoc `@template` is ignored, as php ignores it, so the class still builds.
-///
-/// Adopting it made the constructor a template that was then stripped, and `new Box(5)` reported
-/// that the constructor expects no arguments.
+/// Constructor PHPDoc templates affect class specialization in both PHP modes.
 #[test]
-fn test_docblock_template_on_a_constructor_is_ignored() {
+fn test_docblock_template_on_a_constructor_specializes_the_class() {
     let source = r#"<?php
 class Box {
     public $value;
@@ -344,10 +341,16 @@ class Box {
      */
     public function __construct($value) { $this->value = $value; }
 }
-echo (new Box(5))->value, "|", (new Box("x"))->value;
+$number = new Box(5);
+$text = new Box("x");
+echo get_class($number), ":", $number->value, "|", get_class($text), ":", $text->value;
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "5|x", "{flags:?}");
+        assert_eq!(
+            compile_cli_file_and_run_with_flags(source, flags),
+            "Box<int>:5|Box<string>:x",
+            "{flags:?}"
+        );
     }
 }
 
