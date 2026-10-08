@@ -239,9 +239,9 @@ every type, so an `array<mixed>` body would otherwise satisfy a declared `array<
 the element layout lives in the array header tag, not in the static type, so every caller
 would read the callee's boxed pointers as integers.
 
-> Building an array by appending into an empty literal infers `array<mixed>`, so it cannot
-> satisfy a concrete declared element type yet. Return a literal, or take the array as a typed
-> parameter — see [Limitations](#limitations).
+> Appending values inferred as `int|float`, such as an incremented loop counter or its
+> arithmetic result, uses boxed storage. Cast each value when building a concrete
+> `array<int>` result; see [Limitations](#limitations).
 
 A bare `array` return imposes no element contract and keeps accepting the append idiom.
 

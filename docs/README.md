@@ -58,7 +58,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
 - [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
 - [Sessions](php/sessions.md) — `session_start()`, `$_SESSION`, session ID and cookie management, file-based storage under `--web`
-- [OPcache](php/opcache.md) — the observable Zend OPcache API over elephc's compile-time script manifest: `opcache_get_status()`/`opcache_get_configuration()`, the `opcache.*` directive matrix, `ini_get`/`ini_get_all`, `extension_loaded()`
+- [OPcache](php/opcache.md): the Zend OPcache API over compiled scripts and the runtime cache for dynamic include/require, optional file caching, live statistics, and the `opcache.*` directive matrix
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
 - [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, stackful coroutine codegen

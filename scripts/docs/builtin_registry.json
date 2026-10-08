@@ -100244,9 +100244,9 @@
     "canonical_name": "opcache_compile_file",
     "description": "Compiles a script into the opcode cache without executing it.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
+      "kind": "opcache-dispatch",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -100298,11 +100298,11 @@
     },
     "area": "Misc",
     "canonical_name": "opcache_get_configuration",
-    "description": "Returns the OPcache directives, blacklist, and version.",
+    "description": "Returns the OPcache directives, blacklist, and version, or false when API access is restricted.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
+      "kind": "opcache-dispatch",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -100328,7 +100328,7 @@
     "semantics": null,
     "sig": {
       "params": [],
-      "return_type": "array",
+      "return_type": "array|false",
       "variadic": null
     },
     "since": null,
@@ -100356,9 +100356,9 @@
     "canonical_name": "opcache_get_status",
     "description": "Returns OPcache memory, statistics, and optionally the cached scripts.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
+      "kind": "opcache-dispatch",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -100427,9 +100427,9 @@
     "canonical_name": "opcache_invalidate",
     "description": "Invalidates a script's cached opcodes, optionally without checking its timestamp.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
+      "kind": "opcache-dispatch",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -100498,9 +100498,9 @@
     "canonical_name": "opcache_is_script_cached",
     "description": "Reports whether a script is in the opcode cache.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
+      "kind": "opcache-dispatch",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -100562,9 +100562,9 @@
     "canonical_name": "opcache_is_script_cached_in_file_cache",
     "description": "Reports whether a script is in the on-disk file cache.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
+      "kind": "opcache-dispatch",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -100626,9 +100626,9 @@
     "canonical_name": "opcache_jit_blacklist",
     "description": "Excludes a function from JIT compilation.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
+      "kind": "opcache-dispatch",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -100682,9 +100682,9 @@
     "canonical_name": "opcache_reset",
     "description": "Clears the whole opcode cache.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
+      "kind": "opcache-dispatch",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
