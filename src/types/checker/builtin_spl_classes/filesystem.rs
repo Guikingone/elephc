@@ -394,7 +394,9 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), spl_file_object_valid_body()),
         method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("feof", vec![file_stream_expr()]))),
         method_with_body("fgets", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
-        method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), return_body(file_current_line_expr())),
+        // `SplFileObject::getCurrentLine` is PHP's alias of `fgets`: it returns the current line and
+        // advances to the next one.
+        method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), spl_file_object_get_current_line_body()),
         method_with_body("fgetc", Vec::new(), Some(mixed_type()), return_body(function_call("fgetc", vec![file_stream_expr()]))),
         method_with_body(
             "fread",
@@ -1318,6 +1320,19 @@ fn spl_file_object_fgets_body() -> Vec<Stmt> {
                 binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
             )],
             None,
+        ),
+        return_stmt(var_expr("line")),
+    ]
+}
+
+/// Builds SplFileObject getCurrentLine(): the current line, then advance to the next.
+fn spl_file_object_get_current_line_body() -> Vec<Stmt> {
+    vec![
+        assign_stmt("line", file_current_line_expr()),
+        property_assign_stmt(
+            this_expr(),
+            "lineNumber",
+            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
         ),
         return_stmt(var_expr("line")),
     ]
