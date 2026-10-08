@@ -1485,7 +1485,36 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
             Some(vec![append(var_expr("c")), increment_stmt("i")]),
         )]),
     )];
+    let strlen = |name: &str| function_call("strlen", vec![var_expr(name)]);
+    let invalid = |message: &str| {
+        throw_stmt(new_object_expr(
+            "ValueError",
+            vec![string_expr(message)],
+        ))
+    };
     vec![
+        // php validates the CSV controls before reading.
+        if_stmt(
+            binary_expr(strlen("separator"), BinOp::StrictNotEq, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::fgetcsv(): Argument #1 ($separator) must be a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(strlen("enclosure"), BinOp::StrictNotEq, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::fgetcsv(): Argument #2 ($enclosure) must be a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(strlen("escape"), BinOp::Gt, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::fgetcsv(): Argument #3 ($escape) must be empty or a single character",
+            )],
+            None,
+        ),
         // `fgetcsv()` at end of file answers false.
         if_stmt(
             not_expr(file_object_valid_expr()),
