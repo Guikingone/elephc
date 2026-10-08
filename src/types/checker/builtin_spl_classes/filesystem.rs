@@ -419,7 +419,25 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Int),
             spl_file_object_fseek_body(),
         ),
-        method_with_body("seek", vec![param("line", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "lineNumber", var_expr("line"))]),
+        method_with_body(
+            "seek",
+            vec![param("line", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![
+                // php rejects a negative line before moving the cursor.
+                if_stmt(
+                    binary_expr(var_expr("line"), BinOp::Lt, int_expr(0)),
+                    vec![throw_stmt(new_object_expr(
+                        "ValueError",
+                        vec![string_expr(
+                            "SplFileObject::seek(): Argument #1 ($line) must be greater than or equal to 0",
+                        )],
+                    ))],
+                    None,
+                ),
+                property_assign_stmt(this_expr(), "lineNumber", var_expr("line")),
+            ],
+        ),
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(file_object_flags_expr())),
         method_with_body("setFlags", vec![param("flags", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))]),
         method_with_body("getMaxLineLen", Vec::new(), Some(TypeExpr::Int), return_body(property_access(this_expr(), "maxLineLen"))),

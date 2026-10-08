@@ -245,6 +245,28 @@ unlink("multi.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies SplFileObject::seek rejects a negative line with php's ValueError.
+#[test]
+fn test_spl_file_object_seek_rejects_negative_line() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("seek.txt", "a\nb\n");
+$file = new SplFileObject("seek.txt");
+try {
+    $file->seek(-1);
+} catch (\ValueError $e) {
+    echo $e->getMessage();
+}
+unlink("seek.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "SplFileObject::seek(): Argument #1 ($line) must be greater than or equal to 0"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplFileInfo factories honor explicit and stored class-string overrides.
 #[test]
 fn test_spl_file_info_factory_class_overrides() {
