@@ -226,6 +226,25 @@ unlink("data.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies SplFileObject::fgetcsv joins a quoted field that spans several physical lines.
+#[test]
+fn test_spl_file_object_fgetcsv_multiline_quoted_field() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("multi.csv", "\"a\",\"b\"\n\"line1\nline2\"\n");
+$file = new SplFileObject("multi.csv");
+$file->setCsvControl(",", '"', "");
+$first = $file->fgetcsv();
+echo count($first), ":", $first[0], $first[1], "\n";
+$second = $file->fgetcsv();
+echo count($second), ":", str_replace("\n", "|", $second[0]), "\n";
+unlink("multi.csv");
+"#,
+    );
+    assert_eq!(out, "2:ab\n1:line1|line2\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplFileInfo factories honor explicit and stored class-string overrides.
 #[test]
 fn test_spl_file_info_factory_class_overrides() {

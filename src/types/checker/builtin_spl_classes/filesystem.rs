@@ -1457,6 +1457,14 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
             vec![var_expr("line"), var_expr("i"), int_expr(1)],
         )
     };
+    // A physical line's trailing CR/LF is the record terminator, not field content, so it is
+    // stripped; a newline that ends up inside a quoted field is re-added explicitly.
+    let physical_line = || {
+        function_call(
+            "rtrim",
+            vec![string_copy_expr(file_current_line_expr()), string_expr("\r\n")],
+        )
+    };
     let next_char = || {
         function_call(
             "substr",
@@ -1552,7 +1560,7 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
             return_body(bool_expr(false)),
             None,
         ),
-        assign_stmt("line", file_current_line_expr()),
+        assign_stmt("line", physical_line()),
         property_assign_stmt(
             this_expr(),
             "lineNumber",
@@ -1573,9 +1581,40 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
         assign_stmt("inquotes", bool_expr(false)),
         assign_stmt("i", int_expr(0)),
         assign_stmt("n", function_call("strlen", vec![var_expr("line")])),
+        // A quoted field may span several physical lines: while the current line is exhausted but
+        // the enclosure is still open, pull the next line (newline included) and keep scanning.
         while_stmt(
-            binary_expr(var_expr("i"), BinOp::Lt, var_expr("n")),
+            binary_expr(
+                binary_expr(var_expr("i"), BinOp::Lt, var_expr("n")),
+                BinOp::Or,
+                var_expr("inquotes"),
+            ),
             vec![
+                if_stmt(
+                    binary_expr(var_expr("i"), BinOp::GtEq, var_expr("n")),
+                    vec![
+                        if_stmt(
+                            not_expr(file_object_valid_expr()),
+                            vec![crate::synthetic_class::s_break(1)],
+                            None,
+                        ),
+                        assign_stmt(
+                            "line",
+                            binary_expr(
+                                binary_expr(var_expr("line"), BinOp::Concat, string_expr("\n")),
+                                BinOp::Concat,
+                                physical_line(),
+                            ),
+                        ),
+                        property_assign_stmt(
+                            this_expr(),
+                            "lineNumber",
+                            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+                        ),
+                        assign_stmt("n", function_call("strlen", vec![var_expr("line")])),
+                    ],
+                    None,
+                ),
                 assign_stmt("c", line_char()),
                 if_stmt(in_quotes(), quoted_body, Some(unquoted_body)),
             ],
