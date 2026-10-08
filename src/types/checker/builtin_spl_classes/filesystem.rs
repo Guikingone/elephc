@@ -1414,25 +1414,114 @@ fn spl_file_object_get_csv_control_body() -> Vec<Stmt> {
 }
 
 /// Builds SplFileObject fgetcsv().
+///
+/// Parses the current line with the configured separator/enclosure/escape. The manual parser is
+/// what makes the escape meaningful: inside an enclosure, `escape` quotes the next byte verbatim
+/// (php's `"b""bb"` with escape `"` reads back as `b"bb`), while a doubled enclosure with an empty
+/// escape is a quoted quote.
 fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
-    vec![
+    let line_char = || {
+        function_call(
+            "substr",
+            vec![var_expr("line"), var_expr("i"), int_expr(1)],
+        )
+    };
+    let next_char = || {
+        function_call(
+            "substr",
+            vec![
+                var_expr("line"),
+                binary_expr(var_expr("i"), BinOp::Add, int_expr(1)),
+                int_expr(1),
+            ],
+        )
+    };
+    let append = |value: Expr| {
         assign_stmt(
-            "row",
-            function_call(
-                "fgetcsv",
-                vec![
-                    file_stream_expr(),
-                    var_expr("separator"),
-                    var_expr("enclosure"),
-                ],
-            ),
+            "field",
+            binary_expr(var_expr("field"), BinOp::Concat, value),
+        )
+    };
+    let in_quotes = || var_expr("inquotes");
+    // Quoted context: a doubled enclosure is a literal enclosure, a lone enclosure closes the
+    // field, and (when distinct) the escape char captures the next byte verbatim.
+    let quoted_body = vec![if_stmt(
+        binary_expr(var_expr("c"), BinOp::StrictEq, var_expr("enclosure")),
+        vec![if_stmt(
+            binary_expr(next_char(), BinOp::StrictEq, var_expr("enclosure")),
+            vec![
+                append(var_expr("enclosure")),
+                assign_stmt("i", binary_expr(var_expr("i"), BinOp::Add, int_expr(2))),
+            ],
+            Some(vec![
+                assign_stmt("inquotes", bool_expr(false)),
+                increment_stmt("i"),
+            ]),
+        )],
+        Some(vec![if_stmt(
+            binary_expr(var_expr("c"), BinOp::StrictEq, var_expr("escape")),
+            vec![
+                increment_stmt("i"),
+                append(line_char()),
+                increment_stmt("i"),
+            ],
+            Some(vec![append(var_expr("c")), increment_stmt("i")]),
+        )]),
+    )];
+    // Unquoted context: separator splits, enclosure opens, anything else is literal.
+    let unquoted_body = vec![if_stmt(
+        binary_expr(var_expr("c"), BinOp::StrictEq, var_expr("separator")),
+        vec![
+            array_push_stmt("fields", var_expr("field")),
+            assign_stmt("field", string_expr("")),
+            increment_stmt("i"),
+        ],
+        Some(vec![if_stmt(
+            binary_expr(var_expr("c"), BinOp::StrictEq, var_expr("enclosure")),
+            vec![
+                assign_stmt("inquotes", bool_expr(true)),
+                increment_stmt("i"),
+            ],
+            Some(vec![append(var_expr("c")), increment_stmt("i")]),
+        )]),
+    )];
+    vec![
+        // `fgetcsv()` at end of file answers false.
+        if_stmt(
+            not_expr(file_object_valid_expr()),
+            return_body(bool_expr(false)),
+            None,
         ),
+        assign_stmt("line", file_current_line_expr()),
         property_assign_stmt(
             this_expr(),
             "lineNumber",
             binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
         ),
-        return_stmt(var_expr("row")),
+        // An empty line answers `[null]`, matching php's `fgetcsv()`.
+        if_stmt(
+            binary_expr(
+                function_call("strlen", vec![var_expr("line")]),
+                BinOp::StrictEq,
+                int_expr(0),
+            ),
+            return_body(expr(ExprKind::ArrayLiteral(vec![null_expr()]))),
+            None,
+        ),
+        assign_stmt("fields", empty_array_expr()),
+        assign_stmt("field", string_expr("")),
+        assign_stmt("inquotes", bool_expr(false)),
+        assign_stmt("i", int_expr(0)),
+        assign_stmt("n", function_call("strlen", vec![var_expr("line")])),
+        while_stmt(
+            binary_expr(var_expr("i"), BinOp::Lt, var_expr("n")),
+            vec![
+                assign_stmt("c", line_char()),
+                if_stmt(in_quotes(), quoted_body, Some(unquoted_body)),
+            ],
+        ),
+        array_push_stmt("fields", var_expr("field")),
+        return_stmt(var_expr("fields")),
     ]
 }
 
