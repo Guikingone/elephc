@@ -106,7 +106,7 @@ foreach ($it as $k => $v) {
 }
 "#,
     );
-    assert_eq!(out, "1:bool(false)\na=1;b=2;2=3;");
+    assert_eq!(out, "1:bool(false)\na=1;b=2;0=3;");
 }
 
 /// Verifies that array object returns array iterator.
@@ -177,6 +177,41 @@ echo $it->getFlags();
 "#,
     );
     assert_eq!(out, "2:0:ArrayIterator:ArrayIterator:a=1;b=2;:x=9;:0:2");
+}
+
+/// Verifies `var_dump` renders the single private `storage` property, like PHP.
+///
+/// `ArrayObject`/`ArrayIterator` keep their bookkeeping in `__elephc`-prefixed slots that the
+/// `var_dump` descriptor hides, so exactly one `"storage":<class>:private` row is printed in place
+/// of the internal fields.
+#[test]
+fn test_array_storage_var_dump_shows_php_storage_property() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(new ArrayObject(['a' => 1]));
+$it = new ArrayIterator([2 => 'x']);
+var_dump($it);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(ArrayObject)#1 (1) {\n",
+            "  [\"storage\":\"ArrayObject\":private]=>\n",
+            "  array(1) {\n",
+            "    [\"a\"]=>\n",
+            "    int(1)\n",
+            "  }\n",
+            "}\n",
+            "object(ArrayIterator)#1 (1) {\n",
+            "  [\"storage\":\"ArrayIterator\":private]=>\n",
+            "  array(1) {\n",
+            "    [2]=>\n",
+            "    string(1) \"x\"\n",
+            "  }\n",
+            "}\n",
+        )
+    );
 }
 
 /// Verifies that array iterator get array copy preserves keys.

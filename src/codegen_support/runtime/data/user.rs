@@ -3311,6 +3311,7 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         .properties
         .iter()
         .enumerate()
+        .filter(|(_, (prop_name, _))| !is_hidden_debug_property(prop_name))
         .map(|(layout_index, (prop_name, prop_ty))| VarDumpRow {
             key: var_dump_property_key(class_info, class_name, prop_name),
             print_r_key: print_r_property_key(class_info, class_name, prop_name),
@@ -3324,6 +3325,16 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
             type_name: var_dump_property_type_name(prop_ty),
         })
         .collect()
+}
+
+/// Returns true for a compiler-internal property that `var_dump`/`print_r`/`var_export` must not
+/// render.
+///
+/// Synthetic SPL containers keep their bookkeeping (flags, cursor, iterator class) in
+/// `__elephc`-prefixed slots so the one visible `storage` property prints exactly like PHP's real
+/// private container property.
+fn is_hidden_debug_property(prop_name: &str) -> bool {
+    prop_name.starts_with("__elephc")
 }
 
 /// Folds a class's `__debugInfo()` into the `(array key, property name)` pairs

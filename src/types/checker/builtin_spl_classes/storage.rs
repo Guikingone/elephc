@@ -102,22 +102,22 @@ fn spl_empty_iterator_methods() -> Vec<ClassMethod> {
 /// Builds the property list for array iterator.
 fn array_iterator_properties() -> Vec<ClassProperty> {
     vec![
-        protected_storage_property("keys", array_type()),
-        protected_storage_property("values", array_type()),
-        protected_storage_property("position", TypeExpr::Int),
-        protected_storage_property("flags", TypeExpr::Int),
+        storage_property("storage", mixed_type()),
+        protected_storage_property("__elephc_position", TypeExpr::Int),
+        protected_storage_property("__elephc_flags", TypeExpr::Int),
     ]
 }
 
 /// Builds the property list for array object.
 fn array_object_properties() -> Vec<ClassProperty> {
     vec![
-        storage_property("keys", array_type()),
-        storage_property("values", array_type()),
-        storage_property("flags", TypeExpr::Int),
+        // A generic PHP array (packed or string-keyed), so it is typed `mixed`: an `array<T>` slot
+        // is a PACKED list and would drop string keys.
+        storage_property("storage", mixed_type()),
+        storage_property("__elephc_flags", TypeExpr::Int),
         // The class `getIterator()` instantiates. elephc always builds an `ArrayIterator`, so the
         // value is stored and reported by `getIteratorClass()` but does not change `getIterator()`.
-        storage_property("iteratorClass", TypeExpr::Str),
+        storage_property("__elephc_iteratorClass", TypeExpr::Str),
     ]
 }
 
@@ -147,7 +147,7 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
             "seek",
             vec![param("offset", TypeExpr::Int)],
             Some(TypeExpr::Void),
-            vec![property_assign_stmt(this_expr(), "position", var_expr("offset"))],
+            vec![property_assign_stmt(this_expr(), "__elephc_position", var_expr("offset"))],
         ),
         method_with_body("count", Vec::new(), Some(TypeExpr::Int), array_count_body()),
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(flags_expr())),
@@ -155,7 +155,7 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
             "setFlags",
             vec![param("flags", TypeExpr::Int)],
             Some(TypeExpr::Void),
-            vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))],
+            vec![property_assign_stmt(this_expr(), "__elephc_flags", var_expr("flags"))],
         ),
         method_with_body(
             "offsetExists",
@@ -218,19 +218,19 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             "setFlags",
             vec![param("flags", TypeExpr::Int)],
             Some(TypeExpr::Void),
-            vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))],
+            vec![property_assign_stmt(this_expr(), "__elephc_flags", var_expr("flags"))],
         ),
         method_with_body(
             "getIteratorClass",
             Vec::new(),
             Some(TypeExpr::Str),
-            return_body(property_access(this_expr(), "iteratorClass")),
+            return_body(property_access(this_expr(), "__elephc_iteratorClass")),
         ),
         method_with_body(
             "setIteratorClass",
             vec![param("iteratorClass", TypeExpr::Str)],
             Some(TypeExpr::Void),
-            vec![property_assign_stmt(this_expr(), "iteratorClass", var_expr("iteratorClass"))],
+            vec![property_assign_stmt(this_expr(), "__elephc_iteratorClass", var_expr("iteratorClass"))],
         ),
         method_with_body(
             "exchangeArray",
@@ -272,77 +272,65 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
     ]
 }
 
-/// Builds the AST expression for keys.
-fn keys_expr() -> Expr {
-    property_access(this_expr(), "keys")
-}
-
-/// Builds the AST expression for values.
-fn values_expr() -> Expr {
-    property_access(this_expr(), "values")
+/// Builds the AST expression for the backing storage array.
+fn storage_expr() -> Expr {
+    property_access(this_expr(), "storage")
 }
 
 /// Builds the AST expression for position.
 fn position_expr() -> Expr {
-    property_access(this_expr(), "position")
+    property_access(this_expr(), "__elephc_position")
 }
 
 /// Builds the AST expression for flags.
 fn flags_expr() -> Expr {
-    property_access(this_expr(), "flags")
+    property_access(this_expr(), "__elephc_flags")
 }
 
-/// Provides the Key at helper used by the storage module.
+/// Builds `array_keys($this->storage)[$index]`, the key at a positional index.
 fn key_at(index: Expr) -> Expr {
-    array_access(keys_expr(), index)
+    array_access(function_call("array_keys", vec![storage_expr()]), index)
 }
 
-/// Provides the Value at helper used by the storage module.
+/// Builds `array_values($this->storage)[$index]`, the value at a positional index.
 fn value_at(index: Expr) -> Expr {
-    array_access(values_expr(), index)
+    array_access(function_call("array_values", vec![storage_expr()]), index)
+}
+
+/// Normalizes an `array|object` backing argument to an array in place.
+///
+/// PHP's `ArrayObject`/`ArrayIterator` constructors accept `array|object`; an object contributes
+/// its PUBLIC properties as the backing entries.
+pub(super) fn storage_normalize_stmt() -> Stmt {
+    crate::synthetic_class::s_if(
+        function_call("is_object", vec![var_expr("array")]),
+        vec![crate::synthetic_class::s_assign(
+            "array",
+            function_call("get_object_vars", vec![var_expr("array")]),
+        )],
+        vec![],
+        None,
+    )
 }
 
 /// Builds the synthetic method body for array iterator construct.
 fn array_iterator_construct_body() -> Vec<Stmt> {
-    let mut body = array_object_construct_body();
-    body.insert(2, property_assign_stmt(this_expr(), "position", int_expr(0)));
-    body
-}
-
-/// Builds the synthetic method body for array object construct.
-fn array_object_construct_body() -> Vec<Stmt> {
     vec![
-        // PHP's constructor accepts `array|object`; an object contributes its PUBLIC properties
-        // as the backing entries. Normalize the object to an array up front so the storage and
-        // every later operation work on plain array keys and values.
-        crate::synthetic_class::s_if(
-            function_call("is_object", vec![var_expr("array")]),
-            vec![crate::synthetic_class::s_assign(
-                "array",
-                function_call("get_object_vars", vec![var_expr("array")]),
-            )],
-            vec![],
-            None,
-        ),
-        property_assign_stmt(this_expr(), "keys", function_call("array_keys", vec![var_expr("array")])),
-        property_assign_stmt(
-            this_expr(),
-            "values",
-            function_call("array_values", vec![var_expr("array")]),
-        ),
-        property_assign_stmt(this_expr(), "flags", var_expr("flags")),
+        storage_normalize_stmt(),
+        property_assign_stmt(this_expr(), "storage", var_expr("array")),
+        property_assign_stmt(this_expr(), "__elephc_position", int_expr(0)),
+        property_assign_stmt(this_expr(), "__elephc_flags", var_expr("flags")),
     ]
 }
 
-/// Builds the `ArrayObject` constructor body: the shared storage init plus the iterator class.
+/// Builds the synthetic method body for array object construct.
 fn array_object_ctor_body() -> Vec<Stmt> {
-    let mut body = array_object_construct_body();
-    body.push(property_assign_stmt(
-        this_expr(),
-        "iteratorClass",
-        var_expr("iteratorClass"),
-    ));
-    body
+    vec![
+        storage_normalize_stmt(),
+        property_assign_stmt(this_expr(), "storage", var_expr("array")),
+        property_assign_stmt(this_expr(), "__elephc_flags", var_expr("flags")),
+        property_assign_stmt(this_expr(), "__elephc_iteratorClass", var_expr("iteratorClass")),
+    ]
 }
 
 /// Builds the synthetic method body for array current.
@@ -359,205 +347,124 @@ fn array_key_body() -> Vec<Stmt> {
 fn array_next_body() -> Vec<Stmt> {
     vec![property_assign_stmt(
         this_expr(),
-        "position",
+        "__elephc_position",
         binary_expr(position_expr(), BinOp::Add, int_expr(1)),
     )]
 }
 
 /// Builds the synthetic method body for array rewind.
 fn array_rewind_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(this_expr(), "position", int_expr(0))]
+    vec![property_assign_stmt(this_expr(), "__elephc_position", int_expr(0))]
 }
 
 /// Builds the synthetic method body for array valid.
 fn array_valid_body() -> Vec<Stmt> {
-    return_body(binary_expr(position_expr(), BinOp::Lt, count_expr(values_expr())))
+    return_body(binary_expr(position_expr(), BinOp::Lt, count_expr(storage_expr())))
 }
 
 /// Builds the synthetic method body for array count.
 fn array_count_body() -> Vec<Stmt> {
-    return_body(count_expr(values_expr()))
+    return_body(count_expr(storage_expr()))
 }
 
 /// Builds the synthetic method body for array append.
 fn array_append_body() -> Vec<Stmt> {
     vec![
-        property_array_push_stmt(this_expr(), "keys", count_expr(keys_expr())),
-        property_array_push_stmt(this_expr(), "values", var_expr("value")),
+        assign_stmt("__storage", storage_expr()),
+        array_push_stmt("__storage", var_expr("value")),
+        property_assign_stmt(this_expr(), "storage", var_expr("__storage")),
     ]
 }
 
 /// Builds the synthetic method body for array offset exists.
 fn array_offset_exists_body() -> Vec<Stmt> {
-    let mut body = array_search_prelude();
-    body.push(while_stmt(
-        binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
-        vec![
-            if_stmt(
-                binary_expr(key_at(var_expr("i")), BinOp::StrictEq, var_expr("offset")),
-                return_body(bool_expr(true)),
-                None,
-            ),
-            increment_stmt("i"),
-        ],
-    ));
-    body.push(return_stmt(bool_expr(false)));
-    body
+    return_body(function_call(
+        "array_key_exists",
+        vec![var_expr("offset"), storage_expr()],
+    ))
 }
 
 /// Builds the synthetic method body for array offset get.
 fn array_offset_get_body() -> Vec<Stmt> {
-    let mut body = array_search_prelude();
-    body.push(while_stmt(
-        binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
-        vec![
-            if_stmt(
-                binary_expr(key_at(var_expr("i")), BinOp::StrictEq, var_expr("offset")),
-                return_body(value_at(var_expr("i"))),
-                None,
-            ),
-            increment_stmt("i"),
-        ],
-    ));
-    body.push(return_stmt(null_expr()));
-    body
+    return_body(array_access(storage_expr(), var_expr("offset")))
 }
 
 /// Builds the synthetic method body for array offset set.
+///
+/// The keyed element write goes through a local copy: a runtime-typed (`mixed`) property of a
+/// typed object does not lower `$obj->prop[$key] = $value` directly. The append case calls
+/// `append()` so the method stays referenced by the vtable lowering.
 fn array_offset_set_body() -> Vec<Stmt> {
-    let mut body = vec![if_stmt(
-        binary_expr(var_expr("offset"), BinOp::StrictEq, null_expr()),
-        vec![
-            expr_stmt(method_call(this_expr(), "append", vec![var_expr("value")])),
-            return_void_stmt(),
-        ],
-        None,
-    )];
-    body.extend(array_search_prelude());
-    body.push(while_stmt(
-        binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
-        vec![
-            if_stmt(
-                binary_expr(key_at(var_expr("i")), BinOp::StrictEq, var_expr("offset")),
-                vec![
-                    property_array_assign_stmt(this_expr(), "values", var_expr("i"), var_expr("value")),
-                    return_void_stmt(),
-                ],
-                None,
-            ),
-            increment_stmt("i"),
-        ],
-    ));
-    body.push(property_array_push_stmt(this_expr(), "keys", var_expr("offset")));
-    body.push(property_array_push_stmt(this_expr(), "values", var_expr("value")));
-    body
+    vec![
+        if_stmt(
+            binary_expr(var_expr("offset"), BinOp::StrictEq, null_expr()),
+            vec![
+                expr_stmt(method_call(this_expr(), "append", vec![var_expr("value")])),
+                return_void_stmt(),
+            ],
+            None,
+        ),
+        assign_stmt("__storage", storage_expr()),
+        array_assign_stmt("__storage", var_expr("offset"), var_expr("value")),
+        property_assign_stmt(this_expr(), "storage", var_expr("__storage")),
+    ]
 }
 
 /// Builds the synthetic method body for array offset unset.
+///
+/// `unset()` only lowers for a variable or an `ArrayAccess` receiver, and a runtime-typed local
+/// cannot take the removal path either, so the storage is rebuilt without the key from its
+/// `array_keys`/`array_values` projection. That also preserves PHP's key hole for an indexed
+/// array (the surviving keys are not renumbered).
 fn array_offset_unset_body() -> Vec<Stmt> {
+    let key_at_i = || array_access(var_expr("__keys"), var_expr("__i"));
     vec![
-        assign_stmt("newKeys", empty_array_expr()),
-        assign_stmt("newValues", empty_array_expr()),
-        assign_stmt("i", int_expr(0)),
-        assign_stmt("limit", count_expr(keys_expr())),
+        assign_stmt("__keys", function_call("array_keys", vec![storage_expr()])),
+        assign_stmt("__values", function_call("array_values", vec![storage_expr()])),
+        assign_stmt("__new", empty_array_expr()),
+        assign_stmt("__i", int_expr(0)),
+        assign_stmt("__limit", count_expr(storage_expr())),
         while_stmt(
-            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+            binary_expr(var_expr("__i"), BinOp::Lt, var_expr("__limit")),
             vec![
                 if_stmt(
-                    not_expr(binary_expr(key_at(var_expr("i")), BinOp::StrictEq, var_expr("offset"))),
-                    vec![
-                        array_push_stmt("newKeys", key_at(var_expr("i"))),
-                        array_push_stmt("newValues", value_at(var_expr("i"))),
-                    ],
+                    not_expr(binary_expr(key_at_i(), BinOp::StrictEq, var_expr("offset"))),
+                    vec![array_assign_stmt(
+                        "__new",
+                        key_at_i(),
+                        array_access(var_expr("__values"), var_expr("__i")),
+                    )],
                     None,
                 ),
-                increment_stmt("i"),
+                increment_stmt("__i"),
             ],
         ),
-        property_assign_stmt(this_expr(), "keys", var_expr("newKeys")),
-        property_assign_stmt(this_expr(), "values", var_expr("newValues")),
+        property_assign_stmt(this_expr(), "storage", var_expr("__new")),
     ]
 }
 
 /// Builds the synthetic method body for array copy.
 fn array_copy_body() -> Vec<Stmt> {
-    let mut body = array_snapshot_stmts("out");
-    body.push(return_stmt(var_expr("out")));
-    body
-}
-
-/// Builds the `$name = [...key => value snapshot...]` statements shared by the array copy and
-/// `exchangeArray` bodies. The hash literal start makes the checker infer a hash result, matching
-/// the internal `keys`/`values` storage, so no indexed-array conversion is inserted.
-fn array_snapshot_stmts(name: &str) -> Vec<Stmt> {
-    vec![
-        assign_stmt(name, empty_assoc_array_expr()),
-        assign_stmt("i", int_expr(0)),
-        assign_stmt("limit", count_expr(keys_expr())),
-        while_stmt(
-            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
-            vec![
-                array_assign_stmt(name, key_at(var_expr("i")), value_at(var_expr("i"))),
-                increment_stmt("i"),
-            ],
-        ),
-    ]
+    return_body(storage_expr())
 }
 
 /// Builds the synthetic method body for `exchangeArray()`.
 ///
-/// Returns the previous contents as an array copy, then replaces the backing entries with the
+/// Returns the previous contents as an array copy, then replaces the backing store with the
 /// supplied `array|object` (an object contributes its public properties).
 fn array_exchange_body() -> Vec<Stmt> {
-    let mut body = array_snapshot_stmts("old");
-    body.push(crate::synthetic_class::s_if(
-        function_call("is_object", vec![var_expr("array")]),
-        vec![crate::synthetic_class::s_assign(
-            "array",
-            function_call("get_object_vars", vec![var_expr("array")]),
-        )],
-        vec![],
-        None,
-    ));
-    body.push(property_assign_stmt(
-        this_expr(),
-        "keys",
-        function_call("array_keys", vec![var_expr("array")]),
-    ));
-    body.push(property_assign_stmt(
-        this_expr(),
-        "values",
-        function_call("array_values", vec![var_expr("array")]),
-    ));
-    body.push(return_stmt(var_expr("old")));
-    body
+    vec![
+        assign_stmt("old", storage_expr()),
+        storage_normalize_stmt(),
+        property_assign_stmt(this_expr(), "storage", var_expr("array")),
+        return_stmt(var_expr("old")),
+    ]
 }
 
 /// Builds the synthetic method body for array object get iterator.
 fn array_object_get_iterator_body() -> Vec<Stmt> {
-    vec![
-        assign_stmt("it", new_object_expr("ArrayIterator", vec![empty_array_expr()])),
-        assign_stmt("i", int_expr(0)),
-        assign_stmt("limit", count_expr(keys_expr())),
-        while_stmt(
-            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
-            vec![
-                expr_stmt(method_call(
-                    var_expr("it"),
-                    "offsetSet",
-                    vec![key_at(var_expr("i")), value_at(var_expr("i"))],
-                )),
-                increment_stmt("i"),
-            ],
-        ),
-        return_stmt(var_expr("it")),
-    ]
-}
-
-/// Provides the Array search prelude helper used by the storage module.
-fn array_search_prelude() -> Vec<Stmt> {
-    vec![
-        assign_stmt("i", int_expr(0)),
-        assign_stmt("limit", count_expr(keys_expr())),
-    ]
+    vec![return_stmt(new_object_expr(
+        "ArrayIterator",
+        vec![storage_expr()],
+    ))]
 }

@@ -62,8 +62,8 @@ matching follows PHP's normal class hierarchy rules.
 
 The Phase 4 SPL containers and Phase 5 storage/decorator iterators are built-in classes.
 `SplDoublyLinkedList`, `SplStack`, `SplQueue`, and `SplFixedArray` use dedicated
-runtime storage; `ArrayIterator` and `ArrayObject` use compiler-managed
-keys/values storage over boxed `mixed` cells; the iterator decorators forward to
+runtime storage; `ArrayIterator` and `ArrayObject` keep a single compiler-managed
+`storage` array over boxed `mixed` cells; the iterator decorators forward to
 one or more `Iterator` objects:
 
 | Class | Parent | Interfaces |
