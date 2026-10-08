@@ -1067,6 +1067,7 @@ pub fn s_do_while(body: Vec<Stmt>, condition: Expr) -> Stmt {
     Stmt::new(StmtKind::DoWhile { body, condition }, Span::synthetic())
 }
 
+/// Builds a synthetic while statement with its condition and body.
 pub fn s_while(condition: Expr, body: Vec<Stmt>) -> Stmt {
     Stmt::new(StmtKind::While { condition, body }, Span::synthetic())
 }

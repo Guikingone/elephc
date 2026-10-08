@@ -48,6 +48,7 @@ impl Checker {
         self.verify_class_type_argument_bounds_in(obligations, true)
     }
 
+    /// Validates bound obligations, optionally deferring classes whose implicit Stringable status needs body inference.
     fn verify_class_type_argument_bounds_in(
         &mut self,
         obligations: &[BoundObligation],

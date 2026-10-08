@@ -360,7 +360,7 @@ pub fn emit_array_ptr_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x10, #24]");                                  // x9 = value_lo from the hash entry
     emitter.instruction("ldr x13, [x10, #32]");                                 // x13 = value_hi from the hash entry
     emitter.instruction("ldr x14, [x10, #40]");                                 // x14 = value_tag from the hash entry
-    emitter.instruction("cmp x14, #7");                                          // is the payload already a boxed Mixed cell?
+    emitter.instruction("cmp x14, #7");                                         // is the payload already a boxed Mixed cell?
     emitter.instruction("b.eq __rt_aptr_val_hash_boxed");                       // then it IS the value; boxing it again nests a Mixed in a Mixed
     emitter.instruction("mov x0, x14");                                         // value_tag = the entry's runtime tag
     emitter.instruction("mov x1, x9");                                          // value_lo = the entry's low payload word
