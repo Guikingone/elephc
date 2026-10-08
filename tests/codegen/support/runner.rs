@@ -1663,26 +1663,71 @@ pub(crate) struct ProgramOutput {
 /// remains available as `ProgramOutput::stdout_raw`.
 pub(crate) fn strip_php_display_lines(stdout: &str) -> String {
     const PREFIXES: [&str; 3] = ["Warning: ", "Notice: ", "Deprecated: "];
+    const TERMINATOR: &str = " on line ";
+    const INFIX: &str = " in ";
     let mut out = String::with_capacity(stdout.len());
     let mut i = 0;
-    'scan: while i < stdout.len() {
-        if PREFIXES.iter().any(|prefix| stdout[i..].starts_with(prefix)) {
-            if let Some(end) = stdout[i..].find('\n') {
-                let candidate = &stdout[i..i + end];
-                if let Some((head, line_number)) = candidate.rsplit_once(" on line ") {
-                    if head.contains(" in ")
-                        && !line_number.is_empty()
-                        && line_number.bytes().all(|b| b.is_ascii_digit())
-                    {
-                        i += end + 1;
-                        continue 'scan;
-                    }
+    while i < stdout.len() {
+        let mut terminator = None;
+        let mut search = i;
+        while let Some(rel) = stdout[search..].find(TERMINATOR) {
+            let digits_at = search + rel + TERMINATOR.len();
+            let digits: String = stdout[digits_at..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if !digits.is_empty() {
+                let tail = digits_at + digits.len();
+                if stdout[tail..].starts_with('\n') {
+                    terminator = Some((search + rel, tail + 1));
+                    break;
+                }
+                if tail == stdout.len() {
+                    terminator = Some((search + rel, tail));
+                    break;
                 }
             }
+            search = digits_at;
         }
-        let ch = stdout[i..].chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
+        let Some((term_start, term_end)) = terminator else {
+            out.push_str(&stdout[i..]);
+            break;
+        };
+        let line_start = stdout[..term_start]
+            .rfind('\n')
+            .map(|position| position + 1)
+            .unwrap_or(0)
+            .max(i);
+        let prefix_start = PREFIXES
+            .iter()
+            .filter_map(|prefix| {
+                stdout[line_start..term_start]
+                    .find(prefix)
+                    .map(|off| line_start + off)
+            })
+            .min();
+        let infix_at = stdout[line_start..term_start]
+            .rfind(INFIX)
+            .map(|off| line_start + off + INFIX.len());
+        let path_ok = infix_at.is_some_and(|file_at| {
+            let file = &stdout[file_at..term_start];
+            file.contains('/') || file.ends_with(".php")
+        });
+        let run_start = if infix_at.is_some() && (prefix_start.is_some() || path_ok) {
+            Some(prefix_start.unwrap_or(line_start))
+        } else {
+            None
+        };
+        match run_start {
+            Some(run_start) if run_start >= i => {
+                out.push_str(&stdout[i..run_start]);
+                i = term_end;
+            }
+            _ => {
+                out.push_str(&stdout[i..term_end]);
+                i = term_end;
+            }
+        }
     }
     out
 }
