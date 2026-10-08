@@ -205,6 +205,27 @@ unlink("data.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the inherited SplFileObject accessors (getCsvControl/getFlags) are emitted for both
+/// SplFileObject and SplTempFileObject, so a call never dispatches through a null vtable slot.
+#[test]
+fn test_spl_file_object_csv_control_accessors() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$file = new SplFileObject("data.txt", "w");
+$file->setCsvControl(";", "'", "");
+$c = $file->getCsvControl();
+echo $c[0], $c[1], strlen($c[2]), "|", $file->getFlags(), "\n";
+$tmp = new SplTempFileObject();
+$tmp->setCsvControl("|", '"', "\\");
+$t = $tmp->getCsvControl();
+echo $t[0], "|", $t[2], "\n";
+unlink("data.txt");
+"#,
+    );
+    assert_eq!(out, ";'0|0\n||\\\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplFileInfo factories honor explicit and stored class-string overrides.
 #[test]
 fn test_spl_file_info_factory_class_overrides() {
