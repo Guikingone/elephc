@@ -21,7 +21,8 @@ fn pcntl_registry_entries_reject_invalid_argument_counts() {
         ("pcntl_getcpu(1)", "pcntl_getcpu"),
         ("pcntl_getcpuaffinity(1, 2)", "pcntl_getcpuaffinity"),
         ("pcntl_getqos_class(1)", "pcntl_getqos_class"),
-        ("pcntl_setns()", "pcntl_setns"),
+        // Both parameters are optional, so the invalid fixture exceeds the maximum.
+        ("pcntl_setns(1, 2, 3)", "pcntl_setns"),
         ("pcntl_signal_dispatch(1)", "pcntl_signal_dispatch"),
         ("pcntl_signal_get_handler()", "pcntl_signal_get_handler"),
         ("pcntl_strerror()", "pcntl_strerror"),
@@ -33,8 +34,10 @@ fn pcntl_registry_entries_reject_invalid_argument_counts() {
         ("pcntl_wstopsig()", "pcntl_wstopsig"),
         ("pcntl_wtermsig()", "pcntl_wtermsig"),
     ] {
-        let error = check_source(&format!("<?php {call};"))
-            .expect_err("an invalid PCNTL argument count must fail");
+        let error = match check_source(&format!("<?php {call};")) {
+            Ok(()) => panic!("{call} must reject an invalid PCNTL argument count"),
+            Err(error) => error,
+        };
         assert!(error.contains(name), "{name}: {error}");
         assert!(error.contains("argument"), "{name}: {error}");
         assert!(!error.contains("not available"), "{name}: {error}");
