@@ -81,12 +81,24 @@ impl Checker {
 
     /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).
     pub(crate) fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
-        self.classes.get(class_name).is_some_and(|class_info| {
-            class_info
-                .interfaces
-                .iter()
-                .any(|name| name == interface_name)
-        })
+        let mut current = Some(class_name);
+        let mut seen = std::collections::HashSet::new();
+        while let Some(name) = current {
+            if !seen.insert(name) {
+                return false;
+            }
+            let Some(info) = self.classes.get(name) else {
+                return false;
+            };
+            if info.interfaces.iter().any(|interface| {
+                interface == interface_name
+                    || self.interface_extends_interface(interface, interface_name)
+            }) {
+                return true;
+            }
+            current = info.parent.as_deref();
+        }
+        false
     }
 
     /// Returns true if `type_name` (a class or interface) implements `interface_name`,
