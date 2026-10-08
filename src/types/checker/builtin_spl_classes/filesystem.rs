@@ -1271,6 +1271,12 @@ fn spl_temp_file_object_reload_lines_from_buffer_body() -> Vec<Stmt> {
 /// Builds SplFileObject current() with lightweight READ_CSV support.
 fn spl_file_object_current_body() -> Vec<Stmt> {
     vec![
+        // An out-of-range seek leaves php's `current()` at `false` without reading the line.
+        if_stmt(
+            not_expr(file_object_valid_expr()),
+            return_body(bool_expr(false)),
+            None,
+        ),
         if_stmt(
             flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV),
             return_body(function_call(
