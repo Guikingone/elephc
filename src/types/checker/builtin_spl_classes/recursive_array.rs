@@ -70,7 +70,10 @@ fn spl_recursive_array_iterator_methods() -> Vec<ClassMethod> {
 /// Builds the synthetic method body for recursive array iterator construct.
 fn recursive_array_iterator_construct_body() -> Vec<Stmt> {
     vec![
-        storage_normalize_stmt(),
+        storage_normalize_stmt(&super::storage::object_backing_deprecation(
+            "ArrayIterator",
+            "__construct",
+        )),
         property_assign_stmt(this_expr(), "storage", var_expr("array")),
         property_assign_stmt(this_expr(), "__elephc_position", int_expr(0)),
         property_assign_stmt(this_expr(), "__elephc_flags", var_expr("flags")),

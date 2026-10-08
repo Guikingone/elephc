@@ -348,23 +348,41 @@ fn value_at(index: Expr) -> Expr {
 /// Normalizes an `array|object` backing argument to an array in place.
 ///
 /// PHP's `ArrayObject`/`ArrayIterator` constructors accept `array|object`; an object contributes
-/// its PUBLIC properties as the backing entries.
-pub(super) fn storage_normalize_stmt() -> Stmt {
+/// its PUBLIC properties as the backing entries. PHP also emits the object-backing deprecation
+/// named by `deprecation` first.
+pub(super) fn storage_normalize_stmt(deprecation: &str) -> Stmt {
     crate::synthetic_class::s_if(
         function_call("is_object", vec![var_expr("array")]),
-        vec![crate::synthetic_class::s_assign(
-            "array",
-            function_call("get_object_vars", vec![var_expr("array")]),
-        )],
+        vec![
+            expr_stmt(function_call(
+                "trigger_error",
+                vec![
+                    string_expr(deprecation),
+                    crate::synthetic_class::e_const("E_USER_DEPRECATED"),
+                ],
+            )),
+            crate::synthetic_class::s_assign(
+                "array",
+                function_call("get_object_vars", vec![var_expr("array")]),
+            ),
+        ],
         vec![],
         None,
+    )
+}
+
+/// Builds PHP's object-backing deprecation message for one container constructor or method.
+pub(super) fn object_backing_deprecation(class: &str, method: &str) -> String {
+    format!(
+        "{class}::{method}(): Using an object as a backing array for {class} is deprecated, \
+         as it allows violating class constraints and invariants"
     )
 }
 
 /// Builds the synthetic method body for array iterator construct.
 fn array_iterator_construct_body() -> Vec<Stmt> {
     vec![
-        storage_normalize_stmt(),
+        storage_normalize_stmt(&object_backing_deprecation("ArrayIterator", "__construct")),
         property_assign_stmt(this_expr(), "storage", var_expr("array")),
         property_assign_stmt(this_expr(), "__elephc_position", int_expr(0)),
         property_assign_stmt(this_expr(), "__elephc_flags", var_expr("flags")),
@@ -374,7 +392,7 @@ fn array_iterator_construct_body() -> Vec<Stmt> {
 /// Builds the synthetic method body for array object construct.
 fn array_object_ctor_body() -> Vec<Stmt> {
     vec![
-        storage_normalize_stmt(),
+        storage_normalize_stmt(&object_backing_deprecation("ArrayObject", "__construct")),
         property_assign_stmt(this_expr(), "storage", var_expr("array")),
         property_assign_stmt(this_expr(), "__elephc_flags", var_expr("flags")),
         property_assign_stmt(this_expr(), "__elephc_iteratorClass", var_expr("iteratorClass")),
@@ -503,7 +521,7 @@ fn array_copy_body() -> Vec<Stmt> {
 fn array_exchange_body() -> Vec<Stmt> {
     vec![
         assign_stmt("old", storage_expr()),
-        storage_normalize_stmt(),
+        storage_normalize_stmt(&object_backing_deprecation("ArrayObject", "exchangeArray")),
         property_assign_stmt(this_expr(), "storage", var_expr("array")),
         return_stmt(var_expr("old")),
     ]
