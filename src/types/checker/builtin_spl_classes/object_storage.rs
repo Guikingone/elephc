@@ -84,7 +84,12 @@ fn spl_object_storage_methods() -> Vec<ClassMethod> {
         method_with_body("offsetGet", vec![param("object", mixed_type())], Some(mixed_type()), offset_get_body()),
         method_with_body(
             "offsetSet",
-            vec![param("object", mixed_type()), param("info", mixed_type())],
+            vec![
+                param("object", mixed_type()),
+                // PHP allows the concrete implementation to make ArrayAccess's required `$value`
+                // optional; omit `$info` to attach without info.
+                param_default("info", mixed_type(), null_expr()),
+            ],
             Some(TypeExpr::Void),
             offset_set_body(),
         ),

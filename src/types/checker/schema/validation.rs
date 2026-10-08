@@ -375,11 +375,18 @@ pub(crate) fn validate_signature_compatibility(
         }
     }
 
-    if child.has_defaults != parent.has_defaults {
+    // PHP allows an override to ADD a default (making a required parameter optional) but not to
+    // REMOVE one, so only a parent-optional / child-required position is invalid.
+    if parent
+        .has_defaults
+        .iter()
+        .zip(&child.has_defaults)
+        .any(|(&parent_default, &child_default)| parent_default && !child_default)
+    {
         return Err(CompileError::new(
             span,
             &format!(
-                "Cannot change optional parameter layout when {} {}: {}::{}",
+                "Cannot remove the default of an inherited parameter when {} {}: {}::{}",
                 context, kind, owner_name, method_name
             ),
         ));
@@ -395,11 +402,13 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child.required_param_count() != parent.required_param_count() {
+    // The child may require FEWER parameters than the parent (it added defaults), never more;
+    // the default-removal check above already rejects the latter, so only a net increase is left.
+    if child.required_param_count() > parent.required_param_count() {
         return Err(CompileError::new(
             span,
             &format!(
-                "Cannot change required parameter count when {} {}: {}::{}",
+                "Cannot increase the required parameter count when {} {}: {}::{}",
                 context, kind, owner_name, method_name
             ),
         ));
