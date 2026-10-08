@@ -5,7 +5,7 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
-## [0.27.2] - 2026-10-06
+## [0.27.2] - 2026-10-08
 
 - Added compile-time generics for functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables, and PHPDoc template support; `--strict-php` accepts PHPDoc templates and rejects native generic syntax.
 - Added a runtime OPcache script cache for dynamic `include` and `require` through `eval()`, with optional persistent file caching, timestamp revalidation, admission limits, blacklists, preloading, live statistics, and API restrictions; ordinary compiled code remains ahead of time and no tracing JIT is provided.
