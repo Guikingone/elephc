@@ -245,6 +245,22 @@ unlink("multi.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies SplFileObject::fgetcsv keeps the escape character it consumes inside a quoted field.
+#[test]
+fn test_spl_file_object_fgetcsv_keeps_escape_character() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("esc.csv", "\"aa\\\"\",\"bb\"" . "\n");
+$file = new SplFileObject("esc.csv");
+$row = $file->fgetcsv(",", '"', "\\");
+echo count($row), ":", strlen($row[0]), ":", strlen($row[1]), ":", $row[1], "\n";
+unlink("esc.csv");
+"#,
+    );
+    assert_eq!(out, "2:4:2:bb\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplFileObject::seek rejects a negative line with php's ValueError.
 #[test]
 fn test_spl_file_object_seek_rejects_negative_line() {

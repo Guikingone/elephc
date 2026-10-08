@@ -1518,6 +1518,8 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
         Some(vec![if_stmt(
             binary_expr(var_expr("c"), BinOp::StrictEq, var_expr("escape")),
             vec![
+                // php keeps the escape character itself and copies the byte it captures.
+                append(var_expr("escape")),
                 increment_stmt("i"),
                 append(line_char()),
                 increment_stmt("i"),
