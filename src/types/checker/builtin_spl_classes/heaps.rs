@@ -462,7 +462,7 @@ fn priority_is_empty_body() -> Vec<Stmt> {
     return_body(binary_expr(count_expr(heap_values_expr()), BinOp::StrictEq, int_expr(0)))
 }
 
-/// Returns the top data value without removing it.
+/// Returns the top entry without removing it, honoring the extraction flags like `extract()`.
 fn priority_top_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -473,7 +473,11 @@ fn priority_top_body() -> Vec<Stmt> {
             ))],
             None,
         ),
-        return_stmt(heap_value_at(priority_best_index_expr())),
+        return_stmt(method_call(
+            this_expr(),
+            "__elephcOutputAt",
+            vec![priority_best_index_expr()],
+        )),
     ]
 }
 
