@@ -26,7 +26,9 @@ maintenance branch:
 The watcher only opens an issue for a release newer than its branch's recorded
 tag, so re-runs never duplicate. The file is committed by the workflow and only
 rewritten when a branch pointer advances — a run that finds nothing new leaves
-it untouched.
+it untouched. The first run seeds the pointers **silently** (no issue burst);
+pass `--kickoff` (or the workflow's `kickoff` input) to also open one issue for
+each branch's current latest release.
 
 ## What an issue contains
 
@@ -53,8 +55,12 @@ GH_TOKEN=... bash .github/scripts/php-upstream-watch.sh --dry-run
 GH_TOKEN=... bash .github/scripts/php-upstream-watch.sh --seed-only
 ```
 
-Useful flags: `--min-minor 8.2` (oldest branch to watch), `--max-issues 20`
-(flood guard), `--state PATH`, `--repo OWNER/NAME`.
+Useful flags: `--kickoff` (open the current latest per branch on a first run),
+`--seed-only` (never open issues this run), `--no-milestone`, `--min-minor 8.2`
+(oldest branch to watch), `--max-issues 20` (flood guard), `--state PATH`,
+`--repo OWNER/NAME`.
 
-Issues are labelled `type:chore` and `topic:php-compat`; the body carries a
-`<!-- php-src-watch:php-X.Y.Z -->` marker that the dedup search matches on.
+Issues are grouped under a `PHP X.Y` milestone (created on demand; disable with
+`--no-milestone`) and labelled `type:chore` and `topic:php-compat`; the body
+carries a `<!-- php-src-watch:php-X.Y.Z -->` marker that the dedup search
+matches on.

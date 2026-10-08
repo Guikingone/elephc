@@ -25,6 +25,14 @@ on:
         description: "Record branch pointers without opening any issue"
         type: boolean
         default: false
+      kickoff:
+        description: "On a first run, open an issue for each watched branch's latest"
+        type: boolean
+        default: false
+      milestone:
+        description: "Group issues under a PHP X.Y milestone"
+        type: boolean
+        default: true
 
 # Least privilege by default; only the watch job gets write access below.
 permissions:
@@ -55,10 +63,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           SEED_ONLY: ${{ inputs.seed_only && '1' || '0' }}
+          KICKOFF: ${{ github.event_name == 'workflow_dispatch' && inputs.kickoff && '1' || '0' }}
+          MILESTONE: ${{ github.event_name == 'workflow_dispatch' && !inputs.milestone && '0' || '1' }}
         run: |
           args=()
           if [ "$DRY_RUN" = "1" ]; then args+=(--dry-run); fi
           if [ "$SEED_ONLY" = "1" ]; then args+=(--seed-only); fi
+          if [ "$KICKOFF" = "1" ]; then args+=(--kickoff); fi
+          if [ "$MILESTONE" = "0" ]; then args+=(--no-milestone); fi
           bash .github/scripts/php-upstream-watch.sh "${args[@]+"${args[@]}"}"
 
       - name: Commit watch state

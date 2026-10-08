@@ -124,19 +124,20 @@ case "$cmd" in
   api)
     # Guard: `gh api` with a field defaults to POST, which 404s on read-only
     # endpoints. The watcher must always pair `-f` with `-X GET`.
-    has_field=0; explicit_get=0; prev=""
+    has_field=0; has_post=0; explicit_method=0; prev=""
     for a in "$@"; do
       case "$a" in
         -f|--field|-F|--raw-field|-f=*|--field=*|-F=*|--raw-field=*) has_field=1 ;;
-        --method=GET) explicit_get=1 ;;
+        -X|-X=*|--method|--method=*) explicit_method=1 ;;
+        --method=POST|-X=POST) has_post=1 ;;
       esac
       if [ "$prev" = "-X" ] || [ "$prev" = "--method" ]; then
-        [ "$a" = "GET" ] && explicit_get=1
+        [ "$a" = "POST" ] && has_post=1
       fi
       prev="$a"
     done
-    if [ "$has_field" -eq 1 ] && [ "$explicit_get" -ne 1 ]; then
-      printf 'fake gh: `gh api` with a field must pass -X GET (gh defaults to POST)\n' >&2
+    if [ "$has_field" -eq 1 ] && [ "$explicit_method" -ne 1 ]; then
+      printf 'fake gh: `gh api` with a field must set the method explicitly (add -X GET)\n' >&2
       exit 1
     fi
     # Find the endpoint: the first argument that is neither a flag nor a flag value.
@@ -155,6 +156,8 @@ case "$cmd" in
       *"/contents/NEWS"*) cat "$fix/NEWS" ;;
       *"/contents/UPGRADING"*) cat "$fix/UPGRADING" ;;
       *"/compare/"*) cat "$fix/compare.json" ;;
+      *"/milestones"*)
+        if [ "$has_post" -eq 1 ]; then printf '{"number": 1}\n'; else printf '[]\n'; fi ;;
       *"search/issues"*) printf '%s\n' "${SEARCH_COUNT:-0}" ;;
       *) printf '{}\n' ;;
     esac
@@ -163,6 +166,7 @@ case "$cmd" in
   issue)
     sub="${1:-}"; shift || true
     if [ "$sub" = "create" ]; then
+      printf '%s\n' "$*" >>"$fix/issue_args.log"
       prev=""
       for a in "$@"; do
         if [ "$prev" = "--title" ]; then printf '%s\n' "$a" >>"$fix/titles.log"; fi
@@ -232,7 +236,7 @@ assert_eq "plan chains compare base" "php-8.5.10" "$(plan_releases "$normalized"
 
 dry_out="$WORK/dry.log"
 bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state.json" \
-  --baseline "$FIX/baseline.json" --dry-run >"$dry_out" 2>&1 || true
+  --baseline "$FIX/baseline.json" --dry-run --kickoff >"$dry_out" 2>&1 || true
 assert_file_contains "dry-run plans 8.5.11" "would open: [php-src] PHP 8.5.11 released" "$dry_out"
 assert_file_contains "dry-run plans 8.4.26" "would open: [php-src] PHP 8.4.26 released" "$dry_out"
 if [ -f "$WORK/state.json" ]; then
@@ -243,7 +247,7 @@ fi
 
 # Dry-run must honour the (read-only) dedup search.
 SEARCH_COUNT=1 bash "$HERE/php-upstream-watch.sh" --repo example/elephc \
-  --state "$WORK/state-dry2.json" --baseline "$FIX/baseline.json" --dry-run \
+  --state "$WORK/state-dry2.json" --baseline "$FIX/baseline.json" --dry-run --kickoff \
   >"$WORK/dry2.log" 2>&1 || true
 assert_file_contains "dry-run reports an existing issue" "already exists" "$WORK/dry2.log"
 if grep -qF "would open:" "$WORK/dry2.log"; then
@@ -253,13 +257,26 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# End-to-end: real run with fake gh, then a second run (dedup)
+# End-to-end: silent first run, then a real run with fake gh, then a second run
 # ---------------------------------------------------------------------------
 
+# A first run without --kickoff seeds silently (no issue burst).
 : >"$FIX/titles.log"
+bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state-silent.json" \
+  --baseline "$FIX/baseline.json" >"$WORK/silent.log" 2>&1 || fail "silent first run exited non-zero"
+if [ -s "$FIX/titles.log" ]; then
+  fail "silent first run must open nothing"
+else
+  pass "silent first run opens nothing"
+fi
+assert_file_contains "silent first run seeds pointers" "recording branch pointers only" "$WORK/silent.log"
+assert_eq "silent first run records state" "2" "$(jq '.branches | length' "$WORK/state-silent.json")"
+
+: >"$FIX/titles.log"
+: >"$FIX/issue_args.log"
 run1="$WORK/run1.log"
 bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state.json" \
-  --baseline "$FIX/baseline.json" >"$run1" 2>&1 || fail "first real run exited non-zero"
+  --baseline "$FIX/baseline.json" --kickoff >"$run1" 2>&1 || fail "first real run exited non-zero"
 assert_file_contains "first run opens 8.5.11" "[php-src] PHP 8.5.11 released" "$FIX/titles.log"
 assert_file_contains "first run opens 8.4.26" "[php-src] PHP 8.4.26 released" "$FIX/titles.log"
 assert_eq "state records both branches" "2" "$(jq '.branches | length' "$WORK/state.json")"
@@ -268,6 +285,7 @@ assert_file_contains "issue body carries marker" "<!-- php-src-watch:php-8.5.11 
   "$FIX/body_body_php-8.5.11.md"
 assert_file_contains "issue body links the changelog" "ChangeLog-8.php#8.5.11" \
   "$FIX/body_body_php-8.5.11.md"
+assert_file_contains "first run sets the PHP milestone" "--milestone PHP 8.5" "$FIX/issue_args.log"
 
 state_snapshot="$(cat "$WORK/state.json")"
 : >"$FIX/titles.log"

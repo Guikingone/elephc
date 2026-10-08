@@ -50,6 +50,8 @@ MIN_MINOR="${MIN_MINOR:-8.2}"
 MAX_ISSUES="${MAX_ISSUES:-20}"
 DRY_RUN=0
 SEED_ONLY=0
+KICKOFF="${KICKOFF:-0}"
+MILESTONE="${MILESTONE:-1}"
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -265,6 +267,8 @@ Usage: php-upstream-watch.sh [options]
   --max-issues N        flood guard, at most N issues per run (default: 20)
   --dry-run             render but open no issues and write no state
   --seed-only           record branch pointers without opening issues
+  --kickoff             on a first run, open one issue per watched branch's latest
+  --no-milestone        do not group issues under a "PHP X.Y" milestone
   -h, --help            show this help
 EOF
 }
@@ -281,6 +285,8 @@ parse_args() {
       --max-issues) MAX_ISSUES="$2"; shift 2 ;;
       --dry-run) DRY_RUN=1; shift ;;
       --seed-only) SEED_ONLY=1; shift ;;
+      --kickoff) KICKOFF=1; shift ;;
+      --no-milestone) MILESTONE=0; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown argument: $1" ;;
     esac
@@ -296,6 +302,19 @@ ensure_label() {
     return 0
   fi
   gh label create "$name" --repo "$TARGET_REPO" --color "$color" --description "$description" >/dev/null 2>&1 || true
+}
+
+# ensure_milestone TITLE -> create the "PHP X.Y" milestone if it is missing.
+# Returns 0 when the milestone exists (or was created), 1 otherwise, so a
+# milestone failure never blocks opening the issue itself.
+ensure_milestone() {
+  local title="$1" existing
+  existing="$(gh api -X GET "repos/$TARGET_REPO/milestones" -f state=all -f per_page=100 2>/dev/null \
+    | jq -r --arg t "$title" '.[] | select(.title == $t) | .title' 2>/dev/null | head -1 || true)"
+  if [ "$existing" = "$title" ]; then
+    return 0
+  fi
+  gh api --method POST "repos/$TARGET_REPO/milestones" -f title="$title" >/dev/null 2>&1
 }
 
 # render_provenance BODY VERSION TAG URL BRANCH PREV_TAG FIRST KIND PUBLISHED
@@ -481,6 +500,11 @@ main() {
   if [ "$SEED_ONLY" -eq 1 ]; then
     seed=1
   fi
+  # A first run seeds silently by default so it does not open one issue per
+  # watched branch at once; --kickoff opts into opening them.
+  if [ "$state_existed" -eq 0 ] && [ "$KICKOFF" -eq 0 ]; then
+    seed=1
+  fi
 
   local baseline_version baseline_kind_val
   baseline_version=""
@@ -494,7 +518,7 @@ main() {
 
   if [ "$state_existed" -eq 0 ]; then
     if [ "$seed" -eq 1 ]; then
-      log "first run: recording branch pointers only"
+      log "first run: recording branch pointers only (pass --kickoff to open the current latest)"
     else
       log "first run: opening one issue per watched branch's latest release"
     fi
@@ -597,11 +621,23 @@ main() {
     fi
 
     if [ "$DRY_RUN" -eq 1 ]; then
-      log "[dry-run] would open: $title ($(wc -c <"$body" | tr -d ' ') chars)"
+      local dry_extra=""
+      if [ "$MILESTONE" -eq 1 ]; then dry_extra=" milestone=PHP $branch"; fi
+      log "[dry-run] would open: $title ($(wc -c <"$body" | tr -d ' ') chars)$dry_extra"
       continue
     fi
 
-    if gh issue create --repo "$TARGET_REPO" --title "$title" --body-file "$body" "${label_args[@]+"${label_args[@]}"}"; then
+    local milestone_args=()
+    if [ "$MILESTONE" -eq 1 ]; then
+      if ensure_milestone "PHP $branch"; then
+        milestone_args=(--milestone "PHP $branch")
+      else
+        log "warning: could not ensure milestone 'PHP $branch'; opening without it"
+      fi
+    fi
+
+    if gh issue create --repo "$TARGET_REPO" --title "$title" --body-file "$body" \
+        "${milestone_args[@]+"${milestone_args[@]}"}" "${label_args[@]+"${label_args[@]}"}"; then
       log "opened: $title"
       created=$(( created + 1 ))
     else
