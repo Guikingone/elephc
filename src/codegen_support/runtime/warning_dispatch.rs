@@ -262,7 +262,12 @@ fn emit_php_display_line(e: &mut Emitter) {
     abi::emit_load_symbol_to_reg(e, abi::int_result_reg(e), "_php_diagnostic_file_len", 0);
     abi::emit_branch_if_int_result_zero(e, "__rt_php_display_done");
 
-    // Message without its trailing newline, written first.
+    // php always prefixes the display line with a newline so it starts on a fresh line.
+    abi::emit_symbol_address(e, &a0, "_rt_php_loc_newline");
+    abi::emit_load_int_immediate(e, &a1, 1);
+    abi::emit_call_label(e, write_label);
+
+    // Message without its trailing newline, written next.
     abi::emit_load_temporary_stack_slot(e, &a0, BUFFER);
     abi::emit_load_temporary_stack_slot(e, &a1, LENGTH);
     let no_newline = "__rt_php_display_no_newline";

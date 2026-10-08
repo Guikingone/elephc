@@ -1714,7 +1714,13 @@ pub(crate) fn strip_php_display_lines(stdout: &str) -> String {
             file.contains('/') || file.ends_with(".php")
         });
         let run_start = if infix_at.is_some() && (prefix_start.is_some() || path_ok) {
-            Some(prefix_start.unwrap_or(line_start))
+            let start = prefix_start.unwrap_or(line_start);
+            // php prefixes the display line with a newline; drop it together with the run.
+            if start > i && stdout[..start].ends_with('\n') {
+                Some(start - 1)
+            } else {
+                Some(start)
+            }
         } else {
             None
         };
