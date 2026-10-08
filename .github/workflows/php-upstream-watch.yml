@@ -1,0 +1,76 @@
+name: PHP upstream watch
+
+# Watches php/php-src for newly published stable releases and opens one tracking
+# issue per release tag, so elephc can follow PHP's evolution between minor
+# releases without anyone polling GitHub by hand. Pre-releases (alpha/beta/RC)
+# are ignored on purpose: the signal we act on is a tagged stable release.
+#
+# State — the last seen tag per maintenance branch — is committed under
+# .github/upstream/php-src-watch.json, so a re-run never opens duplicates. The
+# first run opens one issue for each watched branch's current latest release and
+# records the branch pointers; later runs open one issue per newly published tag.
+#
+# This is deliberately disjoint from the release workflows: it only reads
+# php/php-src, writes tracking issues, and commits its own state file.
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays at 06:00 UTC; php-src releases roughly monthly
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Render issues without opening them or updating state"
+        type: boolean
+        default: false
+      seed_only:
+        description: "Record branch pointers without opening any issue"
+        type: boolean
+        default: false
+
+# Least privilege by default; only the watch job gets write access below.
+permissions:
+  contents: read
+
+# Never cancel: a half-run leaves the state file unadvanced and the next run
+# would simply retry (already-opened issues are deduplicated by body marker).
+concurrency:
+  group: php-upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Watch php/php-src releases
+    # Scheduled workflows keep running on forks that never disable Actions;
+    # nothing here would be publishable there.
+    if: github.repository == 'illegalstudio/elephc'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit the watch state under .github/upstream/
+      issues: write   # open the tracking issues
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Detect new releases and open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          SEED_ONLY: ${{ inputs.seed_only && '1' || '0' }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "1" ]; then args+=(--dry-run); fi
+          if [ "$SEED_ONLY" = "1" ]; then args+=(--seed-only); fi
+          bash .github/scripts/php-upstream-watch.sh "${args[@]+"${args[@]}"}"
+
+      - name: Commit watch state
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -f .github/upstream/php-src-watch.json ]; then
+            git add .github/upstream/php-src-watch.json
+          fi
+          if git diff --cached --quiet; then
+            echo "No state changes"
+            exit 0
+          fi
+          git commit -m "chore: update php-src watch state [skip ci]"
+          git push
