@@ -345,8 +345,10 @@ fn caching_require_full_cache_body(mut body: Vec<Stmt>) -> Vec<Stmt> {
         not_expr(caching_full_cache_expr()),
         vec![throw_stmt(new_object_expr(
             "BadMethodCallException",
-            vec![string_expr(
-                "CachingIterator does not use a full cache (see CachingIterator::__construct)",
+            vec![binary_expr(
+                function_call("get_class", vec![this_expr()]),
+                BinOp::Concat,
+                string_expr(" does not use a full cache (see CachingIterator::__construct)"),
             )],
         ))],
         None,
