@@ -497,7 +497,7 @@ main() {
     # NEWS section (always).
     local news_block="$tmp/news_$tag.txt"
     : >"$news_block"
-    if gh api "repos/$UPSTREAM_REPO/contents/NEWS" -f ref="$tag" -H "Accept: application/vnd.github.raw" >"$tmp/news_raw_$tag.txt" 2>/dev/null; then
+    if gh api -X GET "repos/$UPSTREAM_REPO/contents/NEWS" -f ref="$tag" -H "Accept: application/vnd.github.raw" >"$tmp/news_raw_$tag.txt" 2>/dev/null; then
       extract_news_section "$tmp/news_raw_$tag.txt" "$version" >"$news_block" || true
     fi
 
@@ -505,7 +505,7 @@ main() {
     local titles="$tmp/titles_$tag.tsv"
     : >"$titles"
     if [ "$pat" -eq 0 ]; then
-      if gh api "repos/$UPSTREAM_REPO/contents/UPGRADING" -f ref="$tag" -H "Accept: application/vnd.github.raw" >"$tmp/upg_raw_$tag.txt" 2>/dev/null; then
+      if gh api -X GET "repos/$UPSTREAM_REPO/contents/UPGRADING" -f ref="$tag" -H "Accept: application/vnd.github.raw" >"$tmp/upg_raw_$tag.txt" 2>/dev/null; then
         emit_upgrading_sections "$tmp" "$tmp/upg_raw_$tag.txt" >"$titles"
       fi
     fi
@@ -536,7 +536,7 @@ main() {
     fi
 
     local existing
-    existing="$(gh api "search/issues" -f q="repo:$TARGET_REPO in:body \"$marker\"" --jq '.total_count' 2>/dev/null || printf '0')"
+    existing="$(gh api -X GET "search/issues" -f q="repo:$TARGET_REPO in:body \"$marker\"" --jq '.total_count' 2>/dev/null || printf '0')"
     if [ "${existing:-0}" -gt 0 ]; then
       log "skip $tag: issue already exists"
       already=$(( already + 1 ))

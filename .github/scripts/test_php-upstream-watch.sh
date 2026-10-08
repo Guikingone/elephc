@@ -122,6 +122,23 @@ fix="${FIXTURE_DIR:?}"
 cmd="${1:-}"; shift || true
 case "$cmd" in
   api)
+    # Guard: `gh api` with a field defaults to POST, which 404s on read-only
+    # endpoints. The watcher must always pair `-f` with `-X GET`.
+    has_field=0; explicit_get=0; prev=""
+    for a in "$@"; do
+      case "$a" in
+        -f|--field|-F|--raw-field|-f=*|--field=*|-F=*|--raw-field=*) has_field=1 ;;
+        --method=GET) explicit_get=1 ;;
+      esac
+      if [ "$prev" = "-X" ] || [ "$prev" = "--method" ]; then
+        [ "$a" = "GET" ] && explicit_get=1
+      fi
+      prev="$a"
+    done
+    if [ "$has_field" -eq 1 ] && [ "$explicit_get" -ne 1 ]; then
+      printf 'fake gh: `gh api` with a field must pass -X GET (gh defaults to POST)\n' >&2
+      exit 1
+    fi
     endpoint="${1:-}"; shift || true
     case "$endpoint" in
       *"/releases"*) cat "$fix/releases.json" ;;
