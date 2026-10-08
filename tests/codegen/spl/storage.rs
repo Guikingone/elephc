@@ -128,6 +128,31 @@ foreach ($obj as $k => $v) {
     assert_eq!(out, "2:left=4;right=5;");
 }
 
+/// Verifies `ArrayObject`/`ArrayIterator` accept an object as backing storage.
+///
+/// PHP declares the constructor parameter as `array|object`; an object contributes its PUBLIC
+/// properties as the backing entries. The synthetic constructor stores one boxed value and
+/// normalizes an object through `get_object_vars`, so both forms iterate identically. This also
+/// guards the runtime result types of `get_object_vars`/`array_values` on a boxed argument: when
+/// they fell back to `mixed`, the backend emitted a `mixed_clone`/unbox on a raw array pointer and
+/// crashed.
+#[test]
+fn test_array_object_and_iterator_accept_object_backing() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public $a = 1; public $b = 2; }
+$ao = new ArrayObject(new P());
+foreach ($ao as $k => $v) { echo $k; echo "="; echo $v; echo ";"; }
+echo ":";
+$ai = new ArrayIterator((object)["x" => 7, "y" => 8]);
+foreach ($ai as $k => $v) { echo $k; echo "="; echo $v; echo ";"; }
+echo ":";
+echo count(new ArrayObject());
+"#,
+    );
+    assert_eq!(out, "a=1;b=2;:x=7;y=8;:0");
+}
+
 /// Verifies that array iterator get array copy preserves keys.
 #[test]
 fn test_array_iterator_get_array_copy_preserves_keys() {

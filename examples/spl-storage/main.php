@@ -17,3 +17,16 @@ foreach ($obj as $key => $value) {
     echo "\n";
 }
 
+// PHP's constructor accepts `array|object`; an object contributes its public properties.
+$config = new stdClass();
+$config->host = "localhost";
+$config->port = 8080;
+
+$settings = new ArrayObject($config);
+foreach ($settings as $key => $value) {
+    echo $key;
+    echo "=";
+    echo $value;
+    echo "\n";
+}
+

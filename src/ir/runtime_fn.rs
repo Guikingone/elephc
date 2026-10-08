@@ -871,6 +871,15 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
+                // A boxed `mixed`/union argument is a PHP array at runtime (any other type makes
+                // `array_values()` throw before a result exists), so a synthesized call with no
+                // checked call-site type answers with the indexed array layout, not `mixed`.
+                // Returning the broad `mixed` lowered `array_values($boxed)` to a Mixed result
+                // followed by a runtime unbox call, which read the raw array pointer as a boxed
+                // cell and crashed.
+                Some(PhpType::Mixed | PhpType::Union(_)) => {
+                    PhpType::Array(Box::new(PhpType::Mixed))
+                }
                 Some(other) => other,
                 None => declared.clone(),
             },
@@ -919,6 +928,13 @@ impl RuntimeFnId {
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
                 "ReflectionAttribute".to_string(),
             ))),
+            // `get_object_vars()` always answers with a string-keyed hash. A synthesized call has
+            // no checked call-site type, and the broad declared `mixed` made the backend treat the
+            // raw hash pointer as a boxed cell (`mixed_clone`/unbox), which crashed.
+            RuntimeFnId::GetObjectVars => PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            },
             RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::OpensslGetCipherMethods => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),

@@ -124,7 +124,12 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "__construct",
             vec![
-                param_default("array", array_type(), empty_array_expr()),
+                // PHP declares this parameter as `array|object`. It is typed `mixed` here because
+                // elephc's checker rejects a `mixed` argument for an `array|object` parameter
+                // (PHP defers that check to runtime), and several php-src tests pass a `mixed`
+                // value. The synthetic constructor body normalizes an object to its public
+                // properties, so arrays and objects both work (see `array_object_construct_body`).
+                param_default("array", mixed_type(), empty_array_expr()),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
             ],
             Some(TypeExpr::Void),
@@ -182,7 +187,12 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
         method_with_body(
             "__construct",
             vec![
-                param_default("array", array_type(), empty_array_expr()),
+                // PHP declares this parameter as `array|object`. It is typed `mixed` here because
+                // elephc's checker rejects a `mixed` argument for an `array|object` parameter
+                // (PHP defers that check to runtime), and several php-src tests pass a `mixed`
+                // value. The synthetic constructor body normalizes an object to its public
+                // properties, so arrays and objects both work (see `array_object_construct_body`).
+                param_default("array", mixed_type(), empty_array_expr()),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
                 // PHP's third argument names the iterator class `getIterator()` returns; elephc
                 // always returns an `ArrayIterator`, so it is accepted and ignored.
@@ -262,6 +272,18 @@ fn array_iterator_construct_body() -> Vec<Stmt> {
 /// Builds the synthetic method body for array object construct.
 fn array_object_construct_body() -> Vec<Stmt> {
     vec![
+        // PHP's constructor accepts `array|object`; an object contributes its PUBLIC properties
+        // as the backing entries. Normalize the object to an array up front so the storage and
+        // every later operation work on plain array keys and values.
+        crate::synthetic_class::s_if(
+            function_call("is_object", vec![var_expr("array")]),
+            vec![crate::synthetic_class::s_assign(
+                "array",
+                function_call("get_object_vars", vec![var_expr("array")]),
+            )],
+            vec![],
+            None,
+        ),
         property_assign_stmt(this_expr(), "keys", function_call("array_keys", vec![var_expr("array")])),
         property_assign_stmt(
             this_expr(),
