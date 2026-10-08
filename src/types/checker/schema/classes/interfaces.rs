@@ -303,7 +303,10 @@ fn validate_static_interface_method(
                     |owner| declaration_is_source(checker, owner),
                 ),
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return {
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !actual_method.is_some_and(super::super::validation::has_return_type_will_change)
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -364,7 +367,10 @@ fn validate_static_interface_method(
             &actual_sig.return_type,
         )
     });
-    if required_sig.declared_return && !return_compatible {
+    if required_sig.declared_return
+        && !return_compatible
+        && !actual_method.is_some_and(super::super::validation::has_return_type_will_change)
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -541,7 +547,10 @@ fn validate_interface_method(
                     |owner| declaration_is_source(checker, owner),
                 ),
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return {
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !actual_method.is_some_and(super::super::validation::has_return_type_will_change)
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -610,7 +619,10 @@ fn validate_interface_method(
                 &actual_sig.return_type,
             )
         });
-    if required_sig.declared_return && !return_compatible {
+    if required_sig.declared_return
+        && !return_compatible
+        && !actual_method.is_some_and(super::super::validation::has_return_type_will_change)
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

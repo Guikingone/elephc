@@ -161,6 +161,17 @@ pub(crate) fn matches_global_builtin_attribute(attr: &Attribute, builtin: &str) 
     attr.name.is_unqualified() && name.eq_ignore_ascii_case(builtin)
 }
 
+/// Returns `true` when the method carries `#[\ReturnTypeWillChange]`, php's escape hatch that
+/// suppresses the return-type requirement when overriding an internal method.
+pub(crate) fn has_return_type_will_change(method: &ClassMethod) -> bool {
+    method.attributes.iter().any(|group| {
+        group
+            .attributes
+            .iter()
+            .any(|attr| matches_global_builtin_attribute(attr, "ReturnTypeWillChange"))
+    })
+}
+
 /// Builds a mapping from constructor parameter index to property name for each parameter.
 /// For each parameter, searches constructor body for `PropertyAssign` statements where
 /// the right-hand side is a Variable with the same name as the parameter; if found,
@@ -521,7 +532,8 @@ pub(crate) fn validate_override_signature(
         "overriding",
         parent_declaration_is_source && method.span.line != 0,
     )?;
-    if parent_sig.declared_return && !child_sig.declared_return {
+    if parent_sig.declared_return && !child_sig.declared_return && !has_return_type_will_change(method)
+    {
         return Err(CompileError::new(
             method.span,
             &format!(
@@ -556,7 +568,7 @@ pub(crate) fn validate_override_signature(
             &child_sig,
         )
     });
-    if parent_sig.declared_return && !return_compatible {
+    if parent_sig.declared_return && !return_compatible && !has_return_type_will_change(method) {
         return Err(CompileError::new(
             method.span,
             &format!(

@@ -25,6 +25,23 @@ echo $c->count();
     assert_eq!(out, "7");
 }
 
+/// Verifies `#[\ReturnTypeWillChange]` lets a class implement an internal interface method without
+/// repeating the return type, matching php's escape hatch for internal contracts.
+#[test]
+fn test_return_type_will_change_suppresses_return_type_requirement() {
+    let out = compile_and_run(
+        r#"<?php
+class Legacy implements Countable {
+    #[\ReturnTypeWillChange]
+    public function count() { return 5; }
+}
+$c = new Legacy();
+echo $c->count(), "|", count($c);
+"#,
+    );
+    assert_eq!(out, "5|5");
+}
+
 /// Verifies `count()` and `[]` reach a PHP `Countable`/`ArrayAccess` held in a MIXED slot.
 ///
 /// Both operators go through a runtime helper when the static type is `mixed`, and each helper
