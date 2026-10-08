@@ -8,7 +8,7 @@ sidebar:
 ## fputcsv()
 
 ```php
-function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\'): int
+function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = "\n"): int
 ```
 
 Format line as CSV and write to file pointer.
@@ -19,6 +19,7 @@ Format line as CSV and write to file pointer.
 - `$separator` (`string`), default `','`, optional
 - `$enclosure` (`string`), default `'"'`, optional
 - `$escape` (`string`), default `'\\'`, optional
+- `$eol` (`string`), default `"\n"`, optional
 
 **Returns**: `int`
 

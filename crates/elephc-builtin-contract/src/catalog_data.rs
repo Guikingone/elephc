@@ -12853,6 +12853,12 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: Some(DefaultSpec::Str("\\")),
                 by_ref: false,
             },
+            ParamSpec {
+                name: "eol",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Str("\n")),
+                by_ref: false,
+            },
         ],
         variadic: None,
         variadic_by_ref: false,

@@ -320,7 +320,7 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Lowers `fputcsv(stream, fields, separator?, enclosure?)` for string arrays.
 pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "fputcsv", 2, 5)?;
+    ensure_arg_count_between(inst, "fputcsv", 2, 6)?;
     let stream = expect_operand(inst, 0)?;
     let fields = expect_operand(inst, 1)?;
     load_stream_fd_to_result(ctx, stream, "fputcsv")?;

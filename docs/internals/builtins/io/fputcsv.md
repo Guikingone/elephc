@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\'): int
+function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = "\n"): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–5 arguments (3 optional).
+- **Arity**: takes 2–6 arguments (4 optional).
 
 ## Eval interpreter (magician)
 

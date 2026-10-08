@@ -47811,6 +47811,13 @@
           "name": "escape",
           "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\n",
+          "name": "eol",
+          "optional": true,
+          "type": "string"
         }
       ],
       "required_param_count": 2,
@@ -47864,6 +47871,13 @@
           "by_ref": false,
           "default": "\"\\\\\"",
           "name": "escape",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\\n\"",
+          "name": "eol",
           "optional": true,
           "type": "string"
         }
@@ -47988,6 +48002,13 @@
           "by_ref": false,
           "default": "'\\\\'",
           "name": "escape",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\\n\"",
+          "name": "eol",
           "optional": true,
           "type": "string"
         }
