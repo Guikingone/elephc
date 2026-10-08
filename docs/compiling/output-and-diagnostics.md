@@ -162,6 +162,17 @@ elephc --mascotte hello.php
 
 These flags instrument the **compiled program**, not the compiler.
 
+### Runtime warnings and notices
+
+A compiled program mirrors PHP's `display_errors` behavior for its own runtime
+diagnostics (undefined array keys, deprecations, failed stream opens, …). Each
+`Warning:`, `Notice:`, or `Deprecated:` message is also written to **stdout** as
+`<level>: <message> in <file> on line <line>` — the exact text `php` prints — so
+a program's output matches a reference `php` run byte for byte. An `@`-suppressed
+expression hides the display line, and a startup diagnostic with no source file
+keeps its legacy stderr-only form. The legacy message is still written to
+**stderr** as well.
+
 ### `--gc-stats`
 
 Compiles the program so it prints allocation and free counters to stderr when it
