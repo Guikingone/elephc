@@ -12,16 +12,20 @@
 
 use std::collections::HashMap;
 
-use crate::lexer::{tokenize, tokenize_with_mode, SpannedToken, Token};
+use crate::lexer::{tokenize_with_mode, SpannedToken, Token};
 use crate::source::SourceMode;
 
 use super::{parse_block, DocBlock};
 
 /// Collects annotated declaration positions, including property declarator positions.
-pub(super) fn collect(source: &str) -> HashMap<(u32, u32), DocBlock> {
+///
+/// `mode` is the physical file's own [`SourceMode`]; the comments are recovered by
+/// re-tokenizing `source`, which must match how the file was parsed. PHP mode accepts a tagless
+/// file as pure inline HTML, so a failed tokenization no longer identifies an LFC source.
+pub(super) fn collect(source: &str, mode: SourceMode) -> HashMap<(u32, u32), DocBlock> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut blocks = HashMap::new();
-    let Ok(tokens) = tokenize(source).or_else(|_| tokenize_with_mode(source, SourceMode::Lfc)) else {
+    let Ok(tokens) = tokenize_with_mode(source, mode) else {
         return blocks;
     };
     let mut lines = Vec::new();
