@@ -1643,12 +1643,48 @@ pub(crate) fn assemble_and_run_with_env(
 // Used by tests that need to inspect both output streams without asserting success,
 // or by error/regression tests that need to validate stderr without requiring exit failure.
 pub(crate) struct ProgramOutput {
-    // Raw stdout bytes decoded as UTF-8.
+    // stdout with PHP display-diagnostic lines removed, so existing exact-stdout expectations stay
+    // valid while those diagnostics now also appear on stdout.
     pub(crate) stdout: String,
+    // Raw stdout bytes decoded as UTF-8, including the display-diagnostic lines.
+    pub(crate) stdout_raw: String,
     // Raw stderr bytes decoded as UTF-8.
     pub(crate) stderr: String,
     // true if the process exited with a successful (zero) exit code.
     pub(crate) success: bool,
+}
+
+/// Removes PHP `display_errors` diagnostic lines (`Warning: … in … on line N`) from stdout.
+///
+/// Warnings/notices/deprecations are emitted to stderr by the legacy runtime and, since the runtime
+/// now also mirrors php's stdout display line, tests that assert exact stdout must not see them.
+/// The diagnostic can be appended after other output on the same line, so this scans for the
+/// prefix and drops the whole run up to and including its terminating newline. The raw stdout
+/// remains available as `ProgramOutput::stdout_raw`.
+pub(crate) fn strip_php_display_lines(stdout: &str) -> String {
+    const PREFIXES: [&str; 3] = ["Warning: ", "Notice: ", "Deprecated: "];
+    let mut out = String::with_capacity(stdout.len());
+    let mut i = 0;
+    'scan: while i < stdout.len() {
+        if PREFIXES.iter().any(|prefix| stdout[i..].starts_with(prefix)) {
+            if let Some(end) = stdout[i..].find('\n') {
+                let candidate = &stdout[i..i + end];
+                if let Some((head, line_number)) = candidate.rsplit_once(" on line ") {
+                    if head.contains(" in ")
+                        && !line_number.is_empty()
+                        && line_number.bytes().all(|b| b.is_ascii_digit())
+                    {
+                        i += end + 1;
+                        continue 'scan;
+                    }
+                }
+            }
+        }
+        let ch = stdout[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,
@@ -1677,8 +1713,10 @@ pub(crate) fn assemble_and_run_capture(
 
     let output = run_binary(&bin_path, dir);
 
+    let stdout_raw = String::from_utf8(output.stdout).unwrap();
     ProgramOutput {
-        stdout: String::from_utf8(output.stdout).unwrap(),
+        stdout: strip_php_display_lines(&stdout_raw),
+        stdout_raw,
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
     }
@@ -1716,8 +1754,10 @@ pub(crate) fn assemble_and_run_capture_per_argv(
         .iter()
         .map(|args| {
             let output = run_binary_with_args(&bin_path, dir, args);
+            let stdout_raw = String::from_utf8(output.stdout).unwrap();
             ProgramOutput {
-                stdout: String::from_utf8(output.stdout).unwrap(),
+                stdout: strip_php_display_lines(&stdout_raw),
+                stdout_raw,
                 stderr: String::from_utf8(output.stderr).unwrap(),
                 success: output.status.success(),
             }

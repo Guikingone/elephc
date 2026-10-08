@@ -347,6 +347,14 @@ pub(crate) fn emit_runtime_data_fixed(
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
         out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
     }
+    // Static fragments of PHP's display-diagnostic suffix: `<message> in <file> on line <N>\n`.
+    for (symbol, value) in [
+        ("_rt_php_loc_infix", " in "),
+        ("_rt_php_loc_on_line", " on line "),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
+    }
+    out.push_str(".globl _rt_php_loc_newline\n_rt_php_loc_newline:\n    .byte 10\n");
     out.push_str(&comm_directive("_exc_value", 8, target));
     out.push_str(&comm_directive("_fiber_current", 8, target));
     out.push_str(&comm_directive("_magic_set_guard_head", 8, target));

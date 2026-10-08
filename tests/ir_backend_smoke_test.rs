@@ -10,6 +10,8 @@
 
 #[path = "support/managed_pcre2.rs"]
 mod managed_pcre2_support;
+#[path = "support/php_display.rs"]
+mod php_display;
 
 use std::fs;
 use std::io::Write;
@@ -5865,7 +5867,9 @@ echo "after";
     );
     assert!(missing.status.success(), "IR backend missing-file fixture failed");
     assert_eq!(
-        String::from_utf8(missing.stdout).expect("stdout should be utf8"),
+        php_display::strip_php_display_lines(
+            &String::from_utf8(missing.stdout).expect("stdout should be utf8")
+        ),
         "after"
     );
     let stderr = String::from_utf8(missing.stderr).expect("stderr should be utf8");
@@ -6626,7 +6630,9 @@ fn ir_backend_handles_define_builtin() {
         "IR backend duplicate define fixture failed"
     );
     assert_eq!(
-        String::from_utf8(duplicate.stdout).expect("stdout should be utf8"),
+        php_display::strip_php_display_lines(
+            &String::from_utf8(duplicate.stdout).expect("stdout should be utf8")
+        ),
         "ok1"
     );
     let stderr = String::from_utf8(duplicate.stderr).expect("stderr should be utf8");
@@ -6814,21 +6820,21 @@ fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
 fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {
     let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);
     assert!(run.status.success(), "IR backend binary failed for {name}");
-    String::from_utf8(run.stdout).unwrap()
+    php_display::strip_php_display_lines(&String::from_utf8(run.stdout).unwrap())
 }
 
 /// Compiles `source`, runs the output binary with extra args, and returns stdout.
 fn compile_and_run_ir_backend_with_args(name: &str, source: &str, args: &[&str]) -> String {
     let run = compile_ir_backend_and_run(name, source, args);
     assert!(run.status.success(), "IR backend binary failed for {name}");
-    String::from_utf8(run.stdout).unwrap()
+    php_display::strip_php_display_lines(&String::from_utf8(run.stdout).unwrap())
 }
 
 /// Compiles `source`, runs the output binary with stdin, and returns stdout.
 fn compile_and_run_ir_backend_with_stdin(name: &str, source: &str, stdin: &str) -> String {
     let run = compile_ir_backend_and_run_with_stdin(name, source, stdin);
     assert!(run.status.success(), "IR backend binary failed for {name}");
-    String::from_utf8(run.stdout).unwrap()
+    php_display::strip_php_display_lines(&String::from_utf8(run.stdout).unwrap())
 }
 
 /// Compiles `source`, runs the binary, and returns raw process output.

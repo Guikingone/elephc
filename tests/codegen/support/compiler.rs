@@ -918,7 +918,7 @@ fn compile_and_run_with_heap_size_and_optional_regex(
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
 
-    let elephc_out = assemble_and_run(
+    let elephc_raw = assemble_and_run(
         &user_asm,
         &runtime_obj,
         &dir,
@@ -934,10 +934,10 @@ fn compile_and_run_with_heap_size_and_optional_regex(
         if let Ok(php_output) = Command::new("php").arg(&php_path).output() {
             if php_output.status.success() {
                 let php_out = String::from_utf8_lossy(&php_output.stdout);
-                if elephc_out != php_out.as_ref() {
+                if elephc_raw != php_out.as_ref() {
                     eprintln!(
                         "PHP compat note: output differs for test.\n  elephc: {:?}\n  php:    {:?}",
-                        elephc_out, php_out
+                        elephc_raw, php_out
                     );
                 }
             }
@@ -945,7 +945,7 @@ fn compile_and_run_with_heap_size_and_optional_regex(
     }
 
     let _ = fs::remove_dir_all(&dir);
-    elephc_out
+    strip_php_display_lines(&elephc_raw)
 }
 
 // Convenience wrapper that calls `compile_and_run_with_heap_size` with the default

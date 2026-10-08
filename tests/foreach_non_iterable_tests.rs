@@ -35,6 +35,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "support/php_display.rs"]
+mod php_display;
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// The message body elephc and php-src share, minus the `<type> given` tail.
@@ -113,7 +116,7 @@ fn run_binary(bin: &Path) -> (String, String) {
         String::from_utf8_lossy(&output.stderr)
     );
     (
-        String::from_utf8_lossy(&output.stdout).into_owned(),
+        php_display::strip_php_display_lines(&String::from_utf8_lossy(&output.stdout)),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
 }
