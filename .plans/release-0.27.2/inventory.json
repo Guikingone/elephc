@@ -1,0 +1,2239 @@
+{
+  "accounted_commit_count": 212,
+  "base_branch": "main",
+  "direct_commit_count": 9,
+  "errors": [],
+  "from_sha": "24f68a7b03d4db9660515ad17e711a385e0d596a",
+  "from_tag": "v0.27.1",
+  "github_verified": true,
+  "head_ref": "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+  "head_sha": "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+  "integrations": [
+    {
+      "association_verified": true,
+      "author": "illegal-studio[bot]",
+      "committed_at": "2026-09-29T20:00:41Z",
+      "introduced_commits": [
+        "d093426b8a1b0ca70d43c32d1be842fa82c4d523"
+      ],
+      "kind": "direct_commit",
+      "parents": [
+        "24f68a7b03d4db9660515ad17e711a385e0d596a"
+      ],
+      "pr_number": null,
+      "sha": "d093426b8a1b0ca70d43c32d1be842fa82c4d523",
+      "subject": "chore: bump version to 0.27.1 [skip ci]"
+    },
+    {
+      "association_verified": true,
+      "author": "illegal-studio[bot]",
+      "committed_at": "2026-09-30T01:48:42Z",
+      "introduced_commits": [
+        "49732894c69e7d8daec2d027d22b0bf1c0b96edf"
+      ],
+      "kind": "direct_commit",
+      "parents": [
+        "d093426b8a1b0ca70d43c32d1be842fa82c4d523"
+      ],
+      "pr_number": null,
+      "sha": "49732894c69e7d8daec2d027d22b0bf1c0b96edf",
+      "subject": "chore: update repository stats [skip ci]"
+    },
+    {
+      "association_verified": true,
+      "author": "Guillaume Loulier",
+      "committed_at": "2026-09-30T09:23:48+02:00",
+      "introduced_commits": [
+        "2112110547ad28ac5a47555f2805fc9e9421c86b"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "49732894c69e7d8daec2d027d22b0bf1c0b96edf"
+      ],
+      "pr_number": 1665,
+      "sha": "2112110547ad28ac5a47555f2805fc9e9421c86b",
+      "subject": "test(regressions): pin issues main already resolves (#1665)"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-09-30T11:18:01+02:00",
+      "introduced_commits": [
+        "1874b9142e1b45310d325f7f042d238885592c26",
+        "278f1c811e40788c0202651012026a4b8fdc33c7",
+        "d68d192d14c14c743f2d499957de3cae5a1dfd5d",
+        "de28975a35f9439f8570e4d2f120f7fae7e7602d",
+        "eeb72d0737a7dfbfdfccb647ab138282ec6929de"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "2112110547ad28ac5a47555f2805fc9e9421c86b",
+        "d68d192d14c14c743f2d499957de3cae5a1dfd5d"
+      ],
+      "pr_number": 1514,
+      "sha": "278f1c811e40788c0202651012026a4b8fdc33c7",
+      "subject": "Merge pull request #1514 from illegalstudio/fix/1320-pdo-exception-subclass"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-09-30T13:10:22+02:00",
+      "introduced_commits": [
+        "01f7052ed5c31653ae922c9b4ce5d2319022e99e",
+        "06e64fb3b92c4cbde7d3feb2b9f09dfab6a3c678",
+        "1a02b7b7a990a0a5c21b68439f6680ae7410443e",
+        "4557b28494dc19be33219673784088f9c737542b",
+        "920a81600a49a1a923cf98b7e01f9e07e9f64542",
+        "94a7226e0f59c0a6e56ebdfbd92c60eef7cff6d3",
+        "d34468b162d89204b4934c78ca1b1502a224951b"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "278f1c811e40788c0202651012026a4b8fdc33c7",
+        "06e64fb3b92c4cbde7d3feb2b9f09dfab6a3c678"
+      ],
+      "pr_number": 1510,
+      "sha": "1a02b7b7a990a0a5c21b68439f6680ae7410443e",
+      "subject": "Merge pull request #1510 from illegalstudio/fix/1316-serialization-refusals"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-09-30T17:15:39+02:00",
+      "introduced_commits": [
+        "34b46cde0ec623e60d082bc5b34bd02730b32252",
+        "c6e2d0963e52e262d50e73b21ae3e10ef1784606"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "1a02b7b7a990a0a5c21b68439f6680ae7410443e",
+        "c6e2d0963e52e262d50e73b21ae3e10ef1784606"
+      ],
+      "pr_number": 1667,
+      "sha": "34b46cde0ec623e60d082bc5b34bd02730b32252",
+      "subject": "Merge pull request #1667 from Guikingone/feat/elephc-toml-ini"
+    },
+    {
+      "association_verified": true,
+      "author": "illegal-studio[bot]",
+      "committed_at": "2026-10-01T01:47:12Z",
+      "introduced_commits": [
+        "7ce73d028d0f3f5218ff3622f43c4774808d79b6"
+      ],
+      "kind": "direct_commit",
+      "parents": [
+        "34b46cde0ec623e60d082bc5b34bd02730b32252"
+      ],
+      "pr_number": null,
+      "sha": "7ce73d028d0f3f5218ff3622f43c4774808d79b6",
+      "subject": "chore: update repository stats [skip ci]"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T14:06:31+02:00",
+      "introduced_commits": [
+        "21f59ff6c8ca49ee08ae837824c61522c47964cd",
+        "6796e0e24cc194fbcc125ee627bcf9682e63d98c"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "7ce73d028d0f3f5218ff3622f43c4774808d79b6",
+        "6796e0e24cc194fbcc125ee627bcf9682e63d98c"
+      ],
+      "pr_number": 1670,
+      "sha": "21f59ff6c8ca49ee08ae837824c61522c47964cd",
+      "subject": "Merge pull request #1670 from illegalstudio/fix/633-static-call-effects"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T14:06:54+02:00",
+      "introduced_commits": [
+        "3b0a900811c6210070e64d0db668839da43e7093",
+        "ba444d40b38ebf693896c1569354c07b0c025d1a",
+        "e4ad4f853f4d72662fed7fcb886f73cc9fd0156a"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "21f59ff6c8ca49ee08ae837824c61522c47964cd",
+        "e4ad4f853f4d72662fed7fcb886f73cc9fd0156a"
+      ],
+      "pr_number": 1671,
+      "sha": "ba444d40b38ebf693896c1569354c07b0c025d1a",
+      "subject": "Merge pull request #1671 from illegalstudio/refactor/1185-splice-lowering-module"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:33:12+02:00",
+      "introduced_commits": [
+        "27cc2ba1827e5cc3079f30e7b3849026b55dca39",
+        "524cc417daa327c1c09e9258d10caf313e36f2c7"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "ba444d40b38ebf693896c1569354c07b0c025d1a",
+        "27cc2ba1827e5cc3079f30e7b3849026b55dca39"
+      ],
+      "pr_number": 1681,
+      "sha": "524cc417daa327c1c09e9258d10caf313e36f2c7",
+      "subject": "Merge pull request #1681 from illegalstudio/test/1434-array-map-literal-ownership"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:33:44+02:00",
+      "introduced_commits": [
+        "80b3775ac6d9154a71f8503da926477499e9d199",
+        "cb770578a3cf03d1308d6ef23988c2eeb0cf7dab"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "524cc417daa327c1c09e9258d10caf313e36f2c7",
+        "80b3775ac6d9154a71f8503da926477499e9d199"
+      ],
+      "pr_number": 1682,
+      "sha": "cb770578a3cf03d1308d6ef23988c2eeb0cf7dab",
+      "subject": "Merge pull request #1682 from illegalstudio/fix/1436-nextest-artifact-validation"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:34:17+02:00",
+      "introduced_commits": [
+        "7653e2550b7224d5709dff446eda4ec2975c8646",
+        "d752507418592c247ad33e2bbe2ca4f0a26bae62"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "cb770578a3cf03d1308d6ef23988c2eeb0cf7dab",
+        "d752507418592c247ad33e2bbe2ca4f0a26bae62"
+      ],
+      "pr_number": 1684,
+      "sha": "7653e2550b7224d5709dff446eda4ec2975c8646",
+      "subject": "Merge pull request #1684 from illegalstudio/fix/1578-spl-exception-hierarchy"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:34:50+02:00",
+      "introduced_commits": [
+        "23ac4c6679ad5a6a121a23796c27e5d1a5b6fb6e",
+        "fde13c5fcf88b84646f87ba190f9a61703d5bbfc"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "7653e2550b7224d5709dff446eda4ec2975c8646",
+        "23ac4c6679ad5a6a121a23796c27e5d1a5b6fb6e"
+      ],
+      "pr_number": 1685,
+      "sha": "fde13c5fcf88b84646f87ba190f9a61703d5bbfc",
+      "subject": "Merge pull request #1685 from illegalstudio/fix/1590-recursive-phase-stack-budgets"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:35:25+02:00",
+      "introduced_commits": [
+        "21ffb84e016af281d03ae493e0eb37121412416c",
+        "5308f3734abca989c3100d08cb4ec7867b6e98ae"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "fde13c5fcf88b84646f87ba190f9a61703d5bbfc",
+        "21ffb84e016af281d03ae493e0eb37121412416c"
+      ],
+      "pr_number": 1686,
+      "sha": "5308f3734abca989c3100d08cb4ec7867b6e98ae",
+      "subject": "Merge pull request #1686 from illegalstudio/fix/1627-reference-signature-fallback"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:35:59+02:00",
+      "introduced_commits": [
+        "52cade631b321405cee848c7ef6bbcedcf642201",
+        "fcc25ecba80959796b02568ab36bbdc89ceda5f4"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "5308f3734abca989c3100d08cb4ec7867b6e98ae",
+        "fcc25ecba80959796b02568ab36bbdc89ceda5f4"
+      ],
+      "pr_number": 1687,
+      "sha": "52cade631b321405cee848c7ef6bbcedcf642201",
+      "subject": "Merge pull request #1687 from illegalstudio/fix/1608-pdo-thread-local-open-diagnostics"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:36:33+02:00",
+      "introduced_commits": [
+        "0867c78a05f23055b0700c250779b5a642aff385",
+        "e806046120e6c167dc29a909afe5f60e28817b15"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "52cade631b321405cee848c7ef6bbcedcf642201",
+        "e806046120e6c167dc29a909afe5f60e28817b15"
+      ],
+      "pr_number": 1691,
+      "sha": "0867c78a05f23055b0700c250779b5a642aff385",
+      "subject": "Merge pull request #1691 from illegalstudio/test/1257-static-reflection-abstract-flags"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:37:06+02:00",
+      "introduced_commits": [
+        "cc2b2d00ade8237bad688bc8fc63a7eb80d93b57",
+        "cfd3bf8791df1a8d82e7a6bee593cb72a4d74812"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "0867c78a05f23055b0700c250779b5a642aff385",
+        "cc2b2d00ade8237bad688bc8fc63a7eb80d93b57"
+      ],
+      "pr_number": 1692,
+      "sha": "cfd3bf8791df1a8d82e7a6bee593cb72a4d74812",
+      "subject": "Merge pull request #1692 from illegalstudio/test/1592-mixed-local-branch-execution"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:37:38+02:00",
+      "introduced_commits": [
+        "6a641a82166b915625fc52f09f79f348d5120913",
+        "cb2dff6c75d4e5a6fc58401d4472cf7df47c5deb"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "cfd3bf8791df1a8d82e7a6bee593cb72a4d74812",
+        "6a641a82166b915625fc52f09f79f348d5120913"
+      ],
+      "pr_number": 1695,
+      "sha": "cb2dff6c75d4e5a6fc58401d4472cf7df47c5deb",
+      "subject": "Merge pull request #1695 from illegalstudio/fix/1668-pdo-throwable-exemption"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:38:11+02:00",
+      "introduced_commits": [
+        "b3af8371b9eb081d469f5c338c74f616faa21f82",
+        "e5c0714775d65add85e427766ea30c0aa1ad3a37"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "cb2dff6c75d4e5a6fc58401d4472cf7df47c5deb",
+        "e5c0714775d65add85e427766ea30c0aa1ad3a37"
+      ],
+      "pr_number": 1697,
+      "sha": "b3af8371b9eb081d469f5c338c74f616faa21f82",
+      "subject": "Merge pull request #1697 from illegalstudio/test/1594-shared-retype-fixtures"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:38:44+02:00",
+      "introduced_commits": [
+        "24c57cc5426cb61269f0e90cb3b2d24bd6243a46",
+        "7492cd29e93c58704afdea5a16bda30c193752c0"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "b3af8371b9eb081d469f5c338c74f616faa21f82",
+        "24c57cc5426cb61269f0e90cb3b2d24bd6243a46"
+      ],
+      "pr_number": 1705,
+      "sha": "7492cd29e93c58704afdea5a16bda30c193752c0",
+      "subject": "Merge pull request #1705 from illegalstudio/test/1609-apple-iconv-descriptor-ignore"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:39:17+02:00",
+      "introduced_commits": [
+        "086d8b2dfd1b8b99439a81623c17e11da1be82e7",
+        "f0f01db7ba1db4638e1d0b29e274e916a06c6106"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "7492cd29e93c58704afdea5a16bda30c193752c0",
+        "086d8b2dfd1b8b99439a81623c17e11da1be82e7"
+      ],
+      "pr_number": 1706,
+      "sha": "f0f01db7ba1db4638e1d0b29e274e916a06c6106",
+      "subject": "Merge pull request #1706 from illegalstudio/test/1630-split-mbstring-ownership-modes"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:39:52+02:00",
+      "introduced_commits": [
+        "6aafc4e7f9cd6de3b6a18febf30f1d08ef9a55a8",
+        "6c5cc50ae66fb85c2826edb9f3f9a27f5d370231"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "f0f01db7ba1db4638e1d0b29e274e916a06c6106",
+        "6aafc4e7f9cd6de3b6a18febf30f1d08ef9a55a8"
+      ],
+      "pr_number": 1707,
+      "sha": "6c5cc50ae66fb85c2826edb9f3f9a27f5d370231",
+      "subject": "Merge pull request #1707 from illegalstudio/fix/1618-x86-runtime-incref-arguments"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T15:40:26+02:00",
+      "introduced_commits": [
+        "c779d84e796970405cf799a67896f324c6e6a66e",
+        "eebd6b4daec60fbf18c41bcc3d2297e8239fc5f9"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "6c5cc50ae66fb85c2826edb9f3f9a27f5d370231",
+        "eebd6b4daec60fbf18c41bcc3d2297e8239fc5f9"
+      ],
+      "pr_number": 1708,
+      "sha": "c779d84e796970405cf799a67896f324c6e6a66e",
+      "subject": "Merge pull request #1708 from illegalstudio/test/1622-null-coalesce-checker-contracts"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-01T21:37:59+02:00",
+      "introduced_commits": [
+        "42760fcdaa5e675c3b41efbaae38e467d85d2118",
+        "f9228d0cb2f52e5444cb3c01f44ae5123b6ded93"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "c779d84e796970405cf799a67896f324c6e6a66e",
+        "f9228d0cb2f52e5444cb3c01f44ae5123b6ded93"
+      ],
+      "pr_number": 1745,
+      "sha": "42760fcdaa5e675c3b41efbaae38e467d85d2118",
+      "subject": "Merge pull request #1745 from illegalstudio/ci/pin-rust-1.98"
+    },
+    {
+      "association_verified": true,
+      "author": "illegal-studio[bot]",
+      "committed_at": "2026-10-02T01:58:03Z",
+      "introduced_commits": [
+        "293c02545c2e348664366652134a8b44ca918a73"
+      ],
+      "kind": "direct_commit",
+      "parents": [
+        "42760fcdaa5e675c3b41efbaae38e467d85d2118"
+      ],
+      "pr_number": null,
+      "sha": "293c02545c2e348664366652134a8b44ca918a73",
+      "subject": "chore: update repository stats [skip ci]"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-02T07:35:51+02:00",
+      "introduced_commits": [
+        "158d3576b42744fa1d61e4ef18ad086c115ef00e",
+        "2fb3f7ded9dbf8a57df0816e91abc14493f5bee9",
+        "36a633c69ca375fcd643a026b2bc5f99a78a85a5",
+        "475262590610807d919ba24e4b9aaeaae6aa0587",
+        "832660a1dd06022f347b4fd9dc2f7cd5b88b9891",
+        "adb41f992eee30b2e75c3509229a647a8c052bd1",
+        "c856267742bf7dbd231d46b9973bd63ff97fe87e",
+        "db08356b813ee22869de4b8e9e6c73a0d9bb7b6b",
+        "ff11c689b68ab92e6aa1a76e3819c19ee95210e8"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "293c02545c2e348664366652134a8b44ca918a73",
+        "475262590610807d919ba24e4b9aaeaae6aa0587"
+      ],
+      "pr_number": 1567,
+      "sha": "2fb3f7ded9dbf8a57df0816e91abc14493f5bee9",
+      "subject": "Merge pull request #1567 from illegalstudio/feat/mem2reg"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-02T15:25:25+02:00",
+      "introduced_commits": [
+        "bb9f0a864495fe497b91c6117ea357fe638abb29",
+        "c1d7b162a300ef16358eadd1958cf1a57692a835"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "2fb3f7ded9dbf8a57df0816e91abc14493f5bee9",
+        "c1d7b162a300ef16358eadd1958cf1a57692a835"
+      ],
+      "pr_number": 1672,
+      "sha": "bb9f0a864495fe497b91c6117ea357fe638abb29",
+      "subject": "Merge pull request #1672 from illegalstudio/fix/1194-spread-element-type"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-02T15:25:59+02:00",
+      "introduced_commits": [
+        "1d1172f03da29bfe5c6b66c3be190450970e4518",
+        "ec25182894a2d81bb083d72a30e18a40938aaf9f"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "bb9f0a864495fe497b91c6117ea357fe638abb29",
+        "1d1172f03da29bfe5c6b66c3be190450970e4518"
+      ],
+      "pr_number": 1677,
+      "sha": "ec25182894a2d81bb083d72a30e18a40938aaf9f",
+      "subject": "Merge pull request #1677 from illegalstudio/fix/1446-qualified-predefined-names"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-02T15:26:37+02:00",
+      "introduced_commits": [
+        "4b693c20c36fd83e3c7384f9a573dae856fd02a2",
+        "919fe071c16a703b3931ab4e6c43b087934ed648"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "ec25182894a2d81bb083d72a30e18a40938aaf9f",
+        "4b693c20c36fd83e3c7384f9a573dae856fd02a2"
+      ],
+      "pr_number": 1680,
+      "sha": "919fe071c16a703b3931ab4e6c43b087934ed648",
+      "subject": "Merge pull request #1680 from illegalstudio/docs/1432-generator-metadata-split"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-02T15:27:10+02:00",
+      "introduced_commits": [
+        "b9e89e80768b9d8ae5c0d0f418ed60b3e30d42b6",
+        "c4ece12ae4252639e1ba818d1e81e0a0c25b359e"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "919fe071c16a703b3931ab4e6c43b087934ed648",
+        "b9e89e80768b9d8ae5c0d0f418ed60b3e30d42b6"
+      ],
+      "pr_number": 1744,
+      "sha": "c4ece12ae4252639e1ba818d1e81e0a0c25b359e",
+      "subject": "Merge pull request #1744 from illegalstudio/fix/ci-ini-string-atomic-identity"
+    },
+    {
+      "association_verified": true,
+      "author": "illegal-studio[bot]",
+      "committed_at": "2026-10-03T01:42:07Z",
+      "introduced_commits": [
+        "198d0b79dbbef3a0e0422afdb4c157d34207f0ad"
+      ],
+      "kind": "direct_commit",
+      "parents": [
+        "c4ece12ae4252639e1ba818d1e81e0a0c25b359e"
+      ],
+      "pr_number": null,
+      "sha": "198d0b79dbbef3a0e0422afdb4c157d34207f0ad",
+      "subject": "chore: update repository stats [skip ci]"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-03T08:00:34+02:00",
+      "introduced_commits": [
+        "1a008fb3ab8f2972c79856ce691e1d5072ccf237",
+        "2ed405ea5703ea0ddd2f785b2fabbb47f749a1b1",
+        "a1559f0368abfa83b4392e1a87ab5897196b8372",
+        "d3750806c5cc22e68ac4f526d9c2bdb596ced531"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "198d0b79dbbef3a0e0422afdb4c157d34207f0ad",
+        "2ed405ea5703ea0ddd2f785b2fabbb47f749a1b1"
+      ],
+      "pr_number": 968,
+      "sha": "a1559f0368abfa83b4392e1a87ab5897196b8372",
+      "subject": "Merge pull request #968 from Guikingone/feat/opcache-runtime-cache"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-03T08:01:52+02:00",
+      "introduced_commits": [
+        "b7ff23354107926d25de6ea1313963b74b6cc724",
+        "c1c061e2c1b1eee8ffdd65710fc4dd31dfbaf1fe"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "a1559f0368abfa83b4392e1a87ab5897196b8372",
+        "b7ff23354107926d25de6ea1313963b74b6cc724"
+      ],
+      "pr_number": 1702,
+      "sha": "c1c061e2c1b1eee8ffdd65710fc4dd31dfbaf1fe",
+      "subject": "Merge pull request #1702 from illegalstudio/cursor/drop-unplanned-roadmap-items-892e"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-03T08:04:03+02:00",
+      "introduced_commits": [
+        "2fa242e2f53e606dc4fae8ce373e1b01ea1d33d4",
+        "4460d5208e0fddf0fe1714e6bd5f57915b3ab7f4",
+        "8b09c398e1ee8cc2d6723db76dcdfda97dbf6fe1",
+        "8b3df9c6b5c453eb3c0b75eaec7ea51a7d356abc",
+        "8f035ddb28020057ea33fad00c0b7f17343f9279",
+        "9645c00255c53075a2106a9f82b70a0ea350ef91",
+        "a1647e7068a5d62408a149fcf839e2d43d7f63af",
+        "cf039847e92303c3f2caa53fc98cb0d8e4b19d42",
+        "d8151c34049fef40b74e5ed4986a9a025d468a8b",
+        "e39c7208d3237b075ca2c552a97e2a430e2331ab",
+        "f12e17e29051c209a0348f537c728206027f2c10",
+        "ff4d02f9140d8cafb52e940fc02383178593fb7b"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "c1c061e2c1b1eee8ffdd65710fc4dd31dfbaf1fe",
+        "a1647e7068a5d62408a149fcf839e2d43d7f63af"
+      ],
+      "pr_number": 1054,
+      "sha": "cf039847e92303c3f2caa53fc98cb0d8e4b19d42",
+      "subject": "Merge pull request #1054 from illegalstudio/fix/689-implode-nullable-array"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-03T09:49:07+02:00",
+      "introduced_commits": [
+        "0c3e9c46dc4d9c0baf4b492e4889c268a100db89",
+        "5044d290e73071bf89010143950b5f66474878c1",
+        "a674abc476c60097fb6f0653d02d74619e6bb28c"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "cf039847e92303c3f2caa53fc98cb0d8e4b19d42",
+        "0c3e9c46dc4d9c0baf4b492e4889c268a100db89"
+      ],
+      "pr_number": 1673,
+      "sha": "5044d290e73071bf89010143950b5f66474878c1",
+      "subject": "Merge pull request #1673 from illegalstudio/fix/1262-interface-method-order"
+    },
+    {
+      "association_verified": true,
+      "author": "illegal-studio[bot]",
+      "committed_at": "2026-10-04T02:21:30Z",
+      "introduced_commits": [
+        "127947c3859d306a3cfb96cc7885d0cc525a5e19"
+      ],
+      "kind": "direct_commit",
+      "parents": [
+        "5044d290e73071bf89010143950b5f66474878c1"
+      ],
+      "pr_number": null,
+      "sha": "127947c3859d306a3cfb96cc7885d0cc525a5e19",
+      "subject": "chore: update repository stats [skip ci]"
+    },
+    {
+      "association_verified": true,
+      "author": "illegal-studio[bot]",
+      "committed_at": "2026-10-05T01:33:34Z",
+      "introduced_commits": [
+        "703528c563bde7d6ecb66351334339d5c078a4c0"
+      ],
+      "kind": "direct_commit",
+      "parents": [
+        "127947c3859d306a3cfb96cc7885d0cc525a5e19"
+      ],
+      "pr_number": null,
+      "sha": "703528c563bde7d6ecb66351334339d5c078a4c0",
+      "subject": "chore: update repository stats [skip ci]"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-05T16:36:49+02:00",
+      "introduced_commits": [
+        "119f99255a7e215aa00f60d0c11d0bb829eaecb0",
+        "7ebc53fc4d0e0deae3a8edae95a08f34bce5281c"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "703528c563bde7d6ecb66351334339d5c078a4c0",
+        "119f99255a7e215aa00f60d0c11d0bb829eaecb0"
+      ],
+      "pr_number": 1767,
+      "sha": "7ebc53fc4d0e0deae3a8edae95a08f34bce5281c",
+      "subject": "Merge pull request #1767 from illegalstudio/cursor/macos-15-runners-f282"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-05T16:38:47+02:00",
+      "introduced_commits": [
+        "08821435bdb419e8fe8f1c6be8e3d184e55556d2",
+        "85f7adbce644763e00bdd32b6f416412b7223634",
+        "8e36a34dbcf278f1ad7651b4c9d036c1dc90afed",
+        "e8df31a6b213769eab938baf8b72c25bbbe9058e"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "7ebc53fc4d0e0deae3a8edae95a08f34bce5281c",
+        "e8df31a6b213769eab938baf8b72c25bbbe9058e"
+      ],
+      "pr_number": 1679,
+      "sha": "85f7adbce644763e00bdd32b6f416412b7223634",
+      "subject": "Merge pull request #1679 from illegalstudio/fix/1483-strict-php-callable-guards"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-05T16:39:21+02:00",
+      "introduced_commits": [
+        "2eed4dd2ed77edad7008bc623b032c702934b914",
+        "312393f523fa4919065bd647853e4c0fcd7587b1",
+        "ac3870a8099e494d1c1588db50d7037510677da4"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "85f7adbce644763e00bdd32b6f416412b7223634",
+        "2eed4dd2ed77edad7008bc623b032c702934b914"
+      ],
+      "pr_number": 1688,
+      "sha": "312393f523fa4919065bd647853e4c0fcd7587b1",
+      "subject": "Merge pull request #1688 from illegalstudio/docs/1569-fixed-fixture-comments"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-05T16:39:56+02:00",
+      "introduced_commits": [
+        "28b26bc2210762e0739c7cd6cbbfa121d50635bf",
+        "764c4c4f24e20591f0424ad727f965eb50bae439",
+        "7ac92d7335fdf88e671d2e0c69a95f81f2a5ce62",
+        "adc4d35c43e14bfcdc1d06ca1c88ec6867860273"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "312393f523fa4919065bd647853e4c0fcd7587b1",
+        "7ac92d7335fdf88e671d2e0c69a95f81f2a5ce62"
+      ],
+      "pr_number": 1693,
+      "sha": "764c4c4f24e20591f0424ad727f965eb50bae439",
+      "subject": "Merge pull request #1693 from illegalstudio/test/1199-spread-promotion-receivers"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-05T16:40:29+02:00",
+      "introduced_commits": [
+        "421547d4bb9a7a202a19e2434a4704be9c80dc33",
+        "760533f031571150fbaebad417a0b68059d15058",
+        "e906aaf71ffdc34363e8764749da192d9354edad",
+        "f6c3101813a091f2022d52f59970529b2f1f8147"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "764c4c4f24e20591f0424ad727f965eb50bae439",
+        "e906aaf71ffdc34363e8764749da192d9354edad"
+      ],
+      "pr_number": 1704,
+      "sha": "f6c3101813a091f2022d52f59970529b2f1f8147",
+      "subject": "Merge pull request #1704 from illegalstudio/test/1459-rand-mixed-bounds"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-05T16:41:03+02:00",
+      "introduced_commits": [
+        "370486de109f0e1ab8f2e9e96bcf2343a5ab4861",
+        "860a4668dc327dc736dfc325ab5e0cfc135467a9",
+        "98c7b403494284d44a85fc23cfa76f100c1dc035",
+        "9a9885daffb696f0da97b3a3011168c3fd3ea3ae",
+        "b06b5b6563ffa3da123a279b961118552d601d94"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "f6c3101813a091f2022d52f59970529b2f1f8147",
+        "b06b5b6563ffa3da123a279b961118552d601d94"
+      ],
+      "pr_number": 1709,
+      "sha": "9a9885daffb696f0da97b3a3011168c3fd3ea3ae",
+      "subject": "Merge pull request #1709 from illegalstudio/fix/1490-class-name-constant-folding"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-05T16:41:37+02:00",
+      "introduced_commits": [
+        "32a6ee9129b231648f522fa6be6fe5be5792f25c",
+        "7ed6a5bb17a5243d9fd9ac48c32f81424e653ae7",
+        "95edd3ae76af2355475c54ef88ac945ac8b821f6",
+        "ac5ffca62f4c2a665b7a59c9eb7c52b14cfe9c38"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "9a9885daffb696f0da97b3a3011168c3fd3ea3ae",
+        "ac5ffca62f4c2a665b7a59c9eb7c52b14cfe9c38"
+      ],
+      "pr_number": 1711,
+      "sha": "7ed6a5bb17a5243d9fd9ac48c32f81424e653ae7",
+      "subject": "Merge pull request #1711 from illegalstudio/fix/1635-boolval-object-callables"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-05T16:42:10+02:00",
+      "introduced_commits": [
+        "35b106fad1ebe1ccd973fa0ba11d6d4fa5658b35",
+        "4cd7f322bc62a3b7d050f4f7d4e3f7b089cf78a2",
+        "6513a97921bb2e20ff3e1e9a237317b0f01c2b0a",
+        "cdbc65c60e261dcfda1c6cf0bb95e1cf3a75e5e2"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "7ed6a5bb17a5243d9fd9ac48c32f81424e653ae7",
+        "cdbc65c60e261dcfda1c6cf0bb95e1cf3a75e5e2"
+      ],
+      "pr_number": 1713,
+      "sha": "6513a97921bb2e20ff3e1e9a237317b0f01c2b0a",
+      "subject": "Merge pull request #1713 from illegalstudio/fix/1303-mixed-throw-errors"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-05T18:20:27+02:00",
+      "introduced_commits": [
+        "350a237fa92b7d43d4aca846efbd52fe95821b3b",
+        "b23aa1a6b3681c7a89df12d71a390823c8b806e0"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "6513a97921bb2e20ff3e1e9a237317b0f01c2b0a",
+        "350a237fa92b7d43d4aca846efbd52fe95821b3b"
+      ],
+      "pr_number": 1770,
+      "sha": "b23aa1a6b3681c7a89df12d71a390823c8b806e0",
+      "subject": "Merge pull request #1770 from Guikingone/docs/1285-byref-variadic-ref-alias"
+    },
+    {
+      "association_verified": true,
+      "author": "illegal-studio[bot]",
+      "committed_at": "2026-10-06T02:39:44Z",
+      "introduced_commits": [
+        "13c15d5f43be4fc3c3b936ccf44ec784dc69c61d"
+      ],
+      "kind": "direct_commit",
+      "parents": [
+        "b23aa1a6b3681c7a89df12d71a390823c8b806e0"
+      ],
+      "pr_number": null,
+      "sha": "13c15d5f43be4fc3c3b936ccf44ec784dc69c61d",
+      "subject": "chore: update repository stats [skip ci]"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-06T10:22:14+02:00",
+      "introduced_commits": [
+        "b457f312c30dc67d2f6da998974bfd43dfb94d9a",
+        "c012b7af747d8d4ebd336b6344b5185b77986702",
+        "fb57adf01cacc592cc5ebc135b9d8d5003343476"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "13c15d5f43be4fc3c3b936ccf44ec784dc69c61d",
+        "fb57adf01cacc592cc5ebc135b9d8d5003343476"
+      ],
+      "pr_number": 1749,
+      "sha": "b457f312c30dc67d2f6da998974bfd43dfb94d9a",
+      "subject": "Merge pull request #1749 from Guikingone/fix/1729-pdo-sqlsrv-open-diagnostics"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-06T10:22:25+02:00",
+      "introduced_commits": [
+        "7b2c63b2baac4dca9d9add08cf1852c6363c4c9c",
+        "a53f7e21ad3e15b4729fe153c543eef2c5f3a36b"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "b457f312c30dc67d2f6da998974bfd43dfb94d9a",
+        "7b2c63b2baac4dca9d9add08cf1852c6363c4c9c"
+      ],
+      "pr_number": 1752,
+      "sha": "a53f7e21ad3e15b4729fe153c543eef2c5f3a36b",
+      "subject": "Merge pull request #1752 from Guikingone/fix/1294-hash-chunk-callable-ref"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-06T12:28:33+02:00",
+      "introduced_commits": [
+        "6db3e9a14e2a50883fb36e880650533151e881f0",
+        "6e2041b36faa40448dc4cd19008656215a0fbd19",
+        "f5d8fa5e807dd68febcd09028548886d9eb7e4ab"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "a53f7e21ad3e15b4729fe153c543eef2c5f3a36b",
+        "6e2041b36faa40448dc4cd19008656215a0fbd19"
+      ],
+      "pr_number": 1669,
+      "sha": "6db3e9a14e2a50883fb36e880650533151e881f0",
+      "subject": "Merge pull request #1669 from illegalstudio/fix/812-unreachable-dominance"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-06T14:02:39+02:00",
+      "introduced_commits": [
+        "112070c5051856ff0c2210044a3b2735221e4d2b",
+        "22accea8da9e38f24dbb4a803db0285cccf33db3",
+        "29ec8cf4b43a78fa4d01b9ab3562d4a556e6733b",
+        "5d590ee1811c4b1ebec27479d0674a307719c8f2",
+        "63025c1b8150cb3d876325d066591647b6fa1ffd",
+        "63d737f6f321241faf76ac2b5c35d26960c6766f",
+        "7d31b25a92a0c08e2de8f31c959ca1a616f37ef1",
+        "9e7cad33bdfb447da91cac0748876f4eed4a71cb",
+        "a374b66578efcb56401dda3e35faca71c08f1987",
+        "a7656b86f6b3d81f7c7a21b75b7900813cf8504a",
+        "ba7218a64b44bd038e64aa34d1e5c36305e7fe5c",
+        "bb28227c9a31fd12737f7966f6b755da117be595",
+        "cf4971e09a2dfb41bc9dbc687bcc3c318e1e297c",
+        "ede29bea07b912d9d43dd6dd74f1f182806cc56b"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "6db3e9a14e2a50883fb36e880650533151e881f0",
+        "7d31b25a92a0c08e2de8f31c959ca1a616f37ef1"
+      ],
+      "pr_number": 1644,
+      "sha": "9e7cad33bdfb447da91cac0748876f4eed4a71cb",
+      "subject": "Merge pull request #1644 from illegalstudio/feat/eir-integer-range"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-06T15:56:18+02:00",
+      "introduced_commits": [
+        "82614fa10d3879c2e3d0f742af56d9aedfc21e3b",
+        "b77a8c5c91e15341c4b887e89dbc3accb23a814b"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "9e7cad33bdfb447da91cac0748876f4eed4a71cb",
+        "82614fa10d3879c2e3d0f742af56d9aedfc21e3b"
+      ],
+      "pr_number": 1750,
+      "sha": "b77a8c5c91e15341c4b887e89dbc3accb23a814b",
+      "subject": "Merge pull request #1750 from Guikingone/fix/1730-pdo-dblib-thread-local"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-06T22:46:44+02:00",
+      "introduced_commits": [
+        "1159fa1ba43d277c51fdc42d3b9c236145f5ec1b",
+        "aad8704602856cc12b5f0ea09912b8385b20bd84",
+        "ddf78d403048c3c45621f8479397a096da0c995a",
+        "e1e25534acff28bc4995e6acbe75c8234863b74b"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "b77a8c5c91e15341c4b887e89dbc3accb23a814b",
+        "1159fa1ba43d277c51fdc42d3b9c236145f5ec1b"
+      ],
+      "pr_number": 1683,
+      "sha": "aad8704602856cc12b5f0ea09912b8385b20bd84",
+      "subject": "Merge pull request #1683 from illegalstudio/fix/1588-parser-target-diagnostics"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-06T22:46:50+02:00",
+      "introduced_commits": [
+        "b893f54b5355005860e472d0f92580cf9a138953",
+        "c1d4a97d1964005677d965aae788dad79e4ec9e0",
+        "e8780cfea49525bf0c324c0b470e64f143f3aaef"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "aad8704602856cc12b5f0ea09912b8385b20bd84",
+        "e8780cfea49525bf0c324c0b470e64f143f3aaef"
+      ],
+      "pr_number": 1689,
+      "sha": "c1d4a97d1964005677d965aae788dad79e4ec9e0",
+      "subject": "Merge pull request #1689 from illegalstudio/docs/1624-by-ref-indexed-unset"
+    },
+    {
+      "association_verified": true,
+      "author": "illegal-studio[bot]",
+      "committed_at": "2026-10-07T02:02:39Z",
+      "introduced_commits": [
+        "afbb2af85c0004bd72e08cfbb30e312e8333240e"
+      ],
+      "kind": "direct_commit",
+      "parents": [
+        "c1d4a97d1964005677d965aae788dad79e4ec9e0"
+      ],
+      "pr_number": null,
+      "sha": "afbb2af85c0004bd72e08cfbb30e312e8333240e",
+      "subject": "chore: update repository stats [skip ci]"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T10:41:12+02:00",
+      "introduced_commits": [
+        "0c1e305486369707c2743deb82157fc7ad6e13c2",
+        "d19a1d43fc56d0f393400b78fc8ff1a61283dbf4"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "afbb2af85c0004bd72e08cfbb30e312e8333240e",
+        "d19a1d43fc56d0f393400b78fc8ff1a61283dbf4"
+      ],
+      "pr_number": 1759,
+      "sha": "0c1e305486369707c2743deb82157fc7ad6e13c2",
+      "subject": "Merge pull request #1759 from Guikingone/fix/1291-eval-source-id"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T10:41:19+02:00",
+      "introduced_commits": [
+        "0d884c7f5d934478a1c1d543e2c387fa9a2c6833",
+        "22950f919bd492e8e04abc4ae14f8d2ec281796d"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "0c1e305486369707c2743deb82157fc7ad6e13c2",
+        "22950f919bd492e8e04abc4ae14f8d2ec281796d"
+      ],
+      "pr_number": 1769,
+      "sha": "0d884c7f5d934478a1c1d543e2c387fa9a2c6833",
+      "subject": "Merge pull request #1769 from Guikingone/fix/1289-ref-marker-concrete-occupant-release"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T11:10:37+02:00",
+      "introduced_commits": [
+        "30f3c3fb04a66f85cef1743cac8e6a94bd9b3f12",
+        "523ed99e6bd41feb93963993e722c8e389573040",
+        "912022cc3b7d27091e7f0129f48ed8cddffd65ba",
+        "b754fa5d65b3ebb1705068d21e76c17d40e3757e",
+        "f946c2e1dcb77bb7a5ad01766d7ba8d8ebc0152d"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "0d884c7f5d934478a1c1d543e2c387fa9a2c6833",
+        "912022cc3b7d27091e7f0129f48ed8cddffd65ba"
+      ],
+      "pr_number": 1690,
+      "sha": "30f3c3fb04a66f85cef1743cac8e6a94bd9b3f12",
+      "subject": "Merge pull request #1690 from illegalstudio/docs/1572-enum-interface-metadata"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T11:10:44+02:00",
+      "introduced_commits": [
+        "2e8ad687396dd19f2d2869164ed1d6d11b052abe",
+        "54f8617c0ce19d83893f7677f72ebc897602997e",
+        "a2e0f9a2eea5995d9217659198e1ee3d81420e03",
+        "dd8fbc72a1505f829d41125ffb394cf01a0cf5f1"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "30f3c3fb04a66f85cef1743cac8e6a94bd9b3f12",
+        "2e8ad687396dd19f2d2869164ed1d6d11b052abe"
+      ],
+      "pr_number": 1714,
+      "sha": "a2e0f9a2eea5995d9217659198e1ee3d81420e03",
+      "subject": "Merge pull request #1714 from illegalstudio/fix/1586-class-alias-autoload-diagnostic"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T11:13:24+02:00",
+      "introduced_commits": [
+        "0624064920b9c49bfc23a80e9cd9ab3a525272be",
+        "0c9cdc24797c3e4ca82a9defe2e35f58d7ee17f5",
+        "d6ac25190765cb345838229cd77b0447fe4f033f",
+        "ed9d27a8db259f33c832ea76b7b4494bd3e6dddc",
+        "ff99cc866d728cee4c8015c4bbea2677894dcded"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "a2e0f9a2eea5995d9217659198e1ee3d81420e03",
+        "0c9cdc24797c3e4ca82a9defe2e35f58d7ee17f5"
+      ],
+      "pr_number": 1632,
+      "sha": "d6ac25190765cb345838229cd77b0447fe4f033f",
+      "subject": "Merge pull request #1632 from Guikingone/fix/switch-fallthrough-constant-propagation"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T11:13:31+02:00",
+      "introduced_commits": [
+        "0406d9233114f2411c4f8f70b464a03e0e78f4c2",
+        "3e64e112c1cf694e7aa10b9fd7c44f1879567782",
+        "68728e56d6f3952ea048fa0a6c6ecbe5db495594"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "d6ac25190765cb345838229cd77b0447fe4f033f",
+        "68728e56d6f3952ea048fa0a6c6ecbe5db495594"
+      ],
+      "pr_number": 1661,
+      "sha": "3e64e112c1cf694e7aa10b9fd7c44f1879567782",
+      "subject": "Merge pull request #1661 from Guikingone/fix/1657-capture-hash-fixture-flake"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T11:13:40+02:00",
+      "introduced_commits": [
+        "5b2413c36f37d1c6342ba5cc477d7ef51a876cab",
+        "92fdc736d35dbab0faf53dc9f20031431c5a0098"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "3e64e112c1cf694e7aa10b9fd7c44f1879567782",
+        "92fdc736d35dbab0faf53dc9f20031431c5a0098"
+      ],
+      "pr_number": 1778,
+      "sha": "5b2413c36f37d1c6342ba5cc477d7ef51a876cab",
+      "subject": "Merge pull request #1778 from Guikingone/fix/urlencode-digits"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T11:13:47+02:00",
+      "introduced_commits": [
+        "32363eaf0384529ea31f87770d45a199d8c96118",
+        "8882d366883d0d27abf2f1ec5b52c2297b4d0fc3"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "5b2413c36f37d1c6342ba5cc477d7ef51a876cab",
+        "8882d366883d0d27abf2f1ec5b52c2297b4d0fc3"
+      ],
+      "pr_number": 1779,
+      "sha": "32363eaf0384529ea31f87770d45a199d8c96118",
+      "subject": "Merge pull request #1779 from Guikingone/fix/object-vars-null-property"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T12:41:40+02:00",
+      "introduced_commits": [
+        "0ac3ffce08fb39a232789a4bd4e97e685c0f062b",
+        "129eece71f36931686a30ee1a553368310ae5bc8",
+        "22b540f4ecde4af64e77dbc43c95f0a510a7ca00",
+        "26ba7280b26c880020936157272cc0d98ff2fc77",
+        "9a9d4a6c7098fc90edc74de589f0044d6a6fdebb"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "32363eaf0384529ea31f87770d45a199d8c96118",
+        "9a9d4a6c7098fc90edc74de589f0044d6a6fdebb"
+      ],
+      "pr_number": 1712,
+      "sha": "22b540f4ecde4af64e77dbc43c95f0a510a7ca00",
+      "subject": "Merge pull request #1712 from illegalstudio/fix/1571-variant-signature-diagnostics"
+    },
+    {
+      "association_verified": true,
+      "author": "Vincenzo Petrucci",
+      "committed_at": "2026-10-07T23:15:00+02:00",
+      "introduced_commits": [
+        "0798e3bdeb4577f5bf2a9ee4722b04ddf763afcf",
+        "0b5cb2fb6625244eb9269a8339370b15d85807a5",
+        "2587d6b20742196a16de89cbf93971b1fd0d2ff6",
+        "33fe0077d0208110efdc5e3446760f96c9d1fbfc",
+        "3be28bafc4ce7fd6f32819da34988b0e4bc94cc9",
+        "3d7ad09155b4782a0e95e399507c35951bf8e991",
+        "3faa9ee29f32813a31defc6d29605bd4a72b304a",
+        "53aa12df45bd0808e591234f509927fdf7a5da1a",
+        "682b1bac60b85f2589c1e2d3e7487e911d8294ce",
+        "6c8ea5ccd03e96834eff21f114f2c4a2a41ec341",
+        "81a6673fb5c49116f4b3b50c4e0ba9a8da0b3ae0",
+        "892f58bb28ce18e303629cce656b3a426d385b46",
+        "935cf947fb546514c485e5e60f80605c671cfdae",
+        "a512fdb3d50c86d96700abf75d09e20764662405",
+        "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+        "b2ab44858ebf40a32be1522567b008a5a44da4b3",
+        "bd1ca53e93a5b6c637b3c6c0fc8ebb00db3948b3",
+        "c5db6769198b65c6dd9a3d462be19f1f56a699fc",
+        "d8d2a5987b5cbcace91f087fb8a3f6469601cf48",
+        "ef061030c2e107ab86926766ac8d93a78c2414c8",
+        "fc26df52c5d49336e6e47e7c5e1be1df482235dc",
+        "ffbccf7c6dcf7929be63f488ba2de2746621f870"
+      ],
+      "kind": "pull_request",
+      "parents": [
+        "22b540f4ecde4af64e77dbc43c95f0a510a7ca00",
+        "bd1ca53e93a5b6c637b3c6c0fc8ebb00db3948b3"
+      ],
+      "pr_number": 1221,
+      "sha": "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+      "subject": "Merge pull request #1221 from Guikingone/feat/generics-monomorphization-and-array-storage"
+    }
+  ],
+  "pull_request_count": 56,
+  "pull_requests": {
+    "1054": {
+      "additions": 1161,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 21,
+      "deletions": 99,
+      "head_sha": "a1647e7068a5d62408a149fcf839e2d43d7f63af",
+      "labels": [
+        "type:fix",
+        "area:codegen",
+        "area:runtime",
+        "area:builtins",
+        "size:m",
+        "scope:multi-area"
+      ],
+      "merge_commit_sha": "cf039847e92303c3f2caa53fc98cb0d8e4b19d42",
+      "merged_at": "2026-10-03T06:04:03Z",
+      "number": 1054,
+      "title": "fix(strings): implode() reads its array's real element layout, not an assumed one",
+      "url": "https://github.com/illegalstudio/elephc/pull/1054"
+    },
+    "1221": {
+      "additions": 24319,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 1145,
+      "deletions": 2279,
+      "head_sha": "bd1ca53e93a5b6c637b3c6c0fc8ebb00db3948b3",
+      "labels": [
+        "type:feature",
+        "area:types",
+        "area:optimizer",
+        "area:codegen",
+        "size:xl",
+        "scope:multi-area"
+      ],
+      "merge_commit_sha": "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+      "merged_at": "2026-10-07T21:15:01Z",
+      "number": 1221,
+      "title": "feat(generics): monomorphize generics and typed array storage",
+      "url": "https://github.com/illegalstudio/elephc/pull/1221"
+    },
+    "1510": {
+      "additions": 1387,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 28,
+      "deletions": 124,
+      "head_sha": "06e64fb3b92c4cbde7d3feb2b9f09dfab6a3c678",
+      "labels": [
+        "type:fix",
+        "area:types",
+        "area:eir",
+        "area:runtime",
+        "target:linux-x86_64",
+        "size:m",
+        "scope:multi-area"
+      ],
+      "merge_commit_sha": "1a02b7b7a990a0a5c21b68439f6680ae7410443e",
+      "merged_at": "2026-09-30T11:10:22Z",
+      "number": 1510,
+      "title": "fix(serialize): refuse not-serializable classes in both directions",
+      "url": "https://github.com/illegalstudio/elephc/pull/1510"
+    },
+    "1514": {
+      "additions": 226,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 10,
+      "deletions": 31,
+      "head_sha": "d68d192d14c14c743f2d499957de3cae5a1dfd5d",
+      "labels": [
+        "type:fix",
+        "area:types",
+        "area:codegen",
+        "area:runtime",
+        "size:s",
+        "scope:multi-area"
+      ],
+      "merge_commit_sha": "278f1c811e40788c0202651012026a4b8fdc33c7",
+      "merged_at": "2026-09-30T09:18:02Z",
+      "number": 1514,
+      "title": "fix(types): let classes extend PDOException like PHP",
+      "url": "https://github.com/illegalstudio/elephc/pull/1514"
+    },
+    "1567": {
+      "additions": 1610,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 29,
+      "deletions": 207,
+      "head_sha": "475262590610807d919ba24e4b9aaeaae6aa0587",
+      "labels": [
+        "type:feature",
+        "area:optimizer",
+        "area:eir",
+        "area:codegen",
+        "size:m",
+        "scope:multi-area"
+      ],
+      "merge_commit_sha": "2fb3f7ded9dbf8a57df0816e91abc14493f5bee9",
+      "merged_at": "2026-10-02T05:35:51Z",
+      "number": 1567,
+      "title": "feat: promote scalar php locals to SSA",
+      "url": "https://github.com/illegalstudio/elephc/pull/1567"
+    },
+    "1632": {
+      "additions": 393,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 10,
+      "deletions": 63,
+      "head_sha": "0c9cdc24797c3e4ca82a9defe2e35f58d7ee17f5",
+      "labels": [
+        "type:fix",
+        "area:optimizer",
+        "area:runtime",
+        "size:s"
+      ],
+      "merge_commit_sha": "d6ac25190765cb345838229cd77b0447fe4f033f",
+      "merged_at": "2026-10-07T09:13:25Z",
+      "number": 1632,
+      "title": "fix(optimizer): propagate switch bodies from the facts they can see",
+      "url": "https://github.com/illegalstudio/elephc/pull/1632"
+    },
+    "1644": {
+      "additions": 4118,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 35,
+      "deletions": 184,
+      "head_sha": "7d31b25a92a0c08e2de8f31c959ca1a616f37ef1",
+      "labels": [
+        "type:feature",
+        "area:optimizer",
+        "area:eir",
+        "area:codegen",
+        "size:l",
+        "scope:multi-area"
+      ],
+      "merge_commit_sha": "9e7cad33bdfb447da91cac0748876f4eed4a71cb",
+      "merged_at": "2026-10-06T12:02:40Z",
+      "number": 1644,
+      "title": "feat: add EIR integer range and induction-variable analysis",
+      "url": "https://github.com/illegalstudio/elephc/pull/1644"
+    },
+    "1661": {
+      "additions": 57,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 9,
+      "head_sha": "68728e56d6f3952ea048fa0a6c6ecbe5db495594",
+      "labels": [
+        "type:test",
+        "area:runtime",
+        "size:xs"
+      ],
+      "merge_commit_sha": "3e64e112c1cf694e7aa10b9fd7c44f1879567782",
+      "merged_at": "2026-10-07T09:13:32Z",
+      "number": 1661,
+      "title": "test(mbstring): quarantine freed blocks in the capture_hash fixture",
+      "url": "https://github.com/illegalstudio/elephc/pull/1661"
+    },
+    "1665": {
+      "additions": 72,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 0,
+      "head_sha": "04f82837a835aa83d9dabedc3abff8c999b2ba68",
+      "labels": [
+        "type:test",
+        "area:triage",
+        "size:xs"
+      ],
+      "merge_commit_sha": "2112110547ad28ac5a47555f2805fc9e9421c86b",
+      "merged_at": "2026-09-30T07:23:49Z",
+      "number": 1665,
+      "title": "test(regressions): pin #1565 and two shapes main already matches php on",
+      "url": "https://github.com/illegalstudio/elephc/pull/1665"
+    },
+    "1667": {
+      "additions": 615,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 11,
+      "deletions": 4,
+      "head_sha": "c6e2d0963e52e262d50e73b21ae3e10ef1784606",
+      "labels": [
+        "type:feature",
+        "area:triage",
+        "size:m"
+      ],
+      "merge_commit_sha": "34b46cde0ec623e60d082bc5b34bd02730b32252",
+      "merged_at": "2026-09-30T15:15:40Z",
+      "number": 1667,
+      "title": "feat(cli): read INI directives from the project's `elephc.toml`",
+      "url": "https://github.com/illegalstudio/elephc/pull/1667"
+    },
+    "1669": {
+      "additions": 20,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 23,
+      "head_sha": "6e2041b36faa40448dc4cd19008656215a0fbd19",
+      "labels": [
+        "type:fix",
+        "area:eir",
+        "size:xs"
+      ],
+      "merge_commit_sha": "6db3e9a14e2a50883fb36e880650533151e881f0",
+      "merged_at": "2026-10-06T10:28:33Z",
+      "number": 1669,
+      "title": "fix(eir): validate uses across unreachable continuations",
+      "url": "https://github.com/illegalstudio/elephc/pull/1669"
+    },
+    "1670": {
+      "additions": 89,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 5,
+      "head_sha": "6796e0e24cc194fbcc125ee627bcf9682e63d98c",
+      "labels": [
+        "type:fix",
+        "area:eir",
+        "size:xs"
+      ],
+      "merge_commit_sha": "21f59ff6c8ca49ee08ae837824c61522c47964cd",
+      "merged_at": "2026-10-01T12:06:31Z",
+      "number": 1670,
+      "title": "fix(eir): refine static effects and keep concat resets out of call summaries",
+      "url": "https://github.com/illegalstudio/elephc/pull/1670"
+    },
+    "1671": {
+      "additions": 349,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 334,
+      "head_sha": "e4ad4f853f4d72662fed7fcb886f73cc9fd0156a",
+      "labels": [
+        "type:refactor",
+        "area:eir",
+        "size:m"
+      ],
+      "merge_commit_sha": "ba444d40b38ebf693896c1569354c07b0c025d1a",
+      "merged_at": "2026-10-01T12:06:55Z",
+      "number": 1671,
+      "title": "refactor(eir): move array_splice lowering out of the expression dispatcher",
+      "url": "https://github.com/illegalstudio/elephc/pull/1671"
+    },
+    "1672": {
+      "additions": 41,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 4,
+      "deletions": 5,
+      "head_sha": "c1d7b162a300ef16358eadd1958cf1a57692a835",
+      "labels": [
+        "type:fix",
+        "area:types",
+        "size:s"
+      ],
+      "merge_commit_sha": "bb9f0a864495fe497b91c6117ea357fe638abb29",
+      "merged_at": "2026-10-02T13:25:26Z",
+      "number": 1672,
+      "title": "fix(types): preserve nested element types in mixed array spreads",
+      "url": "https://github.com/illegalstudio/elephc/pull/1672"
+    },
+    "1673": {
+      "additions": 120,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 4,
+      "deletions": 8,
+      "head_sha": "0c3e9c46dc4d9c0baf4b492e4889c268a100db89",
+      "labels": [
+        "type:fix",
+        "area:codegen",
+        "size:s"
+      ],
+      "merge_commit_sha": "5044d290e73071bf89010143950b5f66474878c1",
+      "merged_at": "2026-10-03T07:49:08Z",
+      "number": 1673,
+      "title": "fix(reflection): list interface methods in PHP declaration order",
+      "url": "https://github.com/illegalstudio/elephc/pull/1673"
+    },
+    "1677": {
+      "additions": 70,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 5,
+      "deletions": 2,
+      "head_sha": "1d1172f03da29bfe5c6b66c3be190450970e4518",
+      "labels": [
+        "type:fix",
+        "area:parser",
+        "size:s"
+      ],
+      "merge_commit_sha": "ec25182894a2d81bb083d72a30e18a40938aaf9f",
+      "merged_at": "2026-10-02T13:26:00Z",
+      "number": 1677,
+      "title": "fix(parser): parse qualified predefined constant and class names",
+      "url": "https://github.com/illegalstudio/elephc/pull/1677"
+    },
+    "1679": {
+      "additions": 133,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 10,
+      "deletions": 6,
+      "head_sha": "e8df31a6b213769eab938baf8b72c25bbbe9058e",
+      "labels": [
+        "type:fix",
+        "area:types",
+        "size:s"
+      ],
+      "merge_commit_sha": "85f7adbce644763e00bdd32b6f416412b7223634",
+      "merged_at": "2026-10-05T14:38:48Z",
+      "number": 1679,
+      "title": "fix(strict-php): honor hidden extensions in guards and callables",
+      "url": "https://github.com/illegalstudio/elephc/pull/1679"
+    },
+    "1680": {
+      "additions": 15,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 4,
+      "deletions": 10,
+      "head_sha": "4b693c20c36fd83e3c7384f9a573dae856fd02a2",
+      "labels": [
+        "type:docs",
+        "area:types",
+        "area:optimizer",
+        "area:eir",
+        "size:s"
+      ],
+      "merge_commit_sha": "919fe071c16a703b3931ab4e6c43b087934ed648",
+      "merged_at": "2026-10-02T13:26:38Z",
+      "number": 1680,
+      "title": "docs(generators): clarify named and closure metadata paths",
+      "url": "https://github.com/illegalstudio/elephc/pull/1680"
+    },
+    "1681": {
+      "additions": 48,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 0,
+      "head_sha": "27cc2ba1827e5cc3079f30e7b3849026b55dca39",
+      "labels": [
+        "type:test",
+        "area:triage",
+        "size:xs"
+      ],
+      "merge_commit_sha": "524cc417daa327c1c09e9258d10caf313e36f2c7",
+      "merged_at": "2026-10-01T13:33:13Z",
+      "number": 1681,
+      "title": "test(arrays): cover closure map results owned by literals",
+      "url": "https://github.com/illegalstudio/elephc/pull/1681"
+    },
+    "1682": {
+      "additions": 80,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 36,
+      "head_sha": "80b3775ac6d9154a71f8503da926477499e9d199",
+      "labels": [
+        "type:fix",
+        "area:tooling-ci",
+        "size:s"
+      ],
+      "merge_commit_sha": "cb770578a3cf03d1308d6ef23988c2eeb0cf7dab",
+      "merged_at": "2026-10-01T13:33:45Z",
+      "number": 1682,
+      "title": "fix(ci): verify and retry missing nextest artifacts",
+      "url": "https://github.com/illegalstudio/elephc/pull/1682"
+    },
+    "1683": {
+      "additions": 54,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 4,
+      "deletions": 2,
+      "head_sha": "1159fa1ba43d277c51fdc42d3b9c236145f5ec1b",
+      "labels": [
+        "type:fix",
+        "area:parser",
+        "size:s"
+      ],
+      "merge_commit_sha": "aad8704602856cc12b5f0ea09912b8385b20bd84",
+      "merged_at": "2026-10-06T20:46:45Z",
+      "number": 1683,
+      "title": "fix(parser): clarify static instanceof and constant-list errors",
+      "url": "https://github.com/illegalstudio/elephc/pull/1683"
+    },
+    "1684": {
+      "additions": 58,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 5,
+      "deletions": 1,
+      "head_sha": "d752507418592c247ad33e2bbe2ca4f0a26bae62",
+      "labels": [
+        "type:fix",
+        "area:types",
+        "area:optimizer",
+        "size:s"
+      ],
+      "merge_commit_sha": "7653e2550b7224d5709dff446eda4ec2975c8646",
+      "merged_at": "2026-10-01T13:34:18Z",
+      "number": 1684,
+      "title": "fix(optimizer): seed SPL hierarchy for AST-only exception analysis",
+      "url": "https://github.com/illegalstudio/elephc/pull/1684"
+    },
+    "1685": {
+      "additions": 61,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 4,
+      "deletions": 20,
+      "head_sha": "23ac4c6679ad5a6a121a23796c27e5d1a5b6fb6e",
+      "labels": [
+        "type:fix",
+        "area:resolver",
+        "area:optimizer",
+        "size:s"
+      ],
+      "merge_commit_sha": "fde13c5fcf88b84646f87ba190f9a61703d5bbfc",
+      "merged_at": "2026-10-01T13:34:51Z",
+      "number": 1685,
+      "title": "fix(stack): budget target folding and autoload reference scans",
+      "url": "https://github.com/illegalstudio/elephc/pull/1685"
+    },
+    "1686": {
+      "additions": 39,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 1,
+      "deletions": 1,
+      "head_sha": "21ffb84e016af281d03ae493e0eb37121412416c",
+      "labels": [
+        "type:fix",
+        "area:codegen",
+        "size:xs"
+      ],
+      "merge_commit_sha": "5308f3734abca989c3100d08cb4ec7867b6e98ae",
+      "merged_at": "2026-10-01T13:35:25Z",
+      "number": 1686,
+      "title": "fix(codegen): preserve reference-return fallback metadata",
+      "url": "https://github.com/illegalstudio/elephc/pull/1686"
+    },
+    "1687": {
+      "additions": 78,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 21,
+      "head_sha": "fcc25ecba80959796b02568ab36bbdc89ceda5f4",
+      "labels": [
+        "type:fix",
+        "area:runtime",
+        "size:xs"
+      ],
+      "merge_commit_sha": "52cade631b321405cee848c7ef6bbcedcf642201",
+      "merged_at": "2026-10-01T13:36:00Z",
+      "number": 1687,
+      "title": "fix(pdo): isolate driver open diagnostics per thread",
+      "url": "https://github.com/illegalstudio/elephc/pull/1687"
+    },
+    "1688": {
+      "additions": 17,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 20,
+      "head_sha": "2eed4dd2ed77edad7008bc623b032c702934b914",
+      "labels": [
+        "type:docs",
+        "area:triage",
+        "size:xs"
+      ],
+      "merge_commit_sha": "312393f523fa4919065bd647853e4c0fcd7587b1",
+      "merged_at": "2026-10-05T14:39:21Z",
+      "number": 1688,
+      "title": "docs(tests): align retype and array-growth fixture comments",
+      "url": "https://github.com/illegalstudio/elephc/pull/1688"
+    },
+    "1689": {
+      "additions": 11,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 1,
+      "deletions": 23,
+      "head_sha": "e8780cfea49525bf0c324c0b470e64f143f3aaef",
+      "labels": [
+        "type:docs",
+        "area:docs",
+        "size:xs"
+      ],
+      "merge_commit_sha": "c1d4a97d1964005677d965aae788dad79e4ec9e0",
+      "merged_at": "2026-10-06T20:46:51Z",
+      "number": 1689,
+      "title": "docs(arrays): describe indexed unset through references",
+      "url": "https://github.com/illegalstudio/elephc/pull/1689"
+    },
+    "1690": {
+      "additions": 32,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 4,
+      "head_sha": "912022cc3b7d27091e7f0129f48ed8cddffd65ba",
+      "labels": [
+        "type:docs",
+        "area:docs",
+        "size:xs"
+      ],
+      "merge_commit_sha": "30f3c3fb04a66f85cef1743cac8e6a94bd9b3f12",
+      "merged_at": "2026-10-07T09:10:38Z",
+      "number": 1690,
+      "title": "docs(enums): distinguish AOT and eval interface metadata",
+      "url": "https://github.com/illegalstudio/elephc/pull/1690"
+    },
+    "1691": {
+      "additions": 32,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 1,
+      "deletions": 0,
+      "head_sha": "e806046120e6c167dc29a909afe5f60e28817b15",
+      "labels": [
+        "type:test",
+        "area:runtime",
+        "size:xs"
+      ],
+      "merge_commit_sha": "0867c78a05f23055b0700c250779b5a642aff385",
+      "merged_at": "2026-10-01T13:36:34Z",
+      "number": 1691,
+      "title": "test(reflection): pin static abstractness after body trimming",
+      "url": "https://github.com/illegalstudio/elephc/pull/1691"
+    },
+    "1692": {
+      "additions": 86,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 27,
+      "head_sha": "cc2b2d00ade8237bad688bc8fc63a7eb80d93b57",
+      "labels": [
+        "type:test",
+        "area:triage",
+        "size:s"
+      ],
+      "merge_commit_sha": "cfd3bf8791df1a8d82e7a6bee593cb72a4d74812",
+      "merged_at": "2026-10-01T13:37:07Z",
+      "number": 1692,
+      "title": "test(locals): execute guarded and divergent mixed stores",
+      "url": "https://github.com/illegalstudio/elephc/pull/1692"
+    },
+    "1693": {
+      "additions": 110,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 11,
+      "head_sha": "7ac92d7335fdf88e671d2e0c69a95f81f2a5ce62",
+      "labels": [
+        "type:test",
+        "area:triage",
+        "size:s"
+      ],
+      "merge_commit_sha": "764c4c4f24e20591f0424ad727f965eb50bae439",
+      "merged_at": "2026-10-05T14:39:57Z",
+      "number": 1693,
+      "title": "test(arrays): cover static and ternary spread ownership",
+      "url": "https://github.com/illegalstudio/elephc/pull/1693"
+    },
+    "1695": {
+      "additions": 46,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 2,
+      "head_sha": "6a641a82166b915625fc52f09f79f348d5120913",
+      "labels": [
+        "type:fix",
+        "area:types",
+        "size:xs"
+      ],
+      "merge_commit_sha": "cb2dff6c75d4e5a6fc58401d4472cf7df47c5deb",
+      "merged_at": "2026-10-01T13:37:39Z",
+      "number": 1695,
+      "title": "fix(types): scope PDO SQLSTATE exemption to Throwable contract",
+      "url": "https://github.com/illegalstudio/elephc/pull/1695"
+    },
+    "1697": {
+      "additions": 154,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 161,
+      "head_sha": "e5c0714775d65add85e427766ea30c0aa1ad3a37",
+      "labels": [
+        "type:test",
+        "area:triage",
+        "size:s"
+      ],
+      "merge_commit_sha": "b3af8371b9eb081d469f5c338c74f616faa21f82",
+      "merged_at": "2026-10-01T13:38:12Z",
+      "number": 1697,
+      "title": "test: share retype fixtures between checker and codegen",
+      "url": "https://github.com/illegalstudio/elephc/pull/1697"
+    },
+    "1702": {
+      "additions": 5,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 5,
+      "head_sha": "b7ff23354107926d25de6ea1313963b74b6cc724",
+      "labels": [
+        "type:triage",
+        "area:docs",
+        "size:xs"
+      ],
+      "merge_commit_sha": "c1c061e2c1b1eee8ffdd65710fc4dd31dfbaf1fe",
+      "merged_at": "2026-10-03T06:01:53Z",
+      "number": 1702,
+      "title": "Stop adding unplanned work to the roadmap",
+      "url": "https://github.com/illegalstudio/elephc/pull/1702"
+    },
+    "1704": {
+      "additions": 74,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 11,
+      "head_sha": "e906aaf71ffdc34363e8764749da192d9354edad",
+      "labels": [
+        "type:test",
+        "area:triage",
+        "size:xs"
+      ],
+      "merge_commit_sha": "f6c3101813a091f2022d52f59970529b2f1f8147",
+      "merged_at": "2026-10-05T14:40:30Z",
+      "number": 1704,
+      "title": "test(math): cover mt_rand and rand mixed bounds",
+      "url": "https://github.com/illegalstudio/elephc/pull/1704"
+    },
+    "1705": {
+      "additions": 16,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 1,
+      "deletions": 0,
+      "head_sha": "24c57cc5426cb61269f0e90cb3b2d24bd6243a46",
+      "labels": [
+        "type:test",
+        "area:runtime",
+        "size:xs"
+      ],
+      "merge_commit_sha": "7492cd29e93c58704afdea5a16bda30c193752c0",
+      "merged_at": "2026-10-01T13:38:45Z",
+      "number": 1705,
+      "title": "test(iconv): verify Apple discard mode without fallback skipping",
+      "url": "https://github.com/illegalstudio/elephc/pull/1705"
+    },
+    "1706": {
+      "additions": 54,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 29,
+      "head_sha": "086d8b2dfd1b8b99439a81623c17e11da1be82e7",
+      "labels": [
+        "type:test",
+        "area:triage",
+        "size:xs"
+      ],
+      "merge_commit_sha": "f0f01db7ba1db4638e1d0b29e274e916a06c6106",
+      "merged_at": "2026-10-01T13:39:18Z",
+      "number": 1706,
+      "title": "test(mbstring): split slow ownership fixtures by backend",
+      "url": "https://github.com/illegalstudio/elephc/pull/1706"
+    },
+    "1707": {
+      "additions": 52,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 2,
+      "head_sha": "6aafc4e7f9cd6de3b6a18febf30f1d08ef9a55a8",
+      "labels": [
+        "type:fix",
+        "area:runtime",
+        "size:xs"
+      ],
+      "merge_commit_sha": "6c5cc50ae66fb85c2826edb9f3f9a27f5d370231",
+      "merged_at": "2026-10-01T13:39:53Z",
+      "number": 1707,
+      "title": "fix(runtime): pass x86 retain pointers in the helper input register",
+      "url": "https://github.com/illegalstudio/elephc/pull/1707"
+    },
+    "1708": {
+      "additions": 48,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 1,
+      "deletions": 0,
+      "head_sha": "eebd6b4daec60fbf18c41bcc3d2297e8239fc5f9",
+      "labels": [
+        "type:test",
+        "area:triage",
+        "size:xs"
+      ],
+      "merge_commit_sha": "c779d84e796970405cf799a67896f324c6e6a66e",
+      "merged_at": "2026-10-01T13:40:26Z",
+      "number": 1708,
+      "title": "test(types): cover documented null-coalesce result contracts",
+      "url": "https://github.com/illegalstudio/elephc/pull/1708"
+    },
+    "1709": {
+      "additions": 187,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 10,
+      "deletions": 150,
+      "head_sha": "b06b5b6563ffa3da123a279b961118552d601d94",
+      "labels": [
+        "type:fix",
+        "area:types",
+        "area:optimizer",
+        "size:s"
+      ],
+      "merge_commit_sha": "9a9885daffb696f0da97b3a3011168c3fd3ea3ae",
+      "merged_at": "2026-10-05T14:41:03Z",
+      "number": 1709,
+      "title": "fix: fold named class constants before schema construction",
+      "url": "https://github.com/illegalstudio/elephc/pull/1709"
+    },
+    "1711": {
+      "additions": 166,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 4,
+      "deletions": 37,
+      "head_sha": "ac5ffca62f4c2a665b7a59c9eb7c52b14cfe9c38",
+      "labels": [
+        "type:fix",
+        "area:eir",
+        "area:runtime",
+        "area:builtins",
+        "size:s"
+      ],
+      "merge_commit_sha": "7ed6a5bb17a5243d9fd9ac48c32f81424e653ae7",
+      "merged_at": "2026-10-05T14:41:38Z",
+      "number": 1711,
+      "title": "fix: support object boolval runtime callables",
+      "url": "https://github.com/illegalstudio/elephc/pull/1711"
+    },
+    "1712": {
+      "additions": 290,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 9,
+      "deletions": 27,
+      "head_sha": "9a9d4a6c7098fc90edc74de589f0044d6a6fdebb",
+      "labels": [
+        "type:fix",
+        "area:types",
+        "size:s"
+      ],
+      "merge_commit_sha": "22b540f4ecde4af64e77dbc43c95f0a510a7ca00",
+      "merged_at": "2026-10-07T10:41:41Z",
+      "number": 1712,
+      "title": "fix: report conflicting include variant signatures first",
+      "url": "https://github.com/illegalstudio/elephc/pull/1712"
+    },
+    "1713": {
+      "additions": 133,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 9,
+      "deletions": 33,
+      "head_sha": "cdbc65c60e261dcfda1c6cf0bb95e1cf3a75e5e2",
+      "labels": [
+        "type:fix",
+        "area:eir",
+        "area:codegen",
+        "size:s"
+      ],
+      "merge_commit_sha": "6513a97921bb2e20ff3e1e9a237317b0f01c2b0a",
+      "merged_at": "2026-10-05T14:42:11Z",
+      "number": 1713,
+      "title": "fix: distinguish invalid mixed throw errors",
+      "url": "https://github.com/illegalstudio/elephc/pull/1713"
+    },
+    "1714": {
+      "additions": 221,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 17,
+      "deletions": 34,
+      "head_sha": "2e8ad687396dd19f2d2869164ed1d6d11b052abe",
+      "labels": [
+        "type:fix",
+        "area:resolver",
+        "area:types",
+        "area:optimizer",
+        "size:m",
+        "scope:multi-area"
+      ],
+      "merge_commit_sha": "a2e0f9a2eea5995d9217659198e1ee3d81420e03",
+      "merged_at": "2026-10-07T09:10:44Z",
+      "number": 1714,
+      "title": "fix: explain unsupported class alias autoload flag",
+      "url": "https://github.com/illegalstudio/elephc/pull/1714"
+    },
+    "1744": {
+      "additions": 43,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 1,
+      "deletions": 1,
+      "head_sha": "b9e89e80768b9d8ae5c0d0f418ed60b3e30d42b6",
+      "labels": [
+        "type:fix",
+        "area:runtime",
+        "size:xs"
+      ],
+      "merge_commit_sha": "c4ece12ae4252639e1ba818d1e81e0a0c25b359e",
+      "merged_at": "2026-10-02T13:27:11Z",
+      "number": 1744,
+      "title": "fix: keep INI identity allocation warning-free across Rust toolchains",
+      "url": "https://github.com/illegalstudio/elephc/pull/1744"
+    },
+    "1745": {
+      "additions": 60,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 9,
+      "deletions": 16,
+      "head_sha": "f9228d0cb2f52e5444cb3c01f44ae5123b6ded93",
+      "labels": [
+        "type:triage",
+        "area:tooling-ci",
+        "size:s"
+      ],
+      "merge_commit_sha": "42760fcdaa5e675c3b41efbaae38e467d85d2118",
+      "merged_at": "2026-10-01T19:37:59Z",
+      "number": 1745,
+      "title": "CI: pin Rust toolchain to 1.98",
+      "url": "https://github.com/illegalstudio/elephc/pull/1745"
+    },
+    "1749": {
+      "additions": 42,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 2,
+      "head_sha": "fb57adf01cacc592cc5ebc135b9d8d5003343476",
+      "labels": [
+        "type:fix",
+        "area:runtime",
+        "size:xs"
+      ],
+      "merge_commit_sha": "b457f312c30dc67d2f6da998974bfd43dfb94d9a",
+      "merged_at": "2026-10-06T08:22:15Z",
+      "number": 1749,
+      "title": "fix(pdo): publish the SQLSRV CLI diagnostic on constructor failure",
+      "url": "https://github.com/illegalstudio/elephc/pull/1749"
+    },
+    "1750": {
+      "additions": 89,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 16,
+      "head_sha": "82614fa10d3879c2e3d0f742af56d9aedfc21e3b",
+      "labels": [
+        "type:fix",
+        "area:runtime",
+        "area:tooling-ci",
+        "size:s"
+      ],
+      "merge_commit_sha": "b77a8c5c91e15341c4b887e89dbc3accb23a814b",
+      "merged_at": "2026-10-06T13:56:19Z",
+      "number": 1750,
+      "title": "fix(pdo): make the DBLIB pre-handle diagnostic thread-local",
+      "url": "https://github.com/illegalstudio/elephc/pull/1750"
+    },
+    "1752": {
+      "additions": 118,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 4,
+      "head_sha": "7b2c63b2baac4dca9d9add08cf1852c6363c4c9c",
+      "labels": [
+        "type:fix",
+        "area:runtime",
+        "size:s"
+      ],
+      "merge_commit_sha": "a53f7e21ad3e15b4729fe153c543eef2c5f3a36b",
+      "merged_at": "2026-10-06T08:22:26Z",
+      "number": 1752,
+      "title": "fix(arrays): array_chunk owns callable and reference elements",
+      "url": "https://github.com/illegalstudio/elephc/pull/1752"
+    },
+    "1759": {
+      "additions": 93,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 1,
+      "head_sha": "d19a1d43fc56d0f393400b78fc8ff1a61283dbf4",
+      "labels": [
+        "type:fix",
+        "area:triage",
+        "size:xs"
+      ],
+      "merge_commit_sha": "0c1e305486369707c2743deb82157fc7ad6e13c2",
+      "merged_at": "2026-10-07T08:41:12Z",
+      "number": 1759,
+      "title": "fix(eval): give each literal eval fragment its own source identity",
+      "url": "https://github.com/illegalstudio/elephc/pull/1759"
+    },
+    "1767": {
+      "additions": 18,
+      "author": "nahime0",
+      "base_branch": "main",
+      "changed_files": 6,
+      "deletions": 18,
+      "head_sha": "119f99255a7e215aa00f60d0c11d0bb829eaecb0",
+      "labels": [
+        "type:triage",
+        "area:tooling-ci",
+        "size:s"
+      ],
+      "merge_commit_sha": "7ebc53fc4d0e0deae3a8edae95a08f34bce5281c",
+      "merged_at": "2026-10-05T14:36:49Z",
+      "number": 1767,
+      "title": "ci: move macOS jobs from macos-14 to macos-15 runners",
+      "url": "https://github.com/illegalstudio/elephc/pull/1767"
+    },
+    "1769": {
+      "additions": 97,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 0,
+      "head_sha": "22950f919bd492e8e04abc4ae14f8d2ec281796d",
+      "labels": [
+        "type:fix",
+        "area:codegen",
+        "size:xs"
+      ],
+      "merge_commit_sha": "0d884c7f5d934478a1c1d543e2c387fa9a2c6833",
+      "merged_at": "2026-10-07T08:41:20Z",
+      "number": 1769,
+      "title": "fix(arrays): release the concrete occupant a ref-marker write replaces",
+      "url": "https://github.com/illegalstudio/elephc/pull/1769"
+    },
+    "1770": {
+      "additions": 1,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 1,
+      "deletions": 0,
+      "head_sha": "350a237fa92b7d43d4aca846efbd52fe95821b3b",
+      "labels": [
+        "type:docs",
+        "area:docs",
+        "size:xs"
+      ],
+      "merge_commit_sha": "b23aa1a6b3681c7a89df12d71a390823c8b806e0",
+      "merged_at": "2026-10-05T16:20:28Z",
+      "number": 1770,
+      "title": "docs(types): note the by-ref variadic limitation for a ref-aliased local",
+      "url": "https://github.com/illegalstudio/elephc/pull/1770"
+    },
+    "1778": {
+      "additions": 94,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 3,
+      "deletions": 61,
+      "head_sha": "92fdc736d35dbab0faf53dc9f20031431c5a0098",
+      "labels": [
+        "type:fix",
+        "area:runtime",
+        "size:s"
+      ],
+      "merge_commit_sha": "5b2413c36f37d1c6342ba5cc477d7ef51a876cab",
+      "merged_at": "2026-10-07T09:13:40Z",
+      "number": 1778,
+      "title": "fix(strings): keep ASCII digits unescaped in urlencode() and rawurlencode()",
+      "url": "https://github.com/illegalstudio/elephc/pull/1778"
+    },
+    "1779": {
+      "additions": 95,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 2,
+      "deletions": 1,
+      "head_sha": "8882d366883d0d27abf2f1ec5b52c2297b4d0fc3",
+      "labels": [
+        "type:fix",
+        "area:runtime",
+        "size:xs"
+      ],
+      "merge_commit_sha": "32363eaf0384529ea31f87770d45a199d8c96118",
+      "merged_at": "2026-10-07T09:13:48Z",
+      "number": 1779,
+      "title": "fix(objects): project null untyped properties as null in get_object_vars()",
+      "url": "https://github.com/illegalstudio/elephc/pull/1779"
+    },
+    "968": {
+      "additions": 26449,
+      "author": "Guikingone",
+      "base_branch": "main",
+      "changed_files": 271,
+      "deletions": 2006,
+      "head_sha": "2ed405ea5703ea0ddd2f785b2fabbb47f749a1b1",
+      "labels": [
+        "type:feature",
+        "area:codegen",
+        "area:web",
+        "area:magician",
+        "size:xl",
+        "scope:multi-area"
+      ],
+      "merge_commit_sha": "a1559f0368abfa83b4392e1a87ab5897196b8372",
+      "merged_at": "2026-10-03T06:00:35Z",
+      "number": 968,
+      "title": "feat(opcache): give the OPcache surface real behaviour",
+      "url": "https://github.com/illegalstudio/elephc/pull/968"
+    }
+  },
+  "repository": "illegalstudio/elephc",
+  "total_commit_count": 212,
+  "unaccounted_commits": []
+}

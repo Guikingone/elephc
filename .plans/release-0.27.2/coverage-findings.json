@@ -1,0 +1,1911 @@
+{
+  "method": "Case-insensitive literal-name mention in native codegen or dedicated integration fixtures, and argument-count diagnostic sources; absence is a direct-fixture review candidate, not proof of missing semantic coverage through wrappers or methods.",
+  "positive_direct_fixture_candidates": [
+    {
+      "name": "cairo_arc_negative",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_close_path",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_curve_to",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_fill_preserve",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_identity_matrix",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_matrix_init_identity",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_matrix_init_rotate",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_new_path",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_new_sub_path",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_pattern_add_color_stop_rgba",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_pattern_create_rgb",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_rotate",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_fill_rule",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_line_cap",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_line_join",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_source_rgba",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_stroke_preserve",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_transform",
+      "route": "prelude"
+    },
+    {
+      "name": "imagearc",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecharup",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorclosest",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorclosestalpha",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorclosesthwb",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolordeallocate",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorexact",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorexactalpha",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolormatch",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorresolve",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorresolvealpha",
+      "route": "prelude"
+    },
+    {
+      "name": "imageellipse",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefilltoborder",
+      "route": "prelude"
+    },
+    {
+      "name": "imagelayereffect",
+      "route": "prelude"
+    },
+    {
+      "name": "imageopenpolygon",
+      "route": "prelude"
+    },
+    {
+      "name": "imagepolygon",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_affected_rows",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_autocommit",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_begin_transaction",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_character_set_name",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_close",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_commit",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_data_seek",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_errno",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_error",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_error_list",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_escape_string",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_execute_query",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_all",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_array",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_assoc",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_column",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_field",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_field_direct",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_fields",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_object",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_row",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_field_count",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_free_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_client_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_client_version",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_host_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_proto_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_server_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_server_version",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_insert_id",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_num_fields",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_options",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_real_connect",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_real_escape_string",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_real_query",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_rollback",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_select_db",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_set_charset",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_set_opt",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_sqlstate",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stat",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_affected_rows",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_errno",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_error",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_num_rows",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_reset",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_store_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_thread_id",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_use_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_warning_count",
+      "route": "prelude"
+    },
+    {
+      "name": "session_cache_expire",
+      "route": "prelude"
+    },
+    {
+      "name": "session_cache_limiter",
+      "route": "prelude"
+    },
+    {
+      "name": "session_commit",
+      "route": "prelude"
+    },
+    {
+      "name": "session_decode",
+      "route": "prelude"
+    },
+    {
+      "name": "session_register_shutdown",
+      "route": "prelude"
+    },
+    {
+      "name": "session_reset",
+      "route": "prelude"
+    },
+    {
+      "name": "setrawcookie",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_attribute",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_cdata",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_comment",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_dtd",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_dtd_attlist",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_dtd_element",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_dtd_entity",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_pi",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_attribute",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_attribute_ns",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_cdata",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_comment",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_dtd",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_dtd_attlist",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_dtd_element",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_dtd_entity",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_element_ns",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_pi",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_attribute_ns",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_dtd",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_dtd_attlist",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_dtd_element",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_dtd_entity",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_element_ns",
+      "route": "prelude"
+    }
+  ],
+  "arity_diagnostic_direct_fixture_candidates": [
+    {
+      "name": "cairo_arc",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_arc_negative",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_close_path",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_create",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_curve_to",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_fill",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_fill_preserve",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_get_current_point",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_identity_matrix",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_image_surface_create_from_png",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_image_surface_get_height",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_image_surface_get_width",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_line_to",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_matrix_init_identity",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_matrix_init_rotate",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_matrix_init_scale",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_matrix_init_translate",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_matrix_multiply",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_matrix_transform_point",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_move_to",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_new_path",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_new_sub_path",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_paint",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_pattern_add_color_stop_rgb",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_pattern_add_color_stop_rgba",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_pattern_create_linear",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_pattern_create_radial",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_pattern_create_rgb",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_pattern_create_rgba",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_rectangle",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_restore",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_rotate",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_save",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_scale",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_fill_rule",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_line_cap",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_line_join",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_line_width",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_matrix",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_source",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_source_rgb",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_set_source_rgba",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_stroke",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_stroke_preserve",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_surface_write_to_png",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_transform",
+      "route": "prelude"
+    },
+    {
+      "name": "cairo_translate",
+      "route": "prelude"
+    },
+    {
+      "name": "cal_days_in_month",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "cal_from_jd",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "cal_info",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "cal_to_jd",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_add",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_create",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_create_from_format",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_create_immutable",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_create_immutable_from_format",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_date_set",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_diff",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_format",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_get_last_errors",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_interval_create_from_date_string",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_interval_format",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_isodate_set",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_modify",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_offset_get",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_parse",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_parse_from_format",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_sub",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_sun_info",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_sunset",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_time_set",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_timestamp_get",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_timestamp_set",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_timezone_get",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "date_timezone_set",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "easter_days",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "error_log",
+      "route": "prelude"
+    },
+    {
+      "name": "exif_imagetype",
+      "route": "prelude"
+    },
+    {
+      "name": "exif_read_data",
+      "route": "prelude"
+    },
+    {
+      "name": "exif_tagname",
+      "route": "prelude"
+    },
+    {
+      "name": "exif_thumbnail",
+      "route": "prelude"
+    },
+    {
+      "name": "frenchtojd",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "gd_info",
+      "route": "prelude"
+    },
+    {
+      "name": "getimagesize",
+      "route": "prelude"
+    },
+    {
+      "name": "getimagesizefromstring",
+      "route": "prelude"
+    },
+    {
+      "name": "gettimeofday",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "gmstrftime",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "image_type_to_extension",
+      "route": "prelude"
+    },
+    {
+      "name": "image_type_to_mime_type",
+      "route": "prelude"
+    },
+    {
+      "name": "imageaffine",
+      "route": "prelude"
+    },
+    {
+      "name": "imageaffinematrixconcat",
+      "route": "prelude"
+    },
+    {
+      "name": "imagealphablending",
+      "route": "prelude"
+    },
+    {
+      "name": "imageantialias",
+      "route": "prelude"
+    },
+    {
+      "name": "imagearc",
+      "route": "prelude"
+    },
+    {
+      "name": "imagebmp",
+      "route": "prelude"
+    },
+    {
+      "name": "imagechar",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecharup",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorallocatealpha",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorat",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorclosest",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorclosestalpha",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorclosesthwb",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolordeallocate",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorexact",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorexactalpha",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolormatch",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorresolve",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorresolvealpha",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorset",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorsforindex",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolorstotal",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecolortransparent",
+      "route": "prelude"
+    },
+    {
+      "name": "imageconvolution",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecopy",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecopymerge",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecopymergegray",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecopyresampled",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecopyresized",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecreate",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecreatefrombmp",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecreatefromgif",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecreatefromjpeg",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecreatefrompng",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecreatefromstring",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecreatefromtga",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecreatefromwebp",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecrop",
+      "route": "prelude"
+    },
+    {
+      "name": "imagecropauto",
+      "route": "prelude"
+    },
+    {
+      "name": "imagedashedline",
+      "route": "prelude"
+    },
+    {
+      "name": "imagedestroy",
+      "route": "prelude"
+    },
+    {
+      "name": "imageellipse",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefill",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefilledarc",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefilledellipse",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefilledpolygon",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefilledrectangle",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefilltoborder",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefilter",
+      "route": "prelude"
+    },
+    {
+      "name": "imageflip",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefontheight",
+      "route": "prelude"
+    },
+    {
+      "name": "imagefontwidth",
+      "route": "prelude"
+    },
+    {
+      "name": "imagegammacorrect",
+      "route": "prelude"
+    },
+    {
+      "name": "imagegetinterpolation",
+      "route": "prelude"
+    },
+    {
+      "name": "imagegif",
+      "route": "prelude"
+    },
+    {
+      "name": "imageinterlace",
+      "route": "prelude"
+    },
+    {
+      "name": "imageistruecolor",
+      "route": "prelude"
+    },
+    {
+      "name": "imagejpeg",
+      "route": "prelude"
+    },
+    {
+      "name": "imagelayereffect",
+      "route": "prelude"
+    },
+    {
+      "name": "imageline",
+      "route": "prelude"
+    },
+    {
+      "name": "imageopenpolygon",
+      "route": "prelude"
+    },
+    {
+      "name": "imagepalettecopy",
+      "route": "prelude"
+    },
+    {
+      "name": "imagepalettetotruecolor",
+      "route": "prelude"
+    },
+    {
+      "name": "imagepolygon",
+      "route": "prelude"
+    },
+    {
+      "name": "imagerectangle",
+      "route": "prelude"
+    },
+    {
+      "name": "imageresolution",
+      "route": "prelude"
+    },
+    {
+      "name": "imagerotate",
+      "route": "prelude"
+    },
+    {
+      "name": "imagesavealpha",
+      "route": "prelude"
+    },
+    {
+      "name": "imagescale",
+      "route": "prelude"
+    },
+    {
+      "name": "imagesetinterpolation",
+      "route": "prelude"
+    },
+    {
+      "name": "imagesetpixel",
+      "route": "prelude"
+    },
+    {
+      "name": "imagesetthickness",
+      "route": "prelude"
+    },
+    {
+      "name": "imagestring",
+      "route": "prelude"
+    },
+    {
+      "name": "imagestringup",
+      "route": "prelude"
+    },
+    {
+      "name": "imagesx",
+      "route": "prelude"
+    },
+    {
+      "name": "imagesy",
+      "route": "prelude"
+    },
+    {
+      "name": "imagetruecolortopalette",
+      "route": "prelude"
+    },
+    {
+      "name": "imagetypes",
+      "route": "prelude"
+    },
+    {
+      "name": "imagewebp",
+      "route": "prelude"
+    },
+    {
+      "name": "ini_get",
+      "route": "prelude"
+    },
+    {
+      "name": "ini_get_all",
+      "route": "prelude"
+    },
+    {
+      "name": "ini_restore",
+      "route": "prelude"
+    },
+    {
+      "name": "ini_set",
+      "route": "prelude"
+    },
+    {
+      "name": "iptcembed",
+      "route": "prelude"
+    },
+    {
+      "name": "iptcparse",
+      "route": "prelude"
+    },
+    {
+      "name": "jddayofweek",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "jdmonthname",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "jdtofrench",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "jdtojewish",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "jdtojulian",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "jdtounix",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "jewishtojd",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "juliantojd",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "mysqli_affected_rows",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_autocommit",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_begin_transaction",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_character_set_name",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_close",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_commit",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_connect",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_connect_error",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_data_seek",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_errno",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_error",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_error_list",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_escape_string",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_execute",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_execute_query",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_all",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_array",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_assoc",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_column",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_field",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_field_direct",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_fields",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_lengths",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_object",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_fetch_row",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_field_count",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_field_seek",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_field_tell",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_free_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_charset",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_client_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_client_version",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_host_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_proto_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_server_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_get_server_version",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_info",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_init",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_insert_id",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_more_results",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_multi_query",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_next_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_num_fields",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_num_rows",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_options",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_ping",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_prepare",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_query",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_real_connect",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_real_escape_string",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_real_query",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_release_savepoint",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_rollback",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_savepoint",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_set_charset",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_set_opt",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_sqlstate",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stat",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_affected_rows",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_bind_param",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_close",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_errno",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_error",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_error_list",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_execute",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_field_count",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_free_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_get_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_init",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_insert_id",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_num_rows",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_param_count",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_prepare",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_reset",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_sqlstate",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_stmt_store_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_store_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_thread_id",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_thread_safe",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_use_result",
+      "route": "prelude"
+    },
+    {
+      "name": "mysqli_warning_count",
+      "route": "prelude"
+    },
+    {
+      "name": "opcache_compile_file",
+      "route": "prelude"
+    },
+    {
+      "name": "opcache_get_configuration",
+      "route": "prelude"
+    },
+    {
+      "name": "opcache_get_status",
+      "route": "prelude"
+    },
+    {
+      "name": "opcache_invalidate",
+      "route": "prelude"
+    },
+    {
+      "name": "opcache_is_script_cached",
+      "route": "prelude"
+    },
+    {
+      "name": "opcache_is_script_cached_in_file_cache",
+      "route": "prelude"
+    },
+    {
+      "name": "opcache_jit_blacklist",
+      "route": "prelude"
+    },
+    {
+      "name": "opcache_reset",
+      "route": "prelude"
+    },
+    {
+      "name": "pdo_drivers",
+      "route": "prelude"
+    },
+    {
+      "name": "php_sapi_name",
+      "route": "prelude"
+    },
+    {
+      "name": "read_exif_data",
+      "route": "prelude"
+    },
+    {
+      "name": "session_abort",
+      "route": "prelude"
+    },
+    {
+      "name": "session_cache_expire",
+      "route": "prelude"
+    },
+    {
+      "name": "session_cache_limiter",
+      "route": "prelude"
+    },
+    {
+      "name": "session_commit",
+      "route": "prelude"
+    },
+    {
+      "name": "session_create_id",
+      "route": "prelude"
+    },
+    {
+      "name": "session_decode",
+      "route": "prelude"
+    },
+    {
+      "name": "session_destroy",
+      "route": "prelude"
+    },
+    {
+      "name": "session_encode",
+      "route": "prelude"
+    },
+    {
+      "name": "session_gc",
+      "route": "prelude"
+    },
+    {
+      "name": "session_get_cookie_params",
+      "route": "prelude"
+    },
+    {
+      "name": "session_id",
+      "route": "prelude"
+    },
+    {
+      "name": "session_module_name",
+      "route": "prelude"
+    },
+    {
+      "name": "session_name",
+      "route": "prelude"
+    },
+    {
+      "name": "session_regenerate_id",
+      "route": "prelude"
+    },
+    {
+      "name": "session_register_shutdown",
+      "route": "prelude"
+    },
+    {
+      "name": "session_reset",
+      "route": "prelude"
+    },
+    {
+      "name": "session_save_path",
+      "route": "prelude"
+    },
+    {
+      "name": "session_set_save_handler",
+      "route": "prelude"
+    },
+    {
+      "name": "session_start",
+      "route": "prelude"
+    },
+    {
+      "name": "session_status",
+      "route": "prelude"
+    },
+    {
+      "name": "session_unset",
+      "route": "prelude"
+    },
+    {
+      "name": "session_write_close",
+      "route": "prelude"
+    },
+    {
+      "name": "setcookie",
+      "route": "prelude"
+    },
+    {
+      "name": "setrawcookie",
+      "route": "prelude"
+    },
+    {
+      "name": "strftime",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "strptime",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "timezone_abbreviations_list",
+      "route": "prelude"
+    },
+    {
+      "name": "timezone_identifiers_list",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "timezone_location_get",
+      "route": "prelude"
+    },
+    {
+      "name": "timezone_name_from_abbr",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "timezone_name_get",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "timezone_offset_get",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "timezone_open",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "timezone_transitions_get",
+      "route": "prelude"
+    },
+    {
+      "name": "unixtojd",
+      "route": "name-resolver-rewrite"
+    },
+    {
+      "name": "var_export",
+      "route": "prelude"
+    },
+    {
+      "name": "xml_error_string",
+      "route": "prelude"
+    },
+    {
+      "name": "xml_get_current_byte_index",
+      "route": "prelude"
+    },
+    {
+      "name": "xml_get_current_column_number",
+      "route": "prelude"
+    },
+    {
+      "name": "xml_get_current_line_number",
+      "route": "prelude"
+    },
+    {
+      "name": "xml_get_error_code",
+      "route": "prelude"
+    },
+    {
+      "name": "xml_parser_create_ns",
+      "route": "prelude"
+    },
+    {
+      "name": "xml_parser_free",
+      "route": "prelude"
+    },
+    {
+      "name": "xml_parser_get_option",
+      "route": "prelude"
+    },
+    {
+      "name": "xml_set_object",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_attribute",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_cdata",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_comment",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_document",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_dtd",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_dtd_attlist",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_dtd_element",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_dtd_entity",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_element",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_end_pi",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_flush",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_full_end_element",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_open_uri",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_output_memory",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_set_indent",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_set_indent_string",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_attribute",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_attribute_ns",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_cdata",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_comment",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_document",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_dtd",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_dtd_attlist",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_dtd_element",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_dtd_entity",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_element_ns",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_start_pi",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_text",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_attribute",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_attribute_ns",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_cdata",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_comment",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_dtd",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_dtd_attlist",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_dtd_element",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_dtd_entity",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_element",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_element_ns",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_pi",
+      "route": "prelude"
+    },
+    {
+      "name": "xmlwriter_write_raw",
+      "route": "prelude"
+    },
+    {
+      "name": "zend_version",
+      "route": "prelude"
+    }
+  ]
+}

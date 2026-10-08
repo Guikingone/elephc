@@ -1,0 +1,103 @@
+{
+  "source_candidate_sha": "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+  "test_execution": "Skipped by explicit user request",
+  "build_checks": [
+    {
+      "command": "cargo build -j 2",
+      "result": "pass",
+      "warnings": 0,
+      "test_execution": false
+    },
+    {
+      "command": "cargo build --example gen_builtins --features curl -j 2",
+      "result": "pass",
+      "warnings": 0,
+      "test_execution": false
+    },
+    {
+      "command": "cargo check --test error_tests --features curl -j 2",
+      "result": "pass",
+      "warnings": 0,
+      "test_execution": false
+    }
+  ],
+  "builtin_generation_and_audit_checks": [
+    {
+      "command": [
+        "python3",
+        "scripts/docs/extract_builtins.py",
+        "--render",
+        "--force"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/docs/gen_module_sections.py"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/docs/gen_php_comparison.py"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/docs/audit_builtins.py"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/docs/elephc_builtins/validate_site_compat.py"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/audit_builtin_eir_boundary.py",
+        "--enforce-target-architecture"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "documentation": {
+    "candidate_sha": "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+    "pages": 2339,
+    "relative_links": 5206,
+    "errors": [],
+    "scope": "Frontmatter, body H1s and relative file destinations; fenced and inline code excluded. External URLs and heading fragments are not checked."
+  },
+  "rust_documentation": {
+    "owned_rust_files": 5310,
+    "function_declaration_matches": 50702,
+    "missing_preambles": [],
+    "missing_function_docblocks": [],
+    "preamble_scan_scope": "Complete initial module Rustdoc block, without a line limit",
+    "tests_executed": false
+  },
+  "assembly_comments": {
+    "files_checked": 1205,
+    "result": "pass",
+    "misaligned_comments": 0
+  },
+  "coverage": {
+    "method": "Static literal-name candidates, requiring semantic mapping review",
+    "positive_direct_fixture_candidates": 116,
+    "arity_diagnostic_direct_fixture_candidates": 360
+  },
+  "inventory": {
+    "test_declaration_matches": 20605,
+    "files_with_test_declarations": 1597,
+    "example_entry_files": 234,
+    "missing_example_gitignore": []
+  },
+  "source_validation_scope": "Checks performed on the prepared tree before local commits; commits only partition that same content."
+}

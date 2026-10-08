@@ -1,0 +1,1662 @@
+{
+  "version": "0.27.2",
+  "date": "2026-10-06",
+  "from_sha": "24f68a7b03d4db9660515ad17e711a385e0d596a",
+  "head_sha": "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+  "bullets": {
+    "F1": "Added a runtime OPcache script cache for dynamic `include` and `require` through `eval()`, with optional persistent file caching, timestamp revalidation, admission limits, blacklists, preloading, live statistics, and API restrictions; ordinary compiled code remains ahead of time and no tracing JIT is provided.",
+    "F2": "Added project INI directives in the `[ini]` table of `elephc.toml`, using the same settings as `--ini` and allowing command-line overrides.",
+    "F3": "Improved scalar code generation by promoting eligible `int`, `bool`, and `float` locals into SSA values across branches and loops, and refining effects for resolved static calls.",
+    "X1": "Fixed serialization and unserialization of PHP classes that forbid it, with catchable exceptions, and omitted uninitialized typed properties from serialized property counts.",
+    "X2": "Fixed `implode()` and `join()` on nullable, mixed, and runtime-promoted arrays, preserving actual element layouts, catchable type errors, and safe integer formatting near the string scratch-buffer limit.",
+    "X3": "Fixed ownership of callable and reference entries in associative `array_chunk()` results, bound closures on Linux x86_64, and strings stored in static properties.",
+    "X4": "Fixed `PDOException` subclass validation and reflected method ownership, isolated driver connection diagnostics per thread, and preserved SQLSRV constructor SQLSTATE and native error codes.",
+    "X5": "Fixed qualified predefined names, named `::class` constants in defaults and attribute keys, nested array spread types, interface reflection order, strict-PHP callable guards, runtime `boolval()` callables, and the exception class and messages for invalid mixed throws.",
+    "X6": "Fixed deeply nested compiler entry points, unreachable EIR continuations, reference-return callable metadata, and dynamic include/eval handling of templates, argument counts, scoped returns, and pending exceptions across `finally`.",
+    "F4": "Added EIR integer range and induction-variable analysis to remove proven-safe overflow checks and simplify boxed numeric values while preserving PHP overflow-to-float behavior.",
+    "X7": "Improved diagnostics for unparenthesized `instanceof` call targets, missing class-constant names, disabled `class_alias()` autoload, and conflicting include-variant signatures.",
+    "X8": "Fixed source identities for literal eval fragments so type and binding metadata cannot collide with equal coordinates in root or included files.",
+    "X9": "Fixed heap leaks when eval writes back replacements through native typed by-reference variadic parameters.",
+    "X10": "Fixed constant propagation and control-flow handling across switch fallthrough, side-effecting case labels, and default blocks that appear before later cases.",
+    "X11": "Fixed `urlencode()` and `rawurlencode()` to leave ASCII digits unescaped.",
+    "X12": "Fixed crashes when reading untyped null properties from `get_object_vars()` or an object-to-array cast.",
+    "F5": "Added compile-time generics for functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables, and PHPDoc template support; `--strict-php` accepts PHPDoc templates and rejects native generic syntax.",
+    "X13": "Fixed sparse array writes, typed-to-mixed array argument ownership, bare-array value builtins, mapped result types, `array_map(null, ...)`, associative filtering and sorting, internal-pointer values, and callable string-transform leaks.",
+    "X14": "Fixed descriptor wrapper placement to keep generated functions contiguous, avoiding AArch64 branch-range assembly failures and broken ELF function extents under `--debug-info`.",
+    "X15": "Fixed argument-unpack validation to reject positional entries after named entries within the same unpacked array."
+  },
+  "rows": [
+    {
+      "source": "d093426b8a1b0ca70d43c32d1be842fa82c4d523",
+      "sha": "d093426b8a1b0ca70d43c32d1be842fa82c4d523",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "chore: bump version to 0.27.1 [skip ci]",
+      "reason": "Release version automation only.",
+      "issues": [],
+      "evidence_paths": [
+        "Cargo.lock",
+        "Cargo.toml"
+      ]
+    },
+    {
+      "source": "49732894c69e7d8daec2d027d22b0bf1c0b96edf",
+      "sha": "49732894c69e7d8daec2d027d22b0bf1c0b96edf",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "chore: update repository stats [skip ci]",
+      "reason": "Generated repository traffic statistics only.",
+      "issues": [],
+      "evidence_paths": [
+        ".github/traffic/clones-badge.svg",
+        ".github/traffic/clones.json"
+      ]
+    },
+    {
+      "source": 1665,
+      "sha": "2112110547ad28ac5a47555f2805fc9e9421c86b",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test(regressions): pin #1565 and two shapes main already matches php on",
+      "reason": "Regression coverage for behavior already present on the base.",
+      "issues": [
+        1565
+      ],
+      "evidence_paths": [
+        "tests/codegen/regressions/fixed_issue_behaviour.rs",
+        "tests/codegen/regressions/fixed_issue_leaks.rs"
+      ]
+    },
+    {
+      "source": 1514,
+      "sha": "278f1c811e40788c0202651012026a4b8fdc33c7",
+      "decision": "include",
+      "bullets": [
+        "X4"
+      ],
+      "behavior": "fix(types): let classes extend PDOException like PHP",
+      "reason": null,
+      "issues": [
+        1301,
+        1302,
+        1320,
+        1440
+      ],
+      "evidence_paths": [
+        "docs/internals/the-type-checker.md",
+        "docs/php/pdo.md",
+        "docs/php/types.md",
+        "src/codegen/lower_inst/builtins/eval/member_collection.rs",
+        "src/codegen_support/runtime/data/user.rs",
+        "src/types/checker/schema/classes/interfaces.rs",
+        "tests/codegen/exceptions.rs",
+        "tests/codegen/pdo.rs",
+        "tests/error_tests/classes_traits.rs"
+      ]
+    },
+    {
+      "source": 1510,
+      "sha": "1a02b7b7a990a0a5c21b68439f6680ae7410443e",
+      "decision": "include",
+      "bullets": [
+        "X1"
+      ],
+      "behavior": "fix(serialize): refuse not-serializable classes in both directions",
+      "reason": null,
+      "issues": [
+        1316,
+        1327,
+        1328,
+        1329
+      ],
+      "evidence_paths": [
+        "docs/internals/the-runtime.md",
+        "docs/php/system-and-io.md",
+        "src/codegen/lower_inst/builtins/serialize.rs",
+        "src/codegen_support/runtime/data/fixed.rs",
+        "src/codegen_support/runtime/data/mod.rs",
+        "src/codegen_support/runtime/data/user.rs",
+        "src/codegen_support/runtime/emitters/managed.rs",
+        "src/codegen_support/runtime/objects/mod.rs",
+        "src/codegen_support/runtime/objects/object_not_array.rs",
+        "src/codegen_support/runtime/system/serialize.rs",
+        "src/codegen_support/runtime/system/serialize/sleep_result.rs",
+        "src/codegen_support/runtime/system/unserialize/mod.rs",
+        "src/codegen_support/runtime/system/unserialize/refused_classes.rs",
+        "src/codegen_support/runtime/system/unserialize/storage_aarch64.rs",
+        "src/codegen_support/runtime/system/unserialize/storage_x86_64.rs",
+        "src/codegen_support/runtime/system/unserialize/validator_aarch64.rs",
+        "src/codegen_support/runtime/system/unserialize/validator_x86_64.rs",
+        "src/ir_lower/tests/exhaustive.rs",
+        "src/types/checker/builtin_enums.rs",
+        "src/types/checker/driver/init.rs",
+        "src/types/checker/driver/mod.rs",
+        "src/types/checker/mod.rs",
+        "src/types/checker/schema/classes/mod.rs",
+        "src/types/checker/schema/classes/state.rs",
+        "src/types/checker/schema/enums.rs",
+        "src/types/schema.rs",
+        "tests/codegen/serialize.rs",
+        "tests/codegen/serialize/not_serializable.rs"
+      ]
+    },
+    {
+      "source": 1667,
+      "sha": "34b46cde0ec623e60d082bc5b34bd02730b32252",
+      "decision": "include",
+      "bullets": [
+        "F2"
+      ],
+      "behavior": "feat(cli): read INI directives from the project's `elephc.toml`",
+      "reason": null,
+      "issues": [],
+      "evidence_paths": [
+        "docs/compiling/cli-reference.md",
+        "docs/compiling/native-dependencies.md",
+        "docs/php/opcache.md",
+        "examples/project-ini/.gitignore",
+        "examples/project-ini/elephc.toml",
+        "examples/project-ini/main.php",
+        "src/main.rs",
+        "src/native_deps/manifest.rs",
+        "src/native_deps/mod.rs",
+        "src/project_ini.rs",
+        "tests/project_ini_tests.rs"
+      ]
+    },
+    {
+      "source": "7ce73d028d0f3f5218ff3622f43c4774808d79b6",
+      "sha": "7ce73d028d0f3f5218ff3622f43c4774808d79b6",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "chore: update repository stats [skip ci]",
+      "reason": "Generated repository traffic statistics only.",
+      "issues": [],
+      "evidence_paths": [
+        ".github/traffic/clones-badge.svg",
+        ".github/traffic/clones.json",
+        ".github/traffic/star-history-dark.svg",
+        ".github/traffic/star-history-light.svg"
+      ]
+    },
+    {
+      "source": 1670,
+      "sha": "21f59ff6c8ca49ee08ae837824c61522c47964cd",
+      "decision": "include",
+      "bullets": [
+        "F3"
+      ],
+      "behavior": "fix(eir): refine static effects and keep concat resets out of call summaries",
+      "reason": null,
+      "issues": [
+        633,
+        634
+      ],
+      "evidence_paths": [
+        "docs/internals/the-ir.md",
+        "src/ir_lower/effect_refinement.rs",
+        "src/ir_lower/tests/effects.rs"
+      ]
+    },
+    {
+      "source": 1671,
+      "sha": "ba444d40b38ebf693896c1569354c07b0c025d1a",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "refactor(eir): move array_splice lowering out of the expression dispatcher",
+      "reason": "Cohesive module extraction preserves existing array_splice behavior.",
+      "issues": [
+        1185
+      ],
+      "evidence_paths": [
+        "docs/internals/the-ir.md",
+        "src/ir_lower/expr/array_splice.rs",
+        "src/ir_lower/expr/mod.rs"
+      ]
+    },
+    {
+      "source": 1681,
+      "sha": "524cc417daa327c1c09e9258d10caf313e36f2c7",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test(arrays): cover closure map results owned by literals",
+      "reason": "Tests only for already-fixed array literal ownership.",
+      "issues": [
+        1434,
+        1435
+      ],
+      "evidence_paths": [
+        "tests/codegen/arrays/literal_element_types.rs",
+        "tests/codegen/runtime_gc/literal_builtin_elements.rs"
+      ]
+    },
+    {
+      "source": 1682,
+      "sha": "cb770578a3cf03d1308d6ef23988c2eeb0cf7dab",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "fix(ci): verify and retry missing nextest artifacts",
+      "reason": "CI artifact validation and retry only.",
+      "issues": [
+        1436,
+        1437
+      ],
+      "evidence_paths": [
+        ".github/workflows/ci.yml",
+        "scripts/ci/test_validate_archived_nextest.sh",
+        "scripts/ci/validate_archived_nextest.sh"
+      ]
+    },
+    {
+      "source": 1684,
+      "sha": "7653e2550b7224d5709dff446eda4ec2975c8646",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "fix(optimizer): seed SPL hierarchy for AST-only exception analysis",
+      "reason": "AST-only analysis API hierarchy correction; normal compilation already supplies checked metadata.",
+      "issues": [
+        1578
+      ],
+      "evidence_paths": [
+        "docs/internals/the-optimizer.md",
+        "src/optimize/exception_flow/hierarchy.rs",
+        "src/optimize/tests/dce/tries/catch_pruning.rs",
+        "src/types/checker/builtin_spl_exceptions.rs",
+        "src/types/checker/mod.rs"
+      ]
+    },
+    {
+      "source": 1685,
+      "sha": "fde13c5fcf88b84646f87ba190f9a61703d5bbfc",
+      "decision": "include",
+      "bullets": [
+        "X6"
+      ],
+      "behavior": "fix(stack): budget target folding and autoload reference scans",
+      "reason": null,
+      "issues": [
+        1590,
+        1591
+      ],
+      "evidence_paths": [
+        "docs/internals/the-parser.md",
+        "src/autoload/mod.rs",
+        "src/optimize.rs",
+        "tests/embedder_stack_tests.rs"
+      ]
+    },
+    {
+      "source": 1686,
+      "sha": "5308f3734abca989c3100d08cb4ec7867b6e98ae",
+      "decision": "include",
+      "bullets": [
+        "X6"
+      ],
+      "behavior": "fix(codegen): preserve reference-return fallback metadata",
+      "reason": null,
+      "issues": [
+        1627
+      ],
+      "evidence_paths": [
+        "src/codegen/lower_inst/core_closures.rs"
+      ]
+    },
+    {
+      "source": 1687,
+      "sha": "52cade631b321405cee848c7ef6bbcedcf642201",
+      "decision": "include",
+      "bullets": [
+        "X4"
+      ],
+      "behavior": "fix(pdo): isolate driver open diagnostics per thread",
+      "reason": null,
+      "issues": [
+        1608
+      ],
+      "evidence_paths": [
+        "crates/elephc-pdo/src/cubrid.rs",
+        "crates/elephc-pdo/src/odbc.rs"
+      ]
+    },
+    {
+      "source": 1691,
+      "sha": "0867c78a05f23055b0700c250779b5a642aff385",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test(reflection): pin static abstractness after body trimming",
+      "reason": "Emitter test only for existing reflection behavior.",
+      "issues": [
+        1257
+      ],
+      "evidence_paths": [
+        "src/codegen_support/runtime/data/user.rs"
+      ]
+    },
+    {
+      "source": 1692,
+      "sha": "cfd3bf8791df1a8d82e7a6bee593cb72a4d74812",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test(locals): execute guarded and divergent mixed stores",
+      "reason": "Executes additional existing mixed-storage fixture branches.",
+      "issues": [
+        1592,
+        1593
+      ],
+      "evidence_paths": [
+        "tests/codegen/locals_retype.rs",
+        "tests/codegen/support/projects.rs"
+      ]
+    },
+    {
+      "source": 1695,
+      "sha": "cb2dff6c75d4e5a6fc58401d4472cf7df47c5deb",
+      "decision": "include",
+      "bullets": [
+        "X4"
+      ],
+      "behavior": "fix(types): scope PDO SQLSTATE exemption to Throwable contract",
+      "reason": null,
+      "issues": [
+        1668
+      ],
+      "evidence_paths": [
+        "src/types/checker/schema/classes/interfaces.rs",
+        "tests/codegen/pdo.rs"
+      ]
+    },
+    {
+      "source": 1697,
+      "sha": "b3af8371b9eb081d469f5c338c74f616faa21f82",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test: share retype fixtures between checker and codegen",
+      "reason": "Shares test fixtures without changing production behavior.",
+      "issues": [
+        1594,
+        1595
+      ],
+      "evidence_paths": [
+        "tests/codegen/locals_retype.rs",
+        "tests/error_tests/type_system.rs",
+        "tests/support/locals_retype_fixtures.rs"
+      ]
+    },
+    {
+      "source": 1705,
+      "sha": "7492cd29e93c58704afdea5a16bda30c193752c0",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test(iconv): verify Apple discard mode without fallback skipping",
+      "reason": "Apple iconv test only.",
+      "issues": [
+        1609
+      ],
+      "evidence_paths": [
+        "crates/elephc-iconv/src/tests.rs"
+      ]
+    },
+    {
+      "source": 1706,
+      "sha": "f0f01db7ba1db4638e1d0b29e274e916a06c6106",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test(mbstring): split slow ownership fixtures by backend",
+      "reason": "Splits test fixtures to stay within time limits.",
+      "issues": [
+        1630
+      ],
+      "evidence_paths": [
+        "tests/codegen/runtime_gc/mbstring.rs",
+        "tests/codegen/strings/mbstring_mime.rs"
+      ]
+    },
+    {
+      "source": 1707,
+      "sha": "6c5cc50ae66fb85c2826edb9f3f9a27f5d370231",
+      "decision": "include",
+      "bullets": [
+        "X3"
+      ],
+      "behavior": "fix(runtime): pass x86 retain pointers in the helper input register",
+      "reason": null,
+      "issues": [
+        1618
+      ],
+      "evidence_paths": [
+        "src/codegen_support/runtime/arrays/hash_to_hash_unique.rs",
+        "src/codegen_support/runtime/callables/closure_bind.rs",
+        "tests/codegen/callables/closures.rs"
+      ]
+    },
+    {
+      "source": 1708,
+      "sha": "c779d84e796970405cf799a67896f324c6e6a66e",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test(types): cover documented null-coalesce result contracts",
+      "reason": "Checker test coverage only.",
+      "issues": [
+        1622
+      ],
+      "evidence_paths": [
+        "tests/error_tests/type_system.rs"
+      ]
+    },
+    {
+      "source": 1745,
+      "sha": "42760fcdaa5e675c3b41efbaae38e467d85d2118",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "CI: pin Rust toolchain to 1.98",
+      "reason": "Pins CI and packaging toolchain; no PHP-visible change.",
+      "issues": [],
+      "evidence_paths": [
+        ".github/docker/ci.Dockerfile",
+        ".github/workflows/ci.yml",
+        ".github/workflows/ios-curl-live.yml",
+        ".github/workflows/nightly.yml",
+        ".github/workflows/pdo-live.yml",
+        ".github/workflows/release.yml",
+        "AGENTS.md",
+        "Dockerfile.test-linux-arm64",
+        "Dockerfile.test-linux-x86_64"
+      ]
+    },
+    {
+      "source": "293c02545c2e348664366652134a8b44ca918a73",
+      "sha": "293c02545c2e348664366652134a8b44ca918a73",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "chore: update repository stats [skip ci]",
+      "reason": "Generated repository traffic statistics only.",
+      "issues": [],
+      "evidence_paths": [
+        ".github/traffic/clones-badge.svg",
+        ".github/traffic/clones.json",
+        ".github/traffic/star-history-dark.svg",
+        ".github/traffic/star-history-light.svg"
+      ]
+    },
+    {
+      "source": 1567,
+      "sha": "2fb3f7ded9dbf8a57df0816e91abc14493f5bee9",
+      "decision": "include",
+      "bullets": [
+        "F3"
+      ],
+      "behavior": "feat: promote scalar php locals to SSA",
+      "reason": null,
+      "issues": [
+        1648
+      ],
+      "evidence_paths": [
+        "docs/compiling/optimization.md",
+        "docs/internals/architecture.md",
+        "docs/internals/memory-model.md",
+        "docs/internals/the-ir.md",
+        "docs/internals/the-optimizer.md",
+        "examples/mem2reg-loop/.gitignore",
+        "examples/mem2reg-loop/main.php",
+        "src/codegen/lower_term.rs",
+        "src/ir_passes/clobber.rs",
+        "src/ir_passes/dead_store.rs",
+        "src/ir_passes/driver.rs",
+        "src/ir_passes/immutable_local_loads.rs",
+        "src/ir_passes/intervals.rs",
+        "src/ir_passes/licm.rs",
+        "src/ir_passes/local_scope.rs",
+        "src/ir_passes/loops.rs",
+        "src/ir_passes/mem2reg.rs",
+        "src/ir_passes/mod.rs",
+        "src/ir_passes/regalloc.rs",
+        "src/ir_passes/tests/loops_test.rs",
+        "src/ir_passes/tests/mem2reg_test.rs",
+        "src/ir_passes/tests/mod.rs",
+        "src/ir_passes/tests/regalloc_edges_test.rs",
+        "src/ir_passes/tests/regalloc_test.rs",
+        "tests/codegen/optimizer.rs",
+        "tests/codegen/optimizer/mem2reg.rs"
+      ]
+    },
+    {
+      "source": 1672,
+      "sha": "bb9f0a864495fe497b91c6117ea357fe638abb29",
+      "decision": "include",
+      "bullets": [
+        "X5"
+      ],
+      "behavior": "fix(types): preserve nested element types in mixed array spreads",
+      "reason": null,
+      "issues": [
+        1194
+      ],
+      "evidence_paths": [
+        "docs/internals/the-type-checker.md",
+        "src/types/checker/inference/expr/basic.rs",
+        "tests/codegen/arrays/assoc_spread.rs",
+        "tests/error_tests/type_system.rs"
+      ]
+    },
+    {
+      "source": 1677,
+      "sha": "ec25182894a2d81bb083d72a30e18a40938aaf9f",
+      "decision": "include",
+      "bullets": [
+        "X5"
+      ],
+      "behavior": "fix(parser): parse qualified predefined constant and class names",
+      "reason": null,
+      "issues": [
+        1446,
+        1447,
+        1485
+      ],
+      "evidence_paths": [
+        "docs/php/namespaces.md",
+        "src/parser/expr/prefix.rs",
+        "src/parser/stmt/names.rs",
+        "tests/codegen/namespaces.rs",
+        "tests/parser_tests/namespaces.rs"
+      ]
+    },
+    {
+      "source": 1680,
+      "sha": "919fe071c16a703b3931ab4e6c43b087934ed648",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "docs(generators): clarify named and closure metadata paths",
+      "reason": "Corrects generator metadata comments and documentation only.",
+      "issues": [
+        1432,
+        1433
+      ],
+      "evidence_paths": [
+        "docs/internals/the-optimizer.md",
+        "src/ir_lower/function.rs",
+        "src/optimize/generator_bodies.rs",
+        "src/types/checker/callables/closures.rs"
+      ]
+    },
+    {
+      "source": 1744,
+      "sha": "c4ece12ae4252639e1ba818d1e81e0a0c25b359e",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "fix: keep INI identity allocation warning-free across Rust toolchains",
+      "reason": "Equivalent atomic implementation avoids a toolchain warning.",
+      "issues": [],
+      "evidence_paths": [
+        "crates/elephc-mbstring/src/state/ini/string.rs"
+      ]
+    },
+    {
+      "source": "198d0b79dbbef3a0e0422afdb4c157d34207f0ad",
+      "sha": "198d0b79dbbef3a0e0422afdb4c157d34207f0ad",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "chore: update repository stats [skip ci]",
+      "reason": "Generated repository traffic statistics only.",
+      "issues": [],
+      "evidence_paths": [
+        ".github/traffic/clones-badge.svg",
+        ".github/traffic/clones.json"
+      ]
+    },
+    {
+      "source": 968,
+      "sha": "a1559f0368abfa83b4392e1a87ab5897196b8372",
+      "decision": "include",
+      "bullets": [
+        "F1",
+        "X2",
+        "X3",
+        "X6"
+      ],
+      "behavior": "feat(opcache): give the OPcache surface real behaviour",
+      "reason": null,
+      "issues": [],
+      "evidence_paths": [
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+        "crates/elephc-builtin-contract/src/registry.rs",
+        "crates/elephc-builtin-contract/src/support.rs",
+        "crates/elephc-magician/Cargo.toml",
+        "crates/elephc-magician/src/context/functions.rs",
+        "crates/elephc-magician/src/context/native_defaults.rs",
+        "crates/elephc-magician/src/context/native_function.rs",
+        "crates/elephc-magician/src/errors.rs",
+        "crates/elephc-magician/src/eval_ir/attributes.rs",
+        "crates/elephc-magician/src/eval_ir/callable.rs",
+        "crates/elephc-magician/src/eval_ir/classes.rs",
+        "crates/elephc-magician/src/eval_ir/enums.rs",
+        "crates/elephc-magician/src/eval_ir/expressions.rs",
+        "crates/elephc-magician/src/eval_ir/interfaces.rs",
+        "crates/elephc-magician/src/eval_ir/methods.rs",
+        "crates/elephc-magician/src/eval_ir/program.rs",
+        "crates/elephc-magician/src/eval_ir/properties.rs",
+        "crates/elephc-magician/src/eval_ir/statements.rs",
+        "crates/elephc-magician/src/eval_ir/traits.rs",
+        "crates/elephc-magician/src/ffi/context.rs",
+        "crates/elephc-magician/src/ffi/mod.rs",
+        "crates/elephc-magician/src/ffi/opcache_status.rs",
+        "crates/elephc-magician/src/ffi/tests/native_functions.rs",
+        "crates/elephc-magician/src/interpreter/builtins/network_env/mod.rs",
+        "crates/elephc-magician/src/interpreter/builtins/network_env/opcache_direct.rs",
+        "crates/elephc-magician/src/interpreter/builtins/network_env/opcache_file_functions.rs",
+        "crates/elephc-magician/src/interpreter/builtins/network_env/opcache_get_configuration.rs",
+        "crates/elephc-magician/src/interpreter/builtins/network_env/opcache_get_status.rs",
+        "crates/elephc-magician/src/interpreter/builtins/network_env/opcache_reset.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/arity.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/callable.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/callable/array_dispatch.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/callable/call_user_func.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/callable/object_dispatch.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/mod.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/owned_arguments.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/tests.rs",
+        "crates/elephc-magician/src/interpreter/builtins/registry/tests/arity_contract.rs",
+        "crates/elephc-magician/src/interpreter/builtins/spec.rs",
+        "crates/elephc-magician/src/interpreter/builtins/xml/dispatch.rs",
+        "crates/elephc-magician/src/interpreter/dynamic_functions/closure_execution.rs",
+        "crates/elephc-magician/src/interpreter/dynamic_functions/function_binding.rs",
+        "crates/elephc-magician/src/interpreter/dynamic_functions/method_binding.rs",
+        "crates/elephc-magician/src/interpreter/expressions/calls.rs",
+        "crates/elephc-magician/src/interpreter/include_exec.rs",
+        "crates/elephc-magician/src/interpreter/statements/dynamic_method_execution.rs",
+        "crates/elephc-magician/src/interpreter/tests/dynamic_calls/call_user_func.rs",
+        "crates/elephc-magician/src/interpreter/tests/mod.rs",
+        "crates/elephc-magician/src/interpreter/tests/native_ref_cleanup.rs",
+        "crates/elephc-magician/src/interpreter/tests/opcache_script_cache.rs",
+        "crates/elephc-magician/src/interpreter/tests/operand_ownership.rs",
+        "crates/elephc-magician/src/interpreter/throwables.rs",
+        "crates/elephc-magician/src/lexer/inline_html.rs",
+        "crates/elephc-magician/src/lexer/mod.rs",
+        "crates/elephc-magician/src/lexer/scan.rs",
+        "crates/elephc-magician/src/lexer/strings.rs",
+        "crates/elephc-magician/src/lexer/tests.rs",
+        "crates/elephc-magician/src/lib.rs",
+        "crates/elephc-magician/src/parse_cache.rs",
+        "crates/elephc-magician/src/parser/mod.rs",
+        "crates/elephc-magician/src/parser/statements.rs",
+        "crates/elephc-magician/src/parser/tests/exceptions_control.rs",
+        "crates/elephc-magician/src/script_cache/accel_log.rs",
+        "crates/elephc-magician/src/script_cache/blacklist.rs",
+        "crates/elephc-magician/src/script_cache/config.rs",
+        "crates/elephc-magician/src/script_cache/file_cache.rs",
+        "crates/elephc-magician/src/script_cache/file_store.rs",
+        "crates/elephc-magician/src/script_cache/format_bench.rs",
+        "crates/elephc-magician/src/script_cache/format_guard.rs",
+        "crates/elephc-magician/src/script_cache/mod.rs",
+        "crates/elephc-magician/src/script_cache/segments.rs",
+        "crates/elephc-magician/src/script_cache/store.rs",
+        "crates/elephc-magician/src/script_cache/store_tests.rs",
+        "docs/compiling/cli-reference.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_blacklist_entry.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_compile.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_discard.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_in_file_cache.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_is_cached.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_reset.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_script_field.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_script_path.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_soft_invalidate.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_stat.md",
+        "docs/internals/builtins/_internal/__elephc_opcache_rt_swap.md",
+        "docs/internals/builtins/_internal/__elephc_pdo_adapter_addr.md",
+        "docs/internals/builtins/_internal/__elephc_pdo_called_class_status.md",
+        "docs/internals/builtins/_internal/__elephc_pdo_statement_class_status.md",
+        "docs/internals/builtins/_internal/__elephc_phar_bzip2_archive.md",
+        "docs/internals/builtins/_internal/__elephc_phar_decompress_archive.md",
+        "docs/internals/builtins/_internal/__elephc_phar_get_file_metadata.md",
+        "docs/internals/builtins/_internal/__elephc_phar_get_metadata.md",
+        "docs/internals/builtins/_internal/__elephc_phar_get_signature_hash.md",
+        "docs/internals/builtins/_internal/__elephc_phar_get_signature_type.md",
+        "docs/internals/builtins/_internal/__elephc_phar_get_stub.md",
+        "docs/internals/builtins/_internal/__elephc_phar_gzip_archive.md",
+        "docs/internals/builtins/_internal/__elephc_phar_list_entries.md",
+        "docs/internals/builtins/_internal/__elephc_phar_set_compression.md",
+        "docs/internals/builtins/_internal/__elephc_phar_set_file_metadata.md",
+        "docs/internals/builtins/_internal/__elephc_phar_set_metadata.md",
+        "docs/internals/builtins/_internal/__elephc_phar_set_stub.md",
+        "docs/internals/builtins/_internal/__elephc_phar_set_zip_password.md",
+        "docs/internals/builtins/_internal/__elephc_phar_sign_hash.md",
+        "docs/internals/builtins/_internal/__elephc_phar_sign_openssl.md",
+        "docs/internals/builtins/_internal/__elephc_ptr_is_null.md",
+        "docs/internals/builtins/_internal/__elephc_ptr_read_string.md",
+        "docs/internals/builtins/_internal/__elephc_ptr_write_string.md",
+        "docs/internals/builtins/_internal/__elephc_shared_ini.md",
+        "docs/internals/builtins/_internal/__elephc_strtotime_raw.md",
+        "docs/internals/builtins/image/_cairo_clamp8.md",
+        "docs/internals/builtins/image/_cairo_color.md",
+        "docs/internals/builtins/image/_cairo_fx.md",
+        "docs/internals/builtins/image/_cairo_pack.md",
+        "docs/internals/builtins/image/_elephc_img_output.md",
+        "docs/internals/builtins/image/_gmagick_norm_color.md",
+        "docs/internals/builtins/image/_gmagick_parse_color.md",
+        "docs/internals/builtins/image/_gmagick_pixel_from_int.md",
+        "docs/internals/builtins/image/_imagick_code_to_fmt.md",
+        "docs/internals/builtins/image/_imagick_color_name.md",
+        "docs/internals/builtins/image/_imagick_fmt_from_path.md",
+        "docs/internals/builtins/image/_imagick_fmt_to_code.md",
+        "docs/internals/builtins/image/_imagick_hexval.md",
+        "docs/internals/builtins/image/_imagick_norm_color.md",
+        "docs/internals/builtins/image/_imagick_pack2.md",
+        "docs/internals/builtins/image/_imagick_parse_color.md",
+        "docs/internals/builtins/image/_imagick_pixel_from_int.md",
+        "docs/internals/builtins/misc/opcache_compile_file.md",
+        "docs/internals/builtins/misc/opcache_get_configuration.md",
+        "docs/internals/builtins/misc/opcache_get_status.md",
+        "docs/internals/builtins/misc/opcache_invalidate.md",
+        "docs/internals/builtins/misc/opcache_is_script_cached.md",
+        "docs/internals/builtins/misc/opcache_is_script_cached_in_file_cache.md",
+        "docs/internals/builtins/misc/opcache_jit_blacklist.md",
+        "docs/internals/builtins/misc/opcache_reset.md",
+        "docs/internals/builtins/type/var_export.md",
+        "docs/internals/builtins/web/ini_set.md",
+        "docs/internals/eval-runtime.md",
+        "docs/php/eval.md",
+        "docs/php/opcache.md",
+        "examples/opcache-runtime-cache/.gitignore",
+        "examples/opcache-runtime-cache/main.php",
+        "examples/opcache-runtime-cache/rules/10-loyalty.php",
+        "examples/opcache-runtime-cache/rules/20-summer.php",
+        "src/builtins/system/__elephc_opcache_rt_blacklist_entry.rs",
+        "src/builtins/system/__elephc_opcache_rt_compile.rs",
+        "src/builtins/system/__elephc_opcache_rt_discard.rs",
+        "src/builtins/system/__elephc_opcache_rt_in_file_cache.rs",
+        "src/builtins/system/__elephc_opcache_rt_is_cached.rs",
+        "src/builtins/system/__elephc_opcache_rt_reset.rs",
+        "src/builtins/system/__elephc_opcache_rt_script_field.rs",
+        "src/builtins/system/__elephc_opcache_rt_script_path.rs",
+        "src/builtins/system/__elephc_opcache_rt_soft_invalidate.rs",
+        "src/builtins/system/__elephc_opcache_rt_stat.rs",
+        "src/builtins/system/__elephc_opcache_rt_swap.rs",
+        "src/builtins/system/mod.rs",
+        "src/codegen/block_emit.rs",
+        "src/codegen/context.rs",
+        "src/codegen/eval_callable_helpers.rs",
+        "src/codegen/eval_class_constant_helpers.rs",
+        "src/codegen/eval_constructor_helpers.rs",
+        "src/codegen/eval_method_helpers.rs",
+        "src/codegen/eval_property_helpers.rs",
+        "src/codegen/eval_reflection_helpers.rs",
+        "src/codegen/eval_reflection_owner_helpers.rs",
+        "src/codegen/eval_static_property_helpers.rs",
+        "src/codegen/frame.rs",
+        "src/codegen/lower_inst.rs",
+        "src/codegen/lower_inst/builtins.rs",
+        "src/codegen/lower_inst/builtins/eval.rs",
+        "src/codegen/lower_inst/builtins/eval/context_registration.rs",
+        "src/codegen/lower_inst/builtins/eval/function_params.rs",
+        "src/codegen/lower_inst/builtins/eval/function_registration.rs",
+        "src/codegen/lower_inst/builtins/eval/registration_collection.rs",
+        "src/codegen/lower_inst/builtins/opcache_runtime.rs",
+        "src/codegen/lower_inst/callables.rs",
+        "src/codegen/lower_inst/iterators.rs",
+        "src/codegen/lower_inst/ownership.rs",
+        "src/codegen/lower_inst/runtime_calls.rs",
+        "src/codegen/lower_inst/runtime_functions/group_08.rs",
+        "src/codegen/lower_inst/static_locals.rs",
+        "src/codegen/mod.rs",
+        "src/codegen_support/compilation_context.rs",
+        "src/codegen_support/mod.rs",
+        "src/codegen_support/runtime/io/print_r_walk.rs",
+        "src/codegen_support/runtime/io/var_dump_walk.rs",
+        "src/codegen_support/runtime/system/json_encode_array_dynamic.rs",
+        "src/codegen_support/runtime/system/json_encode_array_int.rs",
+        "src/codegen_support/runtime/system/serialize.rs",
+        "src/ir/function.rs",
+        "src/ir/instr.rs",
+        "src/ir/runtime_call.rs",
+        "src/ir/runtime_fn.rs",
+        "src/ir/validator.rs",
+        "src/ir_lower/context.rs",
+        "src/ir_lower/function.rs",
+        "src/ir_lower/mod.rs",
+        "src/ir_lower/program.rs",
+        "src/ir_lower/program/function_declarations.rs",
+        "src/ir_lower/program/runtime_features.rs",
+        "src/ir_lower/stmt/control_exit.rs",
+        "src/ir_lower/stmt/declarations.rs",
+        "src/ir_lower/stmt/exceptions.rs",
+        "src/ir_lower/stmt/statement_basics.rs",
+        "src/ir_lower/stmt/static_property_writes.rs",
+        "src/ir_lower/tests/call_coercion_owners.rs",
+        "src/ir_lower/tests/corpus.rs",
+        "src/ir_passes/inline.rs",
+        "src/lexer/literals/strings.rs",
+        "src/linker/bridges.rs",
+        "src/opcache/directives.rs",
+        "src/opcache/mod.rs",
+        "src/opcache/rt_status_keys.rs",
+        "src/opcache/runtime_cache.rs",
+        "src/opcache_prelude.rs",
+        "src/opcache_prelude/build.rs",
+        "src/opcache_prelude/detect.rs",
+        "src/opcache_prelude/env_ini.rs",
+        "src/opcache_prelude/injection.rs",
+        "src/opcache_prelude/preload.rs",
+        "src/opcache_prelude/scripts_configuration.rs",
+        "src/opcache_prelude/state_restriction.rs",
+        "src/opcache_prelude/status_render.rs",
+        "src/opcache_prelude/tests/basics.rs",
+        "src/opcache_prelude/tests/env_restrict.rs",
+        "src/opcache_prelude/tests/manifest_ini.rs",
+        "src/opcache_prelude/tests/preload.rs",
+        "src/optimize/control/prune/loop_exit.rs",
+        "src/optimize/tests/prune.rs",
+        "src/parser/ast/mod.rs",
+        "src/parser/ast/stmt.rs",
+        "src/pipeline.rs",
+        "src/pipeline/backend.rs",
+        "src/pipeline/output.rs",
+        "src/resolver/engine.rs",
+        "src/resolver/engine_includes.rs",
+        "src/resolver/include_once.rs",
+        "src/resolver/mod.rs",
+        "src/termination.rs",
+        "src/types/checker/stmt_check.rs",
+        "src/var_export_prelude.rs",
+        "src/web_prelude.rs",
+        "src/web_prelude/build.rs",
+        "tests/codegen/exceptions.rs",
+        "tests/codegen/runtime_gc.rs",
+        "tests/codegen/runtime_gc/ini_lookup_arguments.rs",
+        "tests/codegen/runtime_gc/large_unary_string_results.rs",
+        "tests/codegen/runtime_gc/static_local_initializers.rs",
+        "tests/codegen/strings/interpolation_and_hashes.rs",
+        "tests/embedder_stack_tests.rs",
+        "tests/eval_argument_count_tests.rs",
+        "tests/eval_include_template_tests.rs",
+        "tests/eval_inline_html_tests.rs",
+        "tests/finally_pending_exception_tests.rs",
+        "tests/include_scoped_return_tests.rs",
+        "tests/inlined_concat_reset_tests.rs",
+        "tests/opcache_blacklist_tests.rs",
+        "tests/opcache_env_override_tests.rs",
+        "tests/opcache_file_cache_tests.rs",
+        "tests/opcache_ini_tests.rs",
+        "tests/opcache_manifest_tests.rs",
+        "tests/opcache_preload_tests.rs",
+        "tests/opcache_restrict_api_tests.rs",
+        "tests/opcache_runtime_cache_tests.rs",
+        "tests/runtime_promoted_array_reader_tests.rs",
+        "tests/static_property_string_ownership_tests.rs",
+        "tests/var_export_and_strstr_result_tests.rs",
+        "tests/web_session_tests.rs"
+      ]
+    },
+    {
+      "source": 1702,
+      "sha": "c1c061e2c1b1eee8ffdd65710fc4dd31dfbaf1fe",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "Stop adding unplanned work to the roadmap",
+      "reason": "Repository roadmap management policy only.",
+      "issues": [],
+      "evidence_paths": [
+        ".claude/skills/verify-release/SKILL.md",
+        "AGENTS.md"
+      ]
+    },
+    {
+      "source": 1054,
+      "sha": "cf039847e92303c3f2caa53fc98cb0d8e4b19d42",
+      "decision": "include",
+      "bullets": [
+        "X2"
+      ],
+      "behavior": "fix(strings): implode() reads its array's real element layout, not an assumed one",
+      "reason": null,
+      "issues": [
+        689
+      ],
+      "evidence_paths": [
+        "docs/internals/builtins/string/implode.md",
+        "docs/internals/builtins/string/join.md",
+        "docs/php/strings.md",
+        "examples/string-ops/main.php",
+        "src/builtins/string/implode.rs",
+        "src/builtins/string/join.rs",
+        "src/codegen/lower_inst/arrays.rs",
+        "src/codegen/lower_inst/builtins/strings.rs",
+        "src/codegen/lower_inst/builtins/strings/implode_source.rs",
+        "src/codegen/lower_inst/builtins/strings/split.rs",
+        "src/codegen_support/runtime/emitters.rs",
+        "src/codegen_support/runtime/strings/concat_scratch.rs",
+        "src/codegen_support/runtime/strings/ftoa.rs",
+        "src/codegen_support/runtime/strings/implode.rs",
+        "src/codegen_support/runtime/strings/itoa.rs",
+        "src/codegen_support/runtime/strings/mod.rs",
+        "tests/codegen/runtime_gc.rs",
+        "tests/codegen/runtime_gc/implode_boxed_operand.rs",
+        "tests/codegen/strings.rs",
+        "tests/codegen/strings/implode_boxed.rs"
+      ]
+    },
+    {
+      "source": 1673,
+      "sha": "5044d290e73071bf89010143950b5f66474878c1",
+      "decision": "include",
+      "bullets": [
+        "X5"
+      ],
+      "behavior": "fix(reflection): list interface methods in PHP declaration order",
+      "reason": null,
+      "issues": [
+        1262
+      ],
+      "evidence_paths": [
+        "docs/php/classes.md",
+        "src/codegen/lower_inst/objects/reflection/interface_method_names_tests.rs",
+        "src/codegen/lower_inst/objects/reflection/names_constants.rs",
+        "tests/codegen/oop/reflection_functions.rs"
+      ]
+    },
+    {
+      "source": "127947c3859d306a3cfb96cc7885d0cc525a5e19",
+      "sha": "127947c3859d306a3cfb96cc7885d0cc525a5e19",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "chore: update repository stats [skip ci]",
+      "reason": "Generated repository traffic statistics only.",
+      "issues": [],
+      "evidence_paths": [
+        ".github/traffic/clones-badge.svg",
+        ".github/traffic/clones.json"
+      ]
+    },
+    {
+      "source": "703528c563bde7d6ecb66351334339d5c078a4c0",
+      "sha": "703528c563bde7d6ecb66351334339d5c078a4c0",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "chore: update repository stats [skip ci]",
+      "reason": "Generated repository traffic statistics only.",
+      "issues": [],
+      "evidence_paths": [
+        ".github/traffic/clones-badge.svg",
+        ".github/traffic/clones.json"
+      ]
+    },
+    {
+      "source": 1767,
+      "sha": "7ebc53fc4d0e0deae3a8edae95a08f34bce5281c",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "ci: move macOS jobs from macos-14 to macos-15 runners",
+      "reason": "CI runner migration only.",
+      "issues": [],
+      "evidence_paths": [
+        "docs/compiling/native-dependencies.md"
+      ]
+    },
+    {
+      "source": 1679,
+      "sha": "85f7adbce644763e00bdd32b6f416412b7223634",
+      "decision": "include",
+      "bullets": [
+        "X5"
+      ],
+      "behavior": "fix(strict-php): honor hidden extensions in guards and callables",
+      "reason": null,
+      "issues": [
+        1483,
+        1484
+      ],
+      "evidence_paths": [
+        "docs/compiling/cli-reference.md",
+        "docs/internals/the-type-checker.md",
+        "src/types/checker/callables/first_class.rs",
+        "src/types/checker/functions/resolution/call.rs",
+        "src/types/checker/mixed_storage_scan.rs",
+        "src/types/checker/stmt_check/narrowing.rs",
+        "tests/codegen/mod.rs",
+        "tests/codegen/strict_php.rs",
+        "tests/codegen/strict_php_source_guards.rs",
+        "tests/error_tests/strict_php.rs"
+      ]
+    },
+    {
+      "source": 1688,
+      "sha": "312393f523fa4919065bd647853e4c0fcd7587b1",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "docs(tests): align retype and array-growth fixture comments",
+      "reason": "Corrects stale test comments only.",
+      "issues": [
+        1207,
+        1569,
+        1570
+      ],
+      "evidence_paths": [
+        "tests/codegen/arrays/indexed/shape_transforms.rs",
+        "tests/codegen/locals_retype.rs"
+      ]
+    },
+    {
+      "source": 1693,
+      "sha": "764c4c4f24e20591f0424ad727f965eb50bae439",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test(arrays): cover static and ternary spread ownership",
+      "reason": "Adds spread ownership coverage and splits MIME tests.",
+      "issues": [
+        1199
+      ],
+      "evidence_paths": [
+        "tests/codegen/runtime_gc/spread_promotion.rs",
+        "tests/codegen/strings/mbstring_mime.rs"
+      ]
+    },
+    {
+      "source": 1704,
+      "sha": "f6c3101813a091f2022d52f59970529b2f1f8147",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "test(math): cover mt_rand and rand mixed bounds",
+      "reason": "Tests existing random-bound coercion behavior.",
+      "issues": [
+        1459
+      ],
+      "evidence_paths": [
+        "tests/codegen/casts_and_constants/math_builtins.rs"
+      ]
+    },
+    {
+      "source": 1709,
+      "sha": "9a9885daffb696f0da97b3a3011168c3fd3ea3ae",
+      "decision": "include",
+      "bullets": [
+        "X5"
+      ],
+      "behavior": "fix: fold named class constants before schema construction",
+      "reason": null,
+      "issues": [
+        1490,
+        1491,
+        1538,
+        1540
+      ],
+      "evidence_paths": [
+        "src/optimize/fold/expr.rs",
+        "src/optimize/reachability/tests.rs",
+        "src/optimize/reachability/usage/expressions.rs",
+        "src/optimize/tests/fold/php_semantics.rs",
+        "src/types/checker/schema/classes/state.rs",
+        "src/types/schema.rs",
+        "tests/codegen/objects/untyped_property_defaults.rs",
+        "tests/codegen/oop/attributes.rs",
+        "tests/codegen/strings/mbstring_mime.rs",
+        "tests/codegen/types/enums.rs"
+      ]
+    },
+    {
+      "source": 1711,
+      "sha": "7ed6a5bb17a5243d9fd9ac48c32f81424e653ae7",
+      "decision": "include",
+      "bullets": [
+        "X5"
+      ],
+      "behavior": "fix: support object boolval runtime callables",
+      "reason": null,
+      "issues": [
+        1635
+      ],
+      "evidence_paths": [
+        "src/builtins/types/boolval.rs",
+        "src/codegen_support/runtime/arrays/mixed_cast_bool.rs",
+        "src/ir_lower/tests/instanceof_operand_owners.rs",
+        "tests/codegen/casts_and_constants/predicates.rs"
+      ]
+    },
+    {
+      "source": 1713,
+      "sha": "6513a97921bb2e20ff3e1e9a237317b0f01c2b0a",
+      "decision": "include",
+      "bullets": [
+        "X5"
+      ],
+      "behavior": "fix: distinguish invalid mixed throw errors",
+      "reason": null,
+      "issues": [
+        1303
+      ],
+      "evidence_paths": [
+        "docs/internals/eval-runtime.md",
+        "src/codegen/lower_inst.rs",
+        "src/codegen/lower_inst/exceptions.rs",
+        "src/codegen/lower_term.rs",
+        "src/ir_lower/tests/mixed_throw_errors.rs",
+        "src/ir_lower/tests/mod.rs",
+        "tests/codegen/eval_constructors.rs",
+        "tests/codegen/runtime_gc/eval_operand_owners.rs"
+      ]
+    },
+    {
+      "source": 1770,
+      "sha": "b23aa1a6b3681c7a89df12d71a390823c8b806e0",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "docs(types): note the by-ref variadic limitation for a ref-aliased local",
+      "reason": "Documents an existing by-reference variadic limitation.",
+      "issues": [],
+      "evidence_paths": [
+        "docs/php/types.md"
+      ]
+    },
+    {
+      "source": "13c15d5f43be4fc3c3b936ccf44ec784dc69c61d",
+      "sha": "13c15d5f43be4fc3c3b936ccf44ec784dc69c61d",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "chore: update repository stats [skip ci]",
+      "reason": "Generated repository traffic statistics only.",
+      "issues": [],
+      "evidence_paths": [
+        ".github/traffic/clones-badge.svg",
+        ".github/traffic/clones.json",
+        ".github/traffic/star-history-dark.svg",
+        ".github/traffic/star-history-light.svg"
+      ]
+    },
+    {
+      "source": 1749,
+      "sha": "b457f312c30dc67d2f6da998974bfd43dfb94d9a",
+      "decision": "include",
+      "bullets": [
+        "X4"
+      ],
+      "behavior": "fix(pdo): publish the SQLSRV CLI diagnostic on constructor failure",
+      "reason": null,
+      "issues": [
+        1729
+      ],
+      "evidence_paths": [
+        "crates/elephc-pdo/src/lib.rs",
+        "crates/elephc-pdo/src/odbc.rs"
+      ]
+    },
+    {
+      "source": 1752,
+      "sha": "a53f7e21ad3e15b4729fe153c543eef2c5f3a36b",
+      "decision": "include",
+      "bullets": [
+        "X3"
+      ],
+      "behavior": "fix(arrays): array_chunk owns callable and reference elements",
+      "reason": null,
+      "issues": [
+        1294
+      ],
+      "evidence_paths": [
+        "src/codegen_support/runtime/arrays/hash_chunk.rs",
+        "tests/codegen/runtime_gc/assoc_chunk.rs"
+      ]
+    },
+    {
+      "source": 1669,
+      "sha": "6db3e9a14e2a50883fb36e880650533151e881f0",
+      "decision": "include",
+      "bullets": [
+        "X6"
+      ],
+      "behavior": "fix(eir): validate uses across unreachable continuations",
+      "reason": null,
+      "issues": [
+        812
+      ],
+      "evidence_paths": [
+        "docs/internals/the-ir.md",
+        "src/ir/tests/validator_test.rs",
+        "src/ir/validator.rs"
+      ]
+    },
+    {
+      "source": 1644,
+      "sha": "9e7cad33bdfb447da91cac0748876f4eed4a71cb",
+      "decision": "include",
+      "bullets": [
+        "F4"
+      ],
+      "behavior": "Range proofs specialize safe arithmetic and loop induction values, with conservative consumer and null-representation guards.",
+      "reason": null,
+      "evidence_paths": [
+        ".config/nextest.toml",
+        ".plans/eir-integer-range.md",
+        "ROADMAP.md",
+        "docs/internals/architecture.md",
+        "docs/internals/the-optimizer.md",
+        "examples/integer-range/.gitignore",
+        "examples/integer-range/main.php",
+        "src/codegen/lower_inst/comparisons.rs",
+        "src/ir/instr.rs",
+        "src/ir_lower/tests/eval_ownership.rs",
+        "src/ir_lower/tests/instanceof_operand_owners.rs",
+        "src/ir_passes/boxed_narrowing.rs",
+        "src/ir_passes/checked_int_sink.rs",
+        "src/ir_passes/checked_numeric_chain.rs",
+        "src/ir_passes/const_fold.rs",
+        "src/ir_passes/driver.rs",
+        "src/ir_passes/integer_range.rs",
+        "src/ir_passes/mod.rs",
+        "src/ir_passes/tests/boxed_narrowing_test.rs",
+        "src/ir_passes/tests/checked_int_sink_test.rs",
+        "src/ir_passes/tests/checked_numeric_chain_test.rs",
+        "src/ir_passes/tests/integer_range_domain_test.rs",
+        "src/ir_passes/tests/integer_range_regression_test.rs",
+        "src/ir_passes/tests/integer_range_test.rs",
+        "src/ir_passes/tests/mod.rs",
+        "tests/codegen/io/output_handler_lifecycle.rs",
+        "tests/codegen/optimizer.rs",
+        "tests/codegen/optimizer/integer_range.rs",
+        "tests/codegen/optimizer/integer_range/configuration.rs",
+        "tests/codegen/runtime_gc/boxed_array_multisort.rs",
+        "tests/codegen/runtime_gc/mbstring.rs",
+        "tests/codegen/strings/mbstring_detect.rs",
+        "tests/codegen/strings/mbstring_detect_order.rs",
+        "tests/codegen/strings/mbstring_entities.rs",
+        "tests/codegen/strings/mbstring_info.rs"
+      ],
+      "introduced_commits": [
+        "112070c5051856ff0c2210044a3b2735221e4d2b",
+        "22accea8da9e38f24dbb4a803db0285cccf33db3",
+        "29ec8cf4b43a78fa4d01b9ab3562d4a556e6733b",
+        "5d590ee1811c4b1ebec27479d0674a307719c8f2",
+        "63025c1b8150cb3d876325d066591647b6fa1ffd",
+        "63d737f6f321241faf76ac2b5c35d26960c6766f",
+        "7d31b25a92a0c08e2de8f31c959ca1a616f37ef1",
+        "9e7cad33bdfb447da91cac0748876f4eed4a71cb",
+        "a374b66578efcb56401dda3e35faca71c08f1987",
+        "a7656b86f6b3d81f7c7a21b75b7900813cf8504a",
+        "ba7218a64b44bd038e64aa34d1e5c36305e7fe5c",
+        "bb28227c9a31fd12737f7966f6b755da117be595",
+        "cf4971e09a2dfb41bc9dbc687bcc3c318e1e297c",
+        "ede29bea07b912d9d43dd6dd74f1f182806cc56b"
+      ]
+    },
+    {
+      "source": 1750,
+      "sha": "b77a8c5c91e15341c4b887e89dbc3accb23a814b",
+      "decision": "covered",
+      "bullets": [
+        "X4"
+      ],
+      "behavior": "DBLIB pre-handle connection diagnostics are thread-local and preserve SQLSTATE and native error codes.",
+      "reason": "The approved PDO bullet already covers per-thread driver connection diagnostics.",
+      "evidence_paths": [
+        ".github/workflows/pdo-live.yml",
+        "crates/elephc-pdo/src/dblib.rs",
+        "crates/elephc-pdo/src/lib.rs"
+      ],
+      "introduced_commits": [
+        "82614fa10d3879c2e3d0f742af56d9aedfc21e3b",
+        "b77a8c5c91e15341c4b887e89dbc3accb23a814b"
+      ]
+    },
+    {
+      "source": 1683,
+      "sha": "aad8704602856cc12b5f0ea09912b8385b20bd84",
+      "decision": "include",
+      "bullets": [
+        "X7"
+      ],
+      "behavior": "Static method instanceof targets receive a parentheses hint; missing constant-list names report the offending token.",
+      "reason": null,
+      "evidence_paths": [
+        "docs/php/classes.md",
+        "src/parser/expr/pratt.rs",
+        "src/parser/stmt/oop/body.rs",
+        "tests/error_tests/syntax.rs"
+      ],
+      "introduced_commits": [
+        "1159fa1ba43d277c51fdc42d3b9c236145f5ec1b",
+        "aad8704602856cc12b5f0ea09912b8385b20bd84",
+        "ddf78d403048c3c45621f8479397a096da0c995a",
+        "e1e25534acff28bc4995e6acbe75c8234863b74b"
+      ]
+    },
+    {
+      "source": 1689,
+      "sha": "c1d4a97d1964005677d965aae788dad79e4ec9e0",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "Corrects array documentation for already supported indexed unset through references and preserved next integer keys.",
+      "reason": "Documentation clarification of existing behavior; no runtime change.",
+      "evidence_paths": [
+        "docs/php/arrays.md"
+      ],
+      "introduced_commits": [
+        "b893f54b5355005860e472d0f92580cf9a138953",
+        "c1d4a97d1964005677d965aae788dad79e4ec9e0",
+        "e8780cfea49525bf0c324c0b470e64f143f3aaef"
+      ]
+    },
+    {
+      "source": "afbb2af85c0004bd72e08cfbb30e312e8333240e",
+      "sha": "afbb2af85c0004bd72e08cfbb30e312e8333240e",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "chore: update repository stats [skip ci]",
+      "reason": "Repository traffic statistics only.",
+      "evidence_paths": [
+        ".github/traffic/clones-badge.svg",
+        ".github/traffic/clones.json"
+      ],
+      "introduced_commits": [
+        "afbb2af85c0004bd72e08cfbb30e312e8333240e"
+      ]
+    },
+    {
+      "source": 1759,
+      "sha": "0c1e305486369707c2743deb82157fc7ad6e13c2",
+      "decision": "include",
+      "bullets": [
+        "X8"
+      ],
+      "behavior": "Literal AOT eval fragments use a separate source identity counter that survives include-resolution resets.",
+      "reason": null,
+      "evidence_paths": [
+        "docs/internals/the-lexer.md",
+        "src/eval_aot/planning.rs",
+        "src/span.rs"
+      ],
+      "introduced_commits": [
+        "0c1e305486369707c2743deb82157fc7ad6e13c2",
+        "d19a1d43fc56d0f393400b78fc8ff1a61283dbf4"
+      ]
+    },
+    {
+      "source": 1769,
+      "sha": "0d884c7f5d934478a1c1d543e2c387fa9a2c6833",
+      "decision": "include",
+      "bullets": [
+        "X9"
+      ],
+      "behavior": "Ref-marker writeback releases overwritten concrete string, array, hash, and object occupants in both architecture emitters.",
+      "reason": null,
+      "evidence_paths": [
+        "src/codegen/lower_inst/arrays.rs",
+        "tests/codegen/runtime_gc/eval_operand_owners.rs"
+      ],
+      "introduced_commits": [
+        "0d884c7f5d934478a1c1d543e2c387fa9a2c6833",
+        "22950f919bd492e8e04abc4ae14f8d2ec281796d"
+      ]
+    },
+    {
+      "source": 1690,
+      "sha": "30f3c3fb04a66f85cef1743cac8e6a94bd9b3f12",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "Documents incomplete compiled-enum interface metadata across eval and the distinct eval-declared enum behavior.",
+      "reason": "Documents a remaining limitation; does not implement interface parity.",
+      "evidence_paths": [
+        "docs/php/eval.md",
+        "docs/php/types.md"
+      ],
+      "introduced_commits": [
+        "30f3c3fb04a66f85cef1743cac8e6a94bd9b3f12",
+        "523ed99e6bd41feb93963993e722c8e389573040",
+        "912022cc3b7d27091e7f0129f48ed8cddffd65ba",
+        "b754fa5d65b3ebb1705068d21e76c17d40e3757e",
+        "f946c2e1dcb77bb7a5ad01766d7ba8d8ebc0152d"
+      ]
+    },
+    {
+      "source": 1714,
+      "sha": "a2e0f9a2eea5995d9217659198e1ee3d81420e03",
+      "decision": "include",
+      "bullets": [
+        "X7"
+      ],
+      "behavior": "Eligible class_alias source forms diagnose explicitly false autoload literals before constant folding.",
+      "reason": null,
+      "evidence_paths": [
+        "src/autoload/alias.rs",
+        "src/autoload/mod.rs",
+        "src/builtins/callables/class_alias.rs",
+        "src/curl_prelude.rs",
+        "src/ir_lower/tests/mod.rs",
+        "src/optimize/reachability/tests.rs",
+        "src/pipeline.rs",
+        "src/types/checker/mod.rs",
+        "tests/codegen/pdo.rs",
+        "tests/codegen/support/compiler.rs",
+        "tests/codegen/support/projects.rs",
+        "tests/error_tests.rs",
+        "tests/error_tests/callables.rs",
+        "tests/error_tests/classes_traits.rs",
+        "tests/error_tests/curl.rs",
+        "tests/error_tests/image.rs",
+        "tests/error_tests/mysqli.rs"
+      ],
+      "introduced_commits": [
+        "2e8ad687396dd19f2d2869164ed1d6d11b052abe",
+        "54f8617c0ce19d83893f7677f72ebc897602997e",
+        "a2e0f9a2eea5995d9217659198e1ee3d81420e03",
+        "dd8fbc72a1505f829d41125ffb394cf01a0cf5f1"
+      ]
+    },
+    {
+      "source": 1632,
+      "sha": "d6ac25190765cb345838229cd77b0447fe4f033f",
+      "decision": "include",
+      "bullets": [
+        "X10"
+      ],
+      "behavior": "Switch propagation invalidates earlier label and fallthrough writes and preserves default ordering and structured exits.",
+      "reason": null,
+      "evidence_paths": [
+        "docs/internals/the-optimizer.md",
+        "src/optimize/control/common.rs",
+        "src/optimize/control/switch.rs",
+        "src/optimize/propagate/simulate.rs",
+        "src/optimize/propagate/stmt/control.rs",
+        "src/optimize/tests/propagate/control_paths.rs",
+        "src/termination.rs",
+        "tests/codegen/optimizer.rs",
+        "tests/codegen/optimizer/switch_fallthrough.rs"
+      ],
+      "introduced_commits": [
+        "0624064920b9c49bfc23a80e9cd9ab3a525272be",
+        "0c9cdc24797c3e4ca82a9defe2e35f58d7ee17f5",
+        "d6ac25190765cb345838229cd77b0447fe4f033f",
+        "ed9d27a8db259f33c832ea76b7b4494bd3e6dddc",
+        "ff99cc866d728cee4c8015c4bbea2677894dcded"
+      ]
+    },
+    {
+      "source": 1661,
+      "sha": "3e64e112c1cf694e7aa10b9fd7c44f1879567782",
+      "decision": "omit",
+      "bullets": [],
+      "behavior": "The capture_hash test fixture quarantines freed allocation addresses until each case finishes.",
+      "reason": "Test-fixture reliability fix; shipped runtime behavior is unchanged.",
+      "evidence_paths": [
+        "src/codegen_support/runtime/strings/mbstring/capture_hash/native_store.c",
+        "src/codegen_support/runtime/strings/mbstring/query_enter/native_enter.c",
+        "src/codegen_support/runtime/strings/mbstring/query_remove/native_remove.c"
+      ],
+      "introduced_commits": [
+        "0406d9233114f2411c4f8f70b464a03e0e78f4c2",
+        "3e64e112c1cf694e7aa10b9fd7c44f1879567782",
+        "68728e56d6f3952ea048fa0a6c6ecbe5db495594"
+      ]
+    },
+    {
+      "source": 1778,
+      "sha": "5b2413c36f37d1c6342ba5cc477d7ef51a876cab",
+      "decision": "include",
+      "bullets": [
+        "X11"
+      ],
+      "behavior": "Both URL encoder emitters classify ASCII digits before the alphabetic lower-bound rejection.",
+      "reason": null,
+      "evidence_paths": [
+        "src/codegen_support/runtime/strings/rawurlencode.rs",
+        "src/codegen_support/runtime/strings/urlencode.rs",
+        "tests/codegen/strings/encoding.rs"
+      ],
+      "introduced_commits": [
+        "5b2413c36f37d1c6342ba5cc477d7ef51a876cab",
+        "92fdc736d35dbab0faf53dc9f20031431c5a0098"
+      ]
+    },
+    {
+      "source": 1779,
+      "sha": "32363eaf0384529ea31f87770d45a199d8c96118",
+      "decision": "include",
+      "bullets": [
+        "X12"
+      ],
+      "behavior": "Object property projection converts a Mixed null slot to canonical PHP null before boxing.",
+      "reason": null,
+      "evidence_paths": [
+        "src/codegen_support/runtime/objects/object_vars.rs",
+        "tests/codegen/casts_and_constants/object_cast.rs"
+      ],
+      "introduced_commits": [
+        "32363eaf0384529ea31f87770d45a199d8c96118",
+        "8882d366883d0d27abf2f1ec5b52c2297b4d0fc3"
+      ]
+    },
+    {
+      "source": 1712,
+      "sha": "22b540f4ecde4af64e77dbc43c95f0a510a7ca00",
+      "decision": "include",
+      "bullets": [
+        "X7"
+      ],
+      "behavior": "Declared include-variant contracts are validated before recursive provisional signatures and errors point to conflicting declarations.",
+      "reason": null,
+      "evidence_paths": [
+        "src/types/checker/callables/first_class.rs",
+        "src/types/checker/driver/function_variant_tests.rs",
+        "src/types/checker/driver/functions.rs",
+        "src/types/checker/driver/init.rs",
+        "src/types/checker/driver/mod.rs",
+        "src/types/checker/functions/resolution/signature.rs",
+        "src/types/checker/functions/resolution/specialization.rs",
+        "src/types/checker/mod.rs",
+        "tests/codegen/type_builtins/includes/function_variants.rs"
+      ],
+      "introduced_commits": [
+        "0ac3ffce08fb39a232789a4bd4e97e685c0f062b",
+        "129eece71f36931686a30ee1a553368310ae5bc8",
+        "22b540f4ecde4af64e77dbc43c95f0a510a7ca00",
+        "26ba7280b26c880020936157272cc0d98ff2fc77",
+        "9a9d4a6c7098fc90edc74de589f0044d6a6fdebb"
+      ]
+    },
+    {
+      "source": 1221,
+      "sha": "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+      "decision": "include",
+      "bullets": [
+        "F5",
+        "X13",
+        "X14",
+        "X15"
+      ],
+      "approval": "User approved all four draft additions in the current session.",
+      "behavior": "Compile-time generics and typed array storage, including native and PHPDoc templates; accompanying array layout, ownership, callable thunk and argument-unpack correctness fixes.",
+      "reason": "The new feature and fixes are not covered by the existing 16 approved bullets.",
+      "issues": [
+        1794
+      ],
+      "evidence_paths": [
+        "src/generics.rs",
+        "src/generics/classes.rs",
+        "src/generics/methods.rs",
+        "src/generics/constructors.rs",
+        "src/generics/variance.rs",
+        "src/docblock/bindings.rs",
+        "src/parser/ast/types.rs",
+        "src/strict_php/audit.rs",
+        "src/types/checker/packed_counter.rs",
+        "src/types/checker/stmt_check/assignments/arrays.rs",
+        "src/types/call_args/static_spread.rs",
+        "src/codegen/lower_inst/call_cleanup.rs",
+        "src/builtins/array/array_map.rs",
+        "src/codegen/lower_inst/builtins/arrays/map_dispatch.rs",
+        "src/codegen/lower_inst/runtime_wrappers.rs",
+        "src/codegen_support/emit.rs",
+        "src/codegen_support/runtime/arrays/array_internal_pointer.rs",
+        "tests/codegen/generics.rs",
+        "tests/codegen/generics_docblock_methods.rs",
+        "tests/codegen/generics_constructors.rs",
+        "tests/codegen/generics_named_spreads.rs",
+        "tests/codegen/arrays/bare_array_values.rs",
+        "tests/codegen/arrays/callbacks.rs",
+        "tests/codegen/arrays/key_sort.rs",
+        "tests/codegen/arrays/internal_pointer.rs",
+        "tests/codegen/callables/callable_strings.rs",
+        "tests/codegen/regressions/borrowed_array_widening.rs",
+        "tests/error_tests/type_system.rs",
+        "docs/beyond-php/generics.md",
+        "examples/generics/main.php",
+        "examples/generics-docblock/main.php"
+      ],
+      "introduced_commits": [
+        "0798e3bdeb4577f5bf2a9ee4722b04ddf763afcf",
+        "0b5cb2fb6625244eb9269a8339370b15d85807a5",
+        "2587d6b20742196a16de89cbf93971b1fd0d2ff6",
+        "33fe0077d0208110efdc5e3446760f96c9d1fbfc",
+        "3be28bafc4ce7fd6f32819da34988b0e4bc94cc9",
+        "3d7ad09155b4782a0e95e399507c35951bf8e991",
+        "3faa9ee29f32813a31defc6d29605bd4a72b304a",
+        "53aa12df45bd0808e591234f509927fdf7a5da1a",
+        "682b1bac60b85f2589c1e2d3e7487e911d8294ce",
+        "6c8ea5ccd03e96834eff21f114f2c4a2a41ec341",
+        "81a6673fb5c49116f4b3b50c4e0ba9a8da0b3ae0",
+        "892f58bb28ce18e303629cce656b3a426d385b46",
+        "935cf947fb546514c485e5e60f80605c671cfdae",
+        "a512fdb3d50c86d96700abf75d09e20764662405",
+        "a65ce2f1bc18cdf0caad0d7bf5eed74dfa95241b",
+        "b2ab44858ebf40a32be1522567b008a5a44da4b3",
+        "bd1ca53e93a5b6c637b3c6c0fc8ebb00db3948b3",
+        "c5db6769198b65c6dd9a3d462be19f1f56a699fc",
+        "d8d2a5987b5cbcace91f087fb8a3f6469601cf48",
+        "ef061030c2e107ab86926766ac8d93a78c2414c8",
+        "fc26df52c5d49336e6e47e7c5e1be1df482235dc",
+        "ffbccf7c6dcf7929be63f488ba2de2746621f870"
+      ]
+    }
+  ],
+  "approval": "Original nine and date approved earlier; seven additions approved by user on 2026-10-07.",
+  "approved_bullet_ids": [
+    "F1",
+    "F2",
+    "F3",
+    "X1",
+    "X2",
+    "X3",
+    "X4",
+    "X5",
+    "X6",
+    "F4",
+    "X7",
+    "X8",
+    "X9",
+    "X10",
+    "X11",
+    "X12",
+    "F5",
+    "X13",
+    "X14",
+    "X15"
+  ],
+  "proposed_bullet_ids": [],
+  "coverage": {
+    "pull_requests": 55,
+    "direct_commits": 9,
+    "total_commits": 190,
+    "unresolved_commits": 0
+  },
+  "required_inventory_script_status": "passed",
+  "new_bullets_approved": true,
+  "new_bullets_applied": true,
+  "refresh_approval": "Four new bullets approved and applied; all 16 prior bullets and date retained."
+}
