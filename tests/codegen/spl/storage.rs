@@ -214,6 +214,27 @@ var_dump($it);
     );
 }
 
+/// Verifies `asort`/`ksort`/`uasort`/`uksort` preserve key association like PHP.
+#[test]
+fn test_array_storage_sorts_preserve_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$ao = new ArrayObject([4, 2, 3]);
+echo $ao->asort() ? "t" : "f";
+foreach ($ao as $k => $v) { echo $k; echo ":"; echo $v; echo ";"; }
+echo "|";
+$b = new ArrayObject(['b' => 2, 'a' => 1]);
+$b->ksort();
+foreach ($b as $k => $v) { echo $k; echo ":"; echo $v; echo ";"; }
+echo "|";
+$c = new ArrayObject([2, 3, 1]);
+$c->uasort(function($x, $y) { return $y <=> $x; });
+foreach ($c as $k => $v) { echo $k; echo ":"; echo $v; echo ";"; }
+"#,
+    );
+    assert_eq!(out, "t1:2;2:3;0:4;|a:1;b:2;|1:3;0:2;2:1;");
+}
+
 /// Verifies that array iterator get array copy preserves keys.
 #[test]
 fn test_array_iterator_get_array_copy_preserves_keys() {

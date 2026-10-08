@@ -144,6 +144,30 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
         method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), array_rewind_body()),
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), array_valid_body()),
         method_with_body(
+            "asort",
+            vec![param_default("flags", TypeExpr::Int, int_expr(0))],
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Asort),
+        ),
+        method_with_body(
+            "ksort",
+            vec![param_default("flags", TypeExpr::Int, int_expr(0))],
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Ksort),
+        ),
+        method_with_body(
+            "uasort",
+            vec![param("callback", named_type("callable"))],
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Uasort),
+        ),
+        method_with_body(
+            "uksort",
+            vec![param("callback", named_type("callable"))],
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Uksort),
+        ),
+        method_with_body(
             "seek",
             vec![param("offset", TypeExpr::Int)],
             Some(TypeExpr::Void),
@@ -212,6 +236,30 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             array_object_ctor_body(),
         ),
         method_with_body("getIterator", Vec::new(), Some(named_type("Iterator")), array_object_get_iterator_body()),
+        method_with_body(
+            "asort",
+            vec![param_default("flags", TypeExpr::Int, int_expr(0))],
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Asort),
+        ),
+        method_with_body(
+            "ksort",
+            vec![param_default("flags", TypeExpr::Int, int_expr(0))],
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Ksort),
+        ),
+        method_with_body(
+            "uasort",
+            vec![param("callback", named_type("callable"))],
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Uasort),
+        ),
+        method_with_body(
+            "uksort",
+            vec![param("callback", named_type("callable"))],
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Uksort),
+        ),
         method_with_body("count", Vec::new(), Some(TypeExpr::Int), array_count_body()),
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(flags_expr())),
         method_with_body(
@@ -467,4 +515,95 @@ fn array_object_get_iterator_body() -> Vec<Stmt> {
         "ArrayIterator",
         vec![storage_expr()],
     ))]
+}
+
+/// Builds an in-place, stable insertion sort of the storage from its key/value projection.
+///
+/// PHP's `asort`/`ksort` keep key association and leave a key hole rather than renumbering, which
+/// the insertion over parallel key/value lists preserves. `uasort`/`uksort` compare through the
+/// `$callback`; `asort`/`ksort` compare directly with `>`.
+fn array_sort_body(sort: ArraySort) -> Vec<Stmt> {
+    let compares_value = matches!(sort, ArraySort::Asort | ArraySort::Uasort);
+    let uses_callback = matches!(sort, ArraySort::Uasort | ArraySort::Uksort);
+    let projected = if compares_value {
+        array_access(var_expr("__values"), var_expr("__j"))
+    } else {
+        array_access(var_expr("__keys"), var_expr("__j"))
+    };
+    let current = if compares_value { "__cv" } else { "__ck" };
+    let comparison = if uses_callback {
+        binary_expr(
+            crate::synthetic_class::e_closure_call("callback", vec![projected, var_expr(current)]),
+            BinOp::Gt,
+            int_expr(0),
+        )
+    } else {
+        binary_expr(projected, BinOp::Gt, var_expr(current))
+    };
+    let next_index = || binary_expr(var_expr("__j"), BinOp::Add, int_expr(1));
+    vec![
+        assign_stmt("__keys", function_call("array_keys", vec![storage_expr()])),
+        assign_stmt("__values", function_call("array_values", vec![storage_expr()])),
+        assign_stmt("__n", count_expr(var_expr("__keys"))),
+        assign_stmt("__i", int_expr(1)),
+        while_stmt(
+            binary_expr(var_expr("__i"), BinOp::Lt, var_expr("__n")),
+            vec![
+                assign_stmt("__ck", array_access(var_expr("__keys"), var_expr("__i"))),
+                assign_stmt("__cv", array_access(var_expr("__values"), var_expr("__i"))),
+                assign_stmt("__j", binary_expr(var_expr("__i"), BinOp::Sub, int_expr(1))),
+                while_stmt(
+                    binary_expr(
+                        binary_expr(var_expr("__j"), BinOp::GtEq, int_expr(0)),
+                        BinOp::And,
+                        comparison,
+                    ),
+                    vec![
+                        array_assign_stmt(
+                            "__keys",
+                            next_index(),
+                            array_access(var_expr("__keys"), var_expr("__j")),
+                        ),
+                        array_assign_stmt(
+                            "__values",
+                            next_index(),
+                            array_access(var_expr("__values"), var_expr("__j")),
+                        ),
+                        assign_stmt("__j", binary_expr(var_expr("__j"), BinOp::Sub, int_expr(1))),
+                    ],
+                ),
+                array_assign_stmt("__keys", next_index(), var_expr("__ck")),
+                array_assign_stmt("__values", next_index(), var_expr("__cv")),
+                assign_stmt("__i", binary_expr(var_expr("__i"), BinOp::Add, int_expr(1))),
+            ],
+        ),
+        assign_stmt("__new", empty_array_expr()),
+        assign_stmt("__i", int_expr(0)),
+        while_stmt(
+            binary_expr(var_expr("__i"), BinOp::Lt, var_expr("__n")),
+            vec![
+                array_assign_stmt(
+                    "__new",
+                    array_access(var_expr("__keys"), var_expr("__i")),
+                    array_access(var_expr("__values"), var_expr("__i")),
+                ),
+                increment_stmt("__i"),
+            ],
+        ),
+        property_assign_stmt(this_expr(), "storage", var_expr("__new")),
+        return_stmt(bool_expr(true)),
+    ]
+}
+
+/// Selects which side of the key/value projection an [`array_sort_body`] sorts.
+#[derive(Clone, Copy)]
+enum ArraySort {
+    /// `asort`: values ascending with `>`.
+    Asort,
+    /// `ksort`: keys ascending with `>`.
+    Ksort,
+    /// `uasort`: values through `$callback`.
+    Uasort,
+    /// `uksort`: keys through `$callback`.
+    Uksort,
 }
