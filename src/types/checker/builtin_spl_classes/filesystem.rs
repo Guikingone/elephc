@@ -448,7 +448,9 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body(
             "fputcsv",
             vec![
-                param("fields", string_array_type()),
+                // php coerces every field to a string, so a heterogeneous array of scalars is
+                // accepted; the body casts each element.
+                param("fields", mixed_type()),
                 param_default("separator", TypeExpr::Str, string_expr(",")),
                 param_default("enclosure", TypeExpr::Str, string_expr("\"")),
                 param_default("escape", TypeExpr::Str, string_expr("\\")),
@@ -1555,19 +1557,86 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
 }
 
 /// Builds SplFileObject fputcsv().
+///
+/// Joins the fields with the configured separator/enclosure/eol, quoting a field that contains the
+/// separator, the enclosure, or a line break and doubling each enclosure inside it. The bytes go
+/// straight to the stream (the builtin uses a fixed comma/quote pair), and the line storage is
+/// reloaded so a later read sees the write.
 fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
-    let mut body = vec![
-        assign_stmt(
-            "bytes",
+    let contains = |needle: Expr| function_call("str_contains", vec![var_expr("s"), needle]);
+    let needs_quote = binary_expr(
+        contains(var_expr("separator")),
+        BinOp::Or,
+        binary_expr(
+            contains(var_expr("enclosure")),
+            BinOp::Or,
+            binary_expr(
+                contains(string_expr("\n")),
+                BinOp::Or,
+                contains(string_expr("\r")),
+            ),
+        ),
+    );
+    let quoted = binary_expr(
+        var_expr("enclosure"),
+        BinOp::Concat,
+        binary_expr(
             function_call(
-                "fputcsv",
+                "str_replace",
                 vec![
-                    file_stream_expr(),
-                    var_expr("fields"),
-                    var_expr("separator"),
                     var_expr("enclosure"),
+                    binary_expr(var_expr("enclosure"), BinOp::Concat, var_expr("enclosure")),
+                    var_expr("s"),
                 ],
             ),
+            BinOp::Concat,
+            var_expr("enclosure"),
+        ),
+    );
+    let mut body = vec![
+        assign_stmt("line", string_expr("")),
+        assign_stmt("first", bool_expr(true)),
+        foreach_stmt(
+            var_expr("fields"),
+            None,
+            "field",
+            vec![
+                if_stmt(
+                    not_expr(var_expr("first")),
+                    vec![assign_stmt(
+                        "line",
+                        binary_expr(var_expr("line"), BinOp::Concat, var_expr("separator")),
+                    )],
+                    None,
+                ),
+                assign_stmt("first", bool_expr(false)),
+                assign_stmt(
+                    "s",
+                    crate::synthetic_class::e_cast(
+                        crate::parser::ast::CastType::String,
+                        var_expr("field"),
+                    ),
+                ),
+                if_stmt(
+                    needs_quote,
+                    vec![assign_stmt(
+                        "line",
+                        binary_expr(var_expr("line"), BinOp::Concat, quoted),
+                    )],
+                    Some(vec![assign_stmt(
+                        "line",
+                        binary_expr(var_expr("line"), BinOp::Concat, var_expr("s")),
+                    )]),
+                ),
+            ],
+        ),
+        assign_stmt(
+            "line",
+            binary_expr(var_expr("line"), BinOp::Concat, var_expr("eol")),
+        ),
+        assign_stmt(
+            "bytes",
+            function_call("fwrite", vec![file_stream_expr(), var_expr("line")]),
         ),
     ];
     body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));

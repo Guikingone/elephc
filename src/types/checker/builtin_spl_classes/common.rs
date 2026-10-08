@@ -246,11 +246,6 @@ pub(super) fn array_type() -> TypeExpr {
     TypeExpr::Array(Box::new(mixed_type()))
 }
 
-/// Computes the type metadata for array<string>.
-pub(super) fn string_array_type() -> TypeExpr {
-    TypeExpr::Array(Box::new(TypeExpr::Str))
-}
-
 /// Computes the type metadata for named.
 pub(super) fn named_type(name: &str) -> TypeExpr {
     TypeExpr::Named(Name::unqualified(name))
