@@ -66,6 +66,23 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     emitter.syscall(4);
     emitter.label("__rt_diag_warning_done");
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+
+    emitter.label_global("__rt_diag_write_both");
+    abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
+    emitter.instruction("ldr x10, [x9]");                                       // load suppression depth before deciding whether to emit the warning
+    emitter.instruction("cbnz x10, __rt_diag_write_both_done");                 // suppress the warning while inside an active @ scope
+    emitter.instruction("sub sp, sp, #16");                                     // reserve a slot pair for the buffer pointer and length
+    abi::emit_store_to_sp(emitter, "x1", 0);                                    // preserve the buffer pointer across the stderr write
+    abi::emit_store_to_sp(emitter, "x2", 8);                                    // preserve the byte length across the stderr write
+    emitter.instruction("mov x0, #2");                                          // fd = stderr keeps the legacy diagnostic stream
+    emitter.syscall(4);
+    abi::emit_load_temporary_stack_slot(emitter, "x1", 0);                      // reload the buffer pointer for the stdout copy
+    abi::emit_load_temporary_stack_slot(emitter, "x2", 8);                      // reload the byte length for the stdout copy
+    emitter.instruction("mov x0, #1");                                          // fd = stdout matches php's display_errors stream
+    emitter.syscall(4);
+    emitter.instruction("add sp, sp, #16");                                     // release the preserved pointer/length pair
+    emitter.label("__rt_diag_write_both_done");
+    emitter.instruction("ret");                                                 // return after writing the display and log copies
 }
 
 /// Emits x86_64 Linux-specific diagnostic helpers for suppression depth and warning output.
@@ -112,4 +129,27 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("syscall");                                             // emit the runtime warning diagnostic to stderr
     emitter.label("__rt_diag_warning_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+
+    emitter.label_global("__rt_diag_write_both");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
+    emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
+    emitter.instruction("jnz __rt_diag_write_both_done_linux_x86_64");          // suppress the warning while inside an active @ scope
+    emitter.instruction("sub rsp, 16");                                         // reserve a slot pair for the buffer pointer and length
+    emitter.instruction("mov QWORD PTR [rsp], rdi");                            // preserve the buffer pointer across the stderr write
+    emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                        // preserve the byte length across the stderr write
+    emitter.instruction("mov rdx, rsi");                                        // move warning length into the Linux write length register
+    emitter.instruction("mov rsi, rdi");                                        // move warning pointer into the Linux write buffer register
+    emitter.instruction("mov edi, 2");                                          // fd = stderr keeps the legacy diagnostic stream
+    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+    emitter.instruction("syscall");
+    emitter.instruction("mov rdi, QWORD PTR [rsp]");                            // reload the buffer pointer for the stdout copy
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                        // reload the byte length for the stdout copy
+    emitter.instruction("mov rdx, rsi");                                        // move warning length into the Linux write length register
+    emitter.instruction("mov rsi, rdi");                                        // move warning pointer into the Linux write buffer register
+    emitter.instruction("mov edi, 1");                                          // fd = stdout matches php's display_errors stream
+    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+    emitter.instruction("syscall");
+    emitter.instruction("add rsp, 16");                                         // release the preserved pointer/length pair
+    emitter.label("__rt_diag_write_both_done_linux_x86_64");
+    emitter.instruction("ret");                                                 // return after writing the display and log copies
 }
