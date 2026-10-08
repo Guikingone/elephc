@@ -106,8 +106,15 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // -- check for 'w' mode --
     emitter.label("__rt_fopen_check_w");
     emitter.instruction("cmp w9, #0x77");                                       // compare with 'w'
-    emitter.instruction("b.ne __rt_fopen_check_a");                             // if not 'w', check for 'a'
+    emitter.instruction("b.ne __rt_fopen_check_x");                             // if not 'w', check for 'x'
     emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_trunc())); // O_WRONLY|O_CREAT|O_TRUNC
+    emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
+
+    // -- check for 'x' mode (exclusive create) --
+    emitter.label("__rt_fopen_check_x");
+    emitter.instruction("cmp w9, #0x78");                                       // compare with 'x'
+    emitter.instruction("b.ne __rt_fopen_check_a");                             // if not 'x', check for 'a'
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_excl())); // O_WRONLY|O_CREAT|O_EXCL|O_TRUNC
     emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
 
     // -- check for 'a' mode (append) --
@@ -337,8 +344,14 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fopen_check_w_x86");
     emitter.instruction("cmp r11b, 0x77");                                      // does the mode string start with 'w' for truncate-on-open writes?
-    emitter.instruction("jne __rt_fopen_check_a_x86");                          // if not, fall through to the append-mode check
+    emitter.instruction("jne __rt_fopen_check_x_x86");                          // if not, fall through to the exclusive-create check
     emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_trunc())); // select O_WRONLY|O_CREAT|O_TRUNC for the Linux write-mode fopen() path
+    emitter.instruction("jmp __rt_fopen_check_plus_x86");                       // continue with the optional '+' upgrade after selecting the base flags
+
+    emitter.label("__rt_fopen_check_x_x86");
+    emitter.instruction("cmp r11b, 0x78");                                      // does the mode string start with 'x' for exclusive creation?
+    emitter.instruction("jne __rt_fopen_check_a_x86");                          // if not, fall through to the append-mode check
+    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_excl())); // select O_WRONLY|O_CREAT|O_EXCL|O_TRUNC for the exclusive-create fopen() path
     emitter.instruction("jmp __rt_fopen_check_plus_x86");                       // continue with the optional '+' upgrade after selecting the base flags
 
     emitter.label("__rt_fopen_check_a_x86");

@@ -121,6 +121,30 @@ echo ($empty === false ? "e" : "!");
     assert_eq!(out.stderr, "");
 }
 
+/// Verifies the exclusive-create fopen() mode ("x"): it creates a new file, then fails on a
+/// second call because the file already exists, while "x+" also refuses an existing file.
+#[test]
+fn test_fopen_exclusive_create_mode() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("excl.txt", "x");
+echo $f === false ? "false" : "created";
+fwrite($f, "abc");
+fclose($f);
+$again = @fopen("excl.txt", "x");
+echo "|";
+echo $again === false ? "false" : "opened";
+$rw = @fopen("excl.txt", "x+");
+echo "|";
+echo $rw === false ? "false" : "opened";
+echo "|" . file_get_contents("excl.txt");
+unlink("excl.txt");
+"#,
+    );
+    assert_eq!(out, "created|false|false|abc");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a stream resource passed through a mixed-type parameter preserves its resource type.
 #[test]
 fn test_mixed_file_handle_preserves_resource_type() {

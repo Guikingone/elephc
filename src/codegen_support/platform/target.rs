@@ -128,6 +128,18 @@ impl Platform {
         }
     }
 
+    /// Returns the `O_WRONLY | O_CREAT | O_EXCL | O_TRUNC` flag combination for `open()`.
+    ///
+    /// Used by the exclusive-create fopen() mode (`x`): the file is created only
+    /// when it does not already exist, otherwise the open fails.
+    pub fn o_wronly_creat_excl(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0xE01,
+            Platform::Linux => 0x2C1,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// `ioctl` request that reads terminal attributes — `TIOCGETA` on macOS,
     /// `TCGETS` on Linux. `stream_isatty()` issues it to detect a terminal.
     pub fn tty_get_request(&self) -> u32 {
