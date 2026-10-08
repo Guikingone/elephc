@@ -44187,6 +44187,20 @@
           "name": "separator",
           "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"",
+          "name": "enclosure",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\\",
+          "name": "escape",
+          "optional": true,
+          "type": "string"
         }
       ],
       "required_param_count": 1,
@@ -44226,6 +44240,20 @@
           "by_ref": false,
           "default": "\",\"",
           "name": "separator",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\\\"\"",
+          "name": "enclosure",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\\\\\"",
+          "name": "escape",
           "optional": true,
           "type": "string"
         }
@@ -44336,6 +44364,20 @@
           "by_ref": false,
           "default": "','",
           "name": "separator",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "'\"'",
+          "name": "enclosure",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "'\\\\'",
+          "name": "escape",
           "optional": true,
           "type": "string"
         }
@@ -47762,6 +47804,13 @@
           "name": "enclosure",
           "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\\",
+          "name": "escape",
+          "optional": true,
+          "type": "string"
         }
       ],
       "required_param_count": 2,
@@ -47808,6 +47857,13 @@
           "by_ref": false,
           "default": "\"\\\"\"",
           "name": "enclosure",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\\\\\"",
+          "name": "escape",
           "optional": true,
           "type": "string"
         }
@@ -47925,6 +47981,13 @@
           "by_ref": false,
           "default": "'\"'",
           "name": "enclosure",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "'\\\\'",
+          "name": "escape",
           "optional": true,
           "type": "string"
         }

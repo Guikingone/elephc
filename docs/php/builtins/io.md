@@ -15,7 +15,7 @@ sidebar:
 | [`feof()`](./io/feof.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fflush()`](./io/fflush.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fgetc()`](./io/fgetc.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`fgetcsv()`](./io/fgetcsv.md) | `(resource $stream, ?int $length = null, string $separator = ','): mixed` | `mixed` | ✓ | ✓ |
+| [`fgetcsv()`](./io/fgetcsv.md) | `(resource $stream, ?int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): mixed` | `mixed` | ✓ | ✓ |
 | [`fgets()`](./io/fgets.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`file()`](./io/file.md) | `(string $filename, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`file_get_contents()`](./io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
@@ -24,7 +24,7 @@ sidebar:
 | [`fopen()`](./io/fopen.md) | `(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`fpassthru()`](./io/fpassthru.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`fprintf()`](./io/fprintf.md) | `(resource $stream, string $format, ...$values): int` | `int` | ✓ | ✓ |
-| [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int` | `int` | ✓ | ✓ |
+| [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\'): int` | `int` | ✓ | ✓ |
 | [`fread()`](./io/fread.md) | `(resource $stream, int $length): string` | `string` | ✓ | ✓ |
 | [`fscanf()`](./io/fscanf.md) | `(resource $stream, string $format, ...$vars): array` | `array` | ✓ | ✓ |
 | [`fseek()`](./io/fseek.md) | `(resource $stream, int $offset, int $whence = 0): int` | `int` | ✓ | ✓ |
