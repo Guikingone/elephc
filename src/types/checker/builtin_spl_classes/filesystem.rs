@@ -1564,36 +1564,170 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
 /// reloaded so a later read sees the write.
 fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
     let contains = |needle: Expr| function_call("str_contains", vec![var_expr("s"), needle]);
+    // php quotes a field carrying the separator, the enclosure, the escape, or any whitespace.
+    let whitespace = || {
+        binary_expr(
+            contains(string_expr(" ")),
+            BinOp::Or,
+            binary_expr(
+                contains(string_expr("\t")),
+                BinOp::Or,
+                binary_expr(contains(string_expr("\n")), BinOp::Or, contains(string_expr("\r"))),
+            ),
+        )
+    };
+    let escape_set = binary_expr(
+        binary_expr(
+            function_call("strlen", vec![var_expr("escape")]),
+            BinOp::Gt,
+            int_expr(0),
+        ),
+        BinOp::And,
+        contains(var_expr("escape")),
+    );
     let needs_quote = binary_expr(
         contains(var_expr("separator")),
         BinOp::Or,
         binary_expr(
             contains(var_expr("enclosure")),
             BinOp::Or,
-            binary_expr(
-                contains(string_expr("\n")),
-                BinOp::Or,
-                contains(string_expr("\r")),
-            ),
+            binary_expr(whitespace(), BinOp::Or, escape_set),
         ),
     );
     let quoted = binary_expr(
         var_expr("enclosure"),
         BinOp::Concat,
-        binary_expr(
-            function_call(
-                "str_replace",
-                vec![
-                    var_expr("enclosure"),
-                    binary_expr(var_expr("enclosure"), BinOp::Concat, var_expr("enclosure")),
-                    var_expr("s"),
-                ],
-            ),
-            BinOp::Concat,
-            var_expr("enclosure"),
-        ),
+        binary_expr(var_expr("esc"), BinOp::Concat, var_expr("enclosure")),
     );
+    let append_to = |target: &str, value: Expr| {
+        assign_stmt(
+            target,
+            binary_expr(var_expr(target), BinOp::Concat, value),
+        )
+    };
+    // php escapes a field byte by byte: the escape captures the next byte verbatim, and every
+    // other enclosure is doubled.
+    let escape_field = vec![
+        assign_stmt("esc", string_expr("")),
+        assign_stmt("j", int_expr(0)),
+        assign_stmt("m", function_call("strlen", vec![var_expr("s")])),
+        while_stmt(
+            binary_expr(var_expr("j"), BinOp::Lt, var_expr("m")),
+            vec![
+                assign_stmt(
+                    "ch",
+                    function_call(
+                        "substr",
+                        vec![var_expr("s"), var_expr("j"), int_expr(1)],
+                    ),
+                ),
+                if_stmt(
+                    binary_expr(
+                        binary_expr(
+                            function_call("strlen", vec![var_expr("escape")]),
+                            BinOp::Gt,
+                            int_expr(0),
+                        ),
+                        BinOp::And,
+                        binary_expr(
+                            binary_expr(var_expr("ch"), BinOp::StrictEq, var_expr("escape")),
+                            BinOp::And,
+                            binary_expr(
+                                binary_expr(
+                                    var_expr("j"),
+                                    BinOp::Add,
+                                    int_expr(1),
+                                ),
+                                BinOp::Lt,
+                                var_expr("m"),
+                            ),
+                        ),
+                    ),
+                    vec![
+                        append_to(
+                            "esc",
+                            binary_expr(
+                                var_expr("ch"),
+                                BinOp::Concat,
+                                function_call(
+                                    "substr",
+                                    vec![
+                                        var_expr("s"),
+                                        binary_expr(var_expr("j"), BinOp::Add, int_expr(1)),
+                                        int_expr(1),
+                                    ],
+                                ),
+                            ),
+                        ),
+                        assign_stmt("j", binary_expr(var_expr("j"), BinOp::Add, int_expr(2))),
+                    ],
+                    Some(vec![if_stmt(
+                        binary_expr(var_expr("ch"), BinOp::StrictEq, var_expr("enclosure")),
+                        vec![
+                            append_to(
+                                "esc",
+                                binary_expr(
+                                    var_expr("enclosure"),
+                                    BinOp::Concat,
+                                    var_expr("enclosure"),
+                                ),
+                            ),
+                            increment_stmt("j"),
+                        ],
+                        Some(vec![
+                            append_to("esc", var_expr("ch")),
+                            increment_stmt("j"),
+                        ]),
+                    )]),
+                ),
+            ],
+        ),
+        append_to("line", quoted),
+    ];
     let mut body = vec![
+        // php validates the CSV controls before writing.
+        if_stmt(
+            binary_expr(
+                function_call("strlen", vec![var_expr("separator")]),
+                BinOp::StrictNotEq,
+                int_expr(1),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "SplFileObject::fputcsv(): Argument #2 ($separator) must be a single character",
+                )],
+            ))],
+            None,
+        ),
+        if_stmt(
+            binary_expr(
+                function_call("strlen", vec![var_expr("enclosure")]),
+                BinOp::StrictNotEq,
+                int_expr(1),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "SplFileObject::fputcsv(): Argument #3 ($enclosure) must be a single character",
+                )],
+            ))],
+            None,
+        ),
+        if_stmt(
+            binary_expr(
+                function_call("strlen", vec![var_expr("escape")]),
+                BinOp::Gt,
+                int_expr(1),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "SplFileObject::fputcsv(): Argument #4 ($escape) must be empty or a single character",
+                )],
+            ))],
+            None,
+        ),
         assign_stmt("line", string_expr("")),
         assign_stmt("first", bool_expr(true)),
         foreach_stmt(
@@ -1619,10 +1753,7 @@ fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
                 ),
                 if_stmt(
                     needs_quote,
-                    vec![assign_stmt(
-                        "line",
-                        binary_expr(var_expr("line"), BinOp::Concat, quoted),
-                    )],
+                    escape_field,
                     Some(vec![assign_stmt(
                         "line",
                         binary_expr(var_expr("line"), BinOp::Concat, var_expr("s")),
