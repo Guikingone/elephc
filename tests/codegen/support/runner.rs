@@ -1701,14 +1701,14 @@ pub(crate) fn strip_php_display_lines(stdout: &str) -> String {
         let prefix_start = PREFIXES
             .iter()
             .filter_map(|prefix| {
-                stdout[line_start..term_start]
+                stdout[i..term_start]
                     .find(prefix)
-                    .map(|off| line_start + off)
+                    .map(|off| i + off)
             })
             .min();
-        let infix_at = stdout[line_start..term_start]
+        let infix_at = stdout[i..term_start]
             .rfind(INFIX)
-            .map(|off| line_start + off + INFIX.len());
+            .map(|off| i + off + INFIX.len());
         let path_ok = infix_at.is_some_and(|file_at| {
             let file = &stdout[file_at..term_start];
             file.contains('/') || file.ends_with(".php")
