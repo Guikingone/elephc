@@ -164,6 +164,47 @@ rmdir("docs");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies SplFileObject::setCsvControl validates its CSV controls like php, and that a READ_CSV
+/// row does not retain the trailing newline of the physical line.
+#[test]
+fn test_spl_file_object_set_csv_control_validation_and_read_csv_trim() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("data.csv", "aa|bb|10\n");
+$file = new SplFileObject("data.csv");
+try {
+    $file->setCsvControl("too long");
+} catch (\ValueError $e) {
+    echo $e->getMessage(), "|";
+}
+try {
+    $file->setCsvControl("|", "two");
+} catch (\ValueError $e) {
+    echo $e->getMessage(), "|";
+}
+try {
+    $file->setCsvControl("|", "'", "esc");
+} catch (\ValueError $e) {
+    echo $e->getMessage(), "|";
+}
+$file->setCsvControl("|", "'", "");
+$file->setFlags(SplFileObject::READ_CSV);
+$file->rewind();
+$row = $file->current();
+echo $row[2];
+unlink("data.csv");
+"#,
+    );
+    let expected = concat!(
+        "SplFileObject::setCsvControl(): Argument #1 ($separator) must be a single character|",
+        "SplFileObject::setCsvControl(): Argument #2 ($enclosure) must be a single character|",
+        "SplFileObject::setCsvControl(): Argument #3 ($escape) must be empty or a single character|",
+        "10"
+    );
+    assert_eq!(out, expected);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplFileInfo factories honor explicit and stored class-string overrides.
 #[test]
 fn test_spl_file_info_factory_class_overrides() {

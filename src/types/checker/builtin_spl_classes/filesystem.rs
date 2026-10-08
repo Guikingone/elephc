@@ -1288,7 +1288,10 @@ fn spl_file_object_current_body() -> Vec<Stmt> {
                         "explode",
                         vec![
                             string_copy_expr(property_access(this_expr(), "delimiter")),
-                            string_copy_expr(file_current_line_expr()),
+                            function_call(
+                                "rtrim",
+                                vec![string_copy_expr(file_current_line_expr()), string_expr("\r\n")],
+                            ),
                         ],
                     ),
                 ),
@@ -1399,7 +1402,33 @@ fn spl_file_object_fseek_body() -> Vec<Stmt> {
 
 /// Builds SplFileObject setCsvControl().
 fn spl_file_object_set_csv_control_body() -> Vec<Stmt> {
+    let invalid = |message: &str| {
+        throw_stmt(new_object_expr("ValueError", vec![string_expr(message)]))
+    };
+    let strlen = |name: &str| function_call("strlen", vec![var_expr(name)]);
     vec![
+        // php validates the CSV controls before storing them.
+        if_stmt(
+            binary_expr(strlen("separator"), BinOp::StrictNotEq, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::setCsvControl(): Argument #1 ($separator) must be a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(strlen("enclosure"), BinOp::StrictNotEq, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::setCsvControl(): Argument #2 ($enclosure) must be a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(strlen("escape"), BinOp::Gt, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::setCsvControl(): Argument #3 ($escape) must be empty or a single character",
+            )],
+            None,
+        ),
         property_assign_stmt(this_expr(), "delimiter", var_expr("separator")),
         property_assign_stmt(this_expr(), "enclosure", var_expr("enclosure")),
         property_assign_stmt(this_expr(), "escape", var_expr("escape")),
