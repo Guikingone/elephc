@@ -1380,6 +1380,26 @@ fn spl_file_object_fgets_body() -> Vec<Stmt> {
 fn spl_file_object_get_current_line_body() -> Vec<Stmt> {
     vec![
         assign_stmt("line", file_current_line_expr()),
+        // `setMaxLineLen()` caps the returned line when it is positive (0 means unlimited).
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "maxLineLen"),
+                BinOp::Gt,
+                int_expr(0),
+            ),
+            vec![assign_stmt(
+                "line",
+                function_call(
+                    "substr",
+                    vec![
+                        var_expr("line"),
+                        int_expr(0),
+                        property_access(this_expr(), "maxLineLen"),
+                    ],
+                ),
+            )],
+            None,
+        ),
         property_assign_stmt(
             this_expr(),
             "lineNumber",

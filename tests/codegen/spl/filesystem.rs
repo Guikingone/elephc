@@ -283,6 +283,25 @@ unlink("seek.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies SplFileObject::getCurrentLine honors a positive setMaxLineLen() cap.
+#[test]
+fn test_spl_file_object_get_current_line_max_line_len() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("long.txt", "abcdef\nghijkl\n");
+$file = new SplFileObject("long.txt");
+$file->setMaxLineLen(3);
+echo $file->getCurrentLine();
+echo "|";
+$file->setMaxLineLen(0);
+echo trim($file->getCurrentLine());
+unlink("long.txt");
+"#,
+    );
+    assert_eq!(out, "abc|ghijkl");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplFileInfo factories honor explicit and stored class-string overrides.
 #[test]
 fn test_spl_file_info_factory_class_overrides() {
