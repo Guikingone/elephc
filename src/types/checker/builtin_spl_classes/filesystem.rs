@@ -1279,13 +1279,35 @@ fn spl_file_object_current_body() -> Vec<Stmt> {
         ),
         if_stmt(
             flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV),
-            return_body(function_call(
-                "explode",
-                vec![
-                    string_copy_expr(property_access(this_expr(), "delimiter")),
-                    string_copy_expr(file_current_line_expr()),
-                ],
-            )),
+            vec![
+                assign_stmt(
+                    "__fields",
+                    function_call(
+                        "explode",
+                        vec![
+                            string_copy_expr(property_access(this_expr(), "delimiter")),
+                            string_copy_expr(file_current_line_expr()),
+                        ],
+                    ),
+                ),
+                assign_stmt("__csv", empty_array_expr()),
+                foreach_stmt(
+                    var_expr("__fields"),
+                    None,
+                    "__field",
+                    vec![array_push_stmt(
+                        "__csv",
+                        function_call(
+                            "trim",
+                            vec![
+                                var_expr("__field"),
+                                string_copy_expr(property_access(this_expr(), "enclosure")),
+                            ],
+                        ),
+                    )],
+                ),
+                return_stmt(var_expr("__csv")),
+            ],
             None,
         ),
         return_stmt(file_current_line_expr()),
