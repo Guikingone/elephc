@@ -115,6 +115,9 @@ fn array_object_properties() -> Vec<ClassProperty> {
         storage_property("keys", array_type()),
         storage_property("values", array_type()),
         storage_property("flags", TypeExpr::Int),
+        // The class `getIterator()` instantiates. elephc always builds an `ArrayIterator`, so the
+        // value is stored and reported by `getIteratorClass()` but does not change `getIterator()`.
+        storage_property("iteratorClass", TypeExpr::Str),
     ]
 }
 
@@ -147,6 +150,13 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
             vec![property_assign_stmt(this_expr(), "position", var_expr("offset"))],
         ),
         method_with_body("count", Vec::new(), Some(TypeExpr::Int), array_count_body()),
+        method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(flags_expr())),
+        method_with_body(
+            "setFlags",
+            vec![param("flags", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))],
+        ),
         method_with_body(
             "offsetExists",
             vec![param("offset", mixed_type())],
@@ -199,10 +209,35 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
                 param_default("iteratorClass", TypeExpr::Str, string_expr("ArrayIterator")),
             ],
             Some(TypeExpr::Void),
-            array_object_construct_body(),
+            array_object_ctor_body(),
         ),
         method_with_body("getIterator", Vec::new(), Some(named_type("Iterator")), array_object_get_iterator_body()),
         method_with_body("count", Vec::new(), Some(TypeExpr::Int), array_count_body()),
+        method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(flags_expr())),
+        method_with_body(
+            "setFlags",
+            vec![param("flags", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))],
+        ),
+        method_with_body(
+            "getIteratorClass",
+            Vec::new(),
+            Some(TypeExpr::Str),
+            return_body(property_access(this_expr(), "iteratorClass")),
+        ),
+        method_with_body(
+            "setIteratorClass",
+            vec![param("iteratorClass", TypeExpr::Str)],
+            Some(TypeExpr::Void),
+            vec![property_assign_stmt(this_expr(), "iteratorClass", var_expr("iteratorClass"))],
+        ),
+        method_with_body(
+            "exchangeArray",
+            vec![param("array", mixed_type())],
+            Some(mixed_type()),
+            array_exchange_body(),
+        ),
         method_with_body(
             "offsetExists",
             vec![param("offset", mixed_type())],
@@ -252,6 +287,11 @@ fn position_expr() -> Expr {
     property_access(this_expr(), "position")
 }
 
+/// Builds the AST expression for flags.
+fn flags_expr() -> Expr {
+    property_access(this_expr(), "flags")
+}
+
 /// Provides the Key at helper used by the storage module.
 fn key_at(index: Expr) -> Expr {
     array_access(keys_expr(), index)
@@ -292,6 +332,17 @@ fn array_object_construct_body() -> Vec<Stmt> {
         ),
         property_assign_stmt(this_expr(), "flags", var_expr("flags")),
     ]
+}
+
+/// Builds the `ArrayObject` constructor body: the shared storage init plus the iterator class.
+fn array_object_ctor_body() -> Vec<Stmt> {
+    let mut body = array_object_construct_body();
+    body.push(property_assign_stmt(
+        this_expr(),
+        "iteratorClass",
+        var_expr("iteratorClass"),
+    ));
+    body
 }
 
 /// Builds the synthetic method body for array current.
@@ -430,19 +481,56 @@ fn array_offset_unset_body() -> Vec<Stmt> {
 
 /// Builds the synthetic method body for array copy.
 fn array_copy_body() -> Vec<Stmt> {
+    let mut body = array_snapshot_stmts("out");
+    body.push(return_stmt(var_expr("out")));
+    body
+}
+
+/// Builds the `$name = [...key => value snapshot...]` statements shared by the array copy and
+/// `exchangeArray` bodies. The hash literal start makes the checker infer a hash result, matching
+/// the internal `keys`/`values` storage, so no indexed-array conversion is inserted.
+fn array_snapshot_stmts(name: &str) -> Vec<Stmt> {
     vec![
-        assign_stmt("out", empty_assoc_array_expr()),
+        assign_stmt(name, empty_assoc_array_expr()),
         assign_stmt("i", int_expr(0)),
         assign_stmt("limit", count_expr(keys_expr())),
         while_stmt(
             binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
             vec![
-                array_assign_stmt("out", key_at(var_expr("i")), value_at(var_expr("i"))),
+                array_assign_stmt(name, key_at(var_expr("i")), value_at(var_expr("i"))),
                 increment_stmt("i"),
             ],
         ),
-        return_stmt(var_expr("out")),
     ]
+}
+
+/// Builds the synthetic method body for `exchangeArray()`.
+///
+/// Returns the previous contents as an array copy, then replaces the backing entries with the
+/// supplied `array|object` (an object contributes its public properties).
+fn array_exchange_body() -> Vec<Stmt> {
+    let mut body = array_snapshot_stmts("old");
+    body.push(crate::synthetic_class::s_if(
+        function_call("is_object", vec![var_expr("array")]),
+        vec![crate::synthetic_class::s_assign(
+            "array",
+            function_call("get_object_vars", vec![var_expr("array")]),
+        )],
+        vec![],
+        None,
+    ));
+    body.push(property_assign_stmt(
+        this_expr(),
+        "keys",
+        function_call("array_keys", vec![var_expr("array")]),
+    ));
+    body.push(property_assign_stmt(
+        this_expr(),
+        "values",
+        function_call("array_values", vec![var_expr("array")]),
+    ));
+    body.push(return_stmt(var_expr("old")));
+    body
 }
 
 /// Builds the synthetic method body for array object get iterator.

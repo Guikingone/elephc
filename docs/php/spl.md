@@ -325,8 +325,8 @@ Supported methods:
 | Class | Methods |
 |---|---|
 | `EmptyIterator` | `current()`, `key()`, `next()`, `rewind()`, `valid()` |
-| `ArrayIterator` | `__construct(array\|object $array = [], int $flags = 0)`, `current()`, `key()`, `next()`, `rewind()`, `valid()`, `seek(int $offset): void`, `count(): int`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
-| `ArrayObject` | `__construct(array\|object $array = [], int $flags = 0, string $iteratorClass = ArrayIterator::class)`, `getIterator(): ArrayIterator`, `count(): int`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
+| `ArrayIterator` | `__construct(array\|object $array = [], int $flags = 0)`, `current()`, `key()`, `next()`, `rewind()`, `valid()`, `seek(int $offset): void`, `count(): int`, `getFlags(): int`, `setFlags(int $flags): void`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
+| `ArrayObject` | `__construct(array\|object $array = [], int $flags = 0, string $iteratorClass = ArrayIterator::class)`, `getIterator(): ArrayIterator`, `count(): int`, `getFlags(): int`, `setFlags(int $flags): void`, `getIteratorClass(): string`, `setIteratorClass(string $iteratorClass): void`, `exchangeArray(array\|object $array): array`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
 | `IteratorIterator` | `__construct(Traversable $iterator, ?string $class = null)`, `current()`, `key()`, `next()`, `rewind()`, `valid()`, `getInnerIterator(): ?Iterator` |
 | `LimitIterator` | `__construct(Iterator $iterator, int $offset = 0, int $limit = -1)`, `rewind()`, `next()`, `valid()`, `seek(int $offset): void`, `getPosition(): int`, plus inherited forwarding methods |
 | `NoRewindIterator` | `__construct(Iterator $iterator)`, `rewind()` no-op, plus inherited forwarding methods |

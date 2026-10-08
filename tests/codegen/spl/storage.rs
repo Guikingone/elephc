@@ -153,6 +153,32 @@ echo count(new ArrayObject());
     assert_eq!(out, "a=1;b=2;:x=7;y=8;:0");
 }
 
+/// Verifies the `ArrayObject`/`ArrayIterator` flags, iterator-class, and exchange-array surface.
+#[test]
+fn test_array_storage_flags_iterator_class_and_exchange() {
+    let out = compile_and_run(
+        r#"<?php
+$o = new ArrayObject(["a" => 1, "b" => 2], ArrayObject::ARRAY_AS_PROPS);
+echo $o->getFlags(), ":";
+$o->setFlags(0);
+echo $o->getFlags(), ":";
+echo $o->getIteratorClass(), ":";
+$o->setIteratorClass("ArrayIterator");
+echo $o->getIteratorClass(), ":";
+$old = $o->exchangeArray(["x" => 9]);
+foreach ($old as $k => $v) { echo $k; echo "="; echo $v; echo ";"; }
+echo ":";
+foreach ($o as $k => $v) { echo $k; echo "="; echo $v; echo ";"; }
+echo ":";
+$it = new ArrayIterator([1, 2]);
+echo $it->getFlags(), ":";
+$it->setFlags(2);
+echo $it->getFlags();
+"#,
+    );
+    assert_eq!(out, "2:0:ArrayIterator:ArrayIterator:a=1;b=2;:x=9;:0:2");
+}
+
 /// Verifies that array iterator get array copy preserves keys.
 #[test]
 fn test_array_iterator_get_array_copy_preserves_keys() {
