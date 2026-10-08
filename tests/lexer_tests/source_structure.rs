@@ -118,6 +118,28 @@ fn test_short_echo_tag_implies_echo() {
     );
 }
 
+/// Verifies a `<?=` after inline HTML gets an `echo` token anchored at the tag, not at the HTML
+/// run start, and that the lowered HTML tokens carry the extent of the HTML text. A point span
+/// on the HTML run made the doc-comment pass read the HTML back as code.
+#[test]
+fn test_inline_html_tokens_carry_their_source_extent() {
+    let spanned = tokenize("<?php echo 1; ?><div><?= 2; ?>").expect("tokenizes");
+    let literal = spanned
+        .iter()
+        .find_map(|(token, meta)| match token {
+            Token::StringLiteral(text) if text == "<div>" => Some(meta.span),
+            _ => None,
+        })
+        .expect("the HTML literal");
+    assert_eq!((literal.col, literal.end_column()), (17, 22));
+    let short_echo = spanned
+        .iter()
+        .filter_map(|(token, meta)| matches!(token, Token::Echo).then_some(meta.span))
+        .find(|span| span.col == 22)
+        .expect("an echo anchored at the `<?=` tag");
+    assert_eq!(short_echo.end_column(), 25);
+}
+
 /// Verifies `<?php` opens code only when followed by a separator, so `<?phpX` stays HTML.
 #[test]
 fn test_php_prefix_without_separator_is_html() {

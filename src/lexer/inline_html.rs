@@ -92,20 +92,9 @@ fn swallow_close_tag_newline(cursor: &mut Cursor<'_>) {
 fn scan_inline_html(cursor: &mut Cursor<'_>, out: &mut Vec<SpannedToken>) {
     let start = cursor.span();
     let mut html = String::new();
-    let mut short_echo = false;
     loop {
         let remaining = cursor.remaining();
-        if at_short_echo_tag(remaining) {
-            for _ in 0..3 {
-                cursor.advance();
-            }
-            short_echo = true;
-            break;
-        }
-        if at_php_open_tag(remaining) {
-            for _ in 0..5 {
-                cursor.advance();
-            }
+        if at_short_echo_tag(remaining) || at_php_open_tag(remaining) {
             break;
         }
         match cursor.advance() {
@@ -113,12 +102,27 @@ fn scan_inline_html(cursor: &mut Cursor<'_>, out: &mut Vec<SpannedToken>) {
             None => break,
         }
     }
+    // The lowered tokens span the HTML text they reproduce. The doc-comment pass walks token
+    // extents to find the whitespace/comment gap above a declaration, so a point span here made
+    // it read the HTML back as code and drop the `@template` below it. The open tag is consumed
+    // below and is not part of the HTML; the gap scan steps over it.
+    let html_end = cursor.span();
+    let html_span = crate::span::Span::with_end_from(start, html_end);
     if !html.is_empty() {
-        out.push(spanned(Token::Echo, start));
-        out.push(spanned(Token::StringLiteral(html), start));
-        out.push(spanned(Token::Semicolon, start));
+        out.push(spanned(Token::Echo, html_span));
+        out.push(spanned(Token::StringLiteral(html), html_span));
+        out.push(spanned(Token::Semicolon, html_span));
     }
-    if short_echo {
-        out.push(spanned(Token::Echo, start));
+    if at_short_echo_tag(cursor.remaining()) {
+        let tag_start = cursor.span();
+        for _ in 0..3 {
+            cursor.advance();
+        }
+        let echo_span = crate::span::Span::with_end_from(tag_start, cursor.span());
+        out.push(spanned(Token::Echo, echo_span));
+    } else if at_php_open_tag(cursor.remaining()) {
+        for _ in 0..5 {
+            cursor.advance();
+        }
     }
 }

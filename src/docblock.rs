@@ -496,6 +496,31 @@ mod tests {
         assert!(blocks.contains_key(&(7, 1)), "got keys {:?}", blocks.keys());
     }
 
+    /// A doc comment stays bound to the declaration directly below it when inline HTML or a
+    /// `?>`/`<?php` tag sits above the comment. The tag bytes are consumed without a token, so
+    /// the gap scan must step over them the way PHP's own doc-comment binding does.
+    #[test]
+    fn binds_through_inline_html_and_tags() {
+        for source in [
+            "<div>\n<?php\n/** @template T */\nfunction f() {}\n",
+            "<?php echo 1; ?>\n<?php\n/** @template T */\nfunction f() {}\n",
+            "<?php echo 1; ?>\n<div>\n<?php\n/** @template T */\nfunction f() {}\n",
+            "<?=\n1;\n?>\n<div>\n<?php\n/** @template T */\nfunction f() {}\n",
+            "<?PHP\n/** @template T */\nfunction f() {}\n",
+        ] {
+            let program = program_of(source);
+            let type_params = program
+                .iter()
+                .find_map(|stmt| match &stmt.kind {
+                    StmtKind::FunctionDecl { type_params, .. } => Some(type_params),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("expected a function declaration for {source:?}"));
+            assert_eq!(type_params.len(), 1, "source: {source:?}");
+            assert_eq!(type_params[0].name, "T", "source: {source:?}");
+        }
+    }
+
     /// A doc comment with no `@template` carries no type parameter, so this pass leaves the
     /// declaration alone — otherwise every annotated PHP file in the world would start
     /// type-checking differently.

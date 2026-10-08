@@ -200,3 +200,43 @@ fn inline_html_line_comment_ends_at_carriage_return() {
     let out = compile_and_run("<?php echo 1; // c\recho 2;");
     assert_eq!(out, "12");
 }
+
+/// A `@template` docblock stays bound to the declaration directly below it when leading inline
+/// HTML precedes the code. The bound is enforced only when the annotation is read, so a dropped
+/// docblock would let this compile and run instead of failing.
+#[test]
+fn inline_html_keeps_a_docblock_bound_to_the_declaration_below_it() {
+    let source = r#"<div>
+<?php
+class Entity {}
+class Other {}
+/**
+ * @template E of Entity
+ * @param E $entity
+ */
+function accept($entity): int { return 1; }
+echo accept(new Other());
+"#;
+    let error = compile_cli_file_with_flags_expect_failure(source, &[]);
+    assert!(error.contains("does not satisfy its bound"), "{error}");
+}
+
+/// The same binding holds after a `?>`/`<?php` round trip with no HTML between the tags.
+#[test]
+fn inline_html_docblock_after_a_close_and_reopen_binds() {
+    let source = r#"<?php
+class Entity {}
+class Other {}
+echo 1;
+?>
+<?php
+/**
+ * @template E of Entity
+ * @param E $entity
+ */
+function accept($entity): int { return 1; }
+echo accept(new Other());
+"#;
+    let error = compile_cli_file_with_flags_expect_failure(source, &[]);
+    assert!(error.contains("does not satisfy its bound"), "{error}");
+}
