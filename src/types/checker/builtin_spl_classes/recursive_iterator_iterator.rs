@@ -60,7 +60,9 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "__construct",
             vec![
-                param("iterator", named_type("RecursiveIterator")),
+                // PHP declares this as `Traversable`; the constructor validates at runtime that a
+                // `RecursiveIterator` was supplied, so the stored root goes through the assume hook.
+                param("iterator", named_type("Traversable")),
                 param_default("mode", TypeExpr::Int, int_expr(0)),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
             ],

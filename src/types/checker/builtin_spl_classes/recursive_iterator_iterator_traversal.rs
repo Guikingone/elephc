@@ -96,7 +96,15 @@ fn recursive_iterator_iterator_slot_for_depth_expr(depth: Expr) -> Expr {
 /// Builds the synthetic method body for recursive iterator iterator construct.
 pub(super) fn recursive_iterator_iterator_construct_body() -> Vec<Stmt> {
     vec![
-        property_assign_stmt(this_expr(), "root", var_expr("iterator")),
+        property_assign_stmt(
+            this_expr(),
+            "root",
+            method_call(
+                this_expr(),
+                "__elephcAssumeRecursiveIterator",
+                vec![var_expr("iterator")],
+            ),
+        ),
         property_assign_stmt(this_expr(), "mode", var_expr("mode")),
         property_assign_stmt(this_expr(), "flags", var_expr("flags")),
         property_assign_stmt(this_expr(), "iterators", empty_array_expr()),

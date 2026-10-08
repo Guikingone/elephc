@@ -447,12 +447,13 @@ fn test_error_recursive_callback_filter_iterator_requires_callable() {
     );
 }
 
-/// Verifies that error recursive iterator iterator requires recursive iterator.
+/// Verifies that RecursiveIteratorIterator rejects a non-Traversable argument.
 #[test]
-fn test_error_recursive_iterator_iterator_requires_recursive_iterator() {
+fn test_error_recursive_iterator_iterator_requires_traversable() {
+    // PHP declares the parameter as `Traversable`; a non-Traversable argument is still rejected.
     expect_error(
-        "<?php $it = new RecursiveIteratorIterator(new ArrayIterator([]));",
-        "Constructor 'RecursiveIteratorIterator::__construct' parameter $iterator expects Object(\"RecursiveIterator\"), got Object(\"ArrayIterator\")",
+        "<?php $it = new RecursiveIteratorIterator(123);",
+        "Constructor 'RecursiveIteratorIterator::__construct' parameter $iterator expects Object(\"Traversable\"), got Int",
     );
 }
 
