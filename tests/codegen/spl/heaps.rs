@@ -206,6 +206,26 @@ echo count($left);
     assert_eq!(out, "3:B:2:0");
 }
 
+/// Verifies `removeAll($storage)` clears everything even when the argument IS the storage itself.
+#[test]
+fn test_spl_object_storage_remove_all_self() {
+    let out = compile_and_run(
+        r#"<?php
+class Item {}
+$a = new Item();
+$b = new Item();
+$storage = new SplObjectStorage();
+$storage->attach($a, "a");
+$storage->attach($b, "b");
+echo count($storage);
+$storage->removeAll($storage);
+echo ":";
+echo count($storage);
+"#,
+    );
+    assert_eq!(out, "2:0");
+}
+
 /// Verifies Phase 6 containers clean their per-instance storage under heap-debug.
 #[test]
 fn test_phase6_spl_storage_finalizes_cleanly() {

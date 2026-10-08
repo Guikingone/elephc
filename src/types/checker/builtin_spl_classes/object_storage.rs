@@ -226,12 +226,27 @@ fn add_all_body() -> Vec<Stmt> {
 
 /// Detaches every object found in another storage instance.
 fn remove_all_body() -> Vec<Stmt> {
-    vec![foreach_stmt(
-        var_expr("storage"),
-        None,
-        "object",
-        vec![expr_stmt(method_call(this_expr(), "detach", vec![var_expr("object")]))],
-    )]
+    // Snapshot the source first: `removeAll($this)` detaches while iterating the SAME storage,
+    // which would skip every other element.
+    vec![
+        typed_assign_stmt("objects", array_type(), empty_array_expr()),
+        foreach_stmt(
+            var_expr("storage"),
+            None,
+            "object",
+            vec![array_push_stmt("objects", var_expr("object"))],
+        ),
+        foreach_stmt(
+            var_expr("objects"),
+            None,
+            "object",
+            vec![expr_stmt(method_call(
+                this_expr(),
+                "detach",
+                vec![var_expr("object")],
+            ))],
+        ),
+    ]
 }
 
 /// Keeps only objects that are also present in another storage instance.
