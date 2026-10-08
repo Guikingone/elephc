@@ -23,6 +23,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "support/php_display.rs"]
+mod php_display;
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// A program whose only behaviour is the opaque fragment it evaluates.
@@ -80,7 +83,7 @@ fn assert_stdout(binary: &Path, code: &str, expected: &str) {
     let output = run(binary, code);
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
+        php_display::strip_php_display_lines(&String::from_utf8_lossy(&output.stdout)),
         expected,
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
@@ -190,7 +193,7 @@ fn a_refused_builtin_call_still_evaluates_its_arguments_in_order() {
     let output = run(&binary, code);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
+        php_display::strip_php_display_lines(&String::from_utf8_lossy(&output.stdout)),
         "gh|strlen() expects exactly 1 argument, 2 given\n\
          sort() expects at most 2 arguments, 3 given\n\
          bool(false)\n",
@@ -220,7 +223,7 @@ fn an_uncaught_refusal_is_reported_as_an_uncaught_argument_count_error() {
     let output = run(&binary, "strlen(); echo 'after';");
     let all = format!(
         "{}{}",
-        String::from_utf8_lossy(&output.stdout),
+        php_display::strip_php_display_lines(&String::from_utf8_lossy(&output.stdout)),
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
@@ -502,7 +505,7 @@ fn opcache_arguments_evaluated_in_eval_are_released() {
                 echo \"done\\n\";";
     let output = run(&binary, code);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "done\n", "stderr: {stderr}");
+    assert_eq!(php_display::strip_php_display_lines(&String::from_utf8_lossy(&output.stdout)), "done\n", "stderr: {stderr}");
     assert!(
         stderr.contains("HEAP DEBUG: leak summary: clean"),
         "an OPcache call's evaluated argument leaked:\n{stderr}"
