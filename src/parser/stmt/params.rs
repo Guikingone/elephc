@@ -840,6 +840,7 @@ fn parse_callable_signature(
     })
 }
 
+/// Parses a comma-separated declaration name list with aligned optional generic type arguments.
 pub(super) fn parse_name_list(
     tokens: &[SpannedToken],
     pos: &mut usize,

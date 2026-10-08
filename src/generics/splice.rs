@@ -88,6 +88,7 @@ impl crate::magic_constants::walker::Pass for TypeParamSubstitution<'_> {
         crate::parser::ast::ExprKind::MagicConstant(mc)
     }
 
+    /// Substitutes concrete generic bindings into each type annotation visited by the AST walker.
     fn transform_type(
         &self,
         ty: crate::parser::ast::TypeExpr,
