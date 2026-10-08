@@ -43,6 +43,7 @@ jobs:
     # nothing here would be publishable there.
     if: github.repository == 'illegalstudio/elephc'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write # commit the watch state under .github/upstream/
       issues: write   # open the tracking issues

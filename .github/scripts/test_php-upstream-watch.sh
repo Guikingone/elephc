@@ -108,7 +108,7 @@ PHP 8.5 UPGRADE NOTES
 UPG
 
 cat >"$FIX/compare.json" <<'JSON'
-{"files":[{"filename":"ext/dom/a.c"},{"filename":"ext/dom/b.c"},{"filename":"Zend/zend.c"}]}
+{"files":[{"filename":"ext/dom/a.c"},{"filename":"ext/dom/b.c"},{"filename":"Zend/zend.c"},{"filename":"README.md"},{"filename":"tests/dom/foo.phpt"}]}
 JSON
 
 cat >"$FIX/baseline.json" <<'JSON'
@@ -139,13 +139,23 @@ case "$cmd" in
       printf 'fake gh: `gh api` with a field must pass -X GET (gh defaults to POST)\n' >&2
       exit 1
     fi
-    endpoint="${1:-}"; shift || true
+    # Find the endpoint: the first argument that is neither a flag nor a flag value.
+    endpoint=""; expect_value=0
+    for a in "$@"; do
+      if [ "$expect_value" -eq 1 ]; then expect_value=0; continue; fi
+      case "$a" in
+        -X|--method) expect_value=1; continue ;;
+        -X=*|--method=*) continue ;;
+        -*) continue ;;
+      esac
+      endpoint="$a"; break
+    done
     case "$endpoint" in
       *"/releases"*) cat "$fix/releases.json" ;;
       *"/contents/NEWS"*) cat "$fix/NEWS" ;;
       *"/contents/UPGRADING"*) cat "$fix/UPGRADING" ;;
       *"/compare/"*) cat "$fix/compare.json" ;;
-      *"search/issues"*) printf '0\n' ;;
+      *"search/issues"*) printf '%s\n' "${SEARCH_COUNT:-0}" ;;
       *) printf '{}\n' ;;
     esac
     ;;
@@ -229,6 +239,17 @@ if [ -f "$WORK/state.json" ]; then
   fail "dry-run must not write state"
 else
   pass "dry-run writes no state"
+fi
+
+# Dry-run must honour the (read-only) dedup search.
+SEARCH_COUNT=1 bash "$HERE/php-upstream-watch.sh" --repo example/elephc \
+  --state "$WORK/state-dry2.json" --baseline "$FIX/baseline.json" --dry-run \
+  >"$WORK/dry2.log" 2>&1 || true
+assert_file_contains "dry-run reports an existing issue" "already exists" "$WORK/dry2.log"
+if grep -qF "would open:" "$WORK/dry2.log"; then
+  fail "dry-run must not claim it would open an existing issue"
+else
+  pass "dry-run does not claim to open existing issues"
 fi
 
 # ---------------------------------------------------------------------------

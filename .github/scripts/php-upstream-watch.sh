@@ -33,6 +33,9 @@ DEFAULT_BASELINE="scripts/docs/php_baseline.json"
 DEFAULT_BUILTIN_REGISTRY="scripts/docs/builtin_registry.json"
 DEFAULT_SYMBOL_REGISTRY="scripts/docs/symbol_registry.json"
 RELEASES_PER_PAGE=100
+# php-src publishes ~1 release/ month/branch plus prereleases; two pages cover
+# several years, so the oldest watched branch's latest cannot fall off page one.
+MAX_RELEASE_PAGES=2
 # Keep embedded NEWS/UPGRADING blocks bounded: a .0 release can embed five
 # UPGRADING sections plus NEWS, and GitHub caps issue bodies at 65536 chars.
 MAX_EMBED_BYTES=8000
@@ -208,9 +211,11 @@ emit_upgrading_sections() {
 }
 
 # modules_summary COMPARE_JSON_FILE -> "ext/dom x8, core (Zend) x12, ..." on stdout.
+# Only code-bearing trees are counted (ext/, Zend/, sapi/, main/); docs, tests and
+# CI churn are ignored so the summary reflects PHP's implementation surface.
 modules_summary() {
   jq -r '
-    [ .files[]?.filename ]
+    [ .files[]?.filename | select(test("^(ext|Zend|sapi|main)/")) ]
     | map(
         if startswith("ext/") then ("ext/" + (split("/")[1]))
         elif startswith("Zend/") then "core (Zend)"
@@ -282,6 +287,17 @@ parse_args() {
   done
 }
 
+# ensure_label NAME COLOR DESCRIPTION -> create the label if it is missing, so
+# issues are never silently created unlabeled. Never overwrites an existing
+# label (the pr-labels catalog remains authoritative for its definition).
+ensure_label() {
+  local name="$1" color="$2" description="$3"
+  if gh label list --repo "$TARGET_REPO" --limit 200 --json name --jq '.[].name' 2>/dev/null | grep -qxF "$name"; then
+    return 0
+  fi
+  gh label create "$name" --repo "$TARGET_REPO" --color "$color" --description "$description" >/dev/null 2>&1 || true
+}
+
 # render_provenance BODY VERSION TAG URL BRANCH PREV_TAG FIRST KIND PUBLISHED
 render_provenance() {
   local body="$1" version="$2" tag="$3" url="$4" branch="$5" prev_tag="$6" first="$7" kind="$8" published="$9"
@@ -333,10 +349,16 @@ render_baseline() {
 # render_surface BODY COMPARE_FILE VERSION
 render_surface() {
   local body="$1" compare_file="$2" version="$3"
+  local summary=""
+  if [ -s "$compare_file" ]; then
+    summary="$(modules_summary "$compare_file")"
+  fi
   {
     printf '\n### PHP surface\n\n'
-    if [ -s "$compare_file" ]; then
-      printf 'Modules touched upstream (changed files, by module): %s.\n\n' "$(modules_summary "$compare_file")"
+    if [ -n "$summary" ]; then
+      printf 'Modules touched upstream (changed files, by module): %s.\n\n' "$summary"
+    elif [ -s "$compare_file" ]; then
+      printf 'No extension/Zend/SAPI/core files changed in this release.\n\n'
     else
       printf 'No comparable upstream file activity for this release.\n\n'
     fi
@@ -347,7 +369,10 @@ render_surface() {
 # render_news BODY NEWS_BLOCK_FILE VERSION
 render_news() {
   local body="$1" block="$2" version="$3"
-  [ -s "$block" ] || return 0
+  if [ ! -s "$block" ]; then
+    printf '\n> Upstream NEWS block was not found at this tag; use the ChangeLog link above.\n' >>"$body"
+    return 0
+  fi
   {
     printf '\n### Upstream changelog (NEWS)\n\n'
     printf '<details>\n<summary>NEWS block for PHP %s</summary>\n\n' "$version"
@@ -417,13 +442,28 @@ main() {
     die "GH_TOKEN or GITHUB_TOKEN must be set (or pass --dry-run)"
   fi
 
+  case "$MIN_MINOR" in
+    [0-9]*.[0-9]*) ;;
+    *) die "--min-minor must be MAJOR.MINOR (got: $MIN_MINOR)" ;;
+  esac
+
   local tmp
   WATCH_TMP="$(mktemp -d "${TMPDIR:-/tmp}/php-watch.XXXXXX")"
   trap 'rm -rf "$WATCH_TMP"' EXIT
   tmp="$WATCH_TMP"
 
   log "fetching recent releases from $UPSTREAM_REPO"
-  gh api "repos/$UPSTREAM_REPO/releases?per_page=$RELEASES_PER_PAGE" >"$tmp/releases.json"
+  local page count
+  page=1
+  while [ "$page" -le "$MAX_RELEASE_PAGES" ]; do
+    gh api "repos/$UPSTREAM_REPO/releases?per_page=$RELEASES_PER_PAGE&page=$page" >"$tmp/releases_page_$page.json"
+    count="$(jq 'length' "$tmp/releases_page_$page.json")"
+    if [ "$count" -lt "$RELEASES_PER_PAGE" ]; then
+      break
+    fi
+    page=$(( page + 1 ))
+  done
+  jq -s 'add // []' "$tmp"/releases_page_*.json >"$tmp/releases.json"
 
   local min_key normalized
   min_key="$(min_minor_num "$MIN_MINOR")"
@@ -474,6 +514,20 @@ main() {
   local covered_functions
   covered_functions="$tmp/covered_functions.txt"
   load_covered_functions "$BUILTIN_REGISTRY" >"$covered_functions"
+
+  # Ensure the labels we apply exist and resolve the label arguments once.
+  local label_args=()
+  if [ "$DRY_RUN" -eq 0 ]; then
+    ensure_label "type:chore" "6E7781" "Updates maintenance, tooling, dependencies, or housekeeping."
+    ensure_label "topic:php-compat" "D73A4A" "Changes PHP compatibility or observable PHP semantics."
+  fi
+  local labels_present label
+  labels_present="$(gh label list --repo "$TARGET_REPO" --limit 200 --json name --jq '.[].name' 2>/dev/null || true)"
+  for label in "type:chore" "topic:php-compat"; do
+    if printf '%s\n' "$labels_present" | grep -qxF "$label"; then
+      label_args+=("--label" "$label")
+    fi
+  done
 
   local created=0 already=0 failures=0
   local line tag version branch prev_tag first url published pat kind
@@ -530,28 +584,22 @@ main() {
     render_upgrading "$body" "$titles" "$tmp" "$covered_functions"
     render_checklist "$body"
 
-    if [ "$DRY_RUN" -eq 1 ]; then
-      log "[dry-run] would open: $title ($(wc -c <"$body" | tr -d ' ') chars)"
-      continue
-    fi
-
+    # Dedup search runs in both modes (read-only), so --dry-run reports the same
+    # exists/would-open decision the real run would make.
     local existing
     existing="$(gh api -X GET "search/issues" -f q="repo:$TARGET_REPO in:body \"$marker\"" --jq '.total_count' 2>/dev/null || printf '0')"
     if [ "${existing:-0}" -gt 0 ]; then
       log "skip $tag: issue already exists"
-      already=$(( already + 1 ))
+      if [ "$DRY_RUN" -eq 0 ]; then
+        already=$(( already + 1 ))
+      fi
       continue
     fi
 
-    local label_args=()
-    local labels_present
-    labels_present="$(gh label list --repo "$TARGET_REPO" --limit 200 --json name --jq '.[].name' 2>/dev/null || true)"
-    local label
-    for label in "type:chore" "topic:php-compat"; do
-      if printf '%s\n' "$labels_present" | grep -qxF "$label"; then
-        label_args+=("--label" "$label")
-      fi
-    done
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "[dry-run] would open: $title ($(wc -c <"$body" | tr -d ' ') chars)"
+      continue
+    fi
 
     if gh issue create --repo "$TARGET_REPO" --title "$title" --body-file "$body" "${label_args[@]+"${label_args[@]}"}"; then
       log "opened: $title"
