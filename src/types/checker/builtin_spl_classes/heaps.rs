@@ -177,7 +177,7 @@ fn spl_priority_queue_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Bool),
             priority_insert_body(),
         ),
-        method_with_body("setExtractFlags", vec![param("flags", TypeExpr::Int)], Some(TypeExpr::Void), priority_set_extract_flags_body()),
+        method_with_body("setExtractFlags", vec![param("flags", TypeExpr::Int)], Some(TypeExpr::Int), priority_set_extract_flags_body()),
         method_with_body("getExtractFlags", Vec::new(), Some(TypeExpr::Int), return_body(priority_flags_expr())),
         method_with_body("extract", Vec::new(), Some(mixed_type()), priority_extract_body()),
         method_with_body("top", Vec::new(), Some(mixed_type()), priority_top_body()),
@@ -467,6 +467,7 @@ fn priority_set_extract_flags_body() -> Vec<Stmt> {
             None,
         ),
         property_assign_stmt(this_expr(), "extractFlags", var_expr("flags")),
+        return_stmt(var_expr("flags")),
     ]
 }
 

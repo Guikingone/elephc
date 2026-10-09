@@ -74,6 +74,15 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         return value;
     }
     if let ExprKind::ArrayAccess { array, index } = &value.kind {
+        // An `ArrayAccess` receiver must consult `offsetExists()` before `offsetGet()`, or a
+        // missing key would raise the exception the read raises instead of coalescing to the
+        // default. Only a receiver whose type is known here takes that route; anything else
+        // keeps the ordinary silent subscript read.
+        if array_access_expr_satisfies_array_access(ctx, array) {
+            return super::lazy_isset::lower_array_access_object_coalesce_value(
+                ctx, array, index, value,
+            );
+        }
         return lower_array_access_with_missing_warning(ctx, array, index, value, false);
     }
     // A typed property with no default starts UNINITIALIZED, and an ordinary read of one is

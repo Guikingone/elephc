@@ -590,6 +590,41 @@ echo $fixed->getSize();
 
 // Positive control for the SplFixedArray storage-size guard: an ordinary fixed array still
 // allocates, zero-initializes, and round-trips element writes.
+/// Verifies SplStack/SplQueue freeze their LIFO/FIFO iterator mode while the base list does not.
+///
+/// php fixes the mode bit on the two subclasses: `SplStack` refuses FIFO and `SplQueue` refuses
+/// LIFO with the same `RuntimeException`, while `SplDoublyLinkedList` still switches freely.
+#[test]
+fn test_spl_stack_and_queue_freeze_iterator_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$stack = new SplStack();
+try { $stack->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO); }
+catch (RuntimeException $e) { echo "stack: ", $e->getMessage(), "\n"; }
+$stack->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO);
+echo "stack lifo ok\n";
+$queue = new SplQueue();
+try { $queue->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO); }
+catch (RuntimeException $e) { echo "queue: ", $e->getMessage(), "\n"; }
+$queue->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO);
+echo "queue fifo ok\n";
+$dll = new SplDoublyLinkedList();
+$dll->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO);
+echo "dll fifo ok\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "stack: Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen\n",
+            "stack lifo ok\n",
+            "queue: Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen\n",
+            "queue fifo ok\n",
+            "dll fifo ok\n",
+        )
+    );
+}
+
 /// Verifies that ordinary SplFixedArray allocation is unaffected by the storage-size guard.
 #[test]
 fn test_spl_fixed_array_normal_size_still_works() {

@@ -560,6 +560,133 @@ pub(super) fn lazy_empty_magic_property_calls(
     }
 }
 
+/// Lowers `$object[$index]` as the value side of `??` on an `ArrayAccess` receiver.
+///
+/// PHP consults `offsetExists()` first and evaluates `offsetGet()` only when it answers true,
+/// so a missing key yields null — and therefore the `??` default — instead of raising the
+/// exception `offsetGet()` raises for a missing object. The receiver is evaluated once into a
+/// hidden temp and the offset once, so both calls reach the same object and key.
+pub(super) fn lower_array_access_object_coalesce_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let receiver = lower_subscript_receiver_silently(ctx, array);
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    let nullable = value_is_nullable(ctx, receiver.value);
+    let temp_name = ctx.declare_hidden_temp(receiver_type.clone());
+    store_value_into_temp(ctx, &temp_name, receiver_type, receiver, expr.span);
+    let object = Expr::new(ExprKind::Variable(temp_name), expr.span);
+    let (key, key_temp) = evaluate_once(ctx, index, expr);
+    let exists_call = synthetic_method_call(&object, "offsetExists", &key, expr.span);
+    let get_call = synthetic_method_call(&object, "offsetGet", &key, expr.span);
+    let result = if nullable {
+        lower_nullable_receiver_coalesce(ctx, &object, &exists_call, &get_call, expr)
+    } else {
+        lower_coalesce_through_exists_then_get(ctx, &exists_call, &get_call, expr)
+    };
+    release_evaluated_once(ctx, key_temp, expr.span);
+    result
+}
+
+/// Lowers the `??` value for an `ArrayAccess` receiver that may hold null.
+///
+/// A null container answers null without either `ArrayAccess` call, exactly as it does for a
+/// plain subscript read; any other value takes the `offsetExists` then `offsetGet` route.
+fn lower_nullable_receiver_coalesce(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    exists_call: &Expr,
+    get_call: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_type = PhpType::Mixed;
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let null_block = ctx
+        .builder
+        .create_named_block("coalesce.null_receiver", Vec::new());
+    let object_block = ctx
+        .builder
+        .create_named_block("coalesce.object_receiver", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("coalesce.receiver_merge", Vec::new());
+    let receiver = lower_expr(ctx, object);
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![receiver.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: object_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    let null_value = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(object_block);
+    let coalesced = lower_coalesce_through_exists_then_get(ctx, exists_call, get_call, expr);
+    store_value_into_temp(ctx, &temp_name, result_type, coalesced, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Lowers `offsetExists($key) ? offsetGet($key) : null` for an `ArrayAccess` `??` value.
+///
+/// The absent arm produces boxed null, so the enclosing `??` observes a null value and takes
+/// its default without ever calling `offsetGet`.
+fn lower_coalesce_through_exists_then_get(
+    ctx: &mut LoweringContext<'_, '_>,
+    exists_call: &Expr,
+    get_call: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_type = PhpType::Mixed;
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let present_block = ctx
+        .builder
+        .create_named_block("coalesce.present", Vec::new());
+    let absent_block = ctx
+        .builder
+        .create_named_block("coalesce.absent", Vec::new());
+    let merge = ctx.builder.create_named_block("coalesce.merge", Vec::new());
+
+    let exists = lower_expr(ctx, exists_call);
+    let cond = ctx.truthy(exists, Some(expr.span));
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: cond.value,
+        then_target: present_block,
+        then_args: Vec::new(),
+        else_target: absent_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(present_block);
+    let get_value = lower_expr(ctx, get_call);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), get_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(absent_block);
+    let null_value = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, &temp_name, result_type, null_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
 /// Returns the class whose `magic` method (`__isset`/`__unset`) should handle
 /// property existence/removal: a property that cannot be accessed normally on an
 /// object whose class declares the magic method.

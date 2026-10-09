@@ -254,6 +254,32 @@ foreach ($copy as $k => $v) {
     assert_eq!(out, "a=1;b=2;");
 }
 
+/// Verifies `??` over an `ArrayAccess` receiver probes `offsetExists()` before `offsetGet()`.
+///
+/// PHP's null-coalescing operator is a silent probe: a missing key must yield the default, not
+/// the `UnexpectedValueException` a direct `offsetGet()` raises. A regression here routed the
+/// coalesce straight into `offsetGet()`, so `$map[$missing] ?? null` threw instead of printing
+/// `NULL`, and `SplObjectStorage::offsetGet()` could not raise for a genuinely absent object.
+#[test]
+fn test_array_access_coalesce_probes_offset_exists() {
+    let out = compile_and_run(
+        r#"<?php
+$a = new stdClass();
+$b = new stdClass();
+$map = new SplObjectStorage();
+$map[$a] = 'foo';
+var_dump($map[$b] ?? null);
+var_dump($map[$a] ?? null);
+try {
+    $map->offsetGet($b);
+} catch (UnexpectedValueException $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "NULL\nstring(3) \"foo\"\nObject not found\n");
+}
+
 /// Verifies the SPL gate opens for `unserialize`, whose class name lives in the DATA.
 ///
 /// A valid serialized `SplFixedArray` came back as `__PHP_Incomplete_Class` because no static walk

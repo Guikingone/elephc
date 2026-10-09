@@ -732,3 +732,28 @@ rmdir("root");
     assert_eq!(out, "child:wrapped:leaf.txt=root/child/leaf.txt\nhas|leaf=7\n");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the directory and glob iterators reject an empty path with php's `ValueError`.
+///
+/// Each concrete class names itself and its parameter in the message, so the shared directory
+/// constructor has to carry the constructed class rather than a fixed `DirectoryIterator`.
+#[test]
+fn test_directory_and_glob_iterators_reject_empty_path() {
+    let out = compile_and_run(
+        r#"<?php
+try { new DirectoryIterator(''); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { new FilesystemIterator(''); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { new RecursiveDirectoryIterator(''); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { new GlobIterator(''); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "DirectoryIterator::__construct(): Argument #1 ($directory) must not be empty\n",
+            "FilesystemIterator::__construct(): Argument #1 ($directory) must not be empty\n",
+            "RecursiveDirectoryIterator::__construct(): Argument #1 ($directory) must not be empty\n",
+            "GlobIterator::__construct(): Argument #1 ($pattern) must not be empty\n",
+        )
+    );
+}

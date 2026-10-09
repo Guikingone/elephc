@@ -561,7 +561,7 @@ fn directory_iterator_methods() -> Vec<ClassMethod> {
             "__construct",
             vec![param("directory", TypeExpr::Str)],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), int_expr(0), false, false),
+            directory_construct_body(var_expr("directory"), int_expr(0), false, false, "DirectoryIterator"),
         ),
         method_with_body(
             "current",
@@ -590,7 +590,13 @@ fn filesystem_iterator_methods() -> Vec<ClassMethod> {
                 param_default("flags", TypeExpr::Int, int_expr(FS_SKIP_DOTS)),
             ],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
+            directory_construct_body(
+                var_expr("directory"),
+                var_expr("flags"),
+                true,
+                false,
+                "FilesystemIterator",
+            ),
         ),
         method_with_body("current", Vec::new(), Some(mixed_type()), filesystem_current_body()),
         method_with_body("key", Vec::new(), Some(mixed_type()), filesystem_key_body()),
@@ -626,7 +632,13 @@ fn recursive_directory_iterator_methods() -> Vec<ClassMethod> {
                 param_default("flags", TypeExpr::Int, int_expr(FS_CURRENT_AS_FILEINFO)),
             ],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
+            directory_construct_body(
+                var_expr("directory"),
+                var_expr("flags"),
+                true,
+                false,
+                "RecursiveDirectoryIterator",
+            ),
         ),
         method_with_body("hasChildren", Vec::new(), Some(TypeExpr::Bool), recursive_directory_has_children_body()),
         method_with_body(
@@ -2003,8 +2015,26 @@ fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
 }
 
 /// Builds a directory constructor body.
-fn directory_construct_body(directory: Expr, flags: Expr, filter_dots: bool, entries_are_paths: bool) -> Vec<Stmt> {
+fn directory_construct_body(
+    directory: Expr,
+    flags: Expr,
+    filter_dots: bool,
+    entries_are_paths: bool,
+    class_name: &str,
+) -> Vec<Stmt> {
     let mut body = vec![
+        // php rejects an empty directory path before touching the filesystem; the
+        // diagnostic names the concrete class the caller constructed.
+        if_stmt(
+            binary_expr(directory.clone(), BinOp::StrictEq, string_expr("")),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(&format!(
+                    "{class_name}::__construct(): Argument #1 ($directory) must not be empty"
+                ))],
+            ))],
+            None,
+        ),
         property_assign_stmt(this_expr(), "directory", string_copy_expr(directory.clone())),
         property_assign_stmt(this_expr(), "fsFlags", flags.clone()),
         property_assign_stmt(this_expr(), "entriesArePathnames", bool_expr(entries_are_paths)),
@@ -2158,6 +2188,17 @@ fn filesystem_set_flags_body() -> Vec<Stmt> {
 /// Builds GlobIterator constructor.
 fn glob_iterator_construct_body() -> Vec<Stmt> {
     vec![
+        // php rejects an empty pattern before expanding it.
+        if_stmt(
+            binary_expr(var_expr("pattern"), BinOp::StrictEq, string_expr("")),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "GlobIterator::__construct(): Argument #1 ($pattern) must not be empty",
+                )],
+            ))],
+            None,
+        ),
         property_assign_stmt(this_expr(), "pattern", string_copy_expr(var_expr("pattern"))),
         property_assign_stmt(
             this_expr(),
