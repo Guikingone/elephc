@@ -1456,6 +1456,39 @@ echo call_hot(1);
         assert!(!same_sampled_declaration(&names[0], "App\\freename"));
     }
 
+    /// Generic function headers preserve qualified ranges that own sampled source lines.
+    #[test]
+    fn monitor_generic_review_free_function_ranges() {
+        let source = "<?php\nnamespace App;\nfunction firstOf<T>(array<T> $items): T {\n return $items[0];\n}\nfunction after() {}";
+        let ranges = php_decl_ranges(source);
+        assert_eq!(ranges, vec![
+            DeclRange { name: "App\\firstOf".into(), start: 3, end: 5 },
+            DeclRange { name: "App\\after".into(), start: 6, end: 6 },
+        ]);
+        let owner = ranges.iter().find(|range| range.start <= 4 && 4 <= range.end)
+            .expect("sampled generic body has a declaration owner");
+        assert_eq!(owner.name, "App\\firstOf");
+    }
+
+    /// Nested generic defaults, by-reference methods and abstract methods retain source spelling.
+    #[test]
+    fn monitor_generic_review_method_ranges() {
+        let source = "<?php\nnamespace App;\nclass Widget<T> {\n function &getName<U = Box<array<int>>>(U $value): U {\n  return $value;\n }\n}\ninterface Mapper { function map<U>(callable $f); }\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\Widget::getName".into(), start: 4, end: 6 },
+            DeclRange { name: "App\\Mapper::map".into(), start: 8, end: 8 },
+        ]);
+    }
+
+    /// An incomplete generic header cannot borrow the next declaration's parameter list.
+    #[test]
+    fn monitor_generic_review_incomplete_header() {
+        let source = "<?php function broken<T; function after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "after".into(), start: 1, end: 1 },
+        ]);
+    }
+
     /// Exact captures retain the measured calls and costs of mixed-case methods.
     #[test]
     fn monitor_followup_exact_source_method_case() {

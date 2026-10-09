@@ -69,8 +69,8 @@ pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
         if tokens[pos].0 == Token::Function {
             let name_pos = pos + 1 + usize::from(tokens.get(pos + 1).is_some_and(|(token, _)| *token == Token::Ampersand));
             if let Some(name) = word_at(&tokens, name_pos) {
-                if tokens.get(name_pos + 1).is_some_and(|(token, _)| *token == Token::LParen) {
-                    if let Some((_, end)) = declaration_extent(&tokens, name_pos + 1, &brace_ends, true) {
+                if let Some(params_pos) = parameter_list_start(&tokens, name_pos + 1) {
+                    if let Some((_, end)) = declaration_extent(&tokens, params_pos, &brace_ends, true) {
                         let name = match classes.last() {
                             Some((class, _)) => format!("{class}::{name}"),
                             None => qualify_name(&namespace, &name),
@@ -130,6 +130,25 @@ fn namespace_declaration(tokens: &[SpannedToken], mut pos: usize) -> Option<(Str
 fn word_at(tokens: &[SpannedToken], pos: usize) -> Option<String> {
     let (token, metadata) = tokens.get(pos)?;
     token.word_spelling(metadata).map(str::to_string)
+}
+
+/// Skips a balanced generic declaration list before the source-visible parameters.
+fn parameter_list_start(tokens: &[SpannedToken], mut pos: usize) -> Option<usize> {
+    if tokens.get(pos)?.0 == Token::Less {
+        let mut depth = 0usize;
+        loop {
+            match tokens.get(pos)?.0 {
+                Token::Less => depth += 1,
+                Token::Greater => depth = depth.checked_sub(1)?,
+                Token::GreaterGreater => depth = depth.checked_sub(2)?,
+                Token::Semicolon | Token::LBrace | Token::RBrace | Token::Eof => return None,
+                _ => {}
+            }
+            pos += 1;
+            if depth == 0 { break; }
+        }
+    }
+    (tokens.get(pos)?.0 == Token::LParen).then_some(pos)
 }
 
 /// Locates a declaration's body or abstract-method delimiter after its complete header.
