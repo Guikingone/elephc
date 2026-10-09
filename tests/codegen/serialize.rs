@@ -1616,9 +1616,41 @@ foreach ($cases as [$cls, $payload]) {
     );
 }
 
+/// A `false` member rejects a `true` payload on hydration: `b:1;` must raise PHP's TypeError
+/// while `b:0;` stores `false` (review follow-up for #1629). `int|false` keeps its `False` member
+/// (`normalize_union_members` drops it only when `bool` is also declared), so the runtime
+/// accepted-mask requires a zero payload for boxed tag 3.
+#[test]
+fn test_unserialize_false_member_requires_a_false_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int|false $count = false; }
+foreach (['b:1;', 'b:0;', 'i:5;', 'i:0;', 'N;'] as $p) {
+    try {
+        $o = unserialize('O:1:"C":1:{s:5:"count";' . $p . '}');
+        echo $p, " => ", var_export($o->count, true), "\n";
+    } catch (Throwable $e) {
+        echo $p, " => ", get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "b:1; => TypeError: Cannot assign true to property C::$count of type int|false\n",
+            "b:0; => false\n",
+            "i:5; => 5\n",
+            "i:0; => 0\n",
+            "N; => TypeError: Cannot assign null to property C::$count of type int|false\n",
+        )
+    );
+}
+
 /// The message names a non-nullable type without the `?`, resolves a mismatched object's
-/// concrete class, and spells a private property by its plain name rather than the NUL-mangled
-/// wire key. The values PHP accepts still hydrate.
+/// concrete class, spells a class missing from the program as `__PHP_Incomplete_Class`, and
+/// spells a private property by its plain name rather than the NUL-mangled wire key. The values
+/// PHP accepts still hydrate.
 #[test]
 fn test_unserialize_typed_property_type_error_names_declared_type_and_plain_property() {
     let out = compile_and_run(
@@ -1626,6 +1658,7 @@ fn test_unserialize_typed_property_type_error_names_declared_type_and_plain_prop
 class P { public int $i = 0; protected string $s = ""; private ?bool $b = null; }
 class O { public ?stdClass $o = null; }
 class A { public array $a = []; }
+class I { public int $n = 0; }
 function show(string $cls, string $key, string $payload): void {
     try {
         $o = unserialize('O:1:"' . $cls . '":1:{' . $key . $payload . '}');
@@ -1642,6 +1675,7 @@ show('O', 's:1:"o";', 'a:0:{}');
 show('O', 's:1:"o";', 'O:8:"stdClass":0:{}');
 show('A', 's:1:"a";', 'i:3;');
 show('A', 's:1:"a";', 'a:1:{i:0;i:1;}');
+show('I', 's:1:"n";', 'O:7:"Missing":0:{}');
 "#,
     );
     assert_eq!(
@@ -1655,6 +1689,7 @@ show('A', 's:1:"a";', 'a:1:{i:0;i:1;}');
             "O => ok\n",
             "A => Cannot assign int to property A::$a of type array\n",
             "A => ok\n",
+            "I => Cannot assign __PHP_Incomplete_Class to property I::$n of type int\n",
         )
     );
 }
