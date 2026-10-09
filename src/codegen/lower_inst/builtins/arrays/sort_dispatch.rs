@@ -110,8 +110,11 @@ pub(super) fn lower_hash_reindexing_sort(
     };
     let value_ty = value.codegen_repr();
     let helper = match value_ty {
-        PhpType::Str => str_helper,
-        PhpType::Int => int_helper,
+        PhpType::Str => Some(str_helper),
+        PhpType::Int => Some(int_helper),
+        // A Mixed-valued hash has no typed comparator; `emit_mixed_slot_sort` orders the extracted
+        // list with `__rt_php_compare_slots` after a runtime scalar guard, exactly as a boxed sort.
+        PhpType::Mixed => None,
         ref other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for hash values of PHP type {:?}",
@@ -142,8 +145,13 @@ pub(super) fn lower_hash_reindexing_sort(
     // Sort the fresh list in place. The sorters answer nothing useful and clobber the argument
     // registers, so the list pointer is parked rather than read back afterwards.
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_reg_move(ctx.emitter, arg0, result_reg);
-    abi::emit_call_label(ctx.emitter, helper);
+    match helper {
+        Some(helper) => {
+            abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+            abi::emit_call_label(ctx.emitter, helper);
+        }
+        None => emit_mixed_slot_sort(ctx, name)?,
+    }
 
     // Rebuild a hash keyed 0..n-1 out of the sorted list. `__rt_array_slice_to_hash` reads
     // (array, offset, length, length_present), and a zero flag means "to the end", so the length

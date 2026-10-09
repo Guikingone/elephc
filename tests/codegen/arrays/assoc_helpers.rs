@@ -729,3 +729,23 @@ echo array_unshift($c), "|", implode(",", $c), "\n";
     );
     assert_eq!(out, "4|9,z,1,s|1,s\n3|9,1,s\n1|1\n");
 }
+
+/// `rsort` over a Mixed-valued hash reorders the values descending and renumbers the keys from
+/// zero, while a copied alias keeps its own order and keys.
+#[test]
+fn test_rsort_mixed_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => "s"];
+$copy = $a;
+rsort($a);
+var_dump($a);
+var_dump($copy);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  string(1) \"s\"\n  [1]=>\n  int(1)\n}\n\
+array(2) {\n  [\"x\"]=>\n  int(1)\n  [\"y\"]=>\n  string(1) \"s\"\n}\n"
+    );
+}
