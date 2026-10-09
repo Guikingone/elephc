@@ -75,6 +75,7 @@ struct RuntimeInstanceMethodDescriptorCacheEntry {
 struct RuntimeCallableInvokerCacheEntry {
     signature: FunctionSig,
     captures: Vec<(String, PhpType, bool)>,
+    return_is_owned: bool,
     label: String,
 }
 
@@ -260,10 +261,15 @@ impl SharedCodegenState {
         &self,
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
+        return_is_owned: bool,
     ) -> Option<String> {
         self.runtime_callable_invokers
             .iter()
-            .find(|entry| entry.signature == *signature && entry.captures == captures)
+            .find(|entry| {
+                entry.signature == *signature
+                    && entry.captures == captures
+                    && entry.return_is_owned == return_is_owned
+            })
             .map(|entry| entry.label.clone())
     }
 
@@ -272,12 +278,14 @@ impl SharedCodegenState {
         &mut self,
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
+        return_is_owned: bool,
         label: &str,
     ) {
         self.runtime_callable_invokers
             .push(RuntimeCallableInvokerCacheEntry {
                 signature: signature.clone(),
                 captures: captures.to_vec(),
+                return_is_owned,
                 label: label.to_string(),
             });
     }

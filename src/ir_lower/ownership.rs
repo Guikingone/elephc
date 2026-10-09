@@ -7,14 +7,42 @@
 //!   assignment, call, and cleanup boundaries.
 //!
 //! Key details:
-//! - Ownership is represented by explicit EIR opcodes even though the legacy
-//!   backend is still the production path.
+//! - Ownership and semantic value copies use explicit EIR opcodes consumed
+//!   by the active backend; lifetime pins are not PHP value assignments.
 
 #![allow(dead_code)]
 
-use crate::ir::{Op, Ownership};
+use crate::ir::{Immediate, Op, Ownership};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::span::Span;
+
+/// Gives an ordinary PHP value binding its own value-cell owner.
+///
+/// Retaining a boxed array cell shares the mutable zval itself, defeating payload COW.
+/// `MixedClone` detaches that cell while retaining its payload. Resource clones deliberately
+/// retain the original cell, and object payload identity is preserved. Compiler spills and
+/// reference bindings must use their separate ownership operations instead.
+pub(crate) fn copy_for_php_value_binding(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    let php_type = ctx.builder.value_php_type(value.value);
+    if matches!(
+        php_type.codegen_repr(),
+        crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)
+    ) {
+        return ctx.emit_value(
+            Op::MixedClone,
+            vec![value.value],
+            None,
+            php_type,
+            Op::MixedClone.default_effects(),
+            span,
+        );
+    }
+    acquire_if_refcounted(ctx, value, span)
+}
 
 /// Emits an acquire operation when the value can carry runtime lifetime state.
 pub(crate) fn acquire_if_refcounted(
@@ -34,6 +62,51 @@ pub(crate) fn acquire_if_refcounted(
         );
     }
     value
+}
+
+/// Transfers the owner held by a directly loaded local into a terminating operation.
+///
+/// `throw $local` never returns to the current path, so retaining the loaded value would leave
+/// the slot's original owner stranded in an abandoned frame. Clearing the slot without releasing
+/// it moves that owner into the in-flight exception. Loads from widened `Mixed` slots are already
+/// materialized as owned concrete values by the backend; their source box is released before the
+/// slot is cleared, leaving the unboxed owned value as the transferred exception reference.
+pub(crate) fn take_direct_local_load(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> Option<LoweredValue> {
+    let slot = {
+        let inst = ctx.builder.value_defining_instruction(value.value)?;
+        if inst.op != Op::LoadLocal {
+            return None;
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return None;
+        };
+        slot
+    };
+    if matches!(
+        ctx.builder.local_php_type(slot).codegen_repr(),
+        crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)
+    ) {
+        ctx.emit_void(
+            Op::ReleaseLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(),
+            span,
+        );
+    }
+    ctx.emit_void(
+        Op::ZeroLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::ZeroLocalSlot.default_effects(),
+        span,
+    );
+    ctx.builder.set_value_ownership(value.value, Ownership::Owned);
+    Some(value)
 }
 
 /// Emits an acquire that is marked as a lifetime pin: a reference taken purely so the value
@@ -73,6 +146,7 @@ pub(crate) fn release_if_owned(ctx: &mut LoweringContext<'_, '_>, value: Lowered
     if Ownership::php_type_needs_lifetime_tracking(&php_type)
         && !matches!(php_type, crate::types::PhpType::Void)
     {
+        ctx.clear_consumed_argument_snapshot(value.value, span);
         ctx.emit_void(
             Op::Release,
             vec![value.value],

@@ -51,6 +51,11 @@ pub(super) fn lower_method_call(
         terminate_method_call_on_null(ctx, method);
         return null_value;
     }
+    if op == Op::MethodCall && is_parallel_task_group_spawn(ctx, object.value, method) {
+        let spawned = lower_parallel_spawn(ctx, object, args, expr);
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return spawned;
+    }
     if op == Op::MethodCall {
         if let Some(value) =
             lower_reflection_function_invoke_call(ctx, Some(object_expr), method, args, expr)
@@ -133,18 +138,67 @@ pub(super) fn lower_method_call(
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let user_owner = singular_object_class(&ctx.builder.value_php_type(object.value))
+        .and_then(|(class, _)| {
+            let class = class.trim_start_matches('\\');
+            // Fiber switching consumes transferred receivers/arguments in its
+            // private runtime ABI, including escape. It is not a user-method
+            // call and must not also get this caller-side cleanup handler.
+            if php_symbol_key(class) == "fiber" || crate::types::builtin_classes::intrinsic_class_names()
+                .any(|intrinsic| php_symbol_key(intrinsic) == php_symbol_key(class)) {
+                return None;
+            }
+            let info = ctx.classes.get(class)?;
+            let key = php_symbol_key(dispatch_method);
+            let implementation = info.method_impl_classes.get(&key).map(String::as_str).unwrap_or(class);
+            Some(format!("{implementation}::{key}"))
+        });
+    let arg_values = if let Some(owner) = &user_owner {
+        lower_args_with_eir_user_function_signature(ctx, owner, sig.as_ref(), args)
+    } else {
+        lower_args_with_eir_signature(ctx, sig.as_ref(), args)
+    };
     operands.extend(arg_values.iter().copied());
+    let cleanup = (user_owner.is_some() &&
+        (super::function_calls::call_has_owning_temporary_arg(ctx, &arg_values)
+            || ctx.value_is_owning_temporary(object))).then(|| {
+        let handler = ctx.builder.create_named_block("method.call_cleanup", Vec::new());
+        let after = ctx.builder.create_named_block("method.call_after", Vec::new());
+        let result = (result_type != PhpType::Void)
+            .then(|| ctx.declare_owned_hidden_temp(result_type.clone()));
+        ctx.emit_void(Op::TryPushHandler, Vec::new(), Some(Immediate::I64(handler.as_raw() as i64)),
+            Op::TryPushHandler.default_effects(), Some(expr.span));
+        (handler, after, result)
+    });
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
         op,
         operands,
         Some(Immediate::Data(data)),
-        result_type,
+        result_type.clone(),
         op.default_effects(),
         Some(expr.span),
     );
-    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    if let Some((_, _, Some(result))) = &cleanup {
+        store_value_into_temp(ctx, result, result_type, call, expr.span);
+    }
+    let return_alias = match ctx.builder.value_php_type(object.value).codegen_repr() {
+        PhpType::Object(class_name)
+            if php_symbol_key(class_name.trim_start_matches('\\'))
+                == "elephc\\async\\__scheduler"
+                && php_symbol_key(dispatch_method) == "runroot" =>
+        {
+            ReturnArgAlias::None
+        }
+        PhpType::Object(class_name)
+            if php_symbol_key(class_name.trim_start_matches('\\'))
+                == "elephc\\async\\taskgroup"
+                && php_symbol_key(dispatch_method) == "spawn" =>
+        {
+            ReturnArgAlias::None
+        }
+        _ => method_return_arg_alias(ctx, object.value, dispatch_method),
+    };
     release_owned_call_arg_temporaries_with_signature(
         ctx,
         &arg_values,
@@ -153,8 +207,73 @@ pub(super) fn lower_method_call(
         sig.as_ref(),
         expr.span,
     );
-    release_owning_receiver_temporary(ctx, object, expr.span);
+    if fiber_switch_transfers_receiver(ctx, object, dispatch_method) {
+        ctx.builder.set_value_ownership(object.value, Ownership::Owned);
+    } else {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+    }
+    if let Some((handler, after, result)) = cleanup {
+        pop_method_cleanup_handler(ctx, handler, expr.span);
+        branch_to(ctx, after);
+        ctx.builder.position_at_end(handler);
+        ctx.clear_static_callable_locals();
+        pop_method_cleanup_handler(ctx, handler, expr.span);
+        release_owned_call_arg_temporaries_with_signature(ctx, &arg_values, None,
+            &ReturnArgAlias::None, sig.as_ref(), expr.span);
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        let current = ctx.emit_owned_value(Op::CatchBind, Vec::new(), None,
+            PhpType::Object("Throwable".to_string()), Op::CatchBind.default_effects(), Some(expr.span));
+        ctx.builder.terminate(Terminator::Throw { value: current.value });
+        ctx.builder.position_at_end(after);
+        ctx.clear_static_callable_locals();
+        return result.map(|result| take_owned_temp(ctx, &result, expr.span)).unwrap_or(call);
+    }
     call
+}
+
+fn pop_method_cleanup_handler(ctx: &mut LoweringContext<'_, '_>, handler: BlockId, span: Span) {
+    ctx.emit_void(Op::TryPopHandler, Vec::new(), Some(Immediate::I64(handler.as_raw() as i64)),
+        Op::TryPopHandler.default_effects(), Some(span));
+}
+
+fn is_parallel_task_group_spawn(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> bool {
+    // A user program can legally declare a same-named class when it has not opted into the
+    // Parallel prelude. The dedicated worker ABI exists only with that prelude's bridge extern,
+    // so the class name alone must never select special lowering.
+    if php_symbol_key(method) != "spawn"
+        || !ctx
+            .extern_functions
+            .contains_key("elephc_parallel_job_input_php_prepare")
+    {
+        return false;
+    }
+    matches!(
+        ctx.builder.value_php_type(object).codegen_repr(),
+        PhpType::Object(ref class_name)
+            if php_symbol_key(class_name.trim_start_matches('\\'))
+                == "elephc\\parallel\\taskgroup"
+    )
+}
+
+/// Returns whether a Fiber switching method transfers an owning receiver temporary to runtime.
+pub(super) fn fiber_switch_transfers_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+) -> bool {
+    matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Object(ref class_name) if php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
+    ) && matches!(php_symbol_key(method).as_str(), "start" | "resume" | "throw")
+        && ctx.value_is_owning_temporary(object)
+        // A named local owns its own frame slot and must keep that ownership until its
+        // explicit unset/epilogue. The Fiber ABI only consumes expression temporaries whose
+        // ordinary post-call release would otherwise be skipped by a switch/longjmp.
+        && !matches!(ctx.builder.value_defining_op(object.value), Some(Op::LoadLocal))
 }
 
 /// Lowers the `Closure` rebinding methods on a closure (`Callable`) receiver:
@@ -191,7 +310,7 @@ pub(super) fn lower_closure_bind_method(
             Some(ctx.emit_value(
                 Op::CallableDescriptorInvoke,
                 vec![bound.value, arg_container.value],
-                callable_profile_immediate(),
+                callable_profile_immediate(ctx),
                 PhpType::Mixed,
                 Op::CallableDescriptorInvoke.default_effects(),
                 Some(expr.span),

@@ -23,6 +23,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_parallel_contract::RUNTIME_CONTEXT_POOL_SLOTS;
 
 /// Concat scratch capacity in bytes, mirroring `strings::CONCAT_BUF_CAPACITY`.
 /// Duplicated here so the ctx layout is self-contained for the spike.
@@ -128,6 +129,16 @@ pub(crate) const CTX_GC_PEAK_OFFSET: usize = CTX_GC_LIVE_OFFSET + 8;
 /// a shared flag would let one context's collection suppress another's, or let one clear
 /// a flag the other is relying on.
 pub(crate) const CTX_GC_COLLECTING_OFFSET: usize = CTX_GC_PEAK_OFFSET + 8;
+pub(crate) const CTX_SER_VALUE_COUNTER_OFFSET: usize = CTX_GC_COLLECTING_OFFSET + 8;
+pub(crate) const CTX_SER_OBJ_COUNT_OFFSET: usize = CTX_SER_VALUE_COUNTER_OFFSET + 8;
+pub(crate) const CTX_UNSER_DEPTH_OFFSET: usize = CTX_SER_OBJ_COUNT_OFFSET + 8;
+pub(crate) const CTX_UNSER_ALLOWED_MODE_OFFSET: usize = CTX_UNSER_DEPTH_OFFSET + 8;
+pub(crate) const CTX_UNSER_ALLOWED_LIST_OFFSET: usize = CTX_UNSER_ALLOWED_MODE_OFFSET + 8;
+pub(crate) const CTX_UNSER_ALLOWED_LIST_MIXED_OFFSET: usize =
+    CTX_UNSER_ALLOWED_LIST_OFFSET + 8;
+pub(crate) const CTX_UNSER_ACTIVE_OFFSET: usize = CTX_UNSER_ALLOWED_LIST_MIXED_OFFSET + 8;
+pub(crate) const CTX_UNSER_CONTEXT_OFFSET: usize = CTX_UNSER_ACTIVE_OFFSET + 8;
+pub(crate) const CTX_UNSER_COUNT_OFFSET: usize = CTX_UNSER_CONTEXT_OFFSET + 8;
 
 /// Output-buffering and print_r capture state, formerly the `_ob_*` and `_print_r_*`
 /// globals.
@@ -138,7 +149,7 @@ pub(crate) const CTX_GC_COLLECTING_OFFSET: usize = CTX_GC_PEAK_OFFSET + 8;
 ///
 /// The three scalars join the scalar block; the six 512-byte handle arrays follow it,
 /// still inside the first 4 KiB window so their base addresses stay one instruction.
-pub(crate) const CTX_PRINT_R_MODE_OFFSET: usize = CTX_GC_COLLECTING_OFFSET + 8;
+pub(crate) const CTX_PRINT_R_MODE_OFFSET: usize = CTX_UNSER_COUNT_OFFSET + 8;
 pub(crate) const CTX_PRINT_R_OFF_OFFSET: usize = CTX_PRINT_R_MODE_OFFSET + 8;
 pub(crate) const CTX_OB_LEVEL_OFFSET: usize = CTX_PRINT_R_OFF_OFFSET + 8;
 
@@ -164,9 +175,29 @@ pub(crate) const CTX_OB_STARTED_OFFSET: usize = CTX_OB_FLAGS_OFFSET + CTX_OB_TAB
 /// the pool base by `CTX_SIZE` — buys nothing and costs a `udiv`.
 pub(crate) const CTX_POOL_STATE_PTR_OFFSET: usize = CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE;
 
+/// Per-context handle metadata. The large side tables stay outside `_rt_ctx` so their
+/// size can follow the selected heap size and pooled workers pay only for active arenas.
+/// The four cursors are scalar state served directly out of the context; the three table
+/// fields are pointers loaded by `abi::emit_symbol_address`. Serializer object
+/// deduplication follows the same model: two counters here, two large caller-owned tables.
+pub(crate) const CTX_OBJ_HANDLE_INDEX_PTR_OFFSET: usize = CTX_POOL_STATE_PTR_OFFSET + 8;
+pub(crate) const CTX_OBJ_HANDLE_FREE_PTR_OFFSET: usize = CTX_OBJ_HANDLE_INDEX_PTR_OFFSET + 8;
+pub(crate) const CTX_BUFFER_REGISTRY_PTR_OFFSET: usize = CTX_OBJ_HANDLE_FREE_PTR_OFFSET + 8;
+pub(crate) const CTX_SER_OBJ_PTRS_PTR_OFFSET: usize = CTX_BUFFER_REGISTRY_PTR_OFFSET + 8;
+pub(crate) const CTX_SER_OBJ_IDXS_PTR_OFFSET: usize = CTX_SER_OBJ_PTRS_PTR_OFFSET + 8;
+pub(crate) const CTX_UNSER_VALUES_PTR_OFFSET: usize = CTX_SER_OBJ_IDXS_PTR_OFFSET + 8;
+pub(crate) const CTX_OBJ_HANDLE_FREE_TOP_OFFSET: usize = CTX_UNSER_VALUES_PTR_OFFSET + 8;
+pub(crate) const CTX_OBJ_HANDLE_NEXT_OFFSET: usize = CTX_OBJ_HANDLE_FREE_TOP_OFFSET + 8;
+pub(crate) const CTX_BUFFER_REGISTRY_FREE_OFFSET: usize = CTX_OBJ_HANDLE_NEXT_OFFSET + 8;
+pub(crate) const CTX_BUFFER_REGISTRY_NEXT_OFFSET: usize = CTX_BUFFER_REGISTRY_FREE_OFFSET + 8;
+/// Worker-only fatal boundary installed by `__rt_parallel_worker_entry`.
+pub(crate) const CTX_PARALLEL_FATAL_JMP_OFFSET: usize = CTX_BUFFER_REGISTRY_NEXT_OFFSET + 8;
+pub(crate) const CTX_PARALLEL_FATAL_ACTIVE_OFFSET: usize = CTX_PARALLEL_FATAL_JMP_OFFSET + 8;
+pub(crate) const CTX_PARALLEL_FATAL_STATUS_OFFSET: usize = CTX_PARALLEL_FATAL_ACTIVE_OFFSET + 8;
+
 /// Per-descriptor resource tables, formerly `_eof_flags`, `_popen_files`,
-/// `_dir_handles`, `_glob_handles`, `_bzstream_handles` and the two stream-filter
-/// tables.
+/// `_dir_handles`, `_glob_handles`, compression/iconv/TLS handles, user-wrapper and
+/// user-filter instances, stream metadata, and the two stream-filter tables.
 ///
 /// PER-CONTEXT, by the plan's own criterion: "per-context if a thread may open
 /// resources". A spawned task runs arbitrary PHP, so it can call `opendir()` — so it can.
@@ -180,7 +211,7 @@ pub(crate) const CTX_EOF_FLAGS_SIZE: usize = 256;
 pub(crate) const CTX_HANDLE_TABLE_SIZE: usize = 2048;
 pub(crate) const CTX_FILTER_TABLE_SIZE: usize = 256;
 
-pub(crate) const CTX_EOF_FLAGS_OFFSET: usize = CTX_POOL_STATE_PTR_OFFSET + 8;
+pub(crate) const CTX_EOF_FLAGS_OFFSET: usize = CTX_PARALLEL_FATAL_STATUS_OFFSET + 8;
 pub(crate) const CTX_POPEN_FILES_OFFSET: usize = CTX_EOF_FLAGS_OFFSET + CTX_EOF_FLAGS_SIZE;
 pub(crate) const CTX_DIR_HANDLES_OFFSET: usize =
     CTX_POPEN_FILES_OFFSET + CTX_HANDLE_TABLE_SIZE;
@@ -192,6 +223,25 @@ pub(crate) const CTX_STREAM_READ_FILTERS_OFFSET: usize =
     CTX_BZSTREAM_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE;
 pub(crate) const CTX_STREAM_WRITE_FILTERS_OFFSET: usize =
     CTX_STREAM_READ_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE;
+pub(crate) const CTX_ZSTREAM_HANDLES_OFFSET: usize =
+    CTX_STREAM_WRITE_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE;
+pub(crate) const CTX_ICONV_HANDLES_OFFSET: usize =
+    CTX_ZSTREAM_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE;
+pub(crate) const CTX_TLS_SESSIONS_OFFSET: usize =
+    CTX_ICONV_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE;
+pub(crate) const CTX_USER_WRAPPER_HANDLES_OFFSET: usize =
+    CTX_TLS_SESSIONS_OFFSET + CTX_HANDLE_TABLE_SIZE;
+pub(crate) const CTX_USER_FILTER_INSTANCES_SIZE: usize = 4096;
+pub(crate) const CTX_USER_FILTER_INSTANCES_OFFSET: usize =
+    CTX_USER_WRAPPER_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE;
+pub(crate) const CTX_STREAM_CHUNK_SIZE_OFFSET: usize =
+    CTX_USER_FILTER_INSTANCES_OFFSET + CTX_USER_FILTER_INSTANCES_SIZE;
+pub(crate) const CTX_STREAM_CONNECT_HOST_SIZE: usize = 4096;
+pub(crate) const CTX_STREAM_CONNECT_HOST_OFFSET: usize =
+    CTX_STREAM_CHUNK_SIZE_OFFSET + CTX_HANDLE_TABLE_SIZE;
+pub(crate) const CTX_STREAM_OWNED_FDS_SIZE: usize = 256;
+pub(crate) const CTX_STREAM_OWNED_FDS_OFFSET: usize =
+    CTX_STREAM_CONNECT_HOST_OFFSET + CTX_STREAM_CONNECT_HOST_SIZE;
 
 /// The C-string scratch pair, formerly `_cstr_buf` / `_cstr_buf2` (4 KiB each).
 ///
@@ -207,7 +257,7 @@ pub(crate) const CTX_STREAM_WRITE_FILTERS_OFFSET: usize =
 /// cost a second instruction on every use, or fail to assemble.
 pub(crate) const CTX_CSTR_BUF_SIZE: usize = 4096;
 pub(crate) const CTX_CSTR_BUF_OFFSET: usize =
-    (CTX_STREAM_WRITE_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE + 4095) & !4095;
+    (CTX_STREAM_OWNED_FDS_OFFSET + CTX_STREAM_OWNED_FDS_SIZE + 4095) & !4095;
 pub(crate) const CTX_CSTR_BUF2_OFFSET: usize = CTX_CSTR_BUF_OFFSET + CTX_CSTR_BUF_SIZE;
 
 pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_CSTR_BUF2_OFFSET + CTX_CSTR_BUF_SIZE;
@@ -239,7 +289,7 @@ pub(crate) const CTX_STREAM_FILTER_BUF_OFFSET: usize =
 ///
 /// Slot 0 is the MAIN context: `__rt_ctx_init` takes it unconditionally, so the process
 /// always has one even if nothing ever spawns.
-pub(crate) const CTX_POOL_SLOTS: usize = 8;
+pub(crate) const CTX_POOL_SLOTS: usize = RUNTIME_CONTEXT_POOL_SLOTS;
 
 pub(crate) const CTX_SIZE: usize =
     (CTX_STREAM_FILTER_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY + 15) & !15;
@@ -293,7 +343,7 @@ pub fn emit_heap_arena_reset_state(emitter: &mut Emitter) {
     for offset in fields {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("str xzr, [x28, #{}]", offset)); // zero one per-context heap allocator field
+                emitter.instruction(&format!("str xzr, [x28, #{}]", offset));   // zero one per-context heap allocator field
             }
             Arch::X86_64 => {
                 emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 0", offset)); // zero one per-context heap allocator field
@@ -371,6 +421,25 @@ pub fn emit_ctx_zero_fields_at(emitter: &mut Emitter, ctx: &str) {
         CTX_PRINT_R_MODE_OFFSET,
         CTX_PRINT_R_OFF_OFFSET,
         CTX_OB_LEVEL_OFFSET,
+        CTX_OBJ_HANDLE_INDEX_PTR_OFFSET,
+        CTX_OBJ_HANDLE_FREE_PTR_OFFSET,
+        CTX_BUFFER_REGISTRY_PTR_OFFSET,
+        CTX_SER_OBJ_PTRS_PTR_OFFSET,
+        CTX_SER_OBJ_IDXS_PTR_OFFSET,
+        CTX_UNSER_VALUES_PTR_OFFSET,
+        CTX_SER_VALUE_COUNTER_OFFSET,
+        CTX_SER_OBJ_COUNT_OFFSET,
+        CTX_UNSER_DEPTH_OFFSET,
+        CTX_UNSER_ALLOWED_MODE_OFFSET,
+        CTX_UNSER_ALLOWED_LIST_OFFSET,
+        CTX_UNSER_ALLOWED_LIST_MIXED_OFFSET,
+        CTX_UNSER_ACTIVE_OFFSET,
+        CTX_UNSER_CONTEXT_OFFSET,
+        CTX_UNSER_COUNT_OFFSET,
+        CTX_OBJ_HANDLE_FREE_TOP_OFFSET,
+        CTX_OBJ_HANDLE_NEXT_OFFSET,
+        CTX_BUFFER_REGISTRY_FREE_OFFSET,
+        CTX_BUFFER_REGISTRY_NEXT_OFFSET,
         // `_stack_limit` / `_stack_limit_main` are NOT in this list on purpose. They are
         // published by `__rt_stack_limit_init` from the real stack bounds, and a zeroed
         // floor would make every prologue's `cmp sp, floor` succeed at any depth — the
@@ -431,14 +500,17 @@ pub fn emit_rt_ctx_init(emitter: &mut Emitter) {
     // starts pristine even though the data section zero-fills only the first use.
     emit_ctx_zero_fields(emitter);
     emit_ctx_install_default_arena(emitter);
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // return after publishing the initialized main context
 }
 
 /// Emits `__rt_ctx_acquire` and `__rt_ctx_release`: the pool the M1 bridge will call.
 ///
-/// `__rt_ctx_acquire(base, size) -> ctx*` claims a free slot, zeroes its mutable fields,
-/// installs the caller-supplied arena and returns the slot pointer — or 0 when the pool is
-/// exhausted. `__rt_ctx_release(ctx*)` marks the slot free again.
+/// `__rt_ctx_acquire(base, size, object_index, object_free, buffer_registry,
+/// serialize_object_ptrs, serialize_object_indexes, unserialize_values) -> ctx*`
+/// claims a free slot, zeroes its mutable fields, installs the caller-owned arena and
+/// zero-initialized side tables, and returns the slot pointer — or 0 when an input is null
+/// or the pool is exhausted. `__rt_ctx_release(ctx*)` marks the slot free again; the caller
+/// remains responsible for the arena and side-table storage.
 ///
 /// THE CLAIM IS ATOMIC, deliberately, even though nothing spawns a thread yet. A plain
 /// load/store pair would pass every test that can be written today and would be a race the
@@ -460,61 +532,99 @@ pub fn emit_rt_ctx_pool(emitter: &mut Emitter) {
     emitter.label_global("__rt_ctx_acquire");
     match emitter.target.arch {
         Arch::AArch64 => {
-            // x0 = arena base, x1 = arena size in bytes.
+            // x0 = arena base, x1 = arena size, x2..x7 = zeroed side tables.
+            for register in ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"] {
+                emitter.instruction(&format!("cbz {}, __rt_ctx_acquire_exhausted", register)); // reject missing worker-owned storage
+            }
             abi::emit_symbol_address(emitter, "x9", "_rt_ctx_state");               // x9 = this slot's state word
             abi::emit_symbol_address(emitter, "x10", "_rt_ctx_pool");               // x10 = this slot's base
-            emitter.instruction(&format!("mov x11, #{}", CTX_POOL_SLOTS));          // x11 = slots left to try
+            emitter.instruction(&format!("mov x11, #{}", CTX_POOL_SLOTS));      // x11 = slots left to try
             emitter.label("__rt_ctx_acquire_slot");
-            emitter.instruction("cbz x11, __rt_ctx_acquire_exhausted");             // every slot taken
+            emitter.instruction("cbz x11, __rt_ctx_acquire_exhausted");         // every slot taken
             emitter.label("__rt_ctx_acquire_try");
-            emitter.instruction("ldaxr x12, [x9]");                                 // read the state with acquire ordering
-            emitter.instruction("cbnz x12, __rt_ctx_acquire_next");                 // already claimed: move on, write nothing
-            emitter.instruction("mov x13, #1");                                     // the claimed marker
-            emitter.instruction("stlxr w14, x13, [x9]");                            // publish the claim with release ordering
-            emitter.instruction("cbnz w14, __rt_ctx_acquire_try");                  // lost the exclusive: retry this slot
+            emitter.instruction("ldaxr x12, [x9]");                             // read the state with acquire ordering
+            emitter.instruction("cbnz x12, __rt_ctx_acquire_next");             // already claimed: move on, write nothing
+            emitter.instruction("mov x13, #1");                                 // the claimed marker
+            emitter.instruction("stlxr w14, x13, [x9]");                        // publish the claim with release ordering
+            emitter.instruction("cbnz w14, __rt_ctx_acquire_try");              // lost the exclusive: retry this slot
             emit_ctx_zero_fields_at(emitter, "x10");                                // hand back a pristine context
             emitter.instruction(&format!("str x9, [x10, #{}]", CTX_POOL_STATE_PTR_OFFSET)); // remember the slot for release
             emitter.instruction(&format!("str x0, [x10, #{}]", CTX_HEAP_BASE_OFFSET)); // this context's own arena base
-            emitter.instruction("add x12, x0, x1");                                 // arena ceiling = base + size
+            emitter.instruction("add x12, x0, x1");                             // arena ceiling = base + size
             emitter.instruction(&format!("str x12, [x10, #{}]", CTX_HEAP_MAX_OFFSET)); // this context's own arena ceiling
-            emitter.instruction("mov x0, x10");                                     // return the slot pointer
-            emitter.instruction("ret");
+            emitter.instruction(&format!("str x2, [x10, #{}]", CTX_OBJ_HANDLE_INDEX_PTR_OFFSET)); // worker object-index table
+            emitter.instruction(&format!("str x3, [x10, #{}]", CTX_OBJ_HANDLE_FREE_PTR_OFFSET)); // worker released-handle stack
+            emitter.instruction(&format!("str x4, [x10, #{}]", CTX_BUFFER_REGISTRY_PTR_OFFSET)); // worker Buffer descriptor table
+            emitter.instruction(&format!("str x5, [x10, #{}]", CTX_SER_OBJ_PTRS_PTR_OFFSET)); // worker serialize object-pointer table
+            emitter.instruction(&format!("str x6, [x10, #{}]", CTX_SER_OBJ_IDXS_PTR_OFFSET)); // worker serialize object-index table
+            emitter.instruction(&format!("str x7, [x10, #{}]", CTX_UNSER_VALUES_PTR_OFFSET)); // worker unserialize value registry
+            emitter.instruction("mov x12, #1");                                 // handle zero is invalid in both registries
+            emitter.instruction(&format!("str x12, [x10, #{}]", CTX_OBJ_HANDLE_NEXT_OFFSET)); // first object handle
+            emitter.instruction(&format!("str x12, [x10, #{}]", CTX_BUFFER_REGISTRY_NEXT_OFFSET)); // first Buffer descriptor
+            emitter.instruction("mov x0, x10");                                 // return the slot pointer
+            emitter.instruction("ret");                                         // return the claimed context to the caller
             emitter.label("__rt_ctx_acquire_next");
-            emitter.instruction("add x9, x9, #8");                                  // next slot's state word
-            emitter.instruction(&format!("add x10, x10, #{}", CTX_SIZE));           // next slot's base (stride is 4 KiB-aligned)
-            emitter.instruction("sub x11, x11, #1");
-            emitter.instruction("b __rt_ctx_acquire_slot");
+            emitter.instruction("add x9, x9, #8");                              // next slot's state word
+            emitter.instruction(&format!("add x10, x10, #{}", CTX_SIZE));       // next slot's base (stride is 4 KiB-aligned)
+            emitter.instruction("sub x11, x11, #1");                            // consume one attempted pool slot
+            emitter.instruction("b __rt_ctx_acquire_slot");                     // inspect the next pool slot
             emitter.label("__rt_ctx_acquire_exhausted");
-            emitter.instruction("mov x0, #0");                                      // the pool is full; the caller decides what that means
-            emitter.instruction("ret");
+            emitter.instruction("mov x0, #0");                                  // the pool is full; the caller decides what that means
+            emitter.instruction("ret");                                         // return a null context on invalid input or exhaustion
         }
         Arch::X86_64 => {
-            // rdi = arena base, rsi = arena size in bytes.
-            abi::emit_symbol_address(emitter, "r8", "_rt_ctx_state");                // r8 = this slot's state word
-            abi::emit_symbol_address(emitter, "r9", "_rt_ctx_pool");                 // r9 = this slot's base
-            emitter.instruction(&format!("mov r10, {}", CTX_POOL_SLOTS));            // r10 = slots left to try
+            // rdi/rsi = arena, rdx/rcx/r8/r9 plus stack args 7/8 = zeroed side tables.
+            emitter.instruction("push r12");                                    // preserve the pool loop counter
+            emitter.instruction("push r15");                                    // preserve the atomic claimed marker
+            for register in ["rdi", "rsi", "rdx", "rcx", "r8", "r9"] {
+                emitter.instruction(&format!("test {}, {}", register, register)); // validate one caller-owned storage argument
+                emitter.instruction("jz __rt_ctx_acquire_exhausted");           // reject missing worker-owned storage
+            }
+            emitter.instruction("mov rax, QWORD PTR [rsp + 24]");               // load stack-passed serialize object-index table after two pushes
+            emitter.instruction("test rax, rax");                               // validate the seventh caller-owned storage argument
+            emitter.instruction("jz __rt_ctx_acquire_exhausted");               // reject it before claiming a pool slot
+            emitter.instruction("mov rax, QWORD PTR [rsp + 32]");               // load stack-passed unserialize value registry after two pushes
+            emitter.instruction("test rax, rax");                               // validate the eighth caller-owned storage argument
+            emitter.instruction("jz __rt_ctx_acquire_exhausted");               // reject it before claiming a pool slot
+            abi::emit_symbol_address(emitter, "r10", "_rt_ctx_state");               // r10 = this slot's state word
+            abi::emit_symbol_address(emitter, "r11", "_rt_ctx_pool");                // r11 = this slot's base
+            emitter.instruction(&format!("mov r12, {}", CTX_POOL_SLOTS));       // r12 = slots left to try
             emitter.label("__rt_ctx_acquire_slot");
-            emitter.instruction("test r10, r10");
-            emitter.instruction("jz __rt_ctx_acquire_exhausted");                    // every slot taken
-            emitter.instruction("xor eax, eax");                                     // expect the slot to be free
-            emitter.instruction("mov edx, 1");                                       // the claimed marker
-            emitter.instruction("lock cmpxchg QWORD PTR [r8], rdx");                 // claim it, or learn it was taken
-            emitter.instruction("jnz __rt_ctx_acquire_next");                        // someone else holds it
-            emit_ctx_zero_fields_at(emitter, "r9");                                  // hand back a pristine context
-            emitter.instruction(&format!("mov QWORD PTR [r9 + {}], r8", CTX_POOL_STATE_PTR_OFFSET)); // remember the slot for release
-            emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rdi", CTX_HEAP_BASE_OFFSET)); // this context's own arena base
-            emitter.instruction("lea rax, [rdi + rsi]");                             // arena ceiling = base + size
-            emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", CTX_HEAP_MAX_OFFSET)); // this context's own arena ceiling
-            emitter.instruction("mov rax, r9");                                      // return the slot pointer
-            emitter.instruction("ret");
+            emitter.instruction("test r12, r12");                               // did the scan consume every pool slot?
+            emitter.instruction("jz __rt_ctx_acquire_exhausted");               // every slot taken
+            emitter.instruction("xor eax, eax");                                // expect the slot to be free
+            emitter.instruction("mov r15d, 1");                                 // the claimed marker
+            emitter.instruction("lock cmpxchg QWORD PTR [r10], r15");           // claim it, or learn it was taken
+            emitter.instruction("jnz __rt_ctx_acquire_next");                   // someone else holds it
+            emit_ctx_zero_fields_at(emitter, "r11");                                 // hand back a pristine context
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], r10", CTX_POOL_STATE_PTR_OFFSET)); // remember the slot for release
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdi", CTX_HEAP_BASE_OFFSET)); // this context's own arena base
+            emitter.instruction("lea rax, [rdi + rsi]");                        // arena ceiling = base + size
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", CTX_HEAP_MAX_OFFSET)); // this context's own arena ceiling
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdx", CTX_OBJ_HANDLE_INDEX_PTR_OFFSET)); // worker object-index table
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rcx", CTX_OBJ_HANDLE_FREE_PTR_OFFSET)); // worker released-handle stack
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], r8", CTX_BUFFER_REGISTRY_PTR_OFFSET)); // worker Buffer descriptor table
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], r9", CTX_SER_OBJ_PTRS_PTR_OFFSET)); // worker serialize object-pointer table
+            emitter.instruction("mov rax, QWORD PTR [rsp + 24]");               // load stack-passed serialize object-index table after two pushes
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", CTX_SER_OBJ_IDXS_PTR_OFFSET)); // worker serialize object-index table
+            emitter.instruction("mov rax, QWORD PTR [rsp + 32]");               // load stack-passed unserialize value registry after two pushes
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", CTX_UNSER_VALUES_PTR_OFFSET)); // worker unserialize value registry
+            emitter.instruction("mov rax, 1");                                  // handle zero is invalid in both registries
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", CTX_OBJ_HANDLE_NEXT_OFFSET)); // first object handle
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", CTX_BUFFER_REGISTRY_NEXT_OFFSET)); // first Buffer descriptor
+            emitter.instruction("mov rax, r11");                                // return the slot pointer
+            emitter.instruction("jmp __rt_ctx_acquire_return_x86");             // restore callee-saved scratch registers
             emitter.label("__rt_ctx_acquire_next");
-            emitter.instruction("add r8, 8");                                        // next slot's state word
-            emitter.instruction(&format!("add r9, {}", CTX_SIZE));                   // next slot's base
-            emitter.instruction("sub r10, 1");
-            emitter.instruction("jmp __rt_ctx_acquire_slot");
+            emitter.instruction("add r10, 8");                                  // next slot's state word
+            emitter.instruction(&format!("add r11, {}", CTX_SIZE));             // next slot's base
+            emitter.instruction("sub r12, 1");                                  // consume one attempted pool slot
+            emitter.instruction("jmp __rt_ctx_acquire_slot");                   // inspect the next pool slot
             emitter.label("__rt_ctx_acquire_exhausted");
-            emitter.instruction("xor eax, eax");                                     // the pool is full; the caller decides what that means
-            emitter.instruction("ret");
+            emitter.instruction("xor eax, eax");                                // the pool is full; the caller decides what that means
+            emitter.label("__rt_ctx_acquire_return_x86");
+            emitter.instruction("pop r15");                                     // restore the caller's atomic-marker register
+            emitter.instruction("pop r12");                                     // restore the caller's pool-counter register
+            emitter.instruction("ret");                                         // return the claimed or null context result
         }
     }
 
@@ -527,23 +637,528 @@ pub fn emit_rt_ctx_pool(emitter: &mut Emitter) {
             // pool carries a zero back-pointer and is silently ignored, so releasing the
             // main context is a no-op rather than a corruption.
             emitter.instruction(&format!("ldr x9, [x0, #{}]", CTX_POOL_STATE_PTR_OFFSET)); // the slot's state word
-            emitter.instruction("cbz x9, __rt_ctx_release_done");                   // not pooled: nothing to hand back
-            emitter.instruction(&format!("str xzr, [x0, #{}]", CTX_POOL_STATE_PTR_OFFSET)); // forget the slot before freeing it
-            emitter.instruction("stlr xzr, [x9]");                                  // publish the release with release ordering
+            emitter.instruction("cbz x9, __rt_ctx_release_success");            // not pooled: a no-op release still succeeds
+            emitter.instruction("sub sp, sp, #48");                             // preserve host context while draining the worker context
+            emitter.instruction("stp x29, x30, [sp, #32]");                     // save frame pointer and return address
+            emitter.instruction("stp x19, x28, [sp, #16]");                     // save worker pointer and the foreign context register
+            emitter.instruction("add x29, sp, #32");                            // establish the release frame
+            emitter.instruction("mov x19, x0");                                 // retain the pooled context across cleanup calls
+            emitter.instruction("mov x28, x0");                                 // publish the context its cleanup helpers must address
+            emitter.instruction("bl __rt_stream_owner_drain");                  // close any descriptor owners left by normal or fatal flow
+            emitter.instruction("bl __rt_buffer_registry_drain");               // release any active Buffer payload owners
+            emitter.instruction("bl __rt_gc_collect_cycles");                   // reclaim cycles exposed by the final resource releases
+            emitter.instruction("bl __rt_ctx_verify_drained");                  // require every owner-bearing table to be empty
+            emitter.instruction("mov x10, x0");                                 // retain the verification result while restoring host state
+            emitter.instruction("mov x0, x19");                                 // restore the pooled context pointer
+            emitter.instruction("ldp x19, x28, [sp, #16]");                     // restore the foreign context register
+            emitter.instruction("ldp x29, x30, [sp, #32]");                     // restore caller frame state
+            emitter.instruction("add sp, sp, #48");                             // release the cleanup frame
+            emitter.instruction("cbz x10, __rt_ctx_release_dirty");             // dirty contexts stay claimed rather than exposing freed backing storage
+            emitter.instruction(&format!("str xzr, [x0, #{}]", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // disable the boundary before a new worker can claim the slot
+            emitter.instruction(&format!("str xzr, [x0, #{}]", CTX_PARALLEL_FATAL_JMP_OFFSET)); // discard the worker stack's setjmp address
+            emitter.instruction(&format!("ldr x9, [x0, #{}]", CTX_POOL_STATE_PTR_OFFSET)); // reload the slot state pointer after cleanup calls
+            emitter.instruction(&format!("str xzr, [x0, #{}]", CTX_POOL_STATE_PTR_OFFSET)); // forget the slot only after verified cleanup
+            emitter.instruction("stlr xzr, [x9]");                              // publish the release with release ordering
+            emitter.label("__rt_ctx_release_success");
+            emitter.instruction("mov x0, #1");                                  // report that backing storage may be released
+            emitter.instruction("b __rt_ctx_release_done");                     // share the common return
+            emitter.label("__rt_ctx_release_dirty");
+            emitter.instruction(&format!("str xzr, [x0, #{}]", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // quarantine dirty state without leaving a stale fatal target
+            emitter.instruction(&format!("str xzr, [x0, #{}]", CTX_PARALLEL_FATAL_JMP_OFFSET)); // discard the worker stack's setjmp address
+            emitter.instruction("mov x0, #0");                                  // require the host to preserve dirty backing storage
             emitter.label("__rt_ctx_release_done");
-            emitter.instruction("ret");
+            emitter.instruction("ret");                                         // return after publishing the slot release
         }
         Arch::X86_64 => {
             // rdi = a pointer __rt_ctx_acquire returned; a zero back-pointer means unpooled.
             emitter.instruction(&format!("mov r8, QWORD PTR [rdi + {}]", CTX_POOL_STATE_PTR_OFFSET)); // the slot's state word
-            emitter.instruction("test r8, r8");
-            emitter.instruction("jz __rt_ctx_release_done");                         // not pooled: nothing to hand back
-            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", CTX_POOL_STATE_PTR_OFFSET)); // forget the slot before freeing it
-            emitter.instruction("mov QWORD PTR [r8], 0");                            // x86 stores already carry release ordering
+            emitter.instruction("test r8, r8");                                 // did this context originate from the pool?
+            emitter.instruction("jz __rt_ctx_release_success_x86");             // not pooled: a no-op release still succeeds
+            emitter.instruction("push rbp");                                    // preserve caller frame state across cleanup calls
+            emitter.instruction("mov rbp, rsp");                                // establish the release frame
+            emitter.instruction("push r12");                                    // preserve the pooled context pointer
+            emitter.instruction("push r14");                                    // preserve the foreign context register
+            emitter.instruction("mov r12, rdi");                                // retain the pooled context across cleanup calls
+            emitter.instruction("mov r14, rdi");                                // publish the context its cleanup helpers must address
+            emitter.instruction("call __rt_stream_owner_drain");                // close any descriptor owners left by normal or fatal flow
+            emitter.instruction("call __rt_buffer_registry_drain");             // release any active Buffer payload owners
+            emitter.instruction("call __rt_gc_collect_cycles");                 // reclaim cycles exposed by the final resource releases
+            emitter.instruction("call __rt_ctx_verify_drained");                // require every owner-bearing table to be empty
+            emitter.instruction("mov r10, rax");                                // retain the verification result while restoring host state
+            emitter.instruction("mov rdi, r12");                                // restore the pooled context pointer
+            emitter.instruction("pop r14");                                     // restore the foreign context register
+            emitter.instruction("pop r12");                                     // restore callee-saved pooled-context scratch
+            emitter.instruction("pop rbp");                                     // restore caller frame pointer
+            emitter.instruction("test r10, r10");                               // did every owner-bearing table drain?
+            emitter.instruction("jz __rt_ctx_release_dirty_x86");               // dirty contexts stay claimed rather than exposing freed backing storage
+            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // disable before a new worker can claim the slot
+            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", CTX_PARALLEL_FATAL_JMP_OFFSET)); // discard the worker stack's setjmp address
+            emitter.instruction(&format!("mov r8, QWORD PTR [rdi + {}]", CTX_POOL_STATE_PTR_OFFSET)); // reload the slot state pointer after cleanup calls
+            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", CTX_POOL_STATE_PTR_OFFSET)); // forget the slot only after verified cleanup
+            emitter.instruction("mov QWORD PTR [r8], 0");                       // x86 stores already carry release ordering
+            emitter.label("__rt_ctx_release_success_x86");
+            emitter.instruction("mov eax, 1");                                  // report that backing storage may be released
+            emitter.instruction("jmp __rt_ctx_release_done");                   // share the common return
+            emitter.label("__rt_ctx_release_dirty_x86");
+            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // quarantine dirty state without leaving a stale fatal target
+            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", CTX_PARALLEL_FATAL_JMP_OFFSET)); // discard the worker stack's setjmp address
+            emitter.instruction("xor eax, eax");                                // require the host to preserve dirty backing storage
             emitter.label("__rt_ctx_release_done");
-            emitter.instruction("ret");
+            emitter.instruction("ret");                                         // return after publishing the slot release
         }
     }
+    emit_ctx_verify_drained(emitter);
+    emit_parallel_worker_entry(emitter);
+}
+
+fn emit_ctx_verify_drained(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: ctx_verify_drained ---");
+    emitter.label_global("__rt_ctx_verify_drained");
+    match emitter.target.arch {
+        Arch::AArch64 => emit_ctx_verify_drained_aarch64(emitter),
+        Arch::X86_64 => emit_ctx_verify_drained_x86_64(emitter),
+    }
+}
+
+fn emit_ctx_verify_drained_aarch64(emitter: &mut Emitter) {
+    for offset in [CTX_GC_LIVE_OFFSET, CTX_EXC_VALUE_OFFSET, CTX_EXC_CALL_FRAME_TOP_OFFSET, CTX_OB_LEVEL_OFFSET] {
+        emitter.instruction(&format!("ldr x9, [x28, #{}]", offset));            // inspect one scalar owner count or pointer
+        emitter.instruction("cbnz x9, __rt_ctx_verify_drained_dirty");          // any surviving scalar owner keeps the slot claimed
+    }
+    for (name, symbol, count, stride) in [
+        ("popen", "_popen_files", 256usize, 8usize),
+        ("dir", "_dir_handles", 256, 8),
+        ("glob", "_glob_handles", 256, 8),
+        ("bz", "_bzstream_handles", 256, 8),
+        ("zlib", "_zstream_handles", 256, 8),
+        ("iconv", "_iconv_handles", 256, 8),
+        ("tls", "_tls_sessions", 256, 8),
+        ("wrapper", "_user_wrapper_handles", 256, 8),
+        ("filter_instance", "_user_filter_instances", 512, 8),
+        ("connect_host", "_stream_connect_host", 512, 8),
+    ] {
+        let loop_label = format!("__rt_ctx_verify_{name}_loop");
+        let done_label = format!("__rt_ctx_verify_{name}_done");
+        abi::emit_symbol_address(emitter, "x9", symbol);
+        emitter.instruction("mov x10, #0");                                     // begin at the first table entry
+        emitter.label(&loop_label);
+        emitter.instruction(&format!("cmp x10, #{}", count));                   // scanned every entry in this owner table?
+        emitter.instruction(&format!("b.hs {done_label}"));                     // continue with the next owner family
+        emitter.instruction(&format!("ldr x11, [x9, x10, lsl #{}]", stride.trailing_zeros())); // load one owner-table word
+        emitter.instruction("cbnz x11, __rt_ctx_verify_drained_dirty");         // a surviving pointer keeps the slot claimed
+        emitter.instruction("add x10, x10, #1");                                // advance to the next entry
+        emitter.instruction(&format!("b {loop_label}"));                        // continue the bounded scan
+        emitter.label(&done_label);
+    }
+    for (name, symbol) in [
+        ("owned_fd", "_stream_owned_fds"),
+        ("read_filter", "_stream_read_filters"),
+        ("write_filter", "_stream_write_filters"),
+    ] {
+        let loop_label = format!("__rt_ctx_verify_{name}_loop");
+        let done_label = format!("__rt_ctx_verify_{name}_done");
+        abi::emit_symbol_address(emitter, "x9", symbol);
+        emitter.instruction("mov x10, #0");                                     // begin at the first byte entry
+        emitter.label(&loop_label);
+        emitter.instruction("cmp x10, #256");                                   // scanned every descriptor byte?
+        emitter.instruction(&format!("b.hs {done_label}"));                     // continue with the next byte table
+        emitter.instruction("ldrb w11, [x9, x10]");                             // load one byte-sized owner marker
+        emitter.instruction("cbnz w11, __rt_ctx_verify_drained_dirty");         // a surviving marker keeps the slot claimed
+        emitter.instruction("add x10, x10, #1");                                // advance to the next byte
+        emitter.instruction(&format!("b {loop_label}"));                        // continue the bounded scan
+        emitter.label(&done_label);
+    }
+    emit_ctx_verify_buffer_descriptors_aarch64(emitter);
+    emitter.instruction("mov x0, #1");                                          // report a fully drained reusable context
+    emitter.instruction("ret");                                                 // return success to ctx_release
+    emitter.label("__rt_ctx_verify_drained_dirty");
+    emitter.instruction("mov x0, #0");                                          // report a dirty context that must stay claimed
+    emitter.instruction("ret");                                                 // return failure without publishing pool availability
+}
+
+fn emit_ctx_verify_buffer_descriptors_aarch64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "x9", "_buffer_registry");
+    emitter.instruction("mov x10, #1");                                         // Buffer descriptor zero is invalid
+    emitter.label("__rt_ctx_verify_buffer_loop");
+    emitter.instruction(&format!("cmp x10, #{}", crate::codegen_support::runtime::buffers::BUFFER_REGISTRY_CAPACITY)); // reached the final descriptor?
+    emitter.instruction("b.hi __rt_ctx_verify_buffer_done");                    // every active slot was inspected
+    emitter.instruction(&format!("mov x11, #{}", crate::codegen_support::runtime::buffers::BUFFER_DESCRIPTOR_SIZE)); // materialize descriptor stride
+    emitter.instruction("madd x12, x10, x11, x9");                              // address this Buffer descriptor
+    emitter.instruction("ldr x11, [x12, #32]");                                 // inspect the active marker
+    emitter.instruction("cbnz x11, __rt_ctx_verify_drained_dirty");             // an active Buffer keeps the context claimed
+    emitter.instruction("add x10, x10, #1");                                    // advance to the next descriptor
+    emitter.instruction("b __rt_ctx_verify_buffer_loop");                       // continue the bounded registry scan
+    emitter.label("__rt_ctx_verify_buffer_done");
+}
+
+fn emit_ctx_verify_drained_x86_64(emitter: &mut Emitter) {
+    for offset in [
+        CTX_GC_LIVE_OFFSET,
+        CTX_EXC_VALUE_OFFSET,
+        CTX_EXC_CALL_FRAME_TOP_OFFSET,
+        CTX_OB_LEVEL_OFFSET,
+    ] {
+        emitter.instruction(&format!("cmp QWORD PTR [r14 + {}], 0", offset));   // inspect one scalar owner count or pointer
+        emitter.instruction("jne __rt_ctx_verify_drained_dirty_x86");           // any surviving scalar owner keeps the slot claimed
+    }
+    for (name, symbol, count) in [
+        ("popen", "_popen_files", 256usize),
+        ("dir", "_dir_handles", 256),
+        ("glob", "_glob_handles", 256),
+        ("bz", "_bzstream_handles", 256),
+        ("zlib", "_zstream_handles", 256),
+        ("iconv", "_iconv_handles", 256),
+        ("tls", "_tls_sessions", 256),
+        ("wrapper", "_user_wrapper_handles", 256),
+        ("filter_instance", "_user_filter_instances", 512),
+        ("connect_host", "_stream_connect_host", 512),
+    ] {
+        let loop_label = format!("__rt_ctx_verify_{name}_loop_x86");
+        let done_label = format!("__rt_ctx_verify_{name}_done_x86");
+        abi::emit_symbol_address(emitter, "r9", symbol);
+        emitter.instruction("xor r10d, r10d");                                  // begin at the first table entry
+        emitter.label(&loop_label);
+        emitter.instruction(&format!("cmp r10, {}", count));                    // scanned every entry in this owner table?
+        emitter.instruction(&format!("jae {done_label}"));                      // continue with the next owner family
+        emitter.instruction("cmp QWORD PTR [r9 + r10 * 8], 0");                 // inspect one owner-table word
+        emitter.instruction("jne __rt_ctx_verify_drained_dirty_x86");           // a surviving pointer keeps the slot claimed
+        emitter.instruction("inc r10");                                         // advance to the next entry
+        emitter.instruction(&format!("jmp {loop_label}"));                      // continue the bounded scan
+        emitter.label(&done_label);
+    }
+    for (name, symbol) in [
+        ("owned_fd", "_stream_owned_fds"),
+        ("read_filter", "_stream_read_filters"),
+        ("write_filter", "_stream_write_filters"),
+    ] {
+        let loop_label = format!("__rt_ctx_verify_{name}_loop_x86");
+        let done_label = format!("__rt_ctx_verify_{name}_done_x86");
+        abi::emit_symbol_address(emitter, "r9", symbol);
+        emitter.instruction("xor r10d, r10d");                                  // begin at the first byte entry
+        emitter.label(&loop_label);
+        emitter.instruction("cmp r10, 256");                                    // scanned every descriptor byte?
+        emitter.instruction(&format!("jae {done_label}"));                      // continue with the next byte table
+        emitter.instruction("cmp BYTE PTR [r9 + r10], 0");                      // inspect one byte-sized owner marker
+        emitter.instruction("jne __rt_ctx_verify_drained_dirty_x86");           // a surviving marker keeps the slot claimed
+        emitter.instruction("inc r10");                                         // advance to the next byte
+        emitter.instruction(&format!("jmp {loop_label}"));                      // continue the bounded scan
+        emitter.label(&done_label);
+    }
+    abi::emit_symbol_address(emitter, "r9", "_buffer_registry");
+    emitter.instruction("mov r10, 1");                                          // Buffer descriptor zero is invalid
+    emitter.label("__rt_ctx_verify_buffer_loop_x86");
+    emitter.instruction(&format!("cmp r10, {}", crate::codegen_support::runtime::buffers::BUFFER_REGISTRY_CAPACITY)); // reached the final descriptor?
+    emitter.instruction("ja __rt_ctx_verify_buffer_done_x86");                  // every active slot was inspected
+    emitter.instruction(&format!("imul r11, r10, {}", crate::codegen_support::runtime::buffers::BUFFER_DESCRIPTOR_SIZE)); // scale descriptor index
+    emitter.instruction("cmp QWORD PTR [r9 + r11 + 32], 0");                    // inspect the active marker
+    emitter.instruction("jne __rt_ctx_verify_drained_dirty_x86");               // an active Buffer keeps the context claimed
+    emitter.instruction("inc r10");                                             // advance to the next descriptor
+    emitter.instruction("jmp __rt_ctx_verify_buffer_loop_x86");                 // continue the bounded registry scan
+    emitter.label("__rt_ctx_verify_buffer_done_x86");
+    emitter.instruction("mov eax, 1");                                          // report a fully drained reusable context
+    emitter.instruction("ret");                                                 // return success to ctx_release
+    emitter.label("__rt_ctx_verify_drained_dirty_x86");
+    emitter.instruction("xor eax, eax");                                        // report a dirty context that must stay claimed
+    emitter.instruction("ret");                                                 // return failure without publishing pool availability
+}
+
+/// Emits the C-callable boundary that installs a worker context around one callback.
+///
+/// ABI: `entry(ctx, callback, job, stack_size, release_status_out) -> status`, where
+/// `callback(job)` returns the status and `stack_size` is the exact size configured for this
+/// worker. It releases the context while its fatal boundary is installed and reports whether
+/// Rust may free the arena backing storage.
+fn emit_parallel_worker_entry(emitter: &mut Emitter) {
+    use crate::codegen_support::runtime::system::{
+        STACK_BUDGET_CAP_BYTES, STACK_BUDGET_MIN_BYTES, STACK_GUARD_RESERVE_BYTES,
+    };
+    emitter.blank();
+    emitter.comment("--- runtime: parallel_worker_entry (install worker context) ---");
+    emitter.label_global("__rt_parallel_worker_entry");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cbz x0, __rt_parallel_worker_entry_invalid");  // reject a missing worker context
+            emitter.instruction("cbz x1, __rt_parallel_worker_entry_invalid");  // reject a missing worker callback
+            emitter.instruction("cbz x4, __rt_parallel_worker_entry_invalid");  // reject a missing release-status output slot
+            abi::emit_load_int_immediate(emitter, "x9", STACK_BUDGET_MIN_BYTES);
+            emitter.instruction("cmp x3, x9");                                  // require a stack large enough for the runtime reserve
+            emitter.instruction("b.lo __rt_parallel_worker_entry_invalid");     // reject an unsafe worker stack size
+            abi::emit_load_int_immediate(emitter, "x9", STACK_BUDGET_CAP_BYTES);
+            emitter.instruction("cmp x3, x9");                                  // keep floor arithmetic inside the reviewed maximum
+            emitter.instruction("b.hi __rt_parallel_worker_entry_invalid");     // reject an implausibly large worker stack size
+            emitter.instruction("sub sp, sp, #288");                            // reserve saved registers, result, and one jmp_buf
+            emitter.instruction("stp x19, x20, [sp, #0]");                      // preserve callback and job callee-saved registers
+            emitter.instruction("stp x21, x28, [sp, #16]");                     // preserve stack-size scratch and the host context
+            emitter.instruction("str x30, [sp, #32]");                          // preserve the host return address
+            emitter.instruction("str x4, [sp, #56]");                           // retain Rust's release-status output slot
+            emitter.instruction("mov x28, x0");                                 // publish the isolated worker runtime context
+            emitter.instruction("mov x19, x1");                                 // retain the worker callback across stack initialization
+            emitter.instruction("mov x20, x2");                                 // retain the opaque job pointer across stack initialization
+            emitter.instruction("mov x21, x3");                                 // retain the configured worker stack size
+            abi::emit_load_int_immediate(emitter, "x10", STACK_GUARD_RESERVE_BYTES);
+            emitter.instruction("sub x9, x21, x10");                            // usable stack budget leaves the fatal-path reserve
+            emitter.instruction("sub x9, sp, x9");                              // derive the worker's low-water stack address
+            emitter.instruction(&format!("str x9, [x28, #{}]", CTX_STACK_LIMIT_OFFSET)); // publish the active worker stack floor
+            emitter.instruction(&format!("str x9, [x28, #{}]", CTX_STACK_LIMIT_MAIN_OFFSET)); // Fiber returns restore this worker floor
+            emitter.instruction("add x9, sp, #64");                             // address the worker-local fatal jmp_buf
+            emitter.instruction(&format!("str x9, [x28, #{}]", CTX_PARALLEL_FATAL_JMP_OFFSET)); // publish the fatal escape target
+            emitter.instruction("mov x9, #1");                                  // mark the fatal boundary active before setjmp
+            emitter.instruction(&format!("str x9, [x28, #{}]", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // enable worker-local process-exit interception
+            emitter.instruction("add x0, sp, #64");                             // pass the worker-local jmp_buf to libc setjmp
+            emitter.bl_c("setjmp");
+            emitter.instruction("cmp x0, #2");                                  // cleanup-triggered exits quarantine rather than re-entering finalization
+            emitter.instruction("b.eq __rt_parallel_worker_entry_cleanup_aborted"); // a second fatal must not restart partially completed cleanup
+            emitter.instruction("cbnz x0, __rt_parallel_worker_entry_fatal");   // a worker fatal longjmp returns through the terminal-status path
+            emitter.instruction("mov x0, x20");                                 // callback argument is the opaque native job pointer
+            emitter.instruction("blr x19");                                     // execute generated worker code in the installed context
+            emitter.instruction("str x0, [sp, #48]");                           // preserve callback status while restoring the host context
+            emitter.instruction("mov x9, #3");                                  // exits during context finalization quarantine partial cleanup
+            emitter.instruction(&format!("str x9, [x28, #{}]", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // distinguish finalization from callback execution
+            emitter.instruction("mov x0, x28");                                 // finalize the context while its fatal boundary remains active
+            emitter.instruction("bl __rt_ctx_release");                         // drain all owners under the live boundary before Rust returns the arena
+            emitter.instruction("ldr x9, [sp, #56]");                           // reload the Rust-owned release-status output pointer
+            emitter.instruction("str x0, [x9]");                                // report clean release or quarantine before returning
+            emitter.instruction("cmp x0, #1");                                  // did every context-owned table drain cleanly?
+            emitter.instruction("b.eq __rt_parallel_worker_entry_release_clean"); // preserve callback status after a clean release
+            abi::emit_load_int_immediate(
+                emitter,
+                "x9",
+                elephc_parallel_contract::PARALLEL_WORKER_CLEANUP_FAILED,
+            );
+            emitter.instruction("str x9, [sp, #48]");                           // surface dirty cleanup while Rust retains the arena backing
+            emitter.label("__rt_parallel_worker_entry_release_clean");
+            emitter.instruction("b __rt_parallel_worker_entry_restore");        // share host-context restoration with fatal escape
+            emitter.label("__rt_parallel_worker_entry_fatal");
+            emitter.instruction("mov x9, #2");                                  // distinguish terminal cleanup from ordinary worker execution
+            emitter.instruction(&format!("str x9, [x28, #{}]", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // let destructor-finalization releases detect the fatal cleanup phase
+            abi::emit_store_zero_to_symbol(emitter, "_exc_handler_top", 0);
+            emitter.instruction("mov x0, #0");                                  // no activation survives a worker-level fatal escape
+            emitter.instruction("bl __rt_exception_cleanup_frames");            // release every owned local bypassed by the fatal longjmp
+            abi::emit_store_zero_to_symbol(emitter, "_exc_call_frame_top", 0);
+            abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
+            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("bl __rt_decref_object");                       // release an uncaught Throwable after its diagnostic was emitted
+            emitter.instruction("bl __rt_user_wrapper_abandon_all");            // detach wrapper objects before their destructor can re-enter fatal flow
+            emitter.instruction("mov x9, #3");                                  // finalization exits quarantine instead of restarting cleanup
+            emitter.instruction(&format!("str x9, [x28, #{}]", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // mark the last recoverable cleanup phase
+            abi::emit_load_int_immediate(
+                emitter,
+                "x0",
+                elephc_parallel_contract::PARALLEL_WORKER_PHP_FATAL,
+            );
+            emitter.instruction("str x0, [sp, #48]");                           // publish the typed PHP-fatal worker status
+            emitter.instruction("mov x0, x28");                                 // release or quarantine context state under the live fatal boundary
+            emitter.instruction("bl __rt_ctx_release");                         // drain remaining owners without exposing fatal cleanup to the host process
+            emitter.instruction("ldr x9, [sp, #56]");                           // reload the Rust-owned release-status output pointer
+            emitter.instruction("str x0, [x9]");                                // report whether Rust may free the arena backing
+            emitter.instruction("b __rt_parallel_worker_entry_restore");        // share host-context restoration after typed fatal cleanup
+            emitter.label("__rt_parallel_worker_entry_cleanup_aborted");
+            emitter.instruction(&format!("str xzr, [x28, #{}]", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // disable the boundary before its stack frame is removed
+            emitter.instruction(&format!("str xzr, [x28, #{}]", CTX_PARALLEL_FATAL_JMP_OFFSET)); // discard the abandoned worker stack target
+            emitter.instruction("ldr x9, [sp, #56]");                           // reload Rust's release-status output slot
+            emitter.instruction("str xzr, [x9]");                               // quarantine partial finalization and preserve its arena
+            abi::emit_load_int_immediate(
+                emitter,
+                "x9",
+                elephc_parallel_contract::PARALLEL_WORKER_PHP_FATAL,
+            );
+            emitter.instruction("str x9, [sp, #48]");                           // repeated cleanup exits remain a typed worker fatal
+            emitter.label("__rt_parallel_worker_entry_restore");
+            emitter.instruction("ldp x19, x20, [sp, #0]");                      // restore the host's callee-saved worker registers
+            emitter.instruction("ldp x21, x28, [sp, #16]");                     // restore stack-size scratch and the host context
+            emitter.instruction("ldr x30, [sp, #32]");                          // restore the host return address
+            emitter.instruction("ldr x0, [sp, #48]");                           // publish the worker callback status
+            emitter.instruction("add sp, sp, #288");                            // release the aligned worker-entry frame and jmp_buf
+            emitter.instruction("ret");                                         // return to the Rust/C worker host
+            emitter.label("__rt_parallel_worker_entry_invalid");
+            emitter.instruction("mov x0, #-1");                                 // invalid worker-entry argument status
+            emitter.instruction("ret");                                         // reject before touching the context register
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rdi, rdi");                               // validate the worker context pointer
+            emitter.instruction("jz __rt_parallel_worker_entry_invalid_x86");   // reject a missing worker context
+            emitter.instruction("test rsi, rsi");                               // validate the worker callback pointer
+            emitter.instruction("jz __rt_parallel_worker_entry_invalid_x86");   // reject a missing worker callback
+            emitter.instruction("test r8, r8");                                 // require Rust's context-release status slot
+            emitter.instruction("jz __rt_parallel_worker_entry_invalid_x86");   // reject a missing release-status output pointer
+            emitter.instruction(&format!("cmp rcx, {}", STACK_BUDGET_MIN_BYTES)); // require enough worker stack for the runtime reserve
+            emitter.instruction("jb __rt_parallel_worker_entry_invalid_x86");   // reject an unsafe worker stack size
+            emitter.instruction(&format!("cmp rcx, {}", STACK_BUDGET_CAP_BYTES)); // keep floor arithmetic inside the reviewed maximum
+            emitter.instruction("ja __rt_parallel_worker_entry_invalid_x86");   // reject an implausibly large worker stack size
+            emitter.instruction("push rbp");                                    // preserve the host frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish a stable worker-entry frame
+            emitter.instruction("push rbx");                                    // preserve the callback holder
+            emitter.instruction("push r12");                                    // preserve the opaque job holder
+            emitter.instruction("push r13");                                    // preserve the configured stack-size holder
+            emitter.instruction("push r14");                                    // preserve the host runtime-context register
+            emitter.instruction("sub rsp, 240");                                // reserve the result slot and worker-local jmp_buf, aligned
+            emitter.instruction("mov QWORD PTR [rbp - 48], r8");                // retain Rust's release-status output slot
+            emitter.instruction("mov r14, rdi");                                // publish the isolated worker runtime context
+            emitter.instruction("mov rbx, rsi");                                // retain the worker callback across stack initialization
+            emitter.instruction("mov r12, rdx");                                // retain the opaque job pointer across stack initialization
+            emitter.instruction("mov r13, rcx");                                // retain the configured worker stack size
+            emitter.instruction(&format!("sub r13, {}", STACK_GUARD_RESERVE_BYTES)); // usable stack budget leaves the fatal-path reserve
+            emitter.instruction("mov r10, rsp");                                // snapshot the worker's current stack top
+            emitter.instruction("sub r10, r13");                                // derive the worker's low-water stack address
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r10", CTX_STACK_LIMIT_OFFSET)); // publish the active worker stack floor
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r10", CTX_STACK_LIMIT_MAIN_OFFSET)); // Fiber returns restore this worker floor
+            emitter.instruction("lea rax, [rbp - 272]");                        // address the worker-local fatal jmp_buf
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rax", CTX_PARALLEL_FATAL_JMP_OFFSET)); // publish the fatal escape target
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 1", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // enable worker-local process-exit interception
+            emitter.instruction("mov rdi, rax");                                // pass the worker-local jmp_buf to libc setjmp
+            emitter.bl_c("setjmp");
+            emitter.instruction("cmp eax, 2");                                  // cleanup-triggered exits quarantine rather than re-entering finalization
+            emitter.instruction("je __rt_parallel_worker_entry_cleanup_aborted_x86"); // a second fatal must not restart partially completed cleanup
+            emitter.instruction("test eax, eax");                               // distinguish initial setjmp from fatal longjmp
+            emitter.instruction("jnz __rt_parallel_worker_entry_fatal_x86");    // return a typed fatal status after longjmp
+            emitter.instruction("mov rdi, r12");                                // callback argument is the opaque native job pointer
+            emitter.instruction("call rbx");                                    // execute generated worker code in the installed context
+            emitter.instruction("mov QWORD PTR [rbp - 40], rax");               // preserve callback status while restoring the host context
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 3", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // distinguish finalization from callback execution
+            emitter.instruction("mov rdi, r14");                                // finalize the context while its fatal boundary remains active
+            emitter.instruction("call __rt_ctx_release");                       // drain all owners under the live boundary before Rust returns the arena
+            emitter.instruction("mov r10, QWORD PTR [rbp - 48]");               // reload Rust-owned release-status output pointer
+            emitter.instruction("mov QWORD PTR [r10], rax");                    // report clean release or quarantine before returning
+            emitter.instruction("cmp rax, 1");                                  // did every context-owned table drain cleanly?
+            emitter.instruction("je __rt_parallel_worker_entry_release_clean_x86"); // preserve callback status after a clean release
+            abi::emit_load_int_immediate(
+                emitter,
+                "r10",
+                elephc_parallel_contract::PARALLEL_WORKER_CLEANUP_FAILED,
+            );
+            emitter.instruction("mov QWORD PTR [rbp - 40], r10");               // surface dirty cleanup while Rust retains the arena backing
+            emitter.label("__rt_parallel_worker_entry_release_clean_x86");
+            emitter.instruction("jmp __rt_parallel_worker_entry_restore_x86");  // share host-context restoration with fatal escape
+            emitter.label("__rt_parallel_worker_entry_fatal_x86");
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 2", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // distinguish terminal cleanup from ordinary worker execution
+            abi::emit_store_zero_to_symbol(emitter, "_exc_handler_top", 0);
+            emitter.instruction("xor edi, edi");                                // no activation survives a worker-level fatal escape
+            emitter.instruction("call __rt_exception_cleanup_frames");          // release every owned local bypassed by the fatal longjmp
+            abi::emit_store_zero_to_symbol(emitter, "_exc_call_frame_top", 0);
+            abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
+            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("call __rt_decref_object");                     // release an uncaught Throwable after its diagnostic was emitted
+            emitter.instruction("call __rt_user_wrapper_abandon_all");          // detach wrapper objects before their destructor can re-enter fatal flow
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 3", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // mark the last recoverable cleanup phase
+            abi::emit_load_int_immediate(
+                emitter,
+                "rax",
+                elephc_parallel_contract::PARALLEL_WORKER_PHP_FATAL,
+            );
+            emitter.instruction("mov QWORD PTR [rbp - 40], rax");               // publish the typed PHP-fatal worker status
+            emitter.instruction("mov rdi, r14");                                // release or quarantine context state under the live fatal boundary
+            emitter.instruction("call __rt_ctx_release");                       // drain remaining owners without exposing fatal cleanup to the host process
+            emitter.instruction("mov r10, QWORD PTR [rbp - 48]");               // reload Rust-owned release-status output pointer
+            emitter.instruction("mov QWORD PTR [r10], rax");                    // report whether Rust may free the arena backing
+            emitter.instruction("jmp __rt_parallel_worker_entry_restore_x86");  // share host-context restoration after typed fatal cleanup
+            emitter.label("__rt_parallel_worker_entry_cleanup_aborted_x86");
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 0", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // disable the boundary before its stack frame is removed
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 0", CTX_PARALLEL_FATAL_JMP_OFFSET)); // discard the abandoned worker stack target
+            emitter.instruction("mov r10, QWORD PTR [rbp - 48]");               // reload Rust's release-status output slot
+            emitter.instruction("mov QWORD PTR [r10], 0");                      // quarantine partial finalization and preserve its arena
+            abi::emit_load_int_immediate(
+                emitter,
+                "r10",
+                elephc_parallel_contract::PARALLEL_WORKER_PHP_FATAL,
+            );
+            emitter.instruction("mov QWORD PTR [rbp - 40], r10");               // repeated cleanup exits remain a typed worker fatal
+            emitter.label("__rt_parallel_worker_entry_restore_x86");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // publish the worker callback status
+            emitter.instruction("add rsp, 240");                                // release the result slot and worker-local jmp_buf
+            emitter.instruction("pop r14");                                     // restore the host runtime-context register
+            emitter.instruction("pop r13");                                     // restore the host stack-size register
+            emitter.instruction("pop r12");                                     // restore the host opaque-job register
+            emitter.instruction("pop rbx");                                     // restore the host callback register
+            emitter.instruction("pop rbp");                                     // restore the host frame pointer
+            emitter.instruction("ret");                                         // return to the Rust/C worker host
+            emitter.label("__rt_parallel_worker_entry_invalid_x86");
+            emitter.instruction("mov rax, -1");                                 // invalid worker-entry argument status
+            emitter.instruction("ret");                                         // reject before touching the context register
+        }
+    }
+    emit_parallel_fatal_exit_helper(emitter);
+}
+
+/// Emits the common process-exit boundary: workers longjmp to their entry while main exits.
+fn emit_parallel_fatal_exit_helper(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: exit_or_parallel_fatal ---");
+    emitter.label_global("__rt_exit_or_parallel_fatal");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x19, x0");                                 // preserve the requested status across output flushing
+            emitter.instruction("bl __rt_ob_flush_all");                        // honor PHP shutdown output semantics before termination
+            emitter.instruction(&format!("ldr x9, [x28, #{}]", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // detect an installed worker fatal boundary
+            emitter.instruction("cbz x9, __rt_exit_or_parallel_fatal_process"); // main/cdylib execution keeps process-exit semantics
+            emitter.instruction(&format!("str x19, [x28, #{}]", CTX_PARALLEL_FATAL_STATUS_OFFSET)); // retain the worker's requested exit status
+            emitter.instruction(&format!("ldr x0, [x28, #{}]", CTX_PARALLEL_FATAL_JMP_OFFSET)); // load the worker-entry jmp_buf
+            emitter.instruction("cmp x9, #1");                                  // distinguish callback fatal from cleanup-time fatal
+            emitter.instruction("b.ne __rt_exit_or_parallel_fatal_abort_cleanup"); // repeated exits stop cleanup and quarantine the worker
+            emitter.instruction("mov x1, #1");                                  // make longjmp enter typed fatal cleanup
+            emitter.bl_c("longjmp");
+            emitter.label("__rt_exit_or_parallel_fatal_abort_cleanup");
+            emitter.instruction("mov x1, #2");                                  // make longjmp enter the non-reentrant quarantine path
+            emitter.bl_c("longjmp");
+            emitter.label("__rt_exit_or_parallel_fatal_process");
+            emitter.instruction("mov x0, x19");                                 // restore the process exit status
+            emitter.syscall(1);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rbx, rdi");                                // preserve the requested status across output flushing
+            emitter.instruction("and rsp, -16");                                // align the non-returning helper for nested C/runtime calls
+            emitter.instruction("call __rt_ob_flush_all");                      // honor PHP shutdown output semantics before termination
+            emitter.instruction(&format!("mov rax, QWORD PTR [r14 + {}]", CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // detect an installed worker fatal boundary
+            emitter.instruction("test rax, rax");                               // branch on worker-vs-process termination
+            emitter.instruction("jz __rt_exit_or_parallel_fatal_process_x86");  // main/cdylib execution keeps process-exit semantics
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rbx", CTX_PARALLEL_FATAL_STATUS_OFFSET)); // retain the worker's requested exit status
+            emitter.instruction(&format!("mov rdi, QWORD PTR [r14 + {}]", CTX_PARALLEL_FATAL_JMP_OFFSET)); // load the worker-entry jmp_buf
+            emitter.instruction("cmp rax, 1");                                  // distinguish callback fatal from cleanup-time fatal
+            emitter.instruction("jne __rt_exit_or_parallel_fatal_abort_cleanup_x86"); // repeated exits stop cleanup and quarantine the worker
+            emitter.instruction("mov esi, 1");                                  // make longjmp enter typed fatal cleanup
+            emitter.bl_c("longjmp");
+            emitter.label("__rt_exit_or_parallel_fatal_abort_cleanup_x86");
+            emitter.instruction("mov esi, 2");                                  // make longjmp enter the non-reentrant quarantine path
+            emitter.bl_c("longjmp");
+            emitter.label("__rt_exit_or_parallel_fatal_process_x86");
+            emitter.instruction("mov rdi, rbx");                                // restore the process exit status
+            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
+            emitter.instruction("syscall");                                     // terminate the process outside a worker boundary
+        }
+    }
+}
+
+/// Installs the default arena into this context ONLY if it has none yet.
+///
+/// A library export may be the first thing a host calls: nothing requires `elephc_init()`,
+/// and `test_cdylib_stack_overflow_without_init_keeps_host_alive` exists precisely because
+/// skipping it must still work. The export wrapper publishes the ctx pointer, but
+/// publishing is not installing — `heap_base` and `heap_max` stay zero, so the first
+/// allocation finds an arena of size nothing and fails. That was invisible while cdylib
+/// builds used legacy addressing, because the allocator reached `_heap_buf` by name.
+///
+/// `heap_max` is the flag: it is zero only before an install, and `__rt_ctx_init` /
+/// `elephc_init` set it together with the base. Guarding on it means a context that is
+/// already running keeps the arena it has — re-installing on a live context would reset
+/// nothing but would hand the allocator a base it no longer owns.
+///
+/// Mirrors `emit_lazy_stack_limit_init`, which arms the stack floor on the same terms and
+/// for the same reason.
+pub fn emit_lazy_ctx_arena_install(emitter: &mut Emitter, ready_label: &str) {
+    emitter.comment("install this context's arena if the host skipped elephc_init");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x9, [x28, #{}]", CTX_HEAP_MAX_OFFSET)); // already installed?
+            emitter.instruction(&format!("cbnz x9, {ready_label}"));            // keep the context's already-installed arena
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov r10, QWORD PTR [r14 + {}]", CTX_HEAP_MAX_OFFSET)); // already installed?
+            emitter.instruction("test r10, r10");                               // has this context already installed an arena?
+            emitter.instruction(&format!("jnz {ready_label}"));                 // keep the context's already-installed arena
+        }
+    }
+    emit_ctx_install_default_arena(emitter);
+    emitter.label(ready_label);
 }
 
 /// Points this context's arena at the process-wide `_heap_buf`/`_heap_max` pair.
@@ -567,15 +1182,49 @@ pub fn emit_ctx_install_default_arena(emitter: &mut Emitter) {
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-            emitter.instruction(&format!(
-                "mov QWORD PTR [{} + {}], r10",
-                ctx, CTX_HEAP_BASE_OFFSET
-            )); // this context's arena base
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], r10", ctx, CTX_HEAP_BASE_OFFSET)); // this context's arena base
             abi::emit_load_symbol_to_reg(emitter, "r10", "_heap_max", 0);
-            emitter.instruction(&format!(
-                "mov QWORD PTR [{} + {}], r10",
-                ctx, CTX_HEAP_MAX_OFFSET
-            )); // this context's arena capacity
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], r10", ctx, CTX_HEAP_MAX_OFFSET)); // this context's arena capacity
+        }
+    }
+    emit_ctx_install_default_handle_metadata(emitter);
+}
+
+/// Points the main context at the process-owned handle side tables.
+fn emit_ctx_install_default_handle_metadata(emitter: &mut Emitter) {
+    let ctx = ctx_reg(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            for (symbol, offset) in [
+                ("_obj_handle_index", CTX_OBJ_HANDLE_INDEX_PTR_OFFSET),
+                ("_obj_handle_free", CTX_OBJ_HANDLE_FREE_PTR_OFFSET),
+                ("_buffer_registry", CTX_BUFFER_REGISTRY_PTR_OFFSET),
+                ("_ser_obj_ptrs", CTX_SER_OBJ_PTRS_PTR_OFFSET),
+                ("_ser_obj_idxs", CTX_SER_OBJ_IDXS_PTR_OFFSET),
+                ("_unser_values", CTX_UNSER_VALUES_PTR_OFFSET),
+            ] {
+                abi::emit_extern_symbol_address(emitter, "x10", symbol);
+                emitter.instruction(&format!("str x10, [{}, #{}]", ctx, offset)); // install one main-context side-table pointer
+            }
+            emitter.instruction("mov x10, #1");                                 // PHP object and Buffer handle zero stays invalid
+            emitter.instruction(&format!("str x10, [{}, #{}]", ctx, CTX_OBJ_HANDLE_NEXT_OFFSET)); // first PHP object handle is one
+            emitter.instruction(&format!("str x10, [{}, #{}]", ctx, CTX_BUFFER_REGISTRY_NEXT_OFFSET)); // first Buffer descriptor is one
+        }
+        Arch::X86_64 => {
+            for (symbol, offset) in [
+                ("_obj_handle_index", CTX_OBJ_HANDLE_INDEX_PTR_OFFSET),
+                ("_obj_handle_free", CTX_OBJ_HANDLE_FREE_PTR_OFFSET),
+                ("_buffer_registry", CTX_BUFFER_REGISTRY_PTR_OFFSET),
+                ("_ser_obj_ptrs", CTX_SER_OBJ_PTRS_PTR_OFFSET),
+                ("_ser_obj_idxs", CTX_SER_OBJ_IDXS_PTR_OFFSET),
+                ("_unser_values", CTX_UNSER_VALUES_PTR_OFFSET),
+            ] {
+                abi::emit_extern_symbol_address(emitter, "r10", symbol);
+                emitter.instruction(&format!("mov QWORD PTR [{} + {}], r10", ctx, offset)); // install one main-context side-table pointer
+            }
+            emitter.instruction("mov r10, 1");                                  // PHP object and Buffer handle zero stays invalid
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], r10", ctx, CTX_OBJ_HANDLE_NEXT_OFFSET)); // first PHP object handle is one
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], r10", ctx, CTX_BUFFER_REGISTRY_NEXT_OFFSET)); // first Buffer descriptor is one
         }
     }
 }
@@ -607,6 +1256,19 @@ const PER_CONTEXT_SYMBOLS: &[(&str, usize)] = &[
     ("_gc_live", CTX_GC_LIVE_OFFSET),
     ("_gc_peak", CTX_GC_PEAK_OFFSET),
     ("_gc_collecting", CTX_GC_COLLECTING_OFFSET),
+    ("_ser_value_counter", CTX_SER_VALUE_COUNTER_OFFSET),
+    ("_ser_obj_count", CTX_SER_OBJ_COUNT_OFFSET),
+    ("_unser_depth", CTX_UNSER_DEPTH_OFFSET),
+    ("_unser_allowed_mode", CTX_UNSER_ALLOWED_MODE_OFFSET),
+    ("_unser_allowed_list", CTX_UNSER_ALLOWED_LIST_OFFSET),
+    ("_unser_allowed_list_mixed", CTX_UNSER_ALLOWED_LIST_MIXED_OFFSET),
+    ("_unser_active", CTX_UNSER_ACTIVE_OFFSET),
+    ("_unser_context", CTX_UNSER_CONTEXT_OFFSET),
+    ("_unser_count", CTX_UNSER_COUNT_OFFSET),
+    ("_obj_handle_free_top", CTX_OBJ_HANDLE_FREE_TOP_OFFSET),
+    ("_obj_handle_next", CTX_OBJ_HANDLE_NEXT_OFFSET),
+    ("_buffer_registry_free", CTX_BUFFER_REGISTRY_FREE_OFFSET),
+    ("_buffer_registry_next", CTX_BUFFER_REGISTRY_NEXT_OFFSET),
     // Buffers, not scalars. They route the same way because every consumer asks for the
     // ADDRESS through `emit_symbol_address`, which consults this table — no dedicated
     // helper needed, the lesson the GC family taught.
@@ -633,7 +1295,24 @@ const PER_CONTEXT_SYMBOLS: &[(&str, usize)] = &[
     ("_bzstream_handles", CTX_BZSTREAM_HANDLES_OFFSET),
     ("_stream_read_filters", CTX_STREAM_READ_FILTERS_OFFSET),
     ("_stream_write_filters", CTX_STREAM_WRITE_FILTERS_OFFSET),
+    ("_zstream_handles", CTX_ZSTREAM_HANDLES_OFFSET),
+    ("_iconv_handles", CTX_ICONV_HANDLES_OFFSET),
+    ("_tls_sessions", CTX_TLS_SESSIONS_OFFSET),
+    ("_user_wrapper_handles", CTX_USER_WRAPPER_HANDLES_OFFSET),
+    ("_user_filter_instances", CTX_USER_FILTER_INSTANCES_OFFSET),
+    ("_stream_chunk_size", CTX_STREAM_CHUNK_SIZE_OFFSET),
+    ("_stream_connect_host", CTX_STREAM_CONNECT_HOST_OFFSET),
+    ("_stream_owned_fds", CTX_STREAM_OWNED_FDS_OFFSET),
     ("_stream_filter_buf", CTX_STREAM_FILTER_BUF_OFFSET),
+];
+
+const PER_CONTEXT_POINTER_SYMBOLS: &[(&str, usize)] = &[
+    ("_obj_handle_index", CTX_OBJ_HANDLE_INDEX_PTR_OFFSET),
+    ("_obj_handle_free", CTX_OBJ_HANDLE_FREE_PTR_OFFSET),
+    ("_buffer_registry", CTX_BUFFER_REGISTRY_PTR_OFFSET),
+    ("_ser_obj_ptrs", CTX_SER_OBJ_PTRS_PTR_OFFSET),
+    ("_ser_obj_idxs", CTX_SER_OBJ_IDXS_PTR_OFFSET),
+    ("_unser_values", CTX_UNSER_VALUES_PTR_OFFSET),
 ];
 
 /// The ctx field offset serving `symbol`, when this build routes it.
@@ -650,6 +1329,17 @@ pub fn per_context_symbol_offset(emitter: &Emitter, symbol: &str) -> Option<usiz
         .map(|(_, offset)| *offset)
 }
 
+/// Returns the ctx field containing the address of one external side table.
+pub fn per_context_pointer_symbol_offset(emitter: &Emitter, symbol: &str) -> Option<usize> {
+    if !emitter.ctx_register {
+        return None;
+    }
+    PER_CONTEXT_POINTER_SYMBOLS
+        .iter()
+        .find(|(name, _)| *name == symbol)
+        .map(|(_, offset)| *offset)
+}
+
 /// Loads a ctx field into `reg` through the reserved ctx register.
 ///
 /// `field_offset` must be one of the `CTX_*_OFFSET` constants from this module.
@@ -657,10 +1347,10 @@ pub fn emit_ctx_load(emitter: &mut Emitter, reg: &str, field_offset: usize) {
     let ctx = ctx_reg(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr {}, [{}, #{}]", reg, ctx, field_offset));
+            emitter.instruction(&format!("ldr {}, [{}, #{}]", reg, ctx, field_offset)); // load one scalar or pointer from this context
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [{} + {}]", reg, ctx, field_offset));
+            emitter.instruction(&format!("mov {}, QWORD PTR [{} + {}]", reg, ctx, field_offset)); // load one scalar or pointer from this context
         }
     }
 }
@@ -670,10 +1360,10 @@ pub fn emit_ctx_store(emitter: &mut Emitter, reg: &str, field_offset: usize) {
     let ctx = ctx_reg(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("str {}, [{}, #{}]", reg, ctx, field_offset));
+            emitter.instruction(&format!("str {}, [{}, #{}]", reg, ctx, field_offset)); // store one scalar or pointer into this context
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [{} + {}], {}", ctx, field_offset, reg));
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], {}", ctx, field_offset, reg)); // store one scalar or pointer into this context
         }
     }
 }
@@ -688,10 +1378,10 @@ pub fn emit_ctx_store_zero(emitter: &mut Emitter, field_offset: usize) {
     let ctx = ctx_reg(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("str xzr, [{}, #{}]", ctx, field_offset));
+            emitter.instruction(&format!("str xzr, [{}, #{}]", ctx, field_offset)); // clear one context field without borrowing scratch
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [{} + {}], 0", ctx, field_offset));
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], 0", ctx, field_offset)); // clear one context field without borrowing scratch
         }
     }
 }
@@ -708,7 +1398,7 @@ pub fn emit_ctx_address(emitter: &mut Emitter, dest: &str, field_offset: usize) 
             // assembler to reject. Split it into the two encodable halves rather than
             // contorting the layout to keep every field on a 4 KiB grid.
             if field_offset < 4096 {
-                emitter.instruction(&format!("add {}, {}, #{}", dest, ctx, field_offset));
+                emitter.instruction(&format!("add {}, {}, #{}", dest, ctx, field_offset)); // materialize a near context-field address
             } else {
                 let page = field_offset & !0xfff;
                 let rest = field_offset & 0xfff;
@@ -720,7 +1410,7 @@ pub fn emit_ctx_address(emitter: &mut Emitter, dest: &str, field_offset: usize) 
         }
         Arch::X86_64 => {
             // x86_64 takes a full 32-bit displacement, so one `lea` covers any ctx field.
-            emitter.instruction(&format!("lea {}, [{} + {}]", dest, ctx, field_offset));
+            emitter.instruction(&format!("lea {}, [{} + {}]", dest, ctx, field_offset)); // materialize one context-field address
         }
     }
 }
@@ -733,16 +1423,10 @@ pub fn emit_ctx_address(emitter: &mut Emitter, dest: &str, field_offset: usize) 
 pub fn emit_free_list_head_load(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "ldr {}, [x28, #{}]",
-                reg, CTX_HEAP_FREE_LIST_OFFSET
-            )); // load the per-context free-list head
+            emitter.instruction(&format!("ldr {}, [x28, #{}]", reg, CTX_HEAP_FREE_LIST_OFFSET)); // load the per-context free-list head
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "mov {}, QWORD PTR [r14 + {}]",
-                reg, CTX_HEAP_FREE_LIST_OFFSET
-            )); // load the per-context free-list head
+            emitter.instruction(&format!("mov {}, QWORD PTR [r14 + {}]", reg, CTX_HEAP_FREE_LIST_OFFSET)); // load the per-context free-list head
         }
     }
 }
@@ -756,16 +1440,10 @@ pub fn emit_free_list_head_load(emitter: &mut Emitter, reg: &str) {
 pub fn emit_heap_off_store(emitter: &mut Emitter, value: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "str {}, [x28, #{}]",
-                value, CTX_HEAP_OFF_OFFSET
-            )); // store the per-context heap bump offset
+            emitter.instruction(&format!("str {}, [x28, #{}]", value, CTX_HEAP_OFF_OFFSET)); // store the per-context heap bump offset
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "mov QWORD PTR [r14 + {}], {}",
-                CTX_HEAP_OFF_OFFSET, value
-            )); // store the per-context heap bump offset
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], {}", CTX_HEAP_OFF_OFFSET, value)); // store the per-context heap bump offset
         }
     }
 }
@@ -795,16 +1473,10 @@ pub fn emit_concat_off_store_imm(emitter: &mut Emitter, value: i64) {
                 abi::emit_load_int_immediate(emitter, "x10", value);
                 "x10"
             };
-            emitter.instruction(&format!(
-                "str {}, [x28, #{}]",
-                source, CTX_CONCAT_OFF_OFFSET
-            )); // store the immediate per-context concat offset
+            emitter.instruction(&format!("str {}, [x28, #{}]", source, CTX_CONCAT_OFF_OFFSET)); // store the immediate per-context concat offset
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "mov QWORD PTR [r14 + {}], {}",
-                CTX_CONCAT_OFF_OFFSET, value
-            )); // store the immediate per-context concat offset
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], {}", CTX_CONCAT_OFF_OFFSET, value)); // store the immediate per-context concat offset
         }
     }
 }
@@ -822,16 +1494,10 @@ pub fn emit_concat_off_store_imm(emitter: &mut Emitter, value: i64) {
 pub fn emit_concat_off_load(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "ldr {}, [x28, #{}]",
-                reg, CTX_CONCAT_OFF_OFFSET
-            )); // load the per-context concat scratch write offset
+            emitter.instruction(&format!("ldr {}, [x28, #{}]", reg, CTX_CONCAT_OFF_OFFSET)); // load the per-context concat scratch write offset
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "mov {}, QWORD PTR [r14 + {}]",
-                reg, CTX_CONCAT_OFF_OFFSET
-            )); // load the per-context concat scratch write offset
+            emitter.instruction(&format!("mov {}, QWORD PTR [r14 + {}]", reg, CTX_CONCAT_OFF_OFFSET)); // load the per-context concat scratch write offset
         }
     }
 }
@@ -862,16 +1528,10 @@ pub fn emit_concat_off_store(emitter: &mut Emitter, value: &str) {
     );
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "str {}, [x28, #{}]",
-                value, CTX_CONCAT_OFF_OFFSET
-            )); // store the per-context concat scratch write offset
+            emitter.instruction(&format!("str {}, [x28, #{}]", value, CTX_CONCAT_OFF_OFFSET)); // store the per-context concat scratch write offset
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "mov QWORD PTR [r14 + {}], {}",
-                CTX_CONCAT_OFF_OFFSET, value
-            )); // store the per-context concat scratch write offset
+            emitter.instruction(&format!("mov QWORD PTR [r14 + {}], {}", CTX_CONCAT_OFF_OFFSET, value)); // store the per-context concat scratch write offset
         }
     }
 }
@@ -888,16 +1548,10 @@ pub fn emit_concat_off_store(emitter: &mut Emitter, value: &str) {
 pub fn emit_concat_buf_address(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "add {}, x28, #{}",
-                reg, CTX_CONCAT_BUF_OFFSET
-            )); // base of the per-context concat scratch buffer
+            emitter.instruction(&format!("add {}, x28, #{}", reg, CTX_CONCAT_BUF_OFFSET)); // base of the per-context concat scratch buffer
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "lea {}, [r14 + {}]",
-                reg, CTX_CONCAT_BUF_OFFSET
-            )); // base of the per-context concat scratch buffer
+            emitter.instruction(&format!("lea {}, [r14 + {}]", reg, CTX_CONCAT_BUF_OFFSET)); // base of the per-context concat scratch buffer
         }
     }
 }
@@ -911,16 +1565,10 @@ pub fn emit_concat_buf_address(emitter: &mut Emitter, reg: &str) {
 pub fn emit_free_list_address(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "add {}, x28, #{}",
-                reg, CTX_HEAP_FREE_LIST_OFFSET
-            )); // address of the per-context free-list head slot
+            emitter.instruction(&format!("add {}, x28, #{}", reg, CTX_HEAP_FREE_LIST_OFFSET)); // address of the per-context free-list head slot
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "lea {}, [r14 + {}]",
-                reg, CTX_HEAP_FREE_LIST_OFFSET
-            )); // address of the per-context free-list head slot
+            emitter.instruction(&format!("lea {}, [r14 + {}]", reg, CTX_HEAP_FREE_LIST_OFFSET)); // address of the per-context free-list head slot
         }
     }
 }
@@ -930,16 +1578,10 @@ pub fn emit_free_list_address(emitter: &mut Emitter, reg: &str) {
 pub fn emit_small_bins_address(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "add {}, x28, #{}",
-                reg, CTX_HEAP_SMALL_BINS_OFFSET
-            )); // base of the per-context small-bin head array
+            emitter.instruction(&format!("add {}, x28, #{}", reg, CTX_HEAP_SMALL_BINS_OFFSET)); // base of the per-context small-bin head array
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "lea {}, [r14 + {}]",
-                reg, CTX_HEAP_SMALL_BINS_OFFSET
-            )); // base of the per-context small-bin head array
+            emitter.instruction(&format!("lea {}, [r14 + {}]", reg, CTX_HEAP_SMALL_BINS_OFFSET)); // base of the per-context small-bin head array
         }
     }
 }
@@ -957,16 +1599,10 @@ pub fn emit_small_bins_address(emitter: &mut Emitter, reg: &str) {
 pub fn emit_heap_base_address(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "ldr {}, [x28, #{}]",
-                reg, CTX_HEAP_BASE_OFFSET
-            )); // load this context's heap arena base
+            emitter.instruction(&format!("ldr {}, [x28, #{}]", reg, CTX_HEAP_BASE_OFFSET)); // load this context's heap arena base
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "mov {}, QWORD PTR [r14 + {}]",
-                reg, CTX_HEAP_BASE_OFFSET
-            )); // load this context's heap arena base
+            emitter.instruction(&format!("mov {}, QWORD PTR [r14 + {}]", reg, CTX_HEAP_BASE_OFFSET)); // load this context's heap arena base
         }
     }
 }
@@ -986,16 +1622,10 @@ pub fn emit_heap_base_address(emitter: &mut Emitter, reg: &str) {
 pub fn emit_heap_max_load(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "ldr {}, [x28, #{}]",
-                reg, CTX_HEAP_MAX_OFFSET
-            )); // load this context's heap capacity
+            emitter.instruction(&format!("ldr {}, [x28, #{}]", reg, CTX_HEAP_MAX_OFFSET)); // load this context's heap capacity
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "mov {}, QWORD PTR [r14 + {}]",
-                reg, CTX_HEAP_MAX_OFFSET
-            )); // load this context's heap capacity
+            emitter.instruction(&format!("mov {}, QWORD PTR [r14 + {}]", reg, CTX_HEAP_MAX_OFFSET)); // load this context's heap capacity
         }
     }
 }
@@ -1009,16 +1639,10 @@ pub fn emit_heap_max_load(emitter: &mut Emitter, reg: &str) {
 pub fn emit_heap_off_load(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "ldr {}, [x28, #{}]",
-                reg, CTX_HEAP_OFF_OFFSET
-            )); // load the per-context heap bump offset
+            emitter.instruction(&format!("ldr {}, [x28, #{}]", reg, CTX_HEAP_OFF_OFFSET)); // load the per-context heap bump offset
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "mov {}, QWORD PTR [r14 + {}]",
-                reg, CTX_HEAP_OFF_OFFSET
-            )); // load the per-context heap bump offset
+            emitter.instruction(&format!("mov {}, QWORD PTR [r14 + {}]", reg, CTX_HEAP_OFF_OFFSET)); // load the per-context heap bump offset
         }
     }
 }
@@ -1078,16 +1702,41 @@ mod tests {
         assert_eq!(CTX_GC_COLLECTING_OFFSET, CTX_GC_PEAK_OFFSET + 8);
         // Every scalar stays inside the first 4 KiB window, which is what keeps
         // `add xN, x28, #off` and `ldr xN, [x28, #off]` single instructions.
-        assert_eq!(CTX_PRINT_R_MODE_OFFSET, CTX_GC_COLLECTING_OFFSET + 8);
+        assert_eq!(CTX_SER_VALUE_COUNTER_OFFSET, CTX_GC_COLLECTING_OFFSET + 8);
+        assert_eq!(CTX_SER_OBJ_COUNT_OFFSET, CTX_SER_VALUE_COUNTER_OFFSET + 8);
+        assert_eq!(CTX_UNSER_DEPTH_OFFSET, CTX_SER_OBJ_COUNT_OFFSET + 8);
+        assert_eq!(CTX_UNSER_ALLOWED_MODE_OFFSET, CTX_UNSER_DEPTH_OFFSET + 8);
+        assert_eq!(CTX_UNSER_ALLOWED_LIST_OFFSET, CTX_UNSER_ALLOWED_MODE_OFFSET + 8);
+        assert_eq!(
+            CTX_UNSER_ALLOWED_LIST_MIXED_OFFSET,
+            CTX_UNSER_ALLOWED_LIST_OFFSET + 8
+        );
+        assert_eq!(CTX_UNSER_ACTIVE_OFFSET, CTX_UNSER_ALLOWED_LIST_MIXED_OFFSET + 8);
+        assert_eq!(CTX_UNSER_CONTEXT_OFFSET, CTX_UNSER_ACTIVE_OFFSET + 8);
+        assert_eq!(CTX_UNSER_COUNT_OFFSET, CTX_UNSER_CONTEXT_OFFSET + 8);
+        assert_eq!(CTX_PRINT_R_MODE_OFFSET, CTX_UNSER_COUNT_OFFSET + 8);
         assert_eq!(CTX_OB_LEVEL_OFFSET, CTX_PRINT_R_OFF_OFFSET + 8);
         assert_eq!(CTX_OB_PTRS_OFFSET, CTX_OB_LEVEL_OFFSET + 8);
         assert_eq!(CTX_OB_NAME_PTRS_OFFSET, CTX_OB_HANDLER_ENVS_OFFSET + CTX_OB_TABLE_SIZE);
         assert_eq!(CTX_OB_STARTED_OFFSET, CTX_OB_FLAGS_OFFSET + CTX_OB_TABLE_SIZE);
-        // Ten handle tables of 512 bytes do not fit under 4 KiB beside the scalars, and
-        // that is fine: `emit_ctx_address` splits an offset above the imm12 window into two
-        // encodable adds. What must hold is only that the buffers start after them.
+        // Descriptor and handle tables do not fit under 4 KiB beside the scalars. That is fine:
+        // `emit_ctx_address` splits an offset above the imm12 window into encodable adds. What
+        // must hold is that every table stays disjoint and the large scratch buffers follow them.
         assert_eq!(CTX_POOL_STATE_PTR_OFFSET, CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE);
-        assert_eq!(CTX_EOF_FLAGS_OFFSET, CTX_POOL_STATE_PTR_OFFSET + 8);
+        assert_eq!(CTX_OBJ_HANDLE_INDEX_PTR_OFFSET, CTX_POOL_STATE_PTR_OFFSET + 8);
+        assert_eq!(CTX_OBJ_HANDLE_FREE_PTR_OFFSET, CTX_OBJ_HANDLE_INDEX_PTR_OFFSET + 8);
+        assert_eq!(CTX_BUFFER_REGISTRY_PTR_OFFSET, CTX_OBJ_HANDLE_FREE_PTR_OFFSET + 8);
+        assert_eq!(CTX_SER_OBJ_PTRS_PTR_OFFSET, CTX_BUFFER_REGISTRY_PTR_OFFSET + 8);
+        assert_eq!(CTX_SER_OBJ_IDXS_PTR_OFFSET, CTX_SER_OBJ_PTRS_PTR_OFFSET + 8);
+        assert_eq!(CTX_UNSER_VALUES_PTR_OFFSET, CTX_SER_OBJ_IDXS_PTR_OFFSET + 8);
+        assert_eq!(CTX_OBJ_HANDLE_FREE_TOP_OFFSET, CTX_UNSER_VALUES_PTR_OFFSET + 8);
+        assert_eq!(CTX_OBJ_HANDLE_NEXT_OFFSET, CTX_OBJ_HANDLE_FREE_TOP_OFFSET + 8);
+        assert_eq!(CTX_BUFFER_REGISTRY_FREE_OFFSET, CTX_OBJ_HANDLE_NEXT_OFFSET + 8);
+        assert_eq!(CTX_BUFFER_REGISTRY_NEXT_OFFSET, CTX_BUFFER_REGISTRY_FREE_OFFSET + 8);
+        assert_eq!(CTX_PARALLEL_FATAL_JMP_OFFSET, CTX_BUFFER_REGISTRY_NEXT_OFFSET + 8);
+        assert_eq!(CTX_PARALLEL_FATAL_ACTIVE_OFFSET, CTX_PARALLEL_FATAL_JMP_OFFSET + 8);
+        assert_eq!(CTX_PARALLEL_FATAL_STATUS_OFFSET, CTX_PARALLEL_FATAL_ACTIVE_OFFSET + 8);
+        assert_eq!(CTX_EOF_FLAGS_OFFSET, CTX_PARALLEL_FATAL_STATUS_OFFSET + 8);
         // `__rt_ctx_acquire` steps between slots with `add xN, xN, #CTX_SIZE`, which AArch64
         // encodes in one instruction only for a multiple of 4096. Pinned here because the
         // helper would otherwise fail to assemble the moment the layout drifts off that grid.
@@ -1096,8 +1745,44 @@ mod tests {
             CTX_STREAM_WRITE_FILTERS_OFFSET,
             CTX_STREAM_READ_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE
         );
+        assert_eq!(
+            CTX_ZSTREAM_HANDLES_OFFSET,
+            CTX_STREAM_WRITE_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE
+        );
+        assert_eq!(
+            CTX_ICONV_HANDLES_OFFSET,
+            CTX_ZSTREAM_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE
+        );
+        assert_eq!(
+            CTX_TLS_SESSIONS_OFFSET,
+            CTX_ICONV_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE
+        );
+        assert_eq!(
+            CTX_USER_WRAPPER_HANDLES_OFFSET,
+            CTX_TLS_SESSIONS_OFFSET + CTX_HANDLE_TABLE_SIZE
+        );
+        assert_eq!(
+            CTX_USER_WRAPPER_HANDLES_OFFSET, 20_616,
+            "update the C-host dirty-slot probe when this offset moves"
+        );
+        assert_eq!(
+            CTX_USER_FILTER_INSTANCES_OFFSET,
+            CTX_USER_WRAPPER_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE
+        );
+        assert_eq!(
+            CTX_STREAM_CHUNK_SIZE_OFFSET,
+            CTX_USER_FILTER_INSTANCES_OFFSET + CTX_USER_FILTER_INSTANCES_SIZE
+        );
+        assert_eq!(
+            CTX_STREAM_CONNECT_HOST_OFFSET,
+            CTX_STREAM_CHUNK_SIZE_OFFSET + CTX_HANDLE_TABLE_SIZE
+        );
         assert!(
-            CTX_CSTR_BUF_OFFSET >= CTX_STREAM_WRITE_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE
+            CTX_STREAM_OWNED_FDS_OFFSET
+                == CTX_STREAM_CONNECT_HOST_OFFSET + CTX_STREAM_CONNECT_HOST_SIZE
+        );
+        assert!(
+            CTX_CSTR_BUF_OFFSET >= CTX_STREAM_OWNED_FDS_OFFSET + CTX_STREAM_OWNED_FDS_SIZE
         );
         // The buffers follow, each on a 4 KiB boundary so its address stays one `add`.
         assert_eq!(CTX_CSTR_BUF_OFFSET % 4096, 0);
@@ -1133,6 +1818,15 @@ mod tests {
             CTX_GC_LIVE_OFFSET,
             CTX_GC_PEAK_OFFSET,
             CTX_GC_COLLECTING_OFFSET,
+            CTX_SER_VALUE_COUNTER_OFFSET,
+            CTX_SER_OBJ_COUNT_OFFSET,
+            CTX_UNSER_DEPTH_OFFSET,
+            CTX_UNSER_ALLOWED_MODE_OFFSET,
+            CTX_UNSER_ALLOWED_LIST_OFFSET,
+            CTX_UNSER_ALLOWED_LIST_MIXED_OFFSET,
+            CTX_UNSER_ACTIVE_OFFSET,
+            CTX_UNSER_CONTEXT_OFFSET,
+            CTX_UNSER_COUNT_OFFSET,
         ] {
             assert!(offset + 8 <= 4096, "scalar ctx offset {offset} escapes the imm12 window");
         }
@@ -1141,8 +1835,8 @@ mod tests {
         // The context's size is a per-THREAD cost once M1 pools them, so it is pinned
         // rather than left to drift. Three 64 KiB scratch buffers (concat, print_r capture,
         // stream-filter) dominate it; the scalars and every handle table together are under
-        // 15 KiB. Allocating the scratch lazily is the obvious lever if this ever matters.
-        assert_eq!(CTX_SIZE, 221_184, "the per-context footprint changed");
+        // 36 KiB. Allocating the scratch lazily is the obvious lever if this ever matters.
+        assert_eq!(CTX_SIZE, 241_664, "the per-context footprint changed");
         // The concat scratch dominates the context, so a ctx instance is ~64 KiB.
         assert!(CTX_SIZE > CTX_CONCAT_BUF_CAPACITY);
     }
@@ -1239,6 +1933,251 @@ mod tests {
             assert!(asm.contains(store), "{asm}");
             assert!(asm.contains(address), "{asm}");
             assert!(!asm.contains("adrp"), "ctx access must not materialize symbols: {asm}");
+        }
+    }
+
+    #[test]
+    fn external_side_table_addresses_load_context_owned_pointers() {
+        for (symbol, offset) in [
+            ("_obj_handle_index", CTX_OBJ_HANDLE_INDEX_PTR_OFFSET),
+            ("_ser_obj_ptrs", CTX_SER_OBJ_PTRS_PTR_OFFSET),
+            ("_ser_obj_idxs", CTX_SER_OBJ_IDXS_PTR_OFFSET),
+            ("_unser_values", CTX_UNSER_VALUES_PTR_OFFSET),
+        ] {
+            for (target, scratch, expected) in [
+                (
+                    Target::new(Platform::MacOS, Arch::AArch64),
+                    "x9",
+                    format!("ldr x9, [x28, #{}]", offset),
+                ),
+                (
+                    Target::new(Platform::Linux, Arch::X86_64),
+                    "r9",
+                    format!("mov r9, QWORD PTR [r14 + {}]", offset),
+                ),
+            ] {
+                let mut emitter = Emitter::new(target);
+                emitter.ctx_register = true;
+                abi::emit_symbol_address(&mut emitter, scratch, symbol);
+                let asm = emitter.output();
+                assert!(asm.contains(&expected), "{asm}");
+                assert!(
+                    !asm.contains(symbol),
+                    "worker table access escaped to the main-context symbol: {asm}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn descriptor_resource_tables_route_through_each_runtime_context() {
+        for (symbol, offset) in [
+            ("_zstream_handles", CTX_ZSTREAM_HANDLES_OFFSET),
+            ("_iconv_handles", CTX_ICONV_HANDLES_OFFSET),
+            ("_tls_sessions", CTX_TLS_SESSIONS_OFFSET),
+            ("_user_wrapper_handles", CTX_USER_WRAPPER_HANDLES_OFFSET),
+            ("_user_filter_instances", CTX_USER_FILTER_INSTANCES_OFFSET),
+            ("_stream_chunk_size", CTX_STREAM_CHUNK_SIZE_OFFSET),
+            ("_stream_connect_host", CTX_STREAM_CONNECT_HOST_OFFSET),
+            ("_stream_owned_fds", CTX_STREAM_OWNED_FDS_OFFSET),
+        ] {
+            for (target, scratch, ctx_register) in [
+                (
+                    Target::new(Platform::MacOS, Arch::AArch64),
+                    "x9",
+                    "x28",
+                ),
+                (
+                    Target::new(Platform::Linux, Arch::X86_64),
+                    "r9",
+                    "r14",
+                ),
+            ] {
+                let mut emitter = Emitter::new(target);
+                emitter.ctx_register = true;
+                assert_eq!(per_context_symbol_offset(&emitter, symbol), Some(offset));
+                abi::emit_symbol_address(&mut emitter, scratch, symbol);
+                let asm = emitter.output();
+                assert!(asm.contains(ctx_register), "{target:?} {symbol}:\n{asm}");
+                assert!(
+                    !asm.contains(symbol),
+                    "worker resource access escaped to process-global {symbol}: {asm}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn serializer_state_is_context_routed_on_both_abis() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emitter.ctx_register = true;
+            crate::codegen_support::runtime::system::emit_serialize(&mut emitter);
+            let asm = emitter.output();
+            for legacy in [
+                "_ser_value_counter",
+                "_ser_obj_count",
+                "_ser_obj_ptrs",
+                "_ser_obj_idxs",
+            ] {
+                assert!(
+                    !asm.contains(legacy),
+                    "{target:?} serializer escaped to process-global {legacy}:\n{asm}"
+                );
+            }
+            let counter_access = match target.arch {
+                Arch::AArch64 => format!("add x9, x28, #{}", CTX_SER_VALUE_COUNTER_OFFSET),
+                Arch::X86_64 => {
+                    format!("lea r9, [r14 + {}]", CTX_SER_VALUE_COUNTER_OFFSET)
+                }
+            };
+            assert!(asm.contains(&counter_access), "{target:?}:\n{asm}");
+        }
+    }
+
+    #[test]
+    fn unserializer_state_is_context_routed_on_both_abis() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emitter.ctx_register = true;
+            crate::codegen_support::runtime::system::emit_unserialize(&mut emitter);
+            let asm = emitter.output();
+            for legacy in [
+                "_unser_depth",
+                "_unser_allowed_mode",
+                "_unser_allowed_list",
+                "_unser_allowed_list_mixed",
+                "_unser_active",
+                "_unser_context",
+                "_unser_count",
+                "_unser_values",
+            ] {
+                let escaped = asm.lines().any(|line| {
+                    line.contains(&format!("{legacy}@"))
+                        || line.contains(&format!("{legacy}]"))
+                        || line.trim_end().ends_with(legacy)
+                });
+                assert!(
+                    !escaped,
+                    "{target:?} unserializer escaped to process-global {legacy}:\n{asm}"
+                );
+            }
+            let depth_access = match target.arch {
+                Arch::AArch64 => format!("x28, #{}", CTX_UNSER_DEPTH_OFFSET),
+                Arch::X86_64 => format!("[r14 + {}]", CTX_UNSER_DEPTH_OFFSET),
+            };
+            assert!(asm.contains(&depth_access), "{target:?}:\n{asm}");
+        }
+    }
+
+    #[test]
+    fn parallel_worker_entry_installs_and_restores_the_context_on_both_abis() {
+        for (target, install, save, restore, call) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "mov x28, x0",
+                "stp x21, x28",
+                "ldp x21, x28",
+                "blr x19",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "mov r14, rdi",
+                "push r14",
+                "pop r14",
+                "call rbx",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_parallel_worker_entry(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains(install), "{asm}");
+            assert!(asm.contains(save), "{asm}");
+            assert!(asm.contains(restore), "{asm}");
+            assert!(
+                asm.contains(&CTX_STACK_LIMIT_OFFSET.to_string())
+                    && asm.contains(&CTX_STACK_LIMIT_MAIN_OFFSET.to_string()),
+                "{asm}"
+            );
+            assert!(!asm.contains("__rt_stack_limit_init"), "{asm}");
+            assert!(asm.contains(call), "{asm}");
+            assert!(asm.contains("worker_entry_invalid"), "{asm}");
+            let (fatal_label, cleanup_call, decref_call, release_call, cleanup_abort) = match target.arch {
+                Arch::AArch64 => (
+                    "__rt_parallel_worker_entry_fatal:\n",
+                    "bl __rt_exception_cleanup_frames",
+                    "bl __rt_decref_object",
+                    "bl __rt_ctx_release",
+                    "__rt_parallel_worker_entry_cleanup_aborted:",
+                ),
+                Arch::X86_64 => (
+                    "__rt_parallel_worker_entry_fatal_x86:\n",
+                    "call __rt_exception_cleanup_frames",
+                    "call __rt_decref_object",
+                    "call __rt_ctx_release",
+                    "__rt_parallel_worker_entry_cleanup_aborted_x86:",
+                ),
+            };
+            let fatal = asm
+                .split_once(fatal_label)
+                .map(|(_, fatal)| fatal)
+                .expect("worker fatal label");
+            let cleanup = fatal.find(cleanup_call).expect("fatal frame cleanup");
+            let decref = fatal.find(decref_call).expect("fatal Throwable release");
+            let release = fatal.find(release_call).expect("fatal context finalization");
+            assert!(cleanup < decref && decref < release, "{target:?}:\n{fatal}");
+            assert!(asm.contains(cleanup_abort), "{target:?}:\n{asm}");
+            assert!(asm.contains("longjmp"), "{target:?}:\n{asm}");
+        }
+    }
+
+    #[test]
+    fn context_release_verifies_every_owner_family_before_pool_publication() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emitter.ctx_register = true;
+            emit_rt_ctx_pool(&mut emitter);
+            let asm = emitter.output();
+            let release = asm.find("__rt_ctx_release:").expect("ctx release");
+            let verify = asm[release..]
+                .find("__rt_ctx_verify_drained")
+                .map(|offset| release + offset)
+                .expect("drain verification call");
+            let publish = if target.arch == Arch::AArch64 {
+                asm[release..]
+                    .find("stlr xzr")
+                    .map(|offset| release + offset)
+                    .expect("atomic slot release")
+            } else {
+                asm[release..]
+                    .find("mov QWORD PTR [r8], 0")
+                    .map(|offset| release + offset)
+                    .expect("atomic slot release")
+            };
+            assert!(verify < publish, "{target:?}:\n{}", &asm[release..]);
+            for family in [
+                "verify_owned_fd_loop",
+                "verify_popen_loop",
+                "verify_dir_loop",
+                "verify_glob_loop",
+                "verify_tls_loop",
+                "verify_wrapper_loop",
+                "verify_filter_instance_loop",
+                "verify_connect_host_loop",
+                "verify_buffer_loop",
+            ] {
+                assert!(asm.contains(family), "{target:?} missing {family}:\n{asm}");
+            }
+            assert!(asm.contains("ctx_verify_drained_dirty"), "{target:?}:\n{asm}");
         }
     }
 
@@ -1346,24 +2285,31 @@ mod tests {
                 Arch::AArch64 => {
                     line.starts_with("stp x27, x28,")
                         || line.starts_with("ldp x27, x28,")
+                        || line.starts_with("stp x21, x28,")
+                        || line.starts_with("ldp x21, x28,")
                         || line.starts_with("adrp x28, _rt_ctx")
                         || line.starts_with("add x28, x28, _rt_ctx")
+                        || line == "mov x28, x0"
                         || ((line.starts_with("ldr ") || line.starts_with("str "))
                             && line.contains("[x28, #")
                             && !line.starts_with("ldr x28"))
                         || line.starts_with("str x28, [sp")
                         || line.starts_with("ldr x28, [sp")
+                        || (line.starts_with("mov x") && line.ends_with(", x28"))
                         || (line.starts_with("add x") && line.contains(", x28, #"))
                 }
                 Arch::X86_64 => {
                     line == "push r14"
                         || line == "pop r14"
+                        || line == "mov r14, rdi"
                         || line.starts_with("lea r14, [rip + _rt_ctx]")
                         // whole-register save/restore (fiber switch context block)
                         || line.starts_with("mov r14, QWORD PTR [")
                         || line.ends_with(", r14")
-                        || ((line.starts_with("mov ") || line.starts_with("lea "))
-                            && line.contains("[r14 +"))
+                        // Any ordinary memory operand may use r14 as its immutable base. This
+                        // includes memory-only arithmetic such as `dec [r14 + field]`; unlike a
+                        // register destination it cannot overwrite the reserved context pointer.
+                        || line.contains("[r14 +")
                 }
             };
             if !sanctioned {

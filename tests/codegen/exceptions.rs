@@ -1037,3 +1037,26 @@ echo overwritten();
     );
     assert_eq!(out, "9");
 }
+
+/// A call to an inherited builtin exception constructor must not specialize an unrelated
+/// constructor override at the same parameter index in a descendant class.
+#[test]
+fn test_builtin_exception_constructor_inference_does_not_retype_child_override() {
+    let out = compile_and_run(
+        r#"<?php
+final class CustomFailure extends RuntimeException {
+    private array $items;
+    public function __construct(array $items) {
+        $this->message = "custom";
+        $this->code = 0;
+        $this->items = $items;
+    }
+    public function countItems(): int { return count($this->items); }
+}
+new RuntimeException("base", 17);
+$failure = new CustomFailure([1, 2]);
+echo $failure->getMessage(), "|", $failure->countItems();
+"#,
+    );
+    assert_eq!(out, "custom|2");
+}

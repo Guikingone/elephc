@@ -432,6 +432,10 @@ fn emit_scalar_export_aarch64(
         layout.saved_ctx_offset,
     );
     crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    crate::codegen_support::runtime::ctx::emit_lazy_ctx_arena_install(
+        emitter,
+        &format!("L_cdylib_{suffix}_arena_ready"),
+    );
     emit_save_scalar_c_inputs(emitter, export, layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
@@ -519,6 +523,10 @@ fn emit_scalar_export_x86_64(
         layout.saved_ctx_offset,
     );
     crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    crate::codegen_support::runtime::ctx::emit_lazy_ctx_arena_install(
+        emitter,
+        &format!("L_cdylib_{suffix}_arena_ready"),
+    );
     emit_save_scalar_c_inputs(emitter, export, layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,

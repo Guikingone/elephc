@@ -20,6 +20,7 @@ use super::super::Checker;
 pub(crate) struct ReturnInfo {
     pub ty: PhpType,
     pub has_value: bool,
+    pub expr: Option<crate::parser::ast::Expr>,
 }
 
 /// Makes an inferred return type nullable, the way a declared `?T` hint resolves.
@@ -75,6 +76,7 @@ impl Checker {
                     returns.push(ReturnInfo {
                         ty,
                         has_value: true,
+                        expr: Some(expr.clone()),
                     });
                 }
             }
@@ -82,6 +84,7 @@ impl Checker {
                 returns.push(ReturnInfo {
                     ty: PhpType::Void,
                     has_value: false,
+                    expr: None,
                 });
             }
             StmtKind::If {

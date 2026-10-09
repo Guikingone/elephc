@@ -386,22 +386,22 @@ mod tests {
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
         assert_eq!(eval_registry, 583 + curl_surface);
-        // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
+        // 85 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
-        assert_eq!(eval_internal, 99);
-        // 31 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
+        assert_eq!(eval_internal, 102);
+        // 31 registry builtins awaiting eval homes, plus the 327 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 357);
+        assert_eq!(eval_pending, 358);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
-        // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
-        // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
+        // adds the ten iconv contracts, thirty-five PCNTL contracts, three internal Async helpers,
+        // forty-three internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
         // builtins (`xml_parse_into_struct` plus the nine handler setters).
-        assert_eq!(aot_registry, 629);
-        // Ten constructs/dedicated-syntax/hash surfaces, the 397 prelude-provided and
+        assert_eq!(aot_registry, 632);
+        // Ten constructs/dedicated-syntax/hash surfaces, the 398 prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude), and the curl
         // prelude when published.
-        assert_eq!(aot_external, 407 + curl_surface);
+        assert_eq!(aot_external, 408 + curl_surface);
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 562 + curl_surface);
-        assert_eq!(unsupported, 456);
+        assert_eq!(unsupported, 460);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

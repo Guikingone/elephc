@@ -404,6 +404,7 @@ fn emit_call_descriptor_invoker_from_wrapper(emitter: &mut Emitter, descriptor_r
         descriptor_arg_reg,
     );
     abi::emit_push_reg(emitter, array_arg_reg); // preserve the boxed argument container for release after descriptor invocation
+    crate::codegen_support::callable_descriptor::emit_invoker_binding_policy(emitter, false);
     abi::emit_call_reg(emitter, invoker_reg);
     emit_release_preserved_mixed_argument_after_result(emitter);
 }

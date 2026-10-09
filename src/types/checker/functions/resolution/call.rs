@@ -108,6 +108,7 @@ impl Checker {
             .canonical_function_name_folded(name)
             .unwrap_or_else(|| name.to_string());
         let name = canonical_name.as_str();
+        self.ensure_parallel_prelude_helper_is_internal(name, span)?;
 
         if let Some(mut sig) = self.functions.get(name).cloned() {
             if let Some(reason) = sig.deprecation.as_deref() {
@@ -121,6 +122,10 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
+            let is_async_run = crate::names::php_symbol_key(name.trim_start_matches('\\'))
+                == "elephc\\async\\run";
+            let is_parallel_run = crate::names::php_symbol_key(name.trim_start_matches('\\'))
+                == "elephc\\parallel\\run";
             let normalized_args = self.normalize_named_call_args(
                 &effective_sig,
                 args,
@@ -128,6 +133,13 @@ impl Checker {
                 &format!("Function '{}'", name),
                 caller_env,
             )?;
+            if is_async_run {
+                self.record_async_task_callable(&normalized_args);
+            }
+            if is_parallel_run {
+                self.check_parallel_run_task_group_escape(&normalized_args, span, caller_env)?;
+                self.record_parallel_run_site(span);
+            }
             if self.respecialize_resolved_function_params_if_needed(
                 name,
                 &normalized_args,
@@ -312,18 +324,12 @@ impl Checker {
             } else if arg_idx < decl.params.len() {
                 if ty == PhpType::Callable {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
-                        self.callable_param_sigs.insert(
-                            (name.to_string(), decl.params[arg_idx].clone()),
-                            sig,
-                        );
+                        self.record_callable_param_sig(name, &decl.params[arg_idx], sig);
                     }
                 }
                 if is_callable_array_type(&ty) {
                     if let Some(sig) = self.resolve_expr_callable_array_sig(arg, caller_env)? {
-                        self.callable_param_sigs.insert(
-                            (name.to_string(), decl.params[arg_idx].clone()),
-                            sig,
-                        );
+                        self.record_callable_param_sig(name, &decl.params[arg_idx], sig);
                     }
                 }
                 if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {

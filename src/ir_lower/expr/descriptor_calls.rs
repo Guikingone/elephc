@@ -45,6 +45,7 @@ pub(super) fn lower_expr_call_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, callee, expr.span);
     if let Some(arg_container) =
         lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
     {
@@ -55,7 +56,7 @@ pub(super) fn lower_expr_call_from_value(
     ctx.emit_value(
         Op::ExprCall,
         operands,
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -354,4 +355,3 @@ pub(super) fn lower_first_class_callable_expr_call(
         _ => None,
     }
 }
-

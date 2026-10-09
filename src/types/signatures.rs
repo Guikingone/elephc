@@ -42,8 +42,8 @@ pub struct FunctionSig {
 impl FunctionSig {
     /// Returns whether the CALLEE's frame owns a reference to by-value parameter `index`.
     ///
-    /// True exactly when the parameter is by-value and its CODEGEN REPR is an array or an
-    /// associative array — which is precisely the set `privatize_container_param` re-binds to an
+    /// True when the parameter is by-value and its CODEGEN REPR is an array, associative
+    /// array or boxed Mixed value — the set `privatize_container_param` re-binds to an
     /// owning shadow slot on function entry, giving PHP its by-value array semantics.
     ///
     /// The repr matters, not the surface type: `iterable` keeps its own runtime shape (a raw heap
@@ -61,7 +61,7 @@ impl FunctionSig {
         self.params.get(index).is_some_and(|(_, php_type)| {
             matches!(
                 php_type.codegen_repr(),
-                PhpType::Array(_) | PhpType::AssocArray { .. }
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
             )
         })
     }
@@ -69,8 +69,9 @@ impl FunctionSig {
 
 /// Upgrades a variadic signature for use as a first-class callable.
 ///
-/// If the variadic parameter is not already typed as `Array`, upgrades it to
-/// `Array<Mixed>`. Non-variadic signatures are returned unchanged.
+/// Preserves explicit indexed, associative, or iterable container layouts. A scalar
+/// element signature or missing capture slot is upgraded to `Array<Mixed>`.
+/// Non-variadic signatures are returned unchanged.
 ///
 /// Called from:
 /// - first-class callable lowering in codegen
@@ -82,7 +83,7 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     let mut wrapper_sig = sig.clone();
     if let Some((name, ty)) = wrapper_sig.params.last_mut() {
         if name == variadic_name {
-            if !matches!(ty, PhpType::Array(_)) {
+            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) {
                 *ty = PhpType::Array(Box::new(PhpType::Mixed));
             }
             return wrapper_sig;
@@ -278,6 +279,21 @@ mod tests {
         assert_eq!(wrapper_sig.defaults.len(), 2);
         assert_eq!(wrapper_sig.ref_params.len(), 2);
         assert_eq!(wrapper_sig.declared_params.len(), 2);
+    }
+
+    #[test]
+    fn callable_wrapper_sig_preserves_explicit_variadic_container_layouts() {
+        for container in [
+            PhpType::Array(Box::new(PhpType::Int)),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            },
+            PhpType::Iterable,
+        ] {
+            let sig = variadic_sig(vec![("values".to_string(), container)]);
+            assert_eq!(callable_wrapper_sig(&sig), sig);
+        }
     }
 
     /// Builds the parameter metadata for callable wrapper sig appends missing variadic.

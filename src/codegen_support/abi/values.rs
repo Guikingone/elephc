@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Arch;
 use crate::types::PhpType;
 
 use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
-use super::frame::{emit_load_from_address, load_at_offset, store_at_offset};
+use super::frame::{emit_reg_move, load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
 
@@ -122,32 +122,22 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
-/// Releases the payload of a local reference-counted cell and the cell itself.
+/// Drops one shared owner of a local reference cell.
 ///
-/// Pushes `cell_reg` as a temporary, then:
-/// - For `PhpType::Str`: loads the string payload and calls `__rt_heap_free_safe`.
-/// - For other refcounted types: loads the heap pointer and calls `emit_decref_if_refcounted`.
-/// Pops the preserved cell pointer and calls `__rt_heap_free` to release the cell.
-/// Used during function epilogue for local variables that held borrowed or owned refs.
+/// The runtime helper decrements the cell allocation's uniform refcount. Its final owner releases
+/// the typed payload and the cell itself, allowing the frame and any number of closure descriptors
+/// to share the same cell safely across `unset()` and scope exit.
 pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
-    emit_push_reg(emitter, cell_reg); // preserve the owned reference cell pointer while releasing its payload
-    match value_ty.codegen_repr() {
-        PhpType::Str => {
-            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            emit_call_label(emitter, "__rt_heap_free_safe"); // release the owned string payload stored inside the local reference cell
-        }
-        ty if ty.is_refcounted() => {
-            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            emit_decref_if_refcounted(emitter, &ty);
-        }
-        PhpType::Callable => {
-            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            callable_descriptor::emit_release_current_descriptor(emitter);
-        }
-        _ => {}
+    let result_reg = int_result_reg(emitter);
+    if cell_reg != result_reg {
+        emit_reg_move(emitter, result_reg, cell_reg);
     }
-    emit_pop_reg(emitter, int_result_reg(emitter)); // restore the owned reference cell pointer for heap release
-    emit_call_label(emitter, "__rt_heap_free"); // release the local reference cell itself
+    let tag = callable_descriptor::type_tag(value_ty) as i64;
+    match emitter.target.arch {
+        Arch::AArch64 => emit_load_int_immediate(emitter, "x1", tag),
+        Arch::X86_64 => emit_load_int_immediate(emitter, "rdx", tag),
+    }
+    emit_call_label(emitter, "__rt_ref_cell_release"); // drop the frame or descriptor ownership of the shared cell
 }
 
 /// Loads a value of the given type from a stack frame offset into result registers.
@@ -205,11 +195,8 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "test {}, {}",
-                int_result_reg(emitter),
-                int_result_reg(emitter)
-            )); // test whether the coerced integer truthiness result is zero
+            let test = format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter));
+            emitter.instruction(&test);                                         // test whether the coerced integer truthiness result is zero
             emitter.instruction(&format!("je {}", label));                      // branch when the coerced integer truthiness result is zero
         }
     }
@@ -229,11 +216,8 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "test {}, {}",
-                int_result_reg(emitter),
-                int_result_reg(emitter)
-            )); // test whether the coerced integer truthiness result is non-zero
+            let test = format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter));
+            emitter.instruction(&test);                                         // test whether the coerced integer truthiness result is non-zero
             emitter.instruction(&format!("jne {}", label));                     // branch when the coerced integer truthiness result is non-zero
         }
     }
@@ -330,28 +314,16 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
                 let uval = value as u64;
                 emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
                 if (uval >> 16) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 16-31 of the wider immediate value
-                        "movk {}, #0x{:x}, lsl #16",
-                        reg,
-                        (uval >> 16) & 0xFFFF
-                    ));
+                    let patch = format!("movk {}, #0x{:x}, lsl #16", reg, (uval >> 16) & 0xFFFF);
+                    emitter.instruction(&patch);                                // patch bits 16-31 of the wider immediate value
                 }
                 if (uval >> 32) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 32-47 of the wider immediate value
-                        "movk {}, #0x{:x}, lsl #32",
-                        reg,
-                        (uval >> 32) & 0xFFFF
-                    ));
+                    let patch = format!("movk {}, #0x{:x}, lsl #32", reg, (uval >> 32) & 0xFFFF);
+                    emitter.instruction(&patch);                                // patch bits 32-47 of the wider immediate value
                 }
                 if (uval >> 48) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 48-63 of the wider immediate value
-                        "movk {}, #0x{:x}, lsl #48",
-                        reg,
-                        (uval >> 48) & 0xFFFF
-                    ));
+                    let patch = format!("movk {}, #0x{:x}, lsl #48", reg, (uval >> 48) & 0xFFFF);
+                    emitter.instruction(&patch);                                // patch bits 48-63 of the wider immediate value
                 }
             }
         }

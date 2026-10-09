@@ -18,35 +18,10 @@ pub(super) fn lower_static_callable_call(
 ) -> Option<LoweredValue> {
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
-            let sig = ctx.functions.get(&function_name).cloned();
-            let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
-            let php_type = call_return_type(ctx, &function_name, &operands);
-            let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
-                Op::Call,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                effects_lookup::user_call_effects(&function_name),
-                Some(expr.span),
-            ))
+            Some(lower_function_call(ctx, &Name::from(function_name), callback_args, expr))
         }
         StaticCallableBinding::ExternFunction(function_name) => {
-            let sig = ctx
-                .extern_functions
-                .get(&function_name)
-                .map(function_sig_from_extern_for_descriptor);
-            let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
-            let php_type = call_return_type(ctx, &function_name, &operands);
-            let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
-                Op::ExternCall,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                Op::ExternCall.default_effects(),
-                Some(expr.span),
-            ))
+            Some(lower_function_call(ctx, &Name::from(function_name), callback_args, expr))
         }
         StaticCallableBinding::Builtin(function_name) => {
             let sig = call_signature(
@@ -75,18 +50,41 @@ pub(super) fn lower_static_callable_call(
             signature,
             captures,
         } => {
-            let mut operands = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            // A by-reference capture is owned by the runtime closure environment, not by the
+            // enclosing lexical slot forever. Calling it directly would rebuild the hidden
+            // capture argument from that outer slot; after `unset($outer)` the slot is null while
+            // PHP requires the closure's retained cell to remain live. Route these closures
+            // through their descriptor so invocation loads the captured cell pointer from the
+            // environment that owns it.
+            if captures.iter().any(|capture| capture.by_ref) {
+                return None;
+            }
+            // Materialize regular Mixed boxes in EIR too: backend-only boxing
+            // leaves no owner for the exceptional argument cleanup edge.
+            let mut operands = lower_args_with_eir_user_function_signature(
+                ctx, &name, Some(&signature), callback_args,
+            );
             append_closure_capture_operands(&mut operands, &captures);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
+            if super::function_calls::call_has_owning_temporary_arg(ctx, &operands) {
+                return Some(super::function_calls::lower_exception_safe_user_call(
+                    ctx, &name, operands, php_type, Some(&signature), expr,
+                ));
+            }
             let data = ctx.intern_function_name(&name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
-            ))
+            );
+            release_owned_call_arg_temporaries_with_signature(
+                ctx, &operands, Some(call.value), &ReturnArgAlias::Unknown,
+                Some(&signature), expr.span,
+            );
+            Some(call)
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
             Some(lower_static_method_call(ctx, &receiver, &method, callback_args, expr))
@@ -290,6 +288,7 @@ pub(super) fn build_bound_closure_binding(
         signature,
         captures: vec![ClosureCapture {
             value: boxed_this.value,
+            by_ref: false,
         }],
     };
     Some((bound, closure_value))

@@ -239,11 +239,38 @@ fn emit_user_function(
         emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
+    // A throw can bypass this function's ordinary epilogue regardless of whether
+    // it is a closure or a named user function. Any non-parameter local with an
+    // owning representation therefore needs an activation record so the runtime
+    // unwinder can run this frame's normal cleanup callback before the caller's
+    // catch observes the Throwable.
+    let function_exception_cleanup_frame = function.locals.iter().any(|local| {
+            function.params.get(local.id.as_raw() as usize).is_none()
+                && matches!(
+                    local.php_type.codegen_repr(),
+                    PhpType::Str
+                        | PhpType::Callable
+                        | PhpType::Mixed
+                        | PhpType::Union(_)
+                        | PhpType::Array(_)
+                        | PhpType::AssocArray { .. }
+                        | PhpType::Object(_)
+                        | PhpType::Iterable
+                )
+        });
+    // A Parallel worker callback is emitted as a synthetic closure. It can be
+    // bypassed by the worker-local fatal `longjmp` after reconstructing the
+    // task payload, so its own decoded values need an activation even when the
+    // called task closure already has one.
+    let parallel_worker_exception_cleanup_frame =
+        function.flags.is_synthetic && function.name.ends_with("__parallel_worker");
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        emitter.cdylib_boundary
+            || function_exception_cleanup_frame
+            || parallel_worker_exception_cleanup_frame,
     );
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
@@ -404,11 +431,56 @@ fn emit_class_method(
         emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
+    // Class methods can throw across their normal epilogue just like free functions. Their
+    // refcounted locals therefore need an activation record for the runtime unwinder; limiting
+    // this to a short Async allowlist leaves ordinary table-reset/rethrow methods with leaked or
+    // stale owners after longjmp.
+    let method_exception_cleanup_frame = function.locals.iter().any(|local| {
+        function.params.get(local.id.as_raw() as usize).is_none()
+            && matches!(
+                local.php_type.codegen_repr(),
+                PhpType::Str
+                    | PhpType::Callable
+                    | PhpType::Mixed
+                    | PhpType::Union(_)
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Object(_)
+                    | PhpType::Iterable
+            )
+    });
+    let async_exception_cleanup_frame = function
+        .name
+        .ends_with("Elephc\\Async\\TaskGroup::sleep")
+        || function
+            .name
+            .ends_with("Elephc\\Async\\__TaskStart::start")
+        || function
+            .name
+            .ends_with("Elephc\\Async\\__Scheduler::throwIfCancellationRequested")
+        || function
+            .name
+            .ends_with("Elephc\\Async\\__Scheduler::awaitTask")
+        || function
+            .name
+            .ends_with("Elephc\\Async\\__Scheduler::throwFirstUnobservedFailure")
+        || function
+            .name
+            .ends_with("Elephc\\Async\\__Scheduler::runRoot")
+        || function
+            .name
+            .ends_with("Elephc\\Async\\__TaskOutcome::throwIfFailed")
+        || function
+            .name
+            .ends_with("Elephc\\Async\\__TaskOutcome::observeAndThrowIfFailed")
+        || function
+            .name
+            .ends_with("Elephc\\Async\\Awaitable::await");
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        emitter.cdylib_boundary || method_exception_cleanup_frame || async_exception_cleanup_frame,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -697,11 +769,14 @@ fn emit_generator_body(
     shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
+    // A suspended generator may be abandoned without returning through this function's ordinary
+    // epilogue. Keep an activation cleanup record so object destruction can release owned locals
+    // before unmapping the coroutine stack.
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
     );
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(

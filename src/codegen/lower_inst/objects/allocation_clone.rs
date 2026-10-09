@@ -36,10 +36,8 @@ pub(super) fn emit_object_allocation(
             ctx.emitter
                 .instruction(&format!("mov rax, {}", payload_size)); // request object payload storage for the class id and property slots
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            ));                                                                 // materialize the x86_64 object heap kind word
+            let kind_word = crate::codegen_support::sentinels::x86_64_heap_kind_word(4);
+            ctx.emitter.instruction(&format!("mov r10, 0x{kind_word:x}"));      // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
@@ -106,7 +104,9 @@ pub(super) fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usiz
         .enumerate()
         .filter_map(|(index, (property, php_type))| {
             if class_info.property_slot_is_reference(index, property) {
-                return None;
+                // A cloned reference property shares its heap cell with the source object.
+                // Each object therefore owns one cell refcount until its deep destructor runs.
+                return Some(8 + index * 16);
             }
             property_clone_needs_retain(php_type).then_some(8 + index * 16)
         })
@@ -151,7 +151,7 @@ pub(super) fn emit_copy_property_slot(
     abi::emit_store_to_address(ctx.emitter, high_reg, dest_reg, offset + 8);
 }
 
-/// Retains the copied low-word pointer for string, array, hash, object, or Mixed slots.
+/// Retains the copied low-word pointer for reference cells and heap-backed value slots.
 pub(super) fn emit_retain_cloned_property_pointer(
     ctx: &mut FunctionContext<'_>,
     source_reg: &str,

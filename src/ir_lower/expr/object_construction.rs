@@ -50,7 +50,7 @@ pub(super) fn lower_new_object(
         );
     }
     let sig = constructor_signature(ctx, class_name).cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let operands = lower_args_with_eir_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
     emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
 }

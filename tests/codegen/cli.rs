@@ -630,6 +630,86 @@ fn test_cli_monitor_profiles_a_top_level_only_program() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Exact monitoring exposes Async task lineage and state accounting without leaking raw rows.
+#[test]
+fn test_cli_monitor_reports_async_scheduler_tasks() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_async_scheduler");
+    fs::write(
+        dir.join("async.php"),
+        r#"<?php
+use Elephc\Async\TaskGroup;
+use function Elephc\Async\run;
+
+run(function (TaskGroup $tasks): void {
+    $child = $tasks->spawn(function () use ($tasks): int {
+        $tasks->reschedule();
+        $tasks->sleep(0.01);
+        return 42;
+    });
+    echo $child->await() === 42 ? "done" : "bad";
+});
+"#,
+    )
+    .expect("failed to write the Async monitoring fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args(["monitor", "async.php"])
+        .output()
+        .expect("failed to run the Async scheduler monitor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Async monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains("done"), "program output was lost: {stdout}");
+    assert!(stdout.contains("scheduler tasks — 2 tasks"), "{stdout}");
+    assert!(stdout.contains("async scope 1"), "{stdout}");
+    assert!(stdout.contains("parent -1"), "{stdout}");
+    assert!(stdout.contains("group-task 1"), "{stdout}");
+    assert!(stdout.contains("runnable "), "{stdout}");
+    assert!(stdout.contains("running "), "{stdout}");
+    assert!(stdout.contains("blocked "), "{stdout}");
+    assert!(stdout.contains("wakes spawn:1,yield:1"), "{stdout}");
+    assert!(stdout.contains("trace - span -"), "{stdout}");
+    let scheduler_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.starts_with("async scope "))
+        .collect();
+    assert_eq!(scheduler_rows.len(), 2, "expected two rendered task rows: {stdout}");
+    let duration = |row: &str, start: &str, end: &str| {
+        row.split_once(start)
+            .and_then(|(_, tail)| tail.split_once(end).map(|(value, _)| value.trim()))
+            .expect("rendered scheduler duration field")
+            .to_string()
+    };
+    assert!(
+        scheduler_rows
+            .iter()
+            .any(|row| duration(row, "runnable ", "  running ") != "0 ns"),
+        "expected scheduler runnable time to be nonzero: {stdout}"
+    );
+    assert!(
+        scheduler_rows
+            .iter()
+            .any(|row| duration(row, "running ", "  blocked ") != "0 ns"),
+        "expected scheduler running time to be nonzero: {stdout}"
+    );
+    assert!(
+        scheduler_rows
+            .iter()
+            .any(|row| duration(row, "blocked ", "  cancellation ") != "0 ns"),
+        "expected scheduler blocked time to be nonzero: {stdout}"
+    );
+    assert!(
+        !stdout.contains("elephc-instr-scheduler:")
+            && !stderr.contains("elephc-instr-scheduler:"),
+        "raw scheduler profiler rows leaked through the monitor UI\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// End-to-end `elephc monitor`: compiles a busy fixture, activates exact
 /// instrumentation through the control channel, and writes a two-view
 /// Speedscope document whose frames are PHP names — not EIR block labels or
@@ -1574,6 +1654,37 @@ fn test_with_crypto_does_not_force_hash_prelude() {
         !asm.contains(&format!(".globl {hash_init}\n")),
         "--with-crypto must not inject the source-level hash prelude"
     );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--with-parallel` force-links the native transfer bridge without inventing a PHP surface.
+#[test]
+fn test_with_parallel_links_and_runs_an_unrelated_program() {
+    let dir = make_cli_test_dir("elephc_cli_with_parallel_bridge");
+    ensure_cli_bridge_staticlibs(&["elephc_parallel"]);
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php echo 'parallel-bridge-ok|', class_exists('Elephc\Parallel\Future') ? 'class' : 'no-class';"#,
+    )
+    .unwrap();
+
+    let compiled = elephc_cli_command(&dir)
+        .arg("--with-parallel")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile with the Parallel bridge");
+    assert!(
+        compiled.status.success(),
+        "--with-parallel failed to link: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let run = std::process::Command::new(dir.join("main"))
+        .output()
+        .expect("failed to run the Parallel-linked fixture");
+    assert!(run.status.success(), "fixture failed: {}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "parallel-bridge-ok|no-class");
 
     let _ = fs::remove_dir_all(&dir);
 }

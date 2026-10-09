@@ -50,6 +50,31 @@ pub(super) struct ExceptionFlowAnalysis {
     function_returns: HashMap<String, PhpType>,
     static_method_returns: HashMap<String, PhpType>,
     instance_method_returns: HashMap<String, PhpType>,
+    string_bindings: HashSet<String>,
+}
+
+/// Records callable boundaries whose string parameters may dispatch user code.
+fn collect_string_bindings(stmts: &[Stmt], out: &mut HashSet<String>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, params, variadic_type, variadic_by_ref, return_type, body, .. } => {
+                if super::effect_analysis::callable_binds_string(params, variadic_type.as_ref(), *variadic_by_ref)
+                    || super::return_binding_effects::may_throw(params, return_type, body) {
+                    out.insert(name.clone());
+                }
+            }
+            StmtKind::ClassDecl { name, methods, .. } => {
+                for method in methods.iter().filter(|method| method.has_body) {
+                    if super::effect_analysis::callable_binds_string(&method.params, method.variadic_type.as_ref(), method.variadic_by_ref)
+                        || super::return_binding_effects::may_throw(&method.params, &method.return_type, &method.body) {
+                        out.insert(method_effect_key(name, &method.name));
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_string_bindings(body, out),
+            _ => {}
+        }
+    }
 }
 
 /// Installs exception summaries for one optimizer pass and restores the previous analysis.
@@ -265,6 +290,10 @@ impl ExceptionFlowAnalysis {
         let function_bodies = attach_class_contexts(function_bodies, &class_contexts);
         let static_method_bodies = attach_class_contexts(static_method_bodies, &class_contexts);
         let instance_method_bodies = attach_class_contexts(instance_method_bodies, &class_contexts);
+        // Body-only throw summaries omit entry-time Stringable dispatch. Keep
+        // these bindings open until argument-specific type proofs are available.
+        let mut string_bindings = HashSet::new();
+        collect_string_bindings(program, &mut string_bindings);
         let mut analysis = Self {
             hierarchy,
             function_throws: empty_summaries(function_bodies.keys()),
@@ -273,6 +302,7 @@ impl ExceptionFlowAnalysis {
             function_returns,
             static_method_returns,
             instance_method_returns,
+            string_bindings,
         };
 
         for _ in 0..MAX_EXCEPTION_SUMMARY_ITERATIONS {
@@ -308,7 +338,10 @@ impl ExceptionFlowAnalysis {
             .map(|(name, body)| {
                 (
                     name.clone(),
-                    self.block_throws(body.body, &HashMap::new(), body.class_context),
+                    self.block_throws(body.body, &HashMap::new(), body.class_context)
+                        .combined(if self.string_bindings.contains(name) {
+                            ThrownTypes::unknown()
+                        } else { ThrownTypes::default() }),
                 )
             })
             .collect()
@@ -811,7 +844,13 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &callee.kind {
-            ExprKind::Closure { body, .. } => self.block_throws(body, bindings, class_context),
+            ExprKind::Closure { body, params, variadic_type, variadic_by_ref, return_type, .. } => {
+                let thrown = self.block_throws(body, bindings, class_context);
+                if super::effect_analysis::callable_binds_string(params, variadic_type.as_ref(), *variadic_by_ref)
+                    || super::return_binding_effects::may_throw(params, return_type, body) {
+                    thrown.combined(ThrownTypes::unknown())
+                } else { thrown }
+            }
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
                 .function_throws
                 .get(name.as_str())

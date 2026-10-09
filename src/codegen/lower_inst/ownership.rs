@@ -11,12 +11,30 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Instruction, Op, Ownership, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
+
+/// Returns whether an owned SSA value is an expression temporary rather than a local slot owner.
+pub(super) fn is_owned_temporary(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    if ctx.value_ownership(value)? != Ownership::Owned {
+        return Ok(false);
+    }
+    let metadata = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let defining_op = match metadata.def {
+        ValueDef::Instruction { inst, .. } => {
+            ctx.function.instruction(inst).map(|instruction| instruction.op)
+        }
+        ValueDef::BlockParam { .. } => None,
+    };
+    Ok(!matches!(defining_op, Some(Op::LoadLocal)))
+}
 
 /// Lowers an ownership acquire by making the operand safe to store as a new owner.
 pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -114,6 +132,14 @@ pub(super) fn lower_release_unless_aliases(
 /// Lowers a release only for values that own or may own runtime-managed storage.
 pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    emit_release_value(ctx, value)
+}
+
+/// Emits the ownership-aware release for one SSA value outside its original Release instruction.
+pub(super) fn emit_release_value(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
     let ownership = ctx.value_ownership(value)?;
     if !ownership.may_require_release() {
         return Ok(());

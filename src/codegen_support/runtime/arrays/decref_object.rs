@@ -58,6 +58,13 @@ pub fn emit_decref_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after validation
     emitter.label("__rt_decref_object_checked");
 
+    // -- terminal Parallel cleanup resumes a destructor interrupted by exit() --
+    emitter.instruction(&format!("ldr x10, [x28, #{}]", crate::codegen_support::runtime::ctx::CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // inspect whether this worker is unwinding a terminal fatal
+    emitter.instruction("cmp x10, #2");                                         // phase 2 means the fatal trampoline is draining abandoned owners
+    emitter.instruction("b.ne __rt_decref_object_regular");                     // ordinary execution preserves the destructor re-entrancy guard
+    emitter.instruction("ldr w10, [x0, #-12]");                                 // inspect the object's refcount and destructor-in-progress bit
+    emitter.instruction("tbnz w10, #31, __rt_decref_object_finish_destructing"); // finish a destructor the fatal longjmp interrupted without calling it twice
+    emitter.label("__rt_decref_object_regular");
     // -- decrement refcount and check for zero --
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load 32-bit refcount from the uniform heap header
     emitter.instruction("subs w9, w9, #1");                                     // decrement refcount, set flags
@@ -69,6 +76,9 @@ pub fn emit_decref_object(emitter: &mut Emitter) {
     // -- refcount reached zero: deep free the object --
     emitter.label("__rt_decref_object_free");
     emitter.instruction("b __rt_object_free_deep");                             // tail-call to deep free object properties and storage
+
+    emitter.label("__rt_decref_object_finish_destructing");
+    emitter.instruction("b __rt_object_free_deep");                             // resume the already-guarded deep free without re-entering __destruct
 
     emitter.label("__rt_decref_object_skip");
     emitter.instruction("ret");                                                 // return to caller
@@ -113,6 +123,14 @@ fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_decref_object_skip");                         // other heap kinds must not be released through the object decref helper
 
     emitter.label("__rt_decref_object_counted");
+    // -- terminal Parallel cleanup resumes a destructor interrupted by exit() --
+    emitter.instruction(&format!("mov r11, QWORD PTR [r14 + {}]", crate::codegen_support::runtime::ctx::CTX_PARALLEL_FATAL_ACTIVE_OFFSET)); // inspect whether this worker is unwinding a terminal fatal
+    emitter.instruction("cmp r11, 2");                                          // phase 2 means the fatal trampoline is draining abandoned owners
+    emitter.instruction("jne __rt_decref_object_regular_x86");                  // ordinary execution preserves the destructor re-entrancy guard
+    emitter.instruction("mov r11d, DWORD PTR [rax - 12]");                      // inspect the object's refcount and destructor-in-progress bit
+    emitter.instruction("test r11d, 0x80000000");                               // did an earlier destructor frame set the high-bit guard?
+    emitter.instruction("jnz __rt_decref_object_finish_destructing_x86");       // finish it without invoking the destructor again
+    emitter.label("__rt_decref_object_regular_x86");
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit object refcount from the uniform heap header
     emitter.instruction("sub r10d, 1");                                         // decrement the object refcount for the releasing x86_64 owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented object refcount back into the uniform heap header
@@ -124,4 +142,7 @@ fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_object_free");
     emitter.instruction("jmp __rt_object_free_deep");                           // tail-call to deep free the object once the last owner is gone
+
+    emitter.label("__rt_decref_object_finish_destructing_x86");
+    emitter.instruction("jmp __rt_object_free_deep");                           // resume the already-guarded deep free without re-entering __destruct
 }

@@ -258,6 +258,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // a binary without the capability, where those paths pay one load and a
     // branch, and only when they are already raising.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_unpark_fn"), 8, target));
+    // elephc_instr_scheduler_fn: receives task lifecycle transitions from the
+    // Async runtime only while an exact capture window is active. The runtime
+    // wrapper checks both this nullable slot and `elephc_monitor_active` before
+    // calling it, so dormant programs perform no clock read or allocation.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_instr_scheduler_fn"),
+        8,
+        target,
+    ));
     // elephc_monitor_active: 1 once this process has been asked to profile —
     // written by the probe's init, read by the exact profiler's, which runs after
     // it. One check, in one place: repeating it would consume the control
@@ -334,23 +343,23 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // Generation-safe buffer descriptor registry. Public Buffer values are
     // scalar `(generation << 32) | index` handles, never heap pointers: slot
     // reuse increments generation so stale aliases cannot access a new payload.
-    // Index zero is reserved as the invalid/null handle; the descriptor free
-    // list is static metadata and therefore does not consume user heap space.
+    // Index zero is reserved as the invalid/null handle. This is the main
+    // context's backing table; pooled contexts receive caller-owned tables,
+    // while their free-list head and fresh-index cursor live in `_rt_ctx`.
     out.push_str(&comm_directive(
         "_buffer_registry",
         (crate::codegen_support::runtime::buffers::BUFFER_REGISTRY_CAPACITY + 1)
             * crate::codegen_support::runtime::buffers::BUFFER_DESCRIPTOR_SIZE,
         target,
     ));
-    out.push_str(&comm_directive("_buffer_registry_free", 8, target));
-    out.push_str(".globl _buffer_registry_next\n_buffer_registry_next:\n    .quad 1\n");
     // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
     // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
     // blocks can never share a granule because the smallest block is 16 header
     // bytes plus the allocator's 8-byte minimum payload = 24 > 16, so the mapping
     // needs no hashing, no probing and no capacity policy. It stores handles keyed
     // BY POSITION and never an object pointer, so it owns nothing, keeps nothing
-    // alive and is never a GC root. `_obj_handle_free` is the LIFO stack of
+    // alive and is never a GC root. These are the main context's tables;
+    // pooled contexts receive distinct caller-owned storage. `_obj_handle_free` is the LIFO stack of
     // released handles php-src reuses from; its depth can never exceed the number
     // of distinct handles, which is bounded by the peak live-object count, which is
     // bounded by `heap_size / 24`. See `runtime::objects::handles`.
@@ -364,7 +373,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         crate::codegen_support::runtime::object_handle_free_slots(heap_size) * 4,
         target,
     ));
-    out.push_str(&comm_directive("_obj_handle_free_top", 8, target));
     // PHP RESOURCE ids. A SEPARATE numbering space from the object handles above —
     // php-src keeps `zend_resource.handle` and `zend_object.handle` in two unrelated
     // lists, so `resource(5)` and `object(C)#5` can and do coexist. The table maps a
@@ -384,6 +392,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8,
         target,
     ));
+    out.push_str(&comm_directive("_resource_id_lock", 4, target));
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
     out.push_str(&comm_directive("_json_last_error", 8, target));
     out.push_str(&comm_directive("_json_active_flags", 8, target));
@@ -398,10 +407,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_json_error_location_active", 8, target));
     out.push_str(&comm_directive("_json_error_line", 8, target));
     out.push_str(&comm_directive("_json_error_column", 8, target));
-    // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
-    // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
-    // "this block never acquired a handle".
-    out.push_str(".globl _obj_handle_next\n_obj_handle_next:\n    .quad 1\n");
     // `_resource_id_next` is the never-used PHP RESOURCE id cursor. It starts at 5,
     // not at 1, and that number is measured rather than chosen: under PHP 8.5.6 CLI
     // the three standard streams occupy ids 1..3 (`get_resource_id(STDIN|STDOUT|STDERR)`
@@ -685,7 +690,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // then memcpy()s back into the caller's buffer, capping input at 49152 bytes
     // so the 4/3 base64 expansion still fits the scratch.
     out.push_str(&comm_directive("_stream_grow_scratch", 65536, target));
-    out.push_str(&comm_directive("_zstream_handles", 2048, target));
+    // Per-fd zlib handles live in `_rt_ctx`; only bridge function pointers are process-global.
     out.push_str(&comm_directive("_zlib_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_zlib_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_zlib_inflate_init2_fn", 8, target));
@@ -695,10 +700,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_bz2_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_bz2_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_bz2_decompress_fn", 8, target));
-    // convert.iconv.* WRITE-filter state: per-fd iconv_t descriptor table
-    // (_iconv_handles) plus the indirect fn-pointer slots the shared runtime
-    // calls through so it never names libc iconv (which needs -liconv on macOS).
-    out.push_str(&comm_directive("_iconv_handles", 2048, target));
+    // convert.iconv.* WRITE-filter handles live in `_rt_ctx`; the indirect fn-pointer slots stay
+    // process-global so the shared runtime never names libc iconv (which needs -liconv on macOS).
     out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_iconv_close_fn", 8, target));
     out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
@@ -882,23 +885,16 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _phar_list_len: output-length scratch written by elephc_phar_list_entries
     // and consumed immediately while expanding serialized names into an array.
     out.push_str(".p2align 3\n.globl _phar_list_len\n_phar_list_len:\n    .quad 0\n");
-    // _tls_sessions: per-fd TLS handle (i64 returned by
-    // elephc_tls_attach_fd or 0 when the fd is plain TCP). Indexed by raw
-    // fd up to 256; the runtime fread/fwrite/fclose paths consult this
-    // table and route through the elephc-tls helpers when an entry is
-    // non-zero, falling back to read/write/close syscalls otherwise.
-    out.push_str(&comm_directive("_tls_sessions", 2048, target));
-    // _stream_chunk_size: per-fd read/write chunk size set by
+    // Per-fd TLS sessions, stream chunk sizes, and connection-host metadata live in `_rt_ctx`.
+    // _stream_chunk_size is set by
     // stream_set_chunk_size, indexed by raw fd up to 256 (8 bytes each). A zero
     // entry means "unset" and reports PHP's default of 8192. stream_set_chunk_size
     // returns the previous value (the PHP-observable contract); the size does not
     // currently change read granularity (reads return identical data).
-    out.push_str(&comm_directive("_stream_chunk_size", 2048, target));
-    // _stream_connect_host: per-fd transport host string (ptr, len) captured by
+    // _stream_connect_host is per-fd transport host string (ptr, len) captured by
     // stream_socket_client so stream_socket_enable_crypto can default the TLS
     // SNI / peer-name to the connection host when no ssl.peer_name context
     // option is set. 256 fds * 16 bytes (ptr + len). A zero len means "unset".
-    out.push_str(&comm_directive("_stream_connect_host", 4096, target));
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
     // stream_context_create / stream_context_set_params. __rt_http_open fires
@@ -1114,11 +1110,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // registrations, each entry 32 bytes (protocol_ptr/len + class_ptr/len).
     // Slot is free when protocol_ptr is null. 64 × 32 = 2048 bytes.
     out.push_str(&comm_directive("_user_wrappers", 2048, target));
-    // _user_wrapper_handles: USER_WRAPPER_HANDLES_CAP = 256 active stream-handle
-    // slots, each storing the wrapper object pointer keyed by synthetic fd
-    // `USER_WRAPPER_FD_BASE + slot_index`. Slot is free when the stored pointer
-    // is null. 256 slots × 8 bytes = 2048 bytes.
-    out.push_str(&comm_directive("_user_wrapper_handles", 2048, target));
+    // Active user-wrapper handles are context-owned because their object pointers belong to the
+    // worker arena. The process-global registration catalog above contains names only.
     // _user_wrapper_drain_buf: 1 MiB accumulation buffer for the codegen-level
     // feof-gated read loop emitted by stream_get_contents on a wrapper fd.
     // Each fread chunk is copied here, building one contiguous result. Drains
@@ -1152,11 +1145,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // + USER_FILTER_ID_BASE (128) so they don't collide with the existing
     // u8 built-in filter IDs (1..=4). 128 × 32 = 4096 bytes.
     out.push_str(&comm_directive("_user_filter_registry", 4096, target));
-    // _user_filter_instances: one wrapper-class instance per attached
-    // filter, keyed by (fd, direction). Slot = _user_filter_instances[fd*2
-    // + dir] where dir=0 is read, dir=1 is write. Slot is null when no
-    // user filter is attached. 256 fds × 2 dirs × 8 B = 4096 bytes.
-    out.push_str(&comm_directive("_user_filter_instances", 4096, target));
+    // Attached user-filter instances are context-owned because their object pointers belong to
+    // the worker arena. The process-global registration catalog above contains names only.
     // _stream_context_options: pointer to the current stream-context
     // options hash (nested array of `wrapper => option => value`).
     // stream_context_create() stores its options arg here; consumers

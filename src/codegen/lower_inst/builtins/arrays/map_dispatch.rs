@@ -381,4 +381,3 @@ pub(super) fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, 
         }
     }
 }
-

@@ -14,6 +14,13 @@ transfer by deep copy through an `elephc-parallel` bridge. Threads are still a
 plan; what is being built now is the foundation — per-context state reached
 through a reserved register.
 
+The task model, scheduling policy, reactor boundary, refined Async/Parallel API,
+and consensus gate now live in [`execution-scheduler.md`](execution-scheduler.md).
+This file remains authoritative for `_rt_ctx`, sandbox-thread isolation, and
+cross-context transfer. The namespace/handle split and transfer rules below are
+locked inputs to that design; method names and scheduler behavior remain proposals
+until the linked plan reaches consensus.
+
 ## Locked decisions
 
 | Topic | Decision |
@@ -247,10 +254,12 @@ emulated-amd64 bisection for one entry that should never have been there.
       legitimate compile-time choice. Every defect found in rounds 3 and 4 came
       from maintaining two arms. Sequence it AFTER x86_64 CI is green: removing
       the fallback before the survivor is proven is the wrong order.
-- [ ] **Multi-context pool**: `_rt_ctx` as an array + free list instead of a
-      single instance; `__rt_ctx_init`/`__rt_ctx_destroy` exported for the M1
-      bridge. (`--heap-size` per thread to document.)
-- [x] **State families: five of six done.** `emit_runtime_data_fixed` declared 174
+- [x] **Multi-context pool**: `_rt_ctx[8]` uses atomic claim/release and a caller-owned
+      arena per slot. The internal acquisition ABI now also requires distinct object-index,
+      object-free, Buffer, serializer-object, and unserializer-value side tables before returning a context; null metadata
+      fails closed without consuming a slot. The size remains an implementation probe, not a
+      public concurrency promise.
+- [x] **State families: all six done.** `emit_runtime_data_fixed` declared 174
       `.comm` symbols; **38 are now per-context**, and the routing for all of them
       is four `abi::` accessors consulting one name→offset table in `ctx.rs`. Not
       one of the ~500 call sites changed.
@@ -267,12 +276,12 @@ emulated-amd64 bisection for one entry that should never have been there.
       4. **shared buffers** ✅ `_cstr_buf`, `_cstr_buf2`, and the fourteen
          output-buffering / print_r symbols. `_empty_str` stays global as planned:
          one read-only byte.
-      5. **resource registries** — REMAINING: `_dir_handles`, `_glob_handles`,
-         `_bzstream_handles`, `_buffer_registry_*`. Per-context if a thread may open
-         resources, otherwise an explicit boundary; that question is still open.
+      5. **resource registries** ✅ `_dir_handles`, `_glob_handles`, `_bzstream_handles`,
+         stream-filter tables, and the Buffer registry state are per-context. Resources still
+         remain non-transferable across contexts.
       6. **bridge slots** (`_elephc_tls_*_fn`, …) — nothing to do: written once at
          startup, never rewritten, so they stay global by design.
-      7. **object and buffer handle tables — A GAP THE INVENTORY MISSED, found while
+      7. **object and buffer handle tables ✅ — A GAP THE INVENTORY MISSED, found while
          routing family 5.** `_obj_handle_index` is DIRECT-MAPPED: one `u32` per
          16-byte granule, and the granule index is computed as
          `(ptr - this context's arena base) >> 4` — see
@@ -296,8 +305,13 @@ emulated-amd64 bisection for one entry that should never have been there.
            simply join `emit_ctx_zero_fields` — a pooled context would start handing
            out handle 0, the reserved invalid one.
 
-         Pick one before M1 spawns anything: today's single context makes both
-         answers indistinguishable, which is exactly why it would be found late.
+         **Resolved 2026-09-15:** neither large fixed per-context BSS nor context bits in
+         PHP-visible handles. `_rt_ctx` stores pointers to caller-owned, heap-sized object-index
+         and object-free tables plus a Buffer descriptor table; their free/fresh cursors are
+         direct context fields. The main context points at the existing global backing tables,
+         while a pooled worker supplies distinct zero-initialized storage to
+         `__rt_ctx_acquire`. This preserves ordinary PHP handle numbering, supports variable
+         `--heap-size`, and charges side-table memory only to active worker storage.
 
       **What the routing actually cost, and the two things it taught.**
       The first family needed fifteen sites rewritten and an audit to find them.
@@ -387,6 +401,12 @@ Replaces the original `parallel_spawn()`/`parallel_join()` sketch. Prior study:
 Java 27 `StructuredTaskScope`, Swift 6 `Sendable`, Kotlin `coroutineScope`, Rust
 `thread::scope`, ext/parallel.
 
+Status clarification: the namespace split, distinct handles, structured ownership,
+and transfer rules in this section remain locked. The exact method signatures and
+combinator list below are the pre-scheduler sketch and MUST NOT be implemented as-is.
+[`execution-scheduler.md`](execution-scheduler.md) owns the reviewed API proposal and
+the questions that must reach consensus first.
+
 **Three invariants every one of them shares**, which we adopt:
 1. **A scope owns its children** — it does not return before they finish,
    failures aggregate, cancellation propagates down. Go is the only one without,
@@ -407,17 +427,22 @@ the Swift 6 bet, and it is the differentiator.
 arenas). The `Elephc\` prefix is deliberate: no collision with PSL or any other
 library, including one running ON elephc.
 
-### Two surfaces, two handles (arbitrated: separate, less risk)
+### Two surfaces, two handles (arbitrated and locked, 2026-09-16)
 ```
 Elephc\Async      Awaitable<T>, TaskGroup, Cancellation
                   run(Closure): Awaitable, await(Awaitable): T
                   all() any() first() concurrently() series() sleep() later()
 
 Elephc\Parallel   Future<T>, TaskGroup, Channel / Sender / Receiver
-                  run(Closure, mixed ...$args): Future, join(Future): T
-                  concurrently(iterable<Closure>): array
+                  run(Closure $body): mixed
+                  TaskGroup::spawn(Closure, mixed ...$args): Future<T>
+                  Future::join(): T, Future::isComplete(): bool
 ```
 `Awaitable` ≠ `Future`, with no implicit conversion: **the type states the cost**.
+
+`Future::join()` is legal and explicitly blocks the calling OS thread. A provable call from an
+Async task warns at compile time but is not rejected. `Parallel\run()` owns the structured scope,
+waits for all children, and reports remaining failures in deterministic submission order.
 
 ### Transfer contract — REFUSED at compile time
 | Crosses | Refused, with a named error |
@@ -458,12 +483,30 @@ Separating `Awaitable` from `Future` takes await-inside-a-thread out of v1, whic
 takes fibers off the critical path:
 1. **Exceptions + stack-limit into `_rt_ctx`** — blocking: a worker that throws
    must unwind ITS chain, and its stack guard must know ITS stack.
-2. **Pool `_rt_ctx[]`** + `__rt_ctx_init`/`__rt_ctx_destroy` exported.
-3. **The transfer check in the checker** — writable and testable BEFORE any
-   thread exists, on programs that never run. An independent deliverable, and the
-   most differentiating part.
-4. `__rt_value_clone_into(dst_ctx, src)` (cycle-safe deep copy through the GC/COW
-   walkers) + staticlib bridge + an EIR `spawn` node → `Parallel\TaskGroup`.
+2. **Pool `_rt_ctx[]` + isolated handle side tables** — implemented and host-tested through
+   atomic acquire/release and the worker-entry trampoline on every executable host architecture.
+3. **The transfer check in the checker** — implemented and tested:
+   captures, deferred-call arguments, return values, nested literal arrays, callable aliases, and
+   the Cancellation exception are covered. The real Parallel AST declarations now drive both the
+   checker and execution fixtures.
+4. **Implemented for v1:** the `elephc-parallel` staticlib and versioned native byte/failure envelopes are
+   implemented and packaged; cyclic/reference-aliased arrays fail closed in the checker. Transfer
+   bytes and worker storage are native-owned and versioned; a generated worker-entry trampoline
+   installs/restores the reserved context register and exact configured thread-stack floor. Native
+   jobs now use bounded FIFO admission over the seven worker-capable context slots, create one
+   nonpersistent configured-stack thread only when admitted, skip cancelled queued work, and join
+   every admitted thread before job release. The `EPV1` value codec now validates and transfers the
+   complete v1 scalar/array/token value set without using process-global PHP unserialize state; job
+   inputs/results are fail-closed on that envelope. Typed EIR `spawn`, PHP-side codec lowering,
+   callable/capture reconstruction, Future joins, fail-fast cancellation, fatal containment, and
+   the public `Parallel\TaskGroup` execution surface are implemented and executable-tested on
+   macOS AArch64, Linux x86_64, and Linux AArch64. iOS analysis is allowed while artifact emission
+   fails closed with host-worker-contract guidance.
+
+   PHP serialize/unserialize bookkeeping is also isolated now: counters, policy, nesting, and
+   reentrant snapshot state are ctx scalars; two serialize tables and one unserialize registry are
+   worker-owned 512 KiB side tables installed by the eight-argument context acquisition ABI. This
+   removes both parser-state races before task callbacks can execute.
 5. Per-context fibers, `Parallel\Runtime`, MPSC channels — after v1.
 
 ### M2 (optional)

@@ -398,6 +398,10 @@ pub enum RuntimeFnId {
     Sqrt,
     Tan,
     Tanh,
+    ElephcAsyncFd,
+    ElephcAsyncGcCollect,
+    ElephcAsyncMonitorEvent,
+    ElephcAsyncPoll,
     ElephcObjectIsEnum,
     ElephcObjectPropCount,
     ElephcObjectPropName,
@@ -938,6 +942,21 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            RuntimeFnId::ElephcAsyncGcCollect => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits(),
+            ),
+            RuntimeFnId::ElephcAsyncMonitorEvent => crate::ir::Effects::WRITES_PROCESS,
+            RuntimeFnId::ElephcAsyncFd => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits(),
+            ),
+            RuntimeFnId::ElephcAsyncPoll => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::BLOCKING_IO.bits(),
+            ),
             // Both transfer drivers may invoke arbitrary PHP callbacks. Keep the
             // callback-capable conservative set, then preserve their typed network and
             // blocking distinctions so optimizer and monitoring consumers agree.
@@ -1322,6 +1341,17 @@ impl RuntimeFnId {
             IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy,
         };
         match self {
+            RuntimeFnId::ElephcAsyncFd | RuntimeFnId::ElephcAsyncGcCollect => {
+                MonitoringPolicy::GenericTiming
+            }
+            RuntimeFnId::ElephcAsyncMonitorEvent => MonitoringPolicy::Infrastructure {
+                reason: "publishes scheduler state transitions to an optional dormant monitor",
+            },
+            RuntimeFnId::ElephcAsyncPoll => MonitoringPolicy::Io {
+                kind: IoKind::Descriptor,
+                wait: WaitPolicy::GenericTiming,
+                trace_context: TraceContextPolicy::NotApplicable,
+            },
             RuntimeFnId::CurlEasyPerform => MonitoringPolicy::Io {
                 kind: IoKind::Network,
                 wait: WaitPolicy::Measured,
@@ -1600,6 +1630,16 @@ impl RuntimeFnId {
         )
     }
 
+    /// Returns whether this operation requires the optional Async poll adapter.
+    pub const fn uses_async_reactor_runtime(self) -> bool {
+        matches!(
+            self,
+            RuntimeFnId::ElephcAsyncFd
+                | RuntimeFnId::ElephcAsyncMonitorEvent
+                | RuntimeFnId::ElephcAsyncPoll
+        )
+    }
+
     /// Returns whether this operation requires the optional multibyte-length runtime.
     pub const fn uses_mb_strlen_runtime(self) -> bool {
         matches!(self, RuntimeFnId::MbStrlen)
@@ -1701,7 +1741,11 @@ impl RuntimeFnId {
         // for `Strpos` and `Strtr` below.
         if matches!(
             self,
-            RuntimeFnId::IntvalBase
+            RuntimeFnId::ElephcAsyncFd
+                | RuntimeFnId::ElephcAsyncGcCollect
+                | RuntimeFnId::ElephcAsyncMonitorEvent
+                | RuntimeFnId::ElephcAsyncPoll
+                | RuntimeFnId::IntvalBase
                 | RuntimeFnId::BcComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
@@ -1957,6 +2001,9 @@ impl RuntimeFnId {
                 // `value_is_scratch_string` classify the return-mode string as concat scratch and
                 // skip its release, leaking one block per `print_r($v, true)` call.
                 | RuntimeFnId::PrintR
+                // Internal prelude alias of PtrReadString: both copy foreign bytes into a fresh
+                // owned PHP string and therefore share the same non-aliasing contract.
+                | RuntimeFnId::ElephcPtrReadString
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
@@ -1981,6 +2028,11 @@ impl RuntimeFnId {
                 // temporary alive for the boxed result's whole lifetime, which leaked one
                 // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
                 | RuntimeFnId::Strstr
+                // `unserialize()` constructs a fresh scalar box or container graph from the
+                // input bytes. No returned cell can alias the serialized string, so keeping an
+                // owned wire-string temporary alive with the default MayAliasArguments policy
+                // leaks one input buffer per decode (notably every repeated Parallel join).
+                | RuntimeFnId::Unserialize
                 // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
                 // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
                 // `__rt_str_persist` — it is neither of its two argument strings. This was the
@@ -2006,6 +2058,14 @@ impl RuntimeFnId {
                 // temporary alive for the result's whole lifetime, leaking one block per
                 // `chunk_split(build())` call.
                 | RuntimeFnId::ChunkSplit
+                // Read bytes are materialized in concat reservations, not in the
+                // resource argument's Mixed cell. Retaining that argument as a
+                // possible result alias leaks its temporary resource lease.
+                | RuntimeFnId::Fread
+                // Type/class names are separate static/runtime metadata strings,
+                // not the input's value cell or object storage.
+                | RuntimeFnId::Gettype
+                | RuntimeFnId::GetClass
                 | RuntimeFnId::Decbin
                 | RuntimeFnId::Dechex
                 | RuntimeFnId::Decoct
@@ -2333,6 +2393,10 @@ impl RuntimeFnId {
             RuntimeFnId::Sqrt => "sqrt",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
+            RuntimeFnId::ElephcAsyncFd => "__elephc_async_fd",
+            RuntimeFnId::ElephcAsyncGcCollect => "__elephc_async_gc_collect",
+            RuntimeFnId::ElephcAsyncMonitorEvent => "__elephc_async_monitor_event",
+            RuntimeFnId::ElephcAsyncPoll => "__elephc_async_poll",
             RuntimeFnId::ElephcObjectIsEnum => "__elephc_object_is_enum",
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",

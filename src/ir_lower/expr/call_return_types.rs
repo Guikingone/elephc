@@ -29,6 +29,15 @@ pub(in crate::ir_lower) fn call_return_type(
 
 /// Returns the caller-visible EIR return type for a user function signature.
 pub(super) fn eir_user_function_return_type(signature: &FunctionSig) -> PhpType {
+    if !signature.declared_return
+        && signature.variadic.is_some()
+        && matches!(
+            signature.return_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+    {
+        return PhpType::Mixed;
+    }
     if signature.declared_return || !signature_has_dynamic_untyped_param(signature) {
         return signature.return_type.clone();
     }

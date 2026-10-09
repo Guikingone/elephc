@@ -712,6 +712,8 @@ fn emit_eval_runtime_callable_invoker_inline(
         label: &label,
         sig,
         captures,
+        return_is_owned: false,
+        parallel_fiber_suspend_guard: None,
     };
     abi::emit_jump(emitter, &done_label);
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);

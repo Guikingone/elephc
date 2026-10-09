@@ -360,4 +360,3 @@ pub(super) fn descriptor_entry_stack_offsets(
     }
     (offsets, next_offset)
 }
-

@@ -9,6 +9,89 @@
 
 use super::*;
 
+/// Checks a runtime-resolved callback before its user arguments are evaluated.
+///
+/// The Parallel prelude helper is a no-op for ordinary callbacks and raises the locked v1 Error
+/// only when the callback is a string, method array, or first-class closure for `Fiber::suspend`.
+pub(super) fn maybe_emit_parallel_fiber_suspend_callback_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: LoweredValue,
+    span: Span,
+) {
+    maybe_emit_parallel_fiber_suspend_callback_guard_with_pending(
+        ctx,
+        callback,
+        span,
+        &[],
+    );
+}
+
+/// Checks a runtime callback and transfers owning expression temporaries to its rejecting edge.
+pub(super) fn maybe_emit_parallel_fiber_suspend_callback_guard_with_pending(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: LoweredValue,
+    span: Span,
+    pending_values: &[crate::ir::ValueId],
+) {
+    let parallel_enabled = ctx
+        .extern_functions
+        .contains_key("elephc_parallel_parent_scope_active");
+    let async_enabled = ctx
+        .classes
+        .keys()
+        .any(|name| php_symbol_key(name) == "elephc\\async\\__scheduler");
+    let guard = if parallel_enabled {
+        Some("Elephc\\Parallel\\TaskGroup::__assertFiberSuspendCallableGuard")
+    } else if async_enabled {
+        Some("Elephc\\Async\\__Scheduler::__assertFiberSuspendCallableGuard")
+    } else {
+        None
+    };
+    if let Some(guard) = guard {
+        let guard = ctx.intern_string(guard);
+        let mut cleanup_values = pending_values
+            .iter()
+            .copied()
+            .filter(|value| {
+                callback_guard_value_is_owned_temporary(
+                    ctx,
+                    LoweredValue {
+                        value: *value,
+                        ir_type: ctx.builder.value_type(*value),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        if callback_guard_value_is_owned_temporary(ctx, callback) {
+            cleanup_values.push(callback.value);
+        }
+        let mut operands = Vec::with_capacity(1 + cleanup_values.len());
+        operands.push(callback.value);
+        operands.extend(cleanup_values);
+        ctx.emit_void(
+            Op::StaticMethodCall,
+            operands,
+            Some(Immediate::Data(guard)),
+            Op::StaticMethodCall.default_effects(),
+            Some(span),
+        );
+    }
+}
+
+/// Distinguishes expression-owned temps from loads whose local slot still owns the value.
+fn callback_guard_value_is_owned_temporary(
+    ctx: &LoweringContext<'_, '_>,
+    value: LoweredValue,
+) -> bool {
+    if matches!(
+        ctx.builder.value_defining_op(value.value),
+        Some(Op::LoadLocal | Op::LoadGlobal | Op::LoadStaticLocal | Op::LoadRefCell)
+    ) {
+        return false;
+    }
+    ctx.value_is_owning_temporary(value)
+}
+
 /// Lowers `call_user_func*` for receiver-bound first-class callables through `expr_call`.
 pub(super) fn lower_instance_callable_call_user_func(
     ctx: &mut LoweringContext<'_, '_>,
@@ -24,7 +107,7 @@ pub(super) fn lower_instance_callable_call_user_func(
     Some(ctx.emit_value(
         Op::ExprCall,
         operands,
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -46,7 +129,15 @@ pub(super) fn lower_dynamic_call_user_func(
     }
     let signature = callable_descriptor_signature_for_expr(ctx, &args[0]);
     let callback = lower_expr(ctx, &args[0]);
-    if descriptor_callback_php_type_supported(&ctx.builder.value_php_type(callback.value).codegen_repr()) {
+    let descriptor_supported =
+        descriptor_callback_php_type_supported(&ctx.builder.value_php_type(callback.value).codegen_repr());
+    if !descriptor_supported
+        && (crate::types::call_args::has_named_args(&args[1..])
+            || args[1..].iter().any(is_spread_arg))
+    {
+        return None;
+    }
+    if descriptor_supported {
         return lower_call_user_func_descriptor_invoke_from_value(
             ctx,
             callback,
@@ -55,16 +146,14 @@ pub(super) fn lower_dynamic_call_user_func(
             expr,
         );
     }
-    if crate::types::call_args::has_named_args(&args[1..]) || args[1..].iter().any(is_spread_arg) {
-        return None;
-    }
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, callback, expr.span);
     let mut operands = Vec::with_capacity(args.len());
     operands.push(callback.value);
     operands.extend(lower_args(ctx, &args[1..]));
     Some(ctx.emit_value(
         Op::ExprCall,
         operands,
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         PhpType::Mixed,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -89,6 +178,7 @@ pub(super) fn lower_dynamic_call_user_func_array(
     }
     let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
     let callback = lower_expr(ctx, callback_expr);
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, callback, expr.span);
     let arg_array = lower_descriptor_invoker_arg_array_for_call_user_func_array(
         ctx,
         arg_array_expr,
@@ -316,6 +406,7 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     sig: Option<&FunctionSig>,
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, callback, expr.span);
     let arg_container = lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span)?;
     let result_type = sig
         .map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
@@ -337,10 +428,37 @@ pub(super) fn emit_callable_descriptor_invoke(
     result_type: PhpType,
     span: Span,
 ) -> LoweredValue {
+    let container_type = ctx.builder.value_php_type(arg_container.value).codegen_repr();
+    let normalized = match &container_type {
+        PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed => Some((
+            Op::ArrayToMixed, PhpType::Array(Box::new(PhpType::Mixed)),
+        )),
+        PhpType::AssocArray { key, value } if value.codegen_repr() != PhpType::Mixed => Some((
+            Op::HashToMixed, PhpType::AssocArray { key: key.clone(), value: Box::new(PhpType::Mixed) },
+        )),
+        _ => None,
+    };
+    let arg_container = if let Some((op, target)) = normalized {
+        let input = if ctx.value_is_owning_temporary(arg_container) {
+            arg_container
+        } else {
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, arg_container, Some(span))
+        };
+        ctx.emit_value(op, vec![input.value], None, target, op.default_effects(), Some(span))
+    } else {
+        arg_container
+    };
+    let arg_container = if matches!(container_type, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        // Transfer raw-container temporaries before calling user code. A hidden backend box
+        // cannot release EIR's original owner when a descriptor's callable throws past it.
+        ctx.box_value_as_mixed(arg_container, PhpType::Mixed, Some(span))
+    } else {
+        arg_container
+    };
     let result = ctx.emit_value(
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         result_type,
         Op::CallableDescriptorInvoke.default_effects(),
         Some(span),

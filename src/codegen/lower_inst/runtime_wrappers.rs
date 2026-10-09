@@ -15,7 +15,20 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
+    emit_runtime_callable_invoker_inline_with_return_ownership(ctx, sig, captures, false)
+}
+
+/// Emits a descriptor invoker whose boxed result may consume a proven owned return.
+pub(super) fn emit_runtime_callable_invoker_inline_with_return_ownership(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    return_is_owned: bool,
+) -> String {
+    if let Some(label) = ctx
+        .shared
+        .runtime_callable_invoker(sig, captures, return_is_owned)
+    {
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
@@ -24,6 +37,8 @@ pub(super) fn emit_runtime_callable_invoker_inline(
         label: &label,
         sig,
         captures,
+        return_is_owned,
+        parallel_fiber_suspend_guard: parallel_fiber_suspend_guard(ctx),
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
     // enclosing function back before continuing it, or its tail lands in there.
@@ -33,8 +48,46 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, &label);
+        .cache_runtime_callable_invoker(sig, captures, return_is_owned, &label);
     label
+}
+
+/// Returns the TaskGroup error entry when the Parallel prelude is present in this module.
+fn parallel_fiber_suspend_guard(
+    ctx: &FunctionContext<'_>,
+) -> Option<(u64, String)> {
+    if !ctx.module.required_runtime_features.parallel_execution {
+        return None;
+    }
+    ctx.module
+        .class_infos
+        .iter()
+        .find(|(name, _)| crate::names::php_symbol_key(name) == "elephc\\parallel\\taskgroup")
+        .filter(|(name, _)| {
+            ctx.module.class_methods.iter().any(|function| {
+                function.flags.is_static
+                    && function
+                        .name
+                        .rsplit_once("::")
+                        .is_some_and(|(class, method)| {
+                            crate::names::php_symbol_key(class)
+                                == crate::names::php_symbol_key(name)
+                                && crate::names::php_symbol_key(method)
+                                    == crate::names::php_symbol_key(
+                                        "__assertFiberSuspendAllowed",
+                                    )
+                        })
+            })
+        })
+        .map(|(name, info)| {
+            (
+                info.class_id,
+                crate::names::static_method_symbol(
+                    name,
+                    &crate::names::php_symbol_key("__assertFiberSuspendAllowed"),
+                ),
+            )
+        })
 }
 
 /// Emits a synthetic EIR builtin wrapper so callable descriptors can use the PHP ABI.

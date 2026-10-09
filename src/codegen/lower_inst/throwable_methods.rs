@@ -277,7 +277,7 @@ pub(super) fn lower_throwable_get_previous(
                     .instruction(&format!("mov {}, x0", result_reg)); // restore result register
             }
             if result_is_mixed {
-                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &object_ty);
             }
             ctx.emitter
                 .instruction(&format!("b {}", done_label)); // skip null materialization
@@ -306,7 +306,7 @@ pub(super) fn lower_throwable_get_previous(
                     .instruction(&format!("mov {}, rax", result_reg)); // restore result register
             }
             if result_is_mixed {
-                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &object_ty);
             }
             ctx.emitter
                 .instruction(&format!("jmp {}", done_label)); // skip null materialization

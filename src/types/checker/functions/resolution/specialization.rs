@@ -212,9 +212,7 @@ impl Checker {
             if seen_idx < regular_param_count && actual_ty == PhpType::Callable {
                 if let Some((param_name, _)) = param_types.get(seen_idx) {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
-                        let key = (name.to_string(), param_name.clone());
-                        if self.callable_param_sigs.get(&key) != Some(&sig) {
-                            self.callable_param_sigs.insert(key, sig);
+                        if self.record_callable_param_sig(name, param_name, sig) {
                             changed = true;
                         }
                     }
@@ -223,9 +221,7 @@ impl Checker {
             if seen_idx < regular_param_count && is_callable_array_type(&actual_ty) {
                 if let Some((param_name, _)) = param_types.get(seen_idx) {
                     if let Some(sig) = self.resolve_expr_callable_array_sig(arg, caller_env)? {
-                        let key = (name.to_string(), param_name.clone());
-                        if self.callable_param_sigs.get(&key) != Some(&sig) {
-                            self.callable_param_sigs.insert(key, sig);
+                        if self.record_callable_param_sig(name, param_name, sig) {
                             changed = true;
                         }
                     }

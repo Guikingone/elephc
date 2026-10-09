@@ -10,9 +10,9 @@
 
 use super::*;
 
-/// Native descriptor-invoker ABI registered by generated code for AOT functions.
+/// ABI v3 native invoker: explicit physical binding policy (0 weak, 1 strict).
 pub type NativeFunctionInvoker =
-    unsafe extern "C" fn(*mut c_void, *mut RuntimeCell) -> *mut RuntimeCell;
+    unsafe extern "C" fn(*mut c_void, *mut RuntimeCell, u64) -> *mut RuntimeCell;
 
 /// Snapshot of eval execution stacks used to restore caller-sensitive access checks.
 #[derive(Debug, Clone, PartialEq, Eq)]

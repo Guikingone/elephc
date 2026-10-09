@@ -258,6 +258,7 @@ impl FakeOps {
 pub(super) unsafe extern "C" fn fake_native_return_descriptor(
     descriptor: *mut c_void,
     _args: *mut RuntimeCell,
+    _binding_policy: u64,
 ) -> *mut RuntimeCell {
     descriptor.cast()
 }

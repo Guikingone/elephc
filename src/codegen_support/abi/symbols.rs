@@ -107,6 +107,13 @@ pub fn emit_load_symbol_to_local_slot(
 /// addressing on x86_64.  The symbol must be defined in the current module's
 /// data section.
 pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
+    // Large handle side tables are owned alongside each arena. Their ctx field
+    // stores the table POINTER, whereas ordinary per-context symbols live inline
+    // and use `emit_ctx_address` below.
+    if let Some(field) = ctx::per_context_pointer_symbol_offset(emitter, symbol) {
+        ctx::emit_ctx_load(emitter, dest, field);
+        return;
+    }
     // PER-CONTEXT ROUTING. A ctx build serves this family out of `_rt_ctx` instead of a
     // process-global symbol, so a second execution context gets its own. The check sits
     // here rather than at the call sites because that is the whole point: 300 call sites
@@ -379,6 +386,12 @@ pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offse
 /// a push/pop. On AArch64 the immediate is materialized in x10 and stored
 /// through x9 (both clobbered).
 pub fn emit_store_imm_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset: usize, imm: i64) {
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        let scratch = symbol_scratch_reg(emitter);
+        emit_load_int_immediate(emitter, scratch, imm);
+        ctx::emit_ctx_store(emitter, scratch, field + byte_offset);
+        return;
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_symbol_address(emitter, "x9", symbol); // resolve the symbol address into the x9 scratch register
@@ -450,6 +463,13 @@ pub fn emit_cmp_reg_to_symbol(emitter: &mut Emitter, reg: &str, symbol: &str) {
 /// counter is loaded through x9/x10 (both clobbered), decremented, and stored
 /// back.
 pub fn emit_dec_symbol(emitter: &mut Emitter, symbol: &str) {
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        if emitter.target.arch == Arch::X86_64 {
+            let ctx_reg = ctx::ctx_reg(emitter);
+            emitter.instruction(&format!("dec QWORD PTR [{} + {}]", ctx_reg, field)); // decrement this context's counter
+            return;
+        }
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_symbol_address(emitter, "x9", symbol); // resolve the symbol address into the x9 scratch register

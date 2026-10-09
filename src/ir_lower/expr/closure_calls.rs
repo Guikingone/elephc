@@ -23,27 +23,36 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
             return value;
         }
     }
-    let callable = ctx.load_local(var, Some(expr.span));
-    let result_type = result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
     if instance_signature.is_none() {
-        if let Some(arg_container) =
-            lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-        {
-            return emit_callable_descriptor_invoke(
-                ctx,
-                callable,
-                arg_container,
-                result_type,
-                expr.span,
-            );
+        if let Some(signature) = ctx.callable_param_signature(var).cloned() {
+            result_type = Some(signature.return_type.clone());
+            instance_signature = Some(signature);
         }
     }
+    let callable = ctx.load_local(var, Some(expr.span));
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, callable, expr.span);
+    let result_type = result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+    // An unresolved runtime descriptor consumes SOURCE arguments. The descriptor's invoker
+    // performs default/named/variadic binding exactly once; pre-packing a known callable
+    // parameter's variadic collector here would pass that collector as one ordinary argument.
+    let arg_container = if instance_signature.is_some() {
+        lower_descriptor_invoker_arg_container_for_call_user_func(
+            ctx, args, instance_signature.as_ref(), expr.span,
+        ).or_else(|| lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span))
+    } else {
+        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+    };
+    if let Some(arg_container) = arg_container {
+        return emit_callable_descriptor_invoke(
+            ctx, callable, arg_container, result_type, expr.span,
+        );
+    }
     let mut operands = vec![callable.value];
-    operands.extend(lower_args_with_signature(ctx, instance_signature.as_ref(), args));
+    operands.extend(lower_args_with_eir_signature(ctx, instance_signature.as_ref(), args));
     ctx.emit_value(
         Op::ClosureCall,
         operands,
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         result_type,
         Op::ClosureCall.default_effects(),
         Some(expr.span),
@@ -120,6 +129,12 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     // drives the call instead of the generic descriptor-invoke path, which cannot return
     // every result type.
     if let Some(target) = ctx.take_pending_static_callable_result() {
+        if ctx.builder.value_defining_op(lowered_callee.value) == Some(Op::ClosureNew)
+            && matches!(&target, StaticCallableBinding::Closure { captures, .. }
+                if captures.iter().all(|capture| !capture.by_ref))
+        {
+            return super::static_closure_lifetime::invoke(ctx, lowered_callee, target, args, expr);
+        }
         if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
             return value;
         }
@@ -141,7 +156,7 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     ctx.emit_value(
         Op::ExprCall,
         operands,
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -286,4 +301,3 @@ pub(super) fn terminate_dynamic_method_call_on_null(
     );
     ctx.builder.terminate(Terminator::Unreachable);
 }
-

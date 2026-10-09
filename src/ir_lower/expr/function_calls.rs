@@ -77,25 +77,39 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     let extension_builtin = source_prefers_extension_builtin(canonical);
-    let sig = call_signature(ctx, canonical, extension_builtin);
-    let is_extern = ctx.extern_functions.contains_key(canonical);
-    let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
-    let operands = if is_extern || is_user_function {
+    // Synthetic EIR bodies are constructed after name resolution, so their generated `Name`
+    // nodes can retain a root marker or non-canonical casing. Match known extern/user names by
+    // PHP symbol key before deciding whether this is a builtin fallback.
+    let requested = canonical.trim_start_matches('\\');
+    let extern_name = lookup_folded_name(ctx.extern_functions.keys(), requested);
+    let user_name = (!extension_builtin)
+        .then(|| lookup_folded_name(ctx.functions.keys(), requested))
+        .flatten();
+    let callee = extern_name
+        .as_deref()
+        .or(user_name.as_deref())
+        .unwrap_or(canonical);
+    let sig = call_signature(ctx, callee, extension_builtin);
+    let is_extern = extern_name.is_some();
+    let is_user_function = user_name.is_some();
+    let operands = if is_user_function {
+        lower_args_with_eir_user_function_signature(ctx, callee, sig.as_ref(), args)
+    } else if is_extern {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
-        lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
+        lower_builtin_call_args(ctx, callee, sig.as_ref(), args)
     };
     let php_type = if is_extern || is_user_function {
-        call_return_type(ctx, canonical, &operands)
+        call_return_type(ctx, callee, &operands)
     } else if let Some(php_type) =
-        registry_builtin_result_type(ctx, canonical, args, &operands, expr.span)
+        registry_builtin_result_type(ctx, callee, args, &operands, expr.span)
     {
         php_type
     } else {
-        call_return_type(ctx, canonical, &operands)
+        call_return_type(ctx, callee, &operands)
     };
     if is_extern {
-        let data = ctx.intern_function_name(canonical);
+        let data = ctx.intern_function_name(callee);
         let call = ctx.emit_value(
             Op::ExternCall,
             operands.clone(),
@@ -117,13 +131,29 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return call;
     }
     if is_user_function {
-        let data = ctx.intern_function_name(canonical);
+        if matches!(
+            php_symbol_key(canonical.trim_start_matches('\\')).as_str(),
+            "elephc\\async\\run" | "elephc\\parallel\\run"
+        ) {
+            return lower_exception_safe_user_call(
+                ctx,
+                callee,
+                operands,
+                php_type,
+                sig.as_ref(),
+                expr,
+            );
+        }
+        if call_has_owning_temporary_arg(ctx, &operands) {
+            return lower_exception_safe_user_call(ctx, callee, operands, php_type, sig.as_ref(), expr);
+        }
+        let data = ctx.intern_function_name(callee);
         let call = ctx.emit_value(
             Op::Call,
             operands.clone(),
             Some(Immediate::Data(data)),
             php_type,
-            effects_lookup::user_call_effects(canonical),
+            effects_lookup::user_call_effects(callee),
             Some(expr.span),
         );
         // Plain user calls release owned argument temporaries the same way method and
@@ -163,6 +193,199 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
 }
 
+/// Returns whether a user call needs a cleanup handler for an owning argument temporary.
+pub(super) fn call_has_owning_temporary_arg(
+    ctx: &LoweringContext<'_, '_>,
+    operands: &[crate::ir::ValueId],
+) -> bool {
+    operands.iter().any(|value| {
+        let php_type = ctx.builder.value_php_type(*value);
+        ctx.value_is_owning_temporary(LoweredValue {
+            value: *value,
+            ir_type: value_ir_type(&php_type),
+        })
+    })
+}
+
+/// Lowers a user call with symmetric call-argument cleanup on throw.
+///
+/// A caller-owned closure, array, string, or Mixed box can be a temporary. Ordinary post-call
+/// cleanup cannot execute when a user callee throws through `longjmp`, so a tiny internal handler
+/// releases those argument owners before rethrowing the current exception. The successful path
+/// performs the same cleanup and moves non-void results through an owned hidden temporary so both
+/// control-flow edges preserve the ordinary call contract.
+pub(super) fn lower_exception_safe_user_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType,
+    signature: Option<&FunctionSig>,
+    expr: &Expr,
+) -> LoweredValue {
+    if matches!(&php_type, PhpType::Void) {
+        return lower_exception_safe_void_user_call(ctx, canonical, operands, php_type, signature, expr);
+    }
+    let handler = ctx
+        .builder
+        .create_named_block("structured.run.call_cleanup", Vec::new());
+    let after = ctx
+        .builder
+        .create_named_block("structured.run.call_after", Vec::new());
+    let handler_token = handler.as_raw() as i64;
+    let result_temp = ctx.declare_owned_hidden_temp(php_type.clone());
+    let return_alias = ctx.return_alias_summaries.function(canonical).cloned()
+        .unwrap_or(ReturnArgAlias::Unknown);
+    ctx.emit_void(
+        Op::TryPushHandler,
+        Vec::new(),
+        Some(Immediate::I64(handler_token)),
+        Op::TryPushHandler.default_effects(),
+        Some(expr.span),
+    );
+    let data = ctx.intern_function_name(canonical);
+    let call = ctx.emit_value(
+        Op::Call,
+        operands.clone(),
+        Some(Immediate::Data(data)),
+        php_type.clone(),
+        effects_lookup::user_call_effects(canonical),
+        Some(expr.span),
+    );
+    store_value_into_temp(
+        ctx,
+        &result_temp,
+        php_type,
+        call,
+        expr.span,
+    );
+    release_owned_call_arg_temporaries_with_signature(
+        ctx,
+        &operands,
+        Some(call.value),
+        &return_alias,
+        signature,
+        expr.span,
+    );
+    emit_structured_run_call_handler_pop(ctx, handler_token, expr.span);
+    branch_to(ctx, after);
+
+    ctx.builder.position_at_end(handler);
+    ctx.clear_static_callable_locals();
+    emit_structured_run_call_handler_pop(ctx, handler_token, expr.span);
+    release_owned_call_arg_temporaries_with_signature(
+        ctx,
+        &operands,
+        None,
+        &ReturnArgAlias::None,
+        signature,
+        expr.span,
+    );
+    // The cleanup handler rethrows rather than observes the exception. Take the runtime slot's
+    // owner before transferring it into the terminator; borrowing with `CatchCurrent` leaves a
+    // second owner behind whenever a structured Async/Parallel root propagates a failure.
+    let current = ctx.emit_owned_value(
+        Op::CatchBind,
+        Vec::new(),
+        None,
+        PhpType::Object("Throwable".to_string()),
+        Op::CatchBind.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::Throw {
+        value: current.value,
+    });
+
+    ctx.builder.position_at_end(after);
+    ctx.clear_static_callable_locals();
+    take_owned_temp(ctx, &result_temp, expr.span)
+}
+
+/// Lowers a void user call with argument cleanup on both the return and throw paths.
+fn lower_exception_safe_void_user_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType,
+    signature: Option<&FunctionSig>,
+    expr: &Expr,
+) -> LoweredValue {
+    let handler = ctx
+        .builder
+        .create_named_block("user.call_cleanup", Vec::new());
+    let after = ctx
+        .builder
+        .create_named_block("user.call_after", Vec::new());
+    let handler_token = handler.as_raw() as i64;
+    ctx.emit_void(
+        Op::TryPushHandler,
+        Vec::new(),
+        Some(Immediate::I64(handler_token)),
+        Op::TryPushHandler.default_effects(),
+        Some(expr.span),
+    );
+    let data = ctx.intern_function_name(canonical);
+    let call = ctx.emit_value(
+        Op::Call,
+        operands.clone(),
+        Some(Immediate::Data(data)),
+        php_type,
+        effects_lookup::user_call_effects(canonical),
+        Some(expr.span),
+    );
+    release_owned_call_arg_temporaries_with_signature(
+        ctx,
+        &operands,
+        Some(call.value),
+        &ReturnArgAlias::None,
+        signature,
+        expr.span,
+    );
+    emit_structured_run_call_handler_pop(ctx, handler_token, expr.span);
+    branch_to(ctx, after);
+
+    ctx.builder.position_at_end(handler);
+    ctx.clear_static_callable_locals();
+    emit_structured_run_call_handler_pop(ctx, handler_token, expr.span);
+    release_owned_call_arg_temporaries_with_signature(
+        ctx,
+        &operands,
+        None,
+        &ReturnArgAlias::None,
+        signature,
+        expr.span,
+    );
+    let current = ctx.emit_owned_value(
+        Op::CatchBind,
+        Vec::new(),
+        None,
+        PhpType::Object("Throwable".to_string()),
+        Op::CatchBind.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::Throw {
+        value: current.value,
+    });
+
+    ctx.builder.position_at_end(after);
+    ctx.clear_static_callable_locals();
+    call
+}
+
+/// Pops the synthetic handler installed around one structured `run()` call.
+fn emit_structured_run_call_handler_pop(
+    ctx: &mut LoweringContext<'_, '_>,
+    handler_token: i64,
+    span: Span,
+) {
+    ctx.emit_void(
+        Op::TryPopHandler,
+        Vec::new(),
+        Some(Immediate::I64(handler_token)),
+        Op::TryPopHandler.default_effects(),
+        Some(span),
+    );
+}
+
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 pub(super) fn emit_builtin_call_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -174,6 +397,17 @@ pub(super) fn emit_builtin_call_value(
 ) -> LoweredValue {
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
+            let cleanup = if call_has_owning_temporary_arg(ctx, &operands) {
+                let handler = ctx.builder.create_named_block("builtin.arg_cleanup", Vec::new());
+                let after = ctx.builder.create_named_block("builtin.arg_after", Vec::new());
+                ctx.emit_void(
+                    Op::TryPushHandler, Vec::new(), Some(Immediate::I64(handler.as_raw() as i64)),
+                    Op::TryPushHandler.default_effects(), Some(span),
+                );
+                Some((handler, after))
+            } else {
+                None
+            };
             let lowered = crate::builtins::semantics::lower_registry_call(
                 ctx,
                 def,
@@ -194,6 +428,16 @@ pub(super) fn emit_builtin_call_value(
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
+            let result_temp = cleanup.and_then(|_| {
+                if call.ir_type == IrType::Void {
+                    None
+                } else {
+                    let result_type = ctx.builder.value_php_type(call.value);
+                    let temp = ctx.declare_owned_hidden_temp(result_type.clone());
+                    store_value_into_temp(ctx, &temp, result_type, call, span);
+                    Some(temp)
+                }
+            });
             let return_alias = match def.spec.semantics.result_ownership {
                 crate::builtins::semantics::BuiltinResultOwnership::NonHeap
                 | crate::builtins::semantics::BuiltinResultOwnership::Fresh
@@ -215,6 +459,22 @@ pub(super) fn emit_builtin_call_value(
                 &return_alias,
                 span,
             );
+            if let Some((handler, after)) = cleanup {
+                emit_structured_run_call_handler_pop(ctx, handler.as_raw() as i64, span);
+                branch_to(ctx, after);
+                ctx.builder.position_at_end(handler);
+                emit_structured_run_call_handler_pop(ctx, handler.as_raw() as i64, span);
+                release_owned_call_arg_temporaries(ctx, &operands, None, &ReturnArgAlias::None, span);
+                let current = ctx.emit_owned_value(
+                    Op::CatchBind, Vec::new(), None, PhpType::Object("Throwable".to_string()),
+                    Op::CatchBind.default_effects(), Some(span),
+                );
+                ctx.builder.terminate(Terminator::Throw { value: current.value });
+                ctx.builder.position_at_end(after);
+                if let Some(temp) = result_temp {
+                    return take_owned_temp(ctx, &temp, span);
+                }
+            }
             return call;
         }
     }

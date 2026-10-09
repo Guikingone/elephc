@@ -65,6 +65,8 @@ fn check_source_with_defines_and_options(
     // prelude-declared functions report `Undefined function` instead of their real
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let ast = elephc::async_prelude::inject_if_used(ast, true, &mut prelude_inventory);
+    let ast = elephc::parallel_prelude::inject_if_used(ast, true, &mut prelude_inventory);
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -84,6 +86,8 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = parse(&tokens)?;
     let ast = elephc::autoload::collect_aliases(ast);
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let ast = elephc::async_prelude::inject_if_used(ast, true, &mut prelude_inventory);
+    let ast = elephc::parallel_prelude::inject_if_used(ast, true, &mut prelude_inventory);
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -279,6 +283,10 @@ mod string_builtins;
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]
 mod array_builtins;
+#[path = "error_tests/async_scheduler.rs"]
+mod async_scheduler;
+#[path = "error_tests/parallel_transfer.rs"]
+mod parallel_transfer;
 #[path = "error_tests/callables.rs"]
 mod callables;
 #[path = "error_tests/never.rs"]

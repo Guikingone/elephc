@@ -57,7 +57,7 @@ use crate::codegen_support::platform::Arch;
 /// `heap_size` bytes: one slot per 16-byte granule, plus two slots of slack so the
 /// last granule of a full heap is always addressable.
 pub(crate) fn object_handle_index_slots(heap_size: usize) -> usize {
-    heap_size / 16 + 2
+    elephc_parallel_contract::object_handle_index_slots(heap_size)
 }
 
 /// Returns the number of `u32` slots in `_obj_handle_free` for a heap of
@@ -65,7 +65,7 @@ pub(crate) fn object_handle_index_slots(heap_size: usize) -> usize {
 /// the number of distinct handles and the deepest possible free stack — is bounded
 /// by `heap_size / 24` because the smallest object block is 24 bytes.
 pub(crate) fn object_handle_free_slots(heap_size: usize) -> usize {
-    heap_size / 24 + 16
+    elephc_parallel_contract::object_handle_free_slots(heap_size)
 }
 
 /// Emits `__rt_object_handle_acquire`, `__rt_object_handle_of` and

@@ -58,8 +58,17 @@ pub(super) fn lower_named_args_with_signature_options(
         return lower_args(ctx, &normalized);
     }
     let mut source_values = Vec::with_capacity(plan.source_args.len());
-    for source_arg in &plan.source_args {
-        source_values.push(lower_call_source_arg(ctx, source_arg));
+    for (source_index, source_arg) in plan.source_args.iter().enumerate() {
+        let value = lower_call_source_arg(ctx, source_arg);
+        let param_index = plan.source_values.iter()
+            .find(|value| value.source_index() == source_index)
+            .and_then(|value| value.param_idx())
+            .unwrap_or(regular_param_count);
+        let by_ref = sig.ref_params.get(param_index).copied().unwrap_or(false);
+        source_values.push(snapshot_call_argument(
+            ctx, LoweredValue { value, ir_type: ctx.builder.value_type(value) },
+            by_ref, source_arg.span,
+        ));
     }
 
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
@@ -77,6 +86,7 @@ pub(super) fn lower_named_args_with_signature_options(
         }
     }
     if sig.variadic.is_some() {
+        operands = coerce_operands_to_params(ctx, sig, operands);
         operands.push(lower_named_variadic_tail_array(ctx, sig, &plan.source_values, &source_values).value);
     }
     operands

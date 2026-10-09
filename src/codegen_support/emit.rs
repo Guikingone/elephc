@@ -67,7 +67,7 @@ impl Emitter {
             platform: target.platform,
             pic_data_refs: false,
             cdylib_boundary: false,
-            ctx_register: false,
+            ctx_register: true,
             dead_strip: false,
             internal_labels: HashSet::new(),
             current_text_section: None,

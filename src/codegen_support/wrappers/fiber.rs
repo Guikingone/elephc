@@ -113,18 +113,22 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emit_box_descriptor_start_arg_array(emitter, "x22", "x1");
 
     emitter.instruction("mov x25, x1");                                         // keep the boxed argument array alive across the descriptor invocation
+    emitter.instruction(&format!("str x25, [x19, #{}]", runtime::FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // park the argument box where Fiber escape cleanup can reach it
     emitter.instruction("mov x0, x20");                                         // pass callable descriptor as invoker argument 1
     callable_descriptor::emit_load_invoker_from_descriptor(emitter, "x24", "x20");
     emitter.instruction(&format!("cbz x24, {}", missing_label));                // reject descriptors that do not expose the uniform invoker slot
     emitter.instruction("mov x1, x25");                                         // pass boxed start-argument array as invoker argument 2
+    crate::codegen_support::callable_descriptor::emit_invoker_binding_policy(emitter, false);
     emitter.instruction("blr x24");                                             // invoke descriptor adapter; x0 = boxed Mixed return value
     emitter.instruction("mov x24, x0");                                         // preserve the Fiber callback return while releasing the argument container
+    emitter.instruction(&format!("str xzr, [x19, #{}]", runtime::FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // normal return resumes ownership cleanup in this wrapper
     emitter.instruction("mov x0, x25");                                         // move the boxed argument container into the decref helper input
     emitter.instruction("bl __rt_decref_mixed");                                // release the temporary boxed argument container
     emitter.instruction("mov x0, x24");                                         // restore the callback return value for __rt_fiber_entry
     emitter.instruction(&format!("b {}", return_label));                        // skip the missing-invoker diagnostic path
 
     emitter.label(&missing_label);
+    emitter.instruction(&format!("str xzr, [x19, #{}]", runtime::FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // missing-invoker path releases the parked box itself
     emitter.instruction("mov x0, x25");                                         // move the boxed argument container into the decref helper before throwing
     emitter.instruction("bl __rt_decref_mixed");                                // release the temporary boxed argument container on the error path
     abi::emit_symbol_address(emitter, "x0", "_fiber_msg_unsupported_callable"); // x0 = pointer to the unsupported-callable diagnostic
@@ -236,19 +240,23 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emit_box_descriptor_start_arg_array(emitter, "r15", "rsi");
 
     emitter.instruction("mov rbx, rsi");                                        // keep the boxed argument array alive across the descriptor invocation
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rbx", runtime::FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // park the argument box where Fiber escape cleanup can reach it
     emitter.instruction("mov rdi, r13");                                        // pass callable descriptor as invoker argument 1
     callable_descriptor::emit_load_invoker_from_descriptor(emitter, "r10", "r13");
     emitter.instruction(&format!("test r10, r10"));                             // check whether the descriptor exposes a uniform invoker slot
     emitter.instruction(&format!("je {}", missing_label));                      // reject descriptors that cannot be called through the generic path
     emitter.instruction("mov rsi, rbx");                                        // pass boxed start-argument array as invoker argument 2
+    crate::codegen_support::callable_descriptor::emit_invoker_binding_policy(emitter, false);
     emitter.instruction("call r10");                                            // invoke descriptor adapter; rax = boxed Mixed return value
     emitter.instruction("mov r15, rax");                                        // preserve the Fiber callback return while releasing the argument container
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", runtime::FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // normal return resumes ownership cleanup in this wrapper
     emitter.instruction("mov rax, rbx");                                        // move the boxed argument container into the decref helper input
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary boxed argument container
     emitter.instruction("mov rax, r15");                                        // restore the callback return value for __rt_fiber_entry
     emitter.instruction(&format!("jmp {}", return_label));                      // skip the missing-invoker diagnostic path
 
     emitter.label(&missing_label);
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", runtime::FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // missing-invoker path releases the parked box itself
     emitter.instruction("mov rax, rbx");                                        // move the boxed argument container into the decref helper before throwing
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary boxed argument container on the error path
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_unsupported_callable"); // rdi = pointer to the unsupported-callable diagnostic

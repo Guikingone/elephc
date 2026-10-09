@@ -304,6 +304,7 @@ fn validate_instruction_immediate(
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
+        StringBindingAccepted => require_immediate(inst_id, inst, "strict binding bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
@@ -313,6 +314,7 @@ fn validate_instruction_immediate(
         | EnumBackingMixedToInt
         | PackedFieldMixedToInt
         | ReturnBoundaryMixedToInt
+        | StringArgumentGuard | StrictStringArgumentGuard
         | PropInitialized
         | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {
@@ -433,6 +435,7 @@ fn validate_opcode_rules(
         }
         EvalScopeSet => check_count(inst_id, inst, 2, "2"),
         ClosureNew => Ok(()),
+        ParallelSpawn => check_count(inst_id, inst, 1, "1"),
         FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
         EvalStaticMethodCall => Ok(()),
@@ -498,6 +501,7 @@ fn validate_opcode_rules(
         | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
+        StringArgumentGuard | StrictStringArgumentGuard | StringBindingAccepted => check_count(inst_id, inst, 1, "1"),
         ReleaseUnlessAliases => {
             check_count(inst_id, inst, 2, "2")
         }

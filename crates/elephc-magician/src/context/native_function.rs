@@ -175,6 +175,8 @@ impl NativeFunction {
     /// `arg_array` must be a boxed Mixed indexed array whose elements are boxed
     /// Mixed cells following the descriptor-invoker ABI.
     pub unsafe fn call(&self, arg_array: RuntimeCellHandle) -> RuntimeCellHandle {
-        RuntimeCellHandle::from_raw((self.invoker)(self.descriptor, arg_array.as_ptr()))
+        // Eval has already bound these values according to its caller policy.
+        // Do not apply a second strict coercion to normalized native operands.
+        RuntimeCellHandle::from_raw((self.invoker)(self.descriptor, arg_array.as_ptr(), 0))
     }
 }

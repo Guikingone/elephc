@@ -123,6 +123,10 @@ pub(super) fn lower_closure_with_context(
     let mut capture_params = Vec::with_capacity(captures.len());
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
+        let ref_cell_must_be_mixed = by_ref
+            && ctx
+                .ref_cell_mixed_locals
+                .contains(&(ctx.loop_storage_scope.clone(), capture.clone()));
         let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
             // Top-level closure: no enclosing `$this`. Start with a null receiver
             // that `Closure::bind` overwrites; `Mixed` so members dispatch at
@@ -131,7 +135,7 @@ pub(super) fn lower_closure_with_context(
         } else {
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
-            } else if by_ref && body_contains_eval {
+            } else if by_ref && (ref_cell_must_be_mixed || body_contains_eval) {
                 ctx.set_local_type(capture, PhpType::Mixed);
                 Some(PhpType::Mixed)
             } else if by_ref && body_writes_local(body, capture) {
@@ -152,18 +156,38 @@ pub(super) fn lower_closure_with_context(
                 .unwrap_or_else(|| ctx.builder.value_php_type(captured.value));
             (captured, php_type)
         };
+        // A by-value Mixed capture is a snapshot, not another reference to the source zval.
+        // Keep its owner in an ordinary private slot so static-call capture operands are
+        // borrowed loads, not already-released owning temporaries. The descriptor also
+        // retains it, allowing the closure to outlive this frame.
+        let captured = if !by_ref
+            && matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        {
+            let snapshot = format!("{}#capture{}", capture, ctx.builder.value_count());
+            ctx.store_local(&snapshot, captured, php_type.clone(), Some(expr.span));
+            ctx.load_local(&snapshot, Some(expr.span))
+        } else {
+            captured
+        };
         let immediate = by_ref.then_some(Immediate::I64(1));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
         if by_ref {
             ctx.mark_ref_bound_local(capture);
         }
-        captured_values.push(ClosureCapture { value: captured.value });
+        captured_values.push(ClosureCapture {
+            value: captured.value,
+            by_ref,
+        });
         capture_params.push((capture.clone(), php_type, by_ref));
     }
     let name = ctx.next_closure_name();
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
+    let variadic_type = match &expr.kind {
+        ExprKind::Closure { variadic_type, .. } => variadic_type.as_ref(),
+        _ => None,
+    };
     let signature = if contextual_arg_types.is_empty() {
         function::lower_closure_function(
             ctx,
@@ -171,6 +195,7 @@ pub(super) fn lower_closure_with_context(
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             &capture_params,
@@ -185,6 +210,7 @@ pub(super) fn lower_closure_with_context(
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             &capture_params,
@@ -773,4 +799,3 @@ pub(super) fn callable_target_contains_eval_call(target: &CallableTarget) -> boo
 pub(super) fn is_eval_call_name(name: &Name) -> bool {
     php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
 }
-

@@ -29,6 +29,12 @@ pub(super) fn lower_static_array_map(
     let ExprKind::ArrayLiteral(items) = &args[1].kind else {
         return None;
     };
+    // PHP evaluates the complete input array before its first callback. The
+    // inline loop cannot interleave effectful sources with callback invocation;
+    // use ordinary array_map's weak internal binding for those sources.
+    if !items.iter().all(static_callback_array_item_can_inline) {
+        return None;
+    }
     let elem_type = static_callable_return_type(ctx, &callback);
     let array = ctx.emit_value(
         Op::ArrayNew,

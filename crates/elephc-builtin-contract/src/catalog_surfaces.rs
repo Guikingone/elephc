@@ -38,7 +38,7 @@ macro_rules! surface {
     (
         $name:literal, $area:ident, $module:ident, $kind:ident,
         [$($param:expr),* $(,)?], $variadic:expr, $returns:ident,
-        $summary:literal $(, extension: $extension:expr)?
+        $summary:literal $(, extension: $extension:expr)? $(, examples: $examples:expr)?
     ) => {
         BuiltinContract {
             id: BuiltinId::from_canonical_name($name),
@@ -56,7 +56,7 @@ macro_rules! surface {
             returns: TypeSpec::$returns,
             by_ref_return: false,
             summary: $summary,
-            examples: &[],
+            examples: surface!(@examples $($examples)?),
             php_manual: None,
             deprecation: None,
             extension: surface!(@bool $($extension)?),
@@ -66,6 +66,8 @@ macro_rules! surface {
     };
     (@bool $value:expr) => { $value };
     (@bool) => { false };
+    (@examples $value:expr) => { $value };
+    (@examples) => { &[] };
 }
 
 pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
@@ -89,6 +91,18 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         None,
         Void,
         "Terminates execution with an optional status."
+    ),
+    surface!(
+        "elephc\\async\\run",
+        Callables,
+        Elephc,
+        PreludeProvided,
+        [param!("body", Callable)],
+        None,
+        Mixed,
+        "Runs a structured cooperative task scope to completion.",
+        extension: true,
+        examples: &["examples/async-scheduler/main.php"]
     ),
     surface!(
         "empty",

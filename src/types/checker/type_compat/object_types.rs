@@ -383,7 +383,23 @@ impl Checker {
                 }
             }
 
-            if !param_has_declared_type {
+            // Constructor parameters are positional only WITHIN one constructor. A descendant
+            // may override `__construct` with an unrelated signature, so sharpening the base
+            // `$message` parameter at index 0 must not rewrite a child `$items`/`$kind` parameter
+            // merely because both occupy index 0. Only constructors whose own parameter map still
+            // targets this exact inherited property participate in propagation.
+            let maps_same_property = class_info
+                .constructor_param_to_prop
+                .get(param_index)
+                .and_then(|mapped| mapped.as_deref())
+                == Some(prop_name.as_str());
+            let target_has_declared_type = class_info
+                .method_decls
+                .iter()
+                .find(|method| crate::names::php_symbol_key(&method.name) == "__construct")
+                .and_then(|method| method.params.get(param_index))
+                .is_some_and(|(_, type_ann, _, _)| type_ann.is_some());
+            if maps_same_property && !param_has_declared_type && !target_has_declared_type {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
                     if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
                         *param_ty = arg_ty.clone();

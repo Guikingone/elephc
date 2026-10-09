@@ -114,6 +114,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                 let param_index = sig.and_then(|sig| {
                     let regular_param_count = crate::types::call_args::regular_param_count(sig);
                     crate::types::call_args::named_param_index(sig, regular_param_count, name)
+                        .or_else(|| sig.variadic.as_ref().map(|_| regular_param_count))
                 });
                 let value = if let Some(index) = param_index {
                     invoker_ref_arg_variable(ctx, sig, index, value)
@@ -164,6 +165,8 @@ pub(super) fn invoker_ref_arg_variable<'a>(
         return None;
     };
     if let Some(sig) = sig {
+        let regular = crate::types::call_args::regular_param_count(sig);
+        let index = if sig.variadic.is_some() && index >= regular { regular } else { index };
         if !sig.ref_params.get(index).copied().unwrap_or(false) {
             return None;
         }
@@ -201,4 +204,3 @@ pub(super) fn lower_invoker_ref_arg_marker(
         Some(span),
     )
 }
-

@@ -9,6 +9,8 @@
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
 pub mod autoload;
+/// Structured cooperative scheduler prelude (`Elephc\Async`).
+pub mod async_prelude;
 /// Builtin catalog and signature metadata snapshots.
 pub mod builtin_metadata;
 /// Single-source builtin registry: catalog, signatures, type-check, and lowering dispatch.
@@ -69,6 +71,8 @@ pub mod opcache_prelude;
 pub mod optimize;
 /// Parser for PHP syntax.
 pub mod parser;
+/// Structured isolated-thread scheduler prelude (`Elephc\Parallel`).
+pub mod parallel_prelude;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.

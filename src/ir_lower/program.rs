@@ -105,6 +105,13 @@ pub(crate) fn lower(
         &constants,
         &fiber_return_sigs,
     );
+    if module
+        .closures
+        .iter()
+        .any(|function| function.name.ends_with("__parallel_worker"))
+    {
+        ensure_parallel_worker_prepare_extern(&mut module);
+    }
     lower_literal_eval_aot_functions(&mut module, check_result, &constants, &fiber_return_sigs);
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
     include_lowered_runtime_features(&mut module);

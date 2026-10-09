@@ -104,12 +104,16 @@ pub(super) fn emit_named_spread_bounds_guard(
     if check.min_len == 0 && check.max_len.is_none() {
         return;
     }
+    let len_op = match ctx.builder.value_type(spread) {
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Hash) => Op::HashLen,
+        _ => Op::ArrayLen,
+    };
     let len = ctx.emit_value(
-        Op::ArrayLen,
+        len_op,
         vec![spread],
         None,
         PhpType::Int,
-        Op::ArrayLen.default_effects(),
+        len_op.default_effects(),
         Some(span),
     );
     emit_named_spread_min_len_guard(ctx, len.value, check.min_len, span);

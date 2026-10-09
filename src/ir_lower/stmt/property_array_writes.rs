@@ -234,15 +234,17 @@ pub(super) fn release_property_array_insert_value_after_retain(
     value: LoweredValue,
     span: Span,
 ) {
-    let Some(elem_ty) = indexed_property_array_element_type(property_ty) else {
-        return;
-    };
-    if matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable) {
-        return;
-    }
-    if ctx.value_is_owning_temporary(value) {
-        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-    }
+    let element_ty = indexed_property_array_element_type(property_ty);
+    // Property arrays use the same retaining setters as local arrays. In particular, an
+    // already-boxed `Mixed` result is retained by `__rt_array_set_mixed`, so its producer
+    // reference must be released after the write. Concrete values are instead boxed by the
+    // setter and transfer that fresh box directly; the shared helper distinguishes the two.
+    crate::ir_lower::stmt::array_write_core::release_indexed_array_write_operand(
+        ctx,
+        element_ty.as_ref(),
+        value,
+        span,
+    );
 }
 
 /// Releases the loaded property value after rewriting it through a retaining `PropSet`.
@@ -283,4 +285,3 @@ pub(super) fn indexed_property_array_element_type(property_ty: &PhpType) -> Opti
         _ => None,
     }
 }
-

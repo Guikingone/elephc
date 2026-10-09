@@ -14,6 +14,8 @@ use crate::ir::ResourceCleanupKind;
 pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module) {
     let features = lowered_runtime_features(module);
     module.required_runtime_features.regex |= features.regex;
+    module.required_runtime_features.async_reactor |= features.async_reactor;
+    module.required_runtime_features.parallel_execution |= features.parallel_execution;
     module.required_runtime_features.mb_strlen |= features.mb_strlen;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
@@ -45,6 +47,7 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 Op::RuntimeCall => {
                     if let Some(target) = typed_builtin_target(inst) {
                         features.regex |= target.uses_regex_runtime();
+                        features.async_reactor |= target.uses_async_reactor_runtime();
                         features.mb_strlen |= target.uses_mb_strlen_runtime();
                         features.phar_archive |= target.publishes_phar_symbols()
                             && function_belongs_to_phar_archive_helper_class(function);
@@ -90,6 +93,9 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 }
                 Op::PdoAdapterAddr => {
                     features.pdo_udf = true;
+                }
+                Op::ParallelSpawn => {
+                    features.parallel_execution = true;
                 }
                 _ => {}
             }

@@ -11,7 +11,7 @@
 //! - A container payload that is null or the in-band null-container sentinel
 //!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
 //!   is autovivified as a real PHP array before the keyed write (issues #585/#592).
-//! - A string key on an indexed payload promotes the payload to hash storage
+//! - A string, negative, or sparse integer key on an indexed payload promotes it to hash storage
 //!   via `__rt_mixed_cell_promote_to_hash` (PHP array-key semantics) instead
 //!   of dropping the write.
 //! - Canonical null and legacy null-container payloads autovivify through the
@@ -53,7 +53,7 @@ pub fn emit_mixed_array_set(emitter: &mut Emitter) {
 ///   storage, while existing associative arrays call `__rt_hash_set`.
 /// - Array capacity is grown via `__rt_array_grow` if the target index exceeds current capacity.
 /// - Overwriting an existing slot releases the previous `Mixed` cell.
-/// - Extending the logical length zero-fills all gap slots before the written position.
+/// - Appending at the logical end keeps dense storage; sparse integer keys promote to Hash.
 /// - The helper frame is 80 bytes; callee-saved registers `x29`/`x30` are preserved.
 fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -89,6 +89,9 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // reject negative indexes before touching storage
     emitter.instruction("b.lt __rt_mixed_array_set_promote");                   // negative integer keys require associative PHP-array storage
+    emitter.instruction("ldr x11, [x10]");                                      // read the dense array's current logical length
+    emitter.instruction("cmp x9, x11");                                         // would this integer key leave missing keys before it?
+    emitter.instruction("b.hi __rt_mixed_array_set_promote");                   // preserve sparse keys by promoting before conversion or growth
     emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
     emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
@@ -338,6 +341,9 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("cmp r9, 0");                                           // reject negative indexes before touching storage
     emitter.instruction("jl __rt_mixed_array_set_promote");                     // negative integer keys require associative PHP-array storage
+    emitter.instruction("mov r11, QWORD PTR [r10]");                           // read the dense array's current logical length
+    emitter.instruction("cmp r9, r11");                                         // would this integer key leave missing keys before it?
+    emitter.instruction("ja __rt_mixed_array_set_promote");                     // preserve sparse keys by promoting before conversion or growth
     emitter.instruction("mov r8, QWORD PTR [r10 - 8]");                         // load the packed indexed-array metadata
     emitter.instruction("shr r8, 8");                                           // move the value_type tag into the low byte
     emitter.instruction("and r8, 0x7f");                                        // isolate the runtime value_type tag
@@ -534,4 +540,45 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to generated code
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Checks sparse promotion guards on both supported code-emission architectures.
+    //!
+    //! Called from:
+    //! - Library unit tests.
+    //!
+    //! Key details:
+    //! - The strict greater-than guard preserves dense append-at-length and precedes COW/growth.
+
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    #[test]
+    fn boxed_sparse_writes_promote_before_widening_on_both_architectures() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            for nested in [false, true] {
+                let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+                let prefix = if nested {
+                    super::super::emit_mixed_array_fetch_for_write(&mut emitter);
+                    "__rt_mixed_array_gfw"
+                } else {
+                    emit_mixed_array_set(&mut emitter);
+                    "__rt_mixed_array_set"
+                };
+                let asm = emitter.output();
+                let indexed = asm.find(&format!("{prefix}_indexed:")).expect("indexed entry");
+                let body = &asm[indexed..];
+                let (guard, widening) = match arch {
+                    Arch::AArch64 => (format!("b.hi {prefix}_promote"), "bl __rt_array_to_mixed"),
+                    Arch::X86_64 => (format!("ja {prefix}_promote"), "call __rt_array_to_mixed"),
+                };
+                let promotion = body.find(&guard).expect("strict sparse-key promotion guard");
+                let conversion = body.find(widening).expect("dense element conversion");
+                assert!(promotion < conversion, "{arch:?}, nested={nested}: {body}");
+            }
+        }
+    }
 }

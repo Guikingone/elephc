@@ -92,14 +92,12 @@ pub(super) fn store_value_through_ref_cell_slot(
     abi::load_at_offset(ctx.emitter, state_reg, state_offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
-                &format!("cbnz {}, {}", state_reg, ref_cell)
-            );                                                                  // select ref-cell storage after a runtime promotion
+            let branch = format!("cbnz {}, {}", state_reg, ref_cell);
+            ctx.emitter.instruction(&branch);                                   // select ref-cell storage after a runtime promotion
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
-                &format!("test {}, {}", state_reg, state_reg)
-            );                                                                  // test the slot's runtime representation flag
+            let test = format!("test {}, {}", state_reg, state_reg);
+            ctx.emitter.instruction(&test);                                     // test the slot's runtime representation flag
             ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select ref-cell storage after a runtime promotion
         }
     }
@@ -250,6 +248,33 @@ pub(super) fn lower_release_local_slot(
 pub(super) fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let offset = ctx.local_offset(slot)?;
+    if ctx.local_ref_cell_representation_is_dynamic(slot)
+        && ctx.ref_cell_owner_for_slot(slot).is_none()
+    {
+        let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "dynamic ref-cell slot {} has no representation flag",
+                slot.as_raw()
+            ))
+        })?;
+        let raw = ctx.next_label("unset_closure_ref_cell_raw");
+        let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz {}, {}", state_reg, raw)); // raw locals have no shared cell owner to release
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // inspect whether the closure promotion ran
+                ctx.emitter.instruction(&format!("je {}", raw));                // raw locals have no shared cell owner to release
+            }
+        }
+        let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, cell_reg, offset);
+        let value_ty = ctx.local_php_type(slot)?.codegen_repr();
+        abi::emit_release_local_ref_cell(ctx.emitter, cell_reg, &value_ty);
+        ctx.emitter.label(&raw);
+    }
     ctx.unmark_promoted_ref_cell(slot);
     if ctx.local_kind(slot)? == LocalKind::OwnedTemp {
         clear_local_slot_storage(ctx, slot, offset)?;
@@ -319,7 +344,15 @@ pub(super) fn store_value_to_ref_cell_as(
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = target_ty.codegen_repr();
     reject_multiword_ref_param_local(&target_ty, "store")?;
-    coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+    if target_ty == PhpType::Mixed && source_ty.codegen_repr() != PhpType::Mixed {
+        if ctx.value_can_own_mixed_box_source(value)? {
+            emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+        } else {
+            emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+        }
+    } else {
+        coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+    }
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
@@ -397,9 +430,7 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(
-                            "mov QWORD PTR [rsp + 16], rax"
-                        );                                                      // save the int result to the placeholder slot above the saved Mixed pointer
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                 }
                 // Pop the saved Mixed pointer into result_reg for decref_mixed.
@@ -421,9 +452,7 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the bool result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(
-                            "mov QWORD PTR [rsp + 16], rax"
-                        );                                                      // save the bool result to the placeholder slot
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // save the bool result to the placeholder slot
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, result_reg);
@@ -443,9 +472,7 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str d0, [sp, #16]");           // save the float result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(
-                            "movsd QWORD PTR [rsp + 16], xmm0"
-                        );                                                      // save the float result to the placeholder slot
+                        ctx.emitter.instruction("movsd QWORD PTR [rsp + 16], xmm0"); // save the float result to the placeholder slot
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, int_reg); // pop Mixed pointer into int_reg
@@ -477,4 +504,3 @@ pub(super) fn reject_multiword_ref_param_local(ty: &PhpType, action: &str) -> Re
     let _ = (ty, action);
     Ok(())
 }
-

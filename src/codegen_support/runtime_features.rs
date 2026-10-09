@@ -9,6 +9,8 @@
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
 //!   helpers because generated SPL methods can call them.
+//! - Compiler-injected Async descriptor waits enable the libc poll adapter;
+//!   programs that never use the Async prelude retain no reactor symbol.
 //! - Lowered `mb_strlen()` calls enable its iconv-backed runtime helper without
 //!   imposing that native dependency on programs that never use the builtin.
 //! - Emitted stream/archive classes enable PHAR bridge libraries because their
@@ -44,6 +46,10 @@ pub enum LinkRequirement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
     pub regex: bool,
+    /// True when compiler-injected Async methods can call the libc poll adapter.
+    pub async_reactor: bool,
+    /// True when lowered code submits isolated Parallel worker jobs.
+    pub parallel_execution: bool,
     /// True when lowered code can call the optional iconv-backed `mb_strlen()` helper.
     pub mb_strlen: bool,
     pub phar_archive: bool,
@@ -139,12 +145,16 @@ impl RuntimeFeatures {
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
             | ((self.ctx_register as u64) << 12)
+            | ((self.async_reactor as u64) << 13)
+            | ((self.parallel_execution as u64) << 14)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
     pub const fn none() -> Self {
         Self {
             regex: false,
+            async_reactor: false,
+            parallel_execution: false,
             mb_strlen: false,
             phar_archive: false,
             descriptor_invoker: false,
@@ -156,7 +166,11 @@ impl RuntimeFeatures {
             generator: false,
             popen_resource: false,
             directory_resource: false,
-            ctx_register: false,
+            // NOT an optional family: per-context addressing is how this compiler emits.
+            // `none()` means no optional feature families, and a `false` here made every
+            // caller that builds a minimal runtime produce one the user object cannot
+            // link against.
+            ctx_register: true,
         }
     }
 
@@ -165,6 +179,8 @@ impl RuntimeFeatures {
     pub const fn all() -> Self {
         Self {
             regex: true,
+            async_reactor: true,
+            parallel_execution: true,
             mb_strlen: true,
             phar_archive: true,
             descriptor_invoker: true,
@@ -176,9 +192,7 @@ impl RuntimeFeatures {
             generator: true,
             popen_resource: true,
             directory_resource: true,
-            // Deliberately excluded from `all()`: the ctx-register runtime is a
-            // spike mode selected explicitly, never a default full-feature build.
-            ctx_register: false,
+            ctx_register: true,
         }
     }
 }
@@ -1281,6 +1295,8 @@ mod tests {
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_bridge() {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures {
             regex: false,
+            async_reactor: false,
+            parallel_execution: false,
             mb_strlen: false,
             phar_archive: false,
             descriptor_invoker: true,

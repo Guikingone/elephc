@@ -132,7 +132,7 @@ pub(super) fn lower_method_call_with_receiver(
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let arg_values = lower_args_with_eir_signature(ctx, sig.as_ref(), args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
@@ -152,7 +152,11 @@ pub(super) fn lower_method_call_with_receiver(
         sig.as_ref(),
         expr.span,
     );
-    release_owning_receiver_temporary(ctx, object, expr.span);
+    if fiber_switch_transfers_receiver(ctx, object, dispatch_method) {
+        ctx.builder.set_value_ownership(object.value, Ownership::Owned);
+    } else {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+    }
     call
 }
 
@@ -229,6 +233,12 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
                 .is_some_and(|signature| signature.param_is_callee_owned(parameter_index));
             let independently_boxed = signature.is_some_and(|signature| {
                 call_arg_gets_independent_mixed_box(signature, parameter_index, &php_type)
+            }) || result.is_some_and(|result| {
+                // A native callable descriptor is not a Mixed cell. Returning it through a
+                // PHP Mixed contract creates a separate box that retains the descriptor payload;
+                // it therefore cannot consume this caller's raw descriptor reference.
+                php_type.codegen_repr() == PhpType::Callable
+                    && matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
             });
             // The call result reuses this argument's payload — so the argument release
             // must be suppressed and the ownership left to flow through the result —

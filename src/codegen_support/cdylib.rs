@@ -334,11 +334,40 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
     emitter.blank();
     emitter.comment("cdylib release of caller-owned export storage");
     emitter.label_global(&target.extern_symbol("elephc_free"));
+    // A FOREIGN ENTRY, and therefore a publishing one. This was a bare tail call into
+    // `__rt_heap_free_safe` — correct while the allocator reached its state through global
+    // symbols, and a wild read the moment that state moved into `_rt_ctx`: the free would
+    // walk the free list through whatever the HOST happened to keep in the ctx register.
+    // It faulted on the first `elephc_free` from a host that never called `elephc_init`.
+    //
+    // Every other entry from a host already does this (the lifecycle pair, every export
+    // wrapper, the callback trampolines); this one was missed because it needed nothing
+    // before. It costs a frame, which is why it is no longer a tail call.
     match target.arch {
-        Arch::AArch64 => emitter.instruction("b __rt_heap_free_safe"),          // release non-borrowed runtime storage when present
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #32");                             // frame for the return address and the host's ctx register
+            emitter.instruction("stp x29, x30, [sp, #16]");                     // preserve the caller frame pointer and return address
+            emitter.instruction("add x29, sp, #16");
+            emitter.instruction("str x28, [sp, #0]");                           // preserve the HOST's value: x28 is callee-saved
+            crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+            emitter.instruction("bl __rt_heap_free_safe");                      // release non-borrowed runtime storage when present
+            emitter.instruction("ldr x28, [sp, #0]");                           // hand the host its register back
+            emitter.instruction("ldp x29, x30, [sp, #16]");
+            emitter.instruction("add sp, sp, #32");
+            emitter.instruction("ret");
+        }
         Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("push r14");                                    // preserve the HOST's value: r14 is callee-saved
+            emitter.instruction("sub rsp, 8");                                  // pad to the SysV 16-byte call boundary
             emitter.instruction("mov rax, rdi");                                // adapt the SysV pointer register to the runtime free ABI
-            emitter.instruction("jmp __rt_heap_free_safe");                     // release non-borrowed runtime storage when present
+            crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+            emitter.instruction("call __rt_heap_free_safe");                    // release non-borrowed runtime storage when present
+            emitter.instruction("add rsp, 8");                                  // drop the pad without touching rax
+            emitter.instruction("pop r14");                                     // hand the host its register back
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
         }
     }
 }

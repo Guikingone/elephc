@@ -22,14 +22,11 @@ pub(crate) fn lower_call_user_func_builtin_escape(
     )))
 }
 
-/// Lowers `array_sum()` over supported indexed arrays and boxed-Mixed associative values.
+/// Lowers `array_sum()` over indexed arrays and associative PHP-array storage.
 pub(crate) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_sum", 1)?;
     let array = expect_operand(inst, 0)?;
-    if matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
-    ) {
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::AssocArray { .. }) {
         ctx.load_value_to_result(array)?;
         if ctx.emitter.target.arch == Arch::X86_64 {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the associative-array pointer as the runtime helper argument
@@ -471,4 +468,3 @@ fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Optio
         _ => Ok(None),
     }
 }
-

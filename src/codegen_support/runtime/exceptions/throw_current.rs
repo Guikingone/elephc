@@ -182,10 +182,16 @@ mod tests {
             (Platform::Linux, Arch::X86_64),
         ] {
             let asm = emitted(platform, arch);
-            for counter in ["_gc_allocs", "_gc_frees"] {
+            // The counters are ctx fields, so they appear as offsets rather than names.
+            // Two DISTINCT offsets is the property: the hook hands over both, and reading
+            // one twice would be the bug this test was written against.
+            let allocs = crate::codegen_support::runtime::ctx::CTX_GC_ALLOCS_OFFSET;
+            let frees = crate::codegen_support::runtime::ctx::CTX_GC_FREES_OFFSET;
+            assert_ne!(allocs, frees);
+            for offset in [allocs, frees] {
                 assert!(
-                    asm.contains(counter),
-                    "{platform:?}/{arch:?} never reads {counter}:\n{asm}"
+                    asm.contains(&format!("{}]", offset)),
+                    "{platform:?}/{arch:?} never reads the counter at +{offset}:\n{asm}"
                 );
             }
             let (guard, call) = match arch {

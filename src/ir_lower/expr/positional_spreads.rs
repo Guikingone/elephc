@@ -34,7 +34,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
-        operands.push(lower_arg_with_signature(ctx, sig, index, arg));
+        operands.push(lower_arg_source_with_signature(ctx, sig, index, arg));
     }
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
