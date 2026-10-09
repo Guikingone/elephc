@@ -43,6 +43,45 @@ pub(super) fn lower_assoc_array_pop(
     store_if_result(ctx, inst)
 }
 
+/// Removes the insertion-order head from a concrete associative array and returns the removed value.
+///
+/// `array_shift` renumbers the surviving integer keys from zero, so the table is rebuilt rather
+/// than mutated in place: `__rt_hash_shift_boxed` returns the rebuilt table in the result register
+/// and the removed value through a stack out-slot. The rebuilt table is published as the receiver
+/// and the replaced table released, mirroring the hash-reindexing sorts.
+pub(super) fn lower_assoc_array_shift(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    super::shift::require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable("array_shift")?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
+    super::sort_dispatch::ensure_unique_hash_sort_source(ctx, array)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    // Reserve the removed-value out-slot, then park the table being replaced so it can be released
+    // once the rebuilt table has been published. The most recent push sits at stack offset 0, so
+    // the parked table is at 0 and the out-slot at 16.
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    ctx.load_value_to_reg(array, result_reg)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, 0);
+    abi::emit_temporary_stack_address(ctx.emitter, arg1, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_shift_boxed");
+    ctx.store_result_value(array)?;
+    receiver.store_back_value(ctx, array)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    store_if_result(ctx, inst)?;
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
 /// Validates a boxed array and publishes a unique cell before any payload mutation.
 pub(super) fn prepare_boxed_array_receiver(
     ctx: &mut FunctionContext<'_>,

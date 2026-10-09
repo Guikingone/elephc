@@ -692,3 +692,21 @@ array(2) {\n  [0]=>\n  string(1) \"s\"\n  [1]=>\n  int(1)\n}\n\
 array(2) {\n  [\"y\"]=>\n  string(1) \"s\"\n  [\"x\"]=>\n  int(1)\n}\n"
     );
 }
+
+/// `array_shift` over a Mixed-valued hash returns the head value and renumbers the surviving
+/// integer keys from zero, while a copied alias keeps its own order and keys.
+#[test]
+fn test_array_shift_mixed_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => "s"];
+$copy = $a;
+echo array_shift($a), "|", implode(",", $a), "|", implode(",", $copy), "\n";
+$b = [1 => 1, 2 => "s", 5 => 3];
+echo array_shift($b), "|", implode(",", $b), "\n";
+$c = [];
+var_dump(array_shift($c));
+"#,
+    );
+    assert_eq!(out, "1|s|1,s\n1|s,3\nNULL\n");
+}
