@@ -1100,7 +1100,7 @@ fn emit_static_property_default(
     // has no `ConstRef` arm (review follow-up for #1308).
     let folded = crate::codegen::literal_defaults::fold_global_constant_default(
         expr,
-        &ctx.module.global_constants,
+        &crate::codegen::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name),
     )
     .unwrap_or_else(|| expr.clone());
     let value = literal_default_value(

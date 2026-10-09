@@ -732,3 +732,67 @@ echo $b->sig, ":", $b->term, ":", Box::$again, "\n";
     );
     assert_eq!(out, "2:15:2\n");
 }
+
+/// A constant whose value is NOT a bare literal is resolved before materializing: a nested global
+/// constant (`const ITEMS = [A, 2]`), a class constant (`const N = Foo::X`) and a pure operator
+/// (`const N = A + 1`) each reach `literal_default_value` as the literal they denote, so
+/// `new Box()` reads the default instead of failing with an unsupported-backend-feature error
+/// (review follow-up for #1308).
+#[test]
+fn test_non_promoted_defaults_resolve_nested_class_and_operator_constants() {
+    let nested = compile_and_run(
+        r#"<?php
+const A = 1;
+const ITEMS = [A, 2];
+class Box { public array $items = ITEMS; }
+echo implode(",", (new Box())->items), "\n";
+"#,
+    );
+    assert_eq!(nested, "1,2\n");
+
+    let class_constant = compile_and_run(
+        r#"<?php
+class Foo { public const X = 9; }
+const N = Foo::X;
+class Box { public int $n = N; }
+echo (new Box())->n, "\n";
+"#,
+    );
+    assert_eq!(class_constant, "9\n");
+
+    let operator = compile_and_run(
+        r#"<?php
+const A = 1;
+const N = A + 1;
+class Box { public int $n = N; }
+echo (new Box())->n, "\n";
+"#,
+    );
+    assert_eq!(operator, "2\n");
+}
+
+/// The same non-literal constant values resolve for a non-promoted STATIC property default and for
+/// a promoted constructor parameter default, the other two `literal_default_value` consumers
+/// (review follow-up for #1308).
+#[test]
+fn test_static_and_promoted_defaults_resolve_non_literal_constants() {
+    let static_property = compile_and_run(
+        r#"<?php
+const A = 1;
+const ITEMS = [A, 2];
+class Box { public static array $items = ITEMS; }
+echo implode(",", Box::$items), "\n";
+"#,
+    );
+    assert_eq!(static_property, "1,2\n");
+
+    let promoted = compile_and_run(
+        r#"<?php
+const A = 1;
+const D = A + 2;
+class Box { public function __construct(public int $n = D) {} }
+echo (new Box())->n, "\n";
+"#,
+    );
+    assert_eq!(promoted, "3\n");
+}
