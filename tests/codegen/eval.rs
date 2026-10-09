@@ -30530,3 +30530,36 @@ echo $g instanceof Throwable ? "throwable" : "no", "|", $g->getMessage(), "\n";
     );
     assert_eq!(out, "throwable|boom\n");
 }
+
+/// An eval class whose DIRECT parent is already native resolves the interface method the parent
+/// declares: the AOT walk must start at that parent, not step past it to the grandparent
+/// (review follow-up for #1736).
+#[test]
+fn test_eval_resolves_an_aot_interface_method_declared_on_the_native_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {}
+class Service extends Base { public function ping(): int { return 7; } }
+interface Marker { public function ping(): int; }
+eval('class Child extends Service implements Marker {}');
+$c = new Child();
+echo $c->ping(), "\n";
+"#,
+    );
+    assert_eq!(out, "7\n");
+}
+
+/// `class_alias()` of a throwable is a throwable ancestor: an eval class extending the alias may
+/// implement a `Throwable`-extending interface, because the alias resolves to `RuntimeException`
+/// before the ancestry walk (review follow-up for #1736).
+#[test]
+fn test_eval_class_alias_of_a_throwable_is_a_throwable_ancestor() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class_alias("RuntimeException", "AliasRE"); interface UserThrowable extends Throwable {} class Good extends AliasRE implements UserThrowable {}');
+$e = new Good('boom');
+echo $e instanceof Throwable ? "throwable" : "no", "|", $e->getMessage(), "\n";
+"#,
+    );
+    assert_eq!(out, "throwable|boom\n");
+}

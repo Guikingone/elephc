@@ -765,11 +765,17 @@ fn eval_class_extends_throwable(class: &EvalClass, context: &ElephcEvalContext) 
     let Some(parent) = class.parent() else {
         return false;
     };
-    if is_throwable_root(parent) {
+    // An alias of a throwable (`class_alias('RuntimeException', 'AliasRE')`) is not itself a
+    // class, so resolve it to its target before the root check and the ancestry walk; otherwise
+    // `class Good extends AliasRE implements UserThrowable {}` is wrongly rejected.
+    let parent = context
+        .resolve_class_name(parent)
+        .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+    if is_throwable_root(&parent) {
         return true;
     }
     context
-        .class_parent_names(parent)
+        .class_parent_names(&parent)
         .iter()
         .any(|ancestor| is_throwable_root(ancestor))
 }

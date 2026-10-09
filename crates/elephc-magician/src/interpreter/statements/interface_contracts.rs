@@ -347,9 +347,21 @@ pub(super) fn class_has_aot_interface_method(
     let Some(parent) = class.parent() else {
         return Ok(false);
     };
-    let native_parent = context
-        .class_native_parent_name(parent)
+    // Resolve an alias (`class_alias('RuntimeException', 'AliasRE')`) to its target first, then
+    // step an eval parent past its own eval ancestors to the nearest runtime/AOT class. A NATIVE
+    // parent IS that class already, and stepping past it (as `class_native_parent_name` does)
+    // would skip the very methods it declares
+    // (`class Child extends Service implements Marker {}` where `Service` declares `ping`).
+    let resolved_parent = context
+        .resolve_class_name(parent)
         .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+    let native_parent = if context.class(&resolved_parent).is_some() {
+        context
+            .class_native_parent_name(&resolved_parent)
+            .unwrap_or(resolved_parent)
+    } else {
+        resolved_parent
+    };
     // The inherited AOT method only has dispatch metadata (visibility/static/abstract), not a
     // full signature; the requirement is accepted when the parent provides a concrete public
     // instance method of that name. An inherited abstract method is rejected here and again by
