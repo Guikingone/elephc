@@ -1489,6 +1489,57 @@ echo call_hot(1);
         ]);
     }
 
+    /// Balanced instantiation suffixes do not create spurious sampled inline children.
+    #[test]
+    fn monitor_generic_second_review_sampled_names() {
+        for (source, symbol) in [
+            ("App\\firstOf", "App\\firstOf<int>"),
+            ("App\\Widget::getName", "App\\Widget::getname<array<string, Box<int>>>"),
+            ("App\\Widget::run", "App\\Widget<int>::run"),
+            ("App\\Widget::run", "App\\Widget<array<int>>::run<string>"),
+        ] { assert!(same_sampled_declaration(source, symbol), "{source}: {symbol}"); }
+        for symbol in ["App\\firstOf<int", "App\\firstOf<int>tail", "App\\firstOf<>",
+            "App\\firstOf<int>>", "Other\\firstOf<int>", "App\\firstof<int>"] {
+            assert!(!same_sampled_declaration("App\\firstOf", symbol), "{symbol}");
+        }
+        assert!(!same_sampled_declaration("App\\Widget::run", "App\\widget<int>::run"));
+    }
+
+    /// Exact source metrics aggregate all instantiations without folding namespace or method identity.
+    #[test]
+    fn monitor_generic_second_review_exact_source_totals() {
+        use std::io::Write;
+        struct SourceFixture(std::path::PathBuf);
+        impl Drop for SourceFixture {
+            /// Retires this uniquely created fixture on success and assertion failure.
+            fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+        }
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .expect("clock").as_nanos();
+        let path = std::env::temp_dir().join(format!("elephc-monitor-generic-{}-{nonce}.php", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(&path).expect("create fixture");
+        let fixture = SourceFixture(path);
+        file.write_all(b"<?php\nnamespace App;\nfunction firstOf<T>(T $value): T { return $value; }\nclass Widget<T> {\n function getName<U>(U $value): U { return $value; }\n function run() { return 1; }\n}\n").expect("source fixture");
+        drop(file);
+        let mut graph = parse_instrument_dump("elephc-instr: main calls=1 incl_ns=100 excl_ns=0\n\
+elephc-instr: App\\firstOf<int> calls=2 incl_ns=20 excl_ns=10\n\
+elephc-instr: App\\firstOf<string> calls=3 incl_ns=30 excl_ns=15\n\
+elephc-instr: App\\Widget::getName<int> calls=4 incl_ns=10 excl_ns=8\n\
+elephc-instr: App\\Widget<int>::run calls=5 incl_ns=40 excl_ns=30\n\
+elephc-instr: App\\Widget<string>::run calls=6 incl_ns=45 excl_ns=35\n\
+elephc-instr: Other\\firstOf<int> calls=50 incl_ns=10 excl_ns=9\n");
+        attach_exact_source(&mut graph, fixture.0.to_str().expect("source path"));
+        let funcs = &graph.lines.as_ref().expect("source view").funcs;
+        assert_eq!(funcs.len(), 3);
+        assert_eq!((funcs[0].name.as_str(), funcs[0].calls, funcs[0].self_pct, funcs[0].incl_pct),
+            ("App\\firstOf", 5, 25.0, 50.0));
+        assert_eq!((funcs[1].name.as_str(), funcs[1].calls, funcs[1].self_pct),
+            ("App\\Widget::getName", 4, 8.0));
+        assert_eq!((funcs[2].name.as_str(), funcs[2].calls, funcs[2].self_pct, funcs[2].incl_pct),
+            ("App\\Widget::run", 11, 65.0, 85.0));
+    }
+
     /// Exact captures retain the measured calls and costs of mixed-case methods.
     #[test]
     fn monitor_followup_exact_source_method_case() {
