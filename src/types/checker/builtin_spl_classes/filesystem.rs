@@ -227,6 +227,12 @@ fn spl_file_info_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Sentinel default for the CSV `$escape` parameter.
+///
+/// A real escape character is at most one byte, so this multi-byte marker lets a synthetic body
+/// detect an omitted argument and emit php's deprecation before falling back to the real default.
+const CSV_CONTROL_UNSET: &str = "__elephc_csv_escape_unset__";
+
 /// Builds SplFileObject storage properties.
 fn spl_file_object_properties() -> Vec<ClassProperty> {
     vec![
@@ -238,6 +244,7 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
         protected_storage_property("delimiter", TypeExpr::Str),
         protected_storage_property("enclosure", TypeExpr::Str),
         protected_storage_property("escape", TypeExpr::Str),
+        protected_storage_property("__elephcCsvEscapeSet", TypeExpr::Bool),
         protected_storage_property("maxLineLen", TypeExpr::Int),
     ]
 }
@@ -447,7 +454,7 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             vec![
                 param_default("separator", TypeExpr::Str, string_expr(",")),
                 param_default("enclosure", TypeExpr::Str, string_expr("\"")),
-                param_default("escape", TypeExpr::Str, string_expr("\\")),
+                param_default("escape", TypeExpr::Str, string_expr(CSV_CONTROL_UNSET)),
             ],
             Some(TypeExpr::Void),
             spl_file_object_set_csv_control_body(),
@@ -456,9 +463,9 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body(
             "fgetcsv",
             vec![
-                param_default("separator", TypeExpr::Str, string_expr(",")),
-                param_default("enclosure", TypeExpr::Str, string_expr("\"")),
-                param_default("escape", TypeExpr::Str, string_expr("\\")),
+                param_default("separator", TypeExpr::Str, string_expr(CSV_CONTROL_UNSET)),
+                param_default("enclosure", TypeExpr::Str, string_expr(CSV_CONTROL_UNSET)),
+                param_default("escape", TypeExpr::Str, string_expr(CSV_CONTROL_UNSET)),
             ],
             Some(mixed_type()),
             spl_file_object_fgetcsv_body(),
@@ -840,6 +847,7 @@ fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, m
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
         property_assign_stmt(this_expr(), "escape", string_expr("\\")),
+        property_assign_stmt(this_expr(), "__elephcCsvEscapeSet", bool_expr(false)),
         property_assign_stmt(this_expr(), "maxLineLen", int_expr(0)),
     ];
     body.extend(file_object_load_lines_body(string_copy_expr(backing_path)));
@@ -881,6 +889,7 @@ fn spl_temp_file_object_construct_body() -> Vec<Stmt> {
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
         property_assign_stmt(this_expr(), "escape", string_expr("\\")),
+        property_assign_stmt(this_expr(), "__elephcCsvEscapeSet", bool_expr(false)),
         property_assign_stmt(this_expr(), "maxLineLen", int_expr(0)),
         property_assign_stmt(this_expr(), "tempMaxMemory", var_expr("maxMemory")),
         property_assign_stmt(this_expr(), "tempBuffer", string_expr("")),
@@ -1445,6 +1454,26 @@ fn spl_file_object_set_csv_control_body() -> Vec<Stmt> {
     };
     let strlen = |name: &str| function_call("strlen", vec![var_expr(name)]);
     vec![
+        // Detect an omitted `$escape` through the sentinel default, restore php's real default,
+        // then validate: php raises the control ValueError BEFORE the omission deprecation.
+        assign_stmt(
+            "__escapeOmitted",
+            binary_expr(
+                var_expr("escape"),
+                BinOp::StrictEq,
+                string_expr(CSV_CONTROL_UNSET),
+            ),
+        ),
+        if_stmt(
+            var_expr("__escapeOmitted"),
+            vec![assign_stmt("escape", string_expr("\\"))],
+            None,
+        ),
+        property_assign_stmt(
+            this_expr(),
+            "__elephcCsvEscapeSet",
+            not_expr(var_expr("__escapeOmitted")),
+        ),
         // php validates the CSV controls before storing them.
         if_stmt(
             binary_expr(strlen("separator"), BinOp::StrictNotEq, int_expr(1)),
@@ -1465,6 +1494,19 @@ fn spl_file_object_set_csv_control_body() -> Vec<Stmt> {
             vec![invalid(
                 "SplFileObject::setCsvControl(): Argument #3 ($escape) must be empty or a single character",
             )],
+            None,
+        ),
+        if_stmt(
+            var_expr("__escapeOmitted"),
+            vec![expr_stmt(function_call(
+                "trigger_error",
+                vec![
+                    string_expr(
+                        "SplFileObject::setCsvControl(): the $escape parameter must be provided as its default value will change",
+                    ),
+                    crate::synthetic_class::e_const("E_USER_DEPRECATED"),
+                ],
+            ))],
             None,
         ),
         property_assign_stmt(this_expr(), "delimiter", var_expr("separator")),
@@ -1572,6 +1614,48 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
         ))
     };
     vec![
+        // An omitted control falls back to the object's CONFIGURED value (php semantics), detected
+        // through the sentinel defaults. The omission deprecation is emitted AFTER validation.
+        assign_stmt(
+            "__escapeOmitted",
+            binary_expr(
+                var_expr("escape"),
+                BinOp::StrictEq,
+                string_expr(CSV_CONTROL_UNSET),
+            ),
+        ),
+        if_stmt(
+            binary_expr(
+                var_expr("separator"),
+                BinOp::StrictEq,
+                string_expr(CSV_CONTROL_UNSET),
+            ),
+            vec![assign_stmt(
+                "separator",
+                property_access(this_expr(), "delimiter"),
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(
+                var_expr("enclosure"),
+                BinOp::StrictEq,
+                string_expr(CSV_CONTROL_UNSET),
+            ),
+            vec![assign_stmt(
+                "enclosure",
+                property_access(this_expr(), "enclosure"),
+            )],
+            None,
+        ),
+        if_stmt(
+            var_expr("__escapeOmitted"),
+            vec![assign_stmt(
+                "escape",
+                property_access(this_expr(), "escape"),
+            )],
+            None,
+        ),
         // php validates the CSV controls before reading.
         if_stmt(
             binary_expr(strlen("separator"), BinOp::StrictNotEq, int_expr(1)),
@@ -1592,6 +1676,23 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
             vec![invalid(
                 "SplFileObject::fgetcsv(): Argument #3 ($escape) must be empty or a single character",
             )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(
+                var_expr("__escapeOmitted"),
+                BinOp::And,
+                not_expr(property_access(this_expr(), "__elephcCsvEscapeSet")),
+            ),
+            vec![expr_stmt(function_call(
+                "trigger_error",
+                vec![
+                    string_expr(
+                        "SplFileObject::fgetcsv(): the $escape parameter must be provided, as its default value will change, either explicitly or via SplFileObject::setCsvControl()",
+                    ),
+                    crate::synthetic_class::e_const("E_USER_DEPRECATED"),
+                ],
+            ))],
             None,
         ),
         // `fgetcsv()` at end of file answers false.

@@ -136,7 +136,7 @@ echo "\n";
 
 $csv = new SplFileObject("docs/a.txt");
 $csv->setFlags(SplFileObject::READ_CSV);
-$csv->setCsvControl("n");
+$csv->setCsvControl("n", '"', "");
 $row = $csv->current();
 echo count($row);
 echo ":";
@@ -280,6 +280,45 @@ unlink("seek.txt");
         out,
         "SplFileObject::seek(): Argument #1 ($line) must be greater than or equal to 0"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an omitted CSV `$escape` is deprecated like php, that `fgetcsv()` falls back to the
+/// CONFIGURED controls, and that an explicit `setCsvControl()` escape suppresses the later
+/// `fgetcsv()` deprecation.
+#[test]
+fn test_spl_file_object_csv_escape_omission_deprecation() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("dep.csv", "a;b\n");
+$file = new SplFileObject("dep.csv");
+$file->setCsvControl(";");
+$row = $file->fgetcsv();
+echo count($row), "\n";
+$fresh = new SplFileObject("dep.csv");
+$fresh->fgetcsv();
+$configured = new SplFileObject("dep.csv");
+$configured->setCsvControl(";", '"', "\\");
+$configured->fgetcsv();
+unlink("dep.csv");
+"#,
+    );
+    assert_eq!(
+        out
+            .matches("Deprecated: SplFileObject::setCsvControl(): the $escape parameter must be provided")
+            .count(),
+        1,
+        "expected exactly one setCsvControl omission deprecation: {out}"
+    );
+    // The two objects whose escape was never configured deprecate; the configured one does not.
+    assert_eq!(
+        out.matches("Deprecated: SplFileObject::fgetcsv(): the $escape parameter must be provided")
+            .count(),
+        2,
+        "expected exactly two fgetcsv omission deprecations: {out}"
+    );
+    // fgetcsv() used the configured ';' separator, so "a;b" splits into two fields.
+    assert!(out.contains("2\n"), "expected two CSV fields: {out}");
     let _ = fs::remove_dir_all(&dir);
 }
 
