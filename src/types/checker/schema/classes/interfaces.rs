@@ -117,23 +117,34 @@ fn interface_self_return_conforms(
     required_return: &PhpType,
     actual_return: &PhpType,
 ) -> bool {
-    let self_conforms = |expected: &PhpType| match (expected, actual_return) {
-        (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
-            actual_name == &class.name
-                && (expected_name == interface_name
+    // Both sides may be unions (`RecursiveIterator|null`, `RecursiveArrayIterator|null`, …); the
+    // class's own name conforms when it implements a required object member.
+    let required_objects = object_member_names(required_return);
+    object_member_names(actual_return).into_iter().any(|actual_name| {
+        actual_name == class.name.as_str()
+            && required_objects.iter().any(|expected_name| {
+                *expected_name == interface_name
                     || checker.interface_extends_interface(interface_name, expected_name)
                     || class.implements.iter().any(|declared| {
                         declared == expected_name
                             || checker.interface_extends_interface(declared, expected_name)
-                    }))
-        }
-        _ => false,
-    };
-    // The required return may be a UNION (`RecursiveIterator|null`, `RecursiveIterator|false`, …):
-    // the class's own name conforms when ANY member it narrows is the interface (or its ancestor).
-    match required_return {
-        PhpType::Union(members) => members.iter().any(|member| self_conforms(member)),
-        other => self_conforms(other),
+                    })
+            })
+    })
+}
+
+/// Returns the object class/interface names carried by `ty` (itself or its union members).
+fn object_member_names(ty: &PhpType) -> Vec<&str> {
+    match ty {
+        PhpType::Object(name) => vec![name.as_str()],
+        PhpType::Union(members) => members
+            .iter()
+            .filter_map(|member| match member {
+                PhpType::Object(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 

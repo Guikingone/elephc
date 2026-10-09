@@ -42,6 +42,20 @@ echo $c->count(), "|", count($c);
     assert_eq!(out, "5|5");
 }
 
+/// Verifies a nullable COVARIANT self return satisfies an interface contract (php covariance).
+#[test]
+fn test_nullable_self_return_covariance_against_interface() {
+    let out = compile_and_run(
+        r#"<?php
+interface MyI { public function get(): ?MyI; }
+class MyC implements MyI { public function get(): ?MyC { return null; } }
+$c = new MyC();
+var_dump($c->get());
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
 /// Verifies `count()` and `[]` reach a PHP `Countable`/`ArrayAccess` held in a MIXED slot.
 ///
 /// Both operators go through a runtime helper when the static type is `mixed`, and each helper

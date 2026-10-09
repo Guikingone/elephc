@@ -55,7 +55,8 @@ fn spl_recursive_array_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "getChildren",
             Vec::new(),
-            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
+            // php's tentative return type is the CONCRETE class (spl_array.stub.php).
+            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveArrayIterator")))),
             recursive_array_get_children_body(),
         ),
         method_with_body(
