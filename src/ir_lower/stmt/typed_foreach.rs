@@ -532,16 +532,18 @@ fn prepare_addressable_by_ref_foreach_source(
             );
             Some(Expr::new(ExprKind::Variable(alias), source.span))
         }
-        ExprKind::FunctionCall { name, .. }
-            if ctx
-                .functions
-                .get(name.as_str())
-                .is_some_and(|signature| signature.by_ref_return) =>
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+            if crate::ir_lower::expr::call_returns_by_reference(ctx, source) =>
         {
             // A by-reference-returning callee hands the loop its own reference cell. Binding it
             // to a managed local makes that cell the iterator origin, so the loop mutates the
             // array the caller's variable aliases instead of a detached copy
-            // (`foreach (ref_id($array) as &$v)`), matching php's `bug67633.phpt`. A by-VALUE
+            // (`foreach (ref_id($array) as &$v)`, and the same for a method, static method,
+            // closure or immediately-invoked closure), matching php's `bug67633.phpt`. A by-VALUE
             // call stays on the ordinary path and iterates a copy, as PHP does.
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
             crate::ir_lower::expr::lower_ref_assign_call(ctx, &alias, source, source.span);

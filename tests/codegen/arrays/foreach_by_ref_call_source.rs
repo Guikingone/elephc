@@ -75,6 +75,50 @@ echo implode(',', $array);
     assert_eq!(out, "aq,bq,cq");
 }
 
+/// A by-reference `foreach` source adopts the callee's cell for every call kind `lower_ref_assign`
+/// accepts, not just a direct function call: an instance method, a static method, `parent::`, a
+/// closure variable, and an immediately-invoked closure literal. Each must mutate the caller's
+/// array, where before they all iterated a detached copy (review follow-up for #1790).
+#[test]
+fn test_by_ref_foreach_over_every_reference_returning_call_kind() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public function &ref_id(&$x) { return $x; }
+    public static function &sref(&$x) { return $x; }
+}
+class D extends C {
+    public function parent_ref(&$x) {
+        foreach (parent::ref_id($x) as &$v) { $v .= 'q'; }
+        unset($v);
+    }
+}
+$c = new C();
+$a = ['a', 'b', 'c'];
+foreach ($c->ref_id($a) as &$v) { $v .= 'q'; }
+unset($v);
+echo implode(',', $a), '|';
+$b = ['a', 'b', 'c'];
+foreach (C::sref($b) as &$v) { $v .= 'q'; }
+unset($v);
+echo implode(',', $b), '|';
+$e = ['a', 'b', 'c'];
+(new D())->parent_ref($e);
+echo implode(',', $e), '|';
+$f = ['a', 'b', 'c'];
+$fn = function &(&$x) { return $x; };
+foreach ($fn($f) as &$v) { $v .= 'q'; }
+unset($v);
+echo implode(',', $f), '|';
+$g = ['a', 'b', 'c'];
+foreach ((function &(&$x) { return $x; })($g) as &$v) { $v .= 'q'; }
+unset($v);
+echo implode(',', $g);
+"#,
+    );
+    assert_eq!(out, "aq,bq,cq|aq,bq,cq|aq,bq,cq|aq,bq,cq|aq,bq,cq");
+}
+
 /// The full php-src `bug67633.phpt` sequence: the by-value loop copies, the reference loop writes.
 #[test]
 fn test_bug67633_sequence() {
