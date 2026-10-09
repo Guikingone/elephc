@@ -142,6 +142,11 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
         return Err(vec![CompileError::new(span, "Expected '<?php' open tag")]);
     }
 
+    // Seed the file's `strict_types` from a leading `declare(strict_types=...)` before any
+    // statement is parsed, so the directive stamps statements that PRECEDE it too (PHP applies it
+    // to the whole file, including a leading `declare(ticks=...)` body).
+    stmt::preseed_strict_types(tokens);
+
     // PHP requires a namespace declaration to be the file's first statement, or to follow only
     // `declare` and empty statements; after a namespace has been opened, further `namespace`
     // declarations are always allowed (`namespace A; function f() {} namespace B;` runs).

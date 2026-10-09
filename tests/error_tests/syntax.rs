@@ -56,6 +56,16 @@ fn test_error_strict_types_after_a_real_statement() {
     }
 }
 
+/// Verifies `declare(strict_types=1)` applies to the WHOLE file, so a call inside a PRECEDING
+/// `declare(ticks=...)` body is checked strictly too (PHP throws on `f(true)` there).
+#[test]
+fn test_error_strict_types_applies_to_an_earlier_declare_body() {
+    expect_error(
+        "<?php declare(ticks=1) { echo f(true); } declare(strict_types=1); function f(int $i) { return $i; }",
+        "is active in this file",
+    );
+}
+
 /// Verifies the error diagnostic for unterminated string.
 #[test]
 fn test_error_unterminated_string() {

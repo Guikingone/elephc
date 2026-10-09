@@ -184,13 +184,22 @@ fn inline_html_declare_block_before_namespace_is_allowed() {
     assert_eq!(out, "1ok");
 }
 
-/// `declare(strict_types=1)` is allowed after an earlier `declare`, in either form.
+/// `declare(strict_types=1)` is allowed after an earlier `declare`, in either form, including the
+/// bare single-statement form and a NESTED colon form.
 #[test]
 fn inline_html_declare_before_strict_types_is_allowed() {
     let out = compile_and_run("<?php declare(ticks=1); declare(strict_types=1); echo 1;");
     assert_eq!(out, "1");
 
     let out = compile_and_run("<?php declare(ticks=1) { } declare(strict_types=1); echo 1;");
+    assert_eq!(out, "1");
+
+    let out = compile_and_run("<?php declare(ticks=1) echo 1; declare(strict_types=1); echo 2;");
+    assert_eq!(out, "12");
+
+    let out = compile_and_run(
+        "<?php declare(ticks=1): declare(ticks=2): enddeclare; enddeclare; declare(strict_types=1); echo 1;",
+    );
     assert_eq!(out, "1");
 }
 

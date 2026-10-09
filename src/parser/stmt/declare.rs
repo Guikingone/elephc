@@ -111,9 +111,21 @@ fn only_declares_and_empty_statements_before(tokens: &[SpannedToken], declare_po
 /// Returns the token index just past a complete `declare (...)` statement, or `None` when the
 /// tokens at `start` do not spell one.
 ///
-/// Handles the `;`, `{ … }` and `: … enddeclare ;` forms. The bare single-statement form is not
-/// recognized, so `strict_types` after it stays rejected, matching the previous behavior.
+/// Handles the `;`, `{ … }`, `: … enddeclare ;` and bare single-statement (`declare(ticks=1)
+/// echo 1;`) forms, so a `strict_types` that follows any of them is accepted as PHP accepts it.
 fn skip_declare_statement(tokens: &[SpannedToken], start: usize) -> Option<usize> {
+    let after_parens = skip_declare_parens(tokens, start)?;
+    match &tokens.get(after_parens)?.0 {
+        Token::Semicolon => Some(after_parens + 1),
+        Token::LBrace => skip_braced_block(tokens, after_parens),
+        Token::Colon => skip_alternative_block(tokens, after_parens),
+        // The bare single-statement form (`declare(ticks=1) echo 1;`).
+        _ => skip_single_statement(tokens, after_parens),
+    }
+}
+
+/// Returns the token index just past a `declare (...)`'s matching `)`, or `None`.
+fn skip_declare_parens(tokens: &[SpannedToken], start: usize) -> Option<usize> {
     let mut pos = start + 1;
     if !matches!(tokens.get(pos)?.0, Token::LParen) {
         return None;
@@ -125,44 +137,143 @@ fn skip_declare_statement(tokens: &[SpannedToken], start: usize) -> Option<usize
             Token::RParen => {
                 depth -= 1;
                 if depth == 0 {
-                    pos += 1;
-                    break;
+                    return Some(pos + 1);
                 }
             }
             _ => {}
         }
         pos += 1;
     }
-    match &tokens.get(pos)?.0 {
-        Token::Semicolon => Some(pos + 1),
-        Token::LBrace => {
-            let mut braces = 0usize;
-            while let Some((token, _)) = tokens.get(pos) {
-                match token {
-                    Token::LBrace => braces += 1,
-                    Token::RBrace => {
-                        braces -= 1;
-                        if braces == 0 {
-                            return Some(pos + 1);
-                        }
+    None
+}
+
+/// Returns the token index just past a `{ … }` declare body.
+fn skip_braced_block(tokens: &[SpannedToken], start: usize) -> Option<usize> {
+    let mut pos = start;
+    let mut braces = 0usize;
+    while let Some((token, _)) = tokens.get(pos) {
+        match token {
+            Token::LBrace => braces += 1,
+            Token::RBrace => {
+                braces -= 1;
+                if braces == 0 {
+                    return Some(pos + 1);
+                }
+            }
+            _ => {}
+        }
+        pos += 1;
+    }
+    None
+}
+
+/// Returns the token index just past a `: … enddeclare;` declare body, matching NESTED colon-form
+/// declares: `declare(ticks=1): declare(ticks=2): enddeclare; enddeclare;` closes at the SECOND
+/// `enddeclare`, not the first.
+fn skip_alternative_block(tokens: &[SpannedToken], start: usize) -> Option<usize> {
+    let mut pos = start + 1;
+    let mut depth = 1usize;
+    while let Some((token, _)) = tokens.get(pos) {
+        match token {
+            Token::Declare => {
+                if let Some(after_parens) = skip_declare_parens(tokens, pos) {
+                    if matches!(tokens.get(after_parens).map(|(token, _)| token), Some(Token::Colon))
+                    {
+                        depth += 1;
+                        pos = after_parens + 1;
+                        continue;
                     }
-                    _ => {}
+                    pos = after_parens;
+                    continue;
                 }
                 pos += 1;
             }
-            None
-        }
-        Token::Colon => {
-            while let Some((token, _)) = tokens.get(pos) {
-                if matches!(token, Token::EndDeclare) {
+            Token::EndDeclare => {
+                depth -= 1;
+                if depth == 0 {
                     return Some(pos + 2);
                 }
                 pos += 1;
             }
-            None
+            _ => pos += 1,
         }
-        _ => None,
     }
+    None
+}
+
+/// Returns the token index just past one bare single-statement declare body.
+///
+/// Scans to the statement's terminating `;` at delimiter depth 0, or past a trailing `}` for a
+/// block statement (an optional `;` after it is consumed too). This is the `declare(ticks=1)
+/// echo 1;` form PHP accepts before a later `strict_types`.
+fn skip_single_statement(tokens: &[SpannedToken], start: usize) -> Option<usize> {
+    let mut pos = start;
+    let mut depth = 0usize;
+    while let Some((token, _)) = tokens.get(pos) {
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket => depth = depth.checked_sub(1)?,
+            Token::RBrace => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    let next = pos + 1;
+                    return Some(
+                        if matches!(tokens.get(next).map(|(token, _)| token), Some(Token::Semicolon))
+                        {
+                            next + 1
+                        } else {
+                            next
+                        },
+                    );
+                }
+            }
+            Token::Semicolon if depth == 0 => return Some(pos + 1),
+            Token::Eof => return None,
+            _ => {}
+        }
+        pos += 1;
+    }
+    None
+}
+
+/// Seeds the file's `strict_types` state before any statement is parsed.
+///
+/// PHP applies `declare(strict_types=1)` to the WHOLE file, including statements that PRECEDE the
+/// directive (a leading `declare(ticks=...)` body: `declare(ticks=1) { echo f(true); }
+/// declare(strict_types=1);` still throws on `f(true)`). The parser stamps each statement as it is
+/// created, so a directive parsed late would leave those earlier statements coercive. Scanning the
+/// leading tokens for the directive and setting the flag up front stamps every statement of the
+/// file; the later `parse_declare` re-applies the same value idempotently. The scan stops at the
+/// first real statement, so a directive that is not legally placed seeds nothing the placement
+/// check would not reject anyway.
+pub(crate) fn preseed_strict_types(tokens: &[SpannedToken]) {
+    let mut pos = 1; // past the open tag
+    while pos < tokens.len() {
+        match &tokens[pos].0 {
+            Token::Semicolon => pos += 1,
+            Token::Declare => {
+                if let Some(enabled) = peek_strict_types(tokens, pos) {
+                    crate::source::declare_strict_types(enabled);
+                    return;
+                }
+                match skip_declare_statement(tokens, pos) {
+                    Some(next) => pos = next,
+                    None => return,
+                }
+            }
+            _ => return,
+        }
+    }
+}
+
+/// Returns the `strict_types` value of a `declare(...)` at `declare_pos`, if it declares one.
+fn peek_strict_types(tokens: &[SpannedToken], declare_pos: usize) -> Option<bool> {
+    let mut pos = declare_pos + 1;
+    if !matches!(tokens.get(pos)?.0, Token::LParen) {
+        return None;
+    }
+    pos += 1;
+    parse_directives(tokens, &mut pos, Span::dummy()).ok().flatten()
 }
 
 /// Parses one or more directive/literal pairs.
