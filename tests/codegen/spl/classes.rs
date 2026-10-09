@@ -401,6 +401,34 @@ echo "|", serialize($s), "\n";
     );
 }
 
+// `__debugInfo()` returns the raw mode word and the PHYSICAL storage order (first pushed first),
+// not the LIFO `offsetGet()` order, and must snapshot it WITHOUT flipping the frozen mode: the
+// old body called `setIteratorMode(0)`, which a fixed-mode list now rejects with a
+// RuntimeException (issue #1659).
+/// Verifies that spl debug info reports flags and physical order.
+#[test]
+fn test_spl_debug_info_reports_flags_and_physical_order() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplStack();
+$s->push("a"); $s->push("b"); $s->push("c");
+var_dump($s->__debugInfo());
+$q = new SplQueue();
+$q->enqueue("a"); $q->enqueue("b"); $q->enqueue("c");
+var_dump($q->__debugInfo());
+$d = new SplDoublyLinkedList();
+$d->push("a"); $d->push("b"); $d->push("c");
+var_dump($d->__debugInfo());
+"#,
+    );
+    let entry = |flags: i64| {
+        format!(
+            "array(2) {{\n  [\"\0SplDoublyLinkedList\0flags\"]=>\n  int({flags})\n  [\"\0SplDoublyLinkedList\0dllist\"]=>\n  array(3) {{\n    [0]=>\n    string(1) \"a\"\n    [1]=>\n    string(1) \"b\"\n    [2]=>\n    string(1) \"c\"\n  }}\n}}\n"
+        )
+    };
+    assert_eq!(out, format!("{}{}{}", entry(6), entry(4), entry(0)));
+}
+
 // Tests SplFixedArray getSize/setSize, direct bracket read/write, isset/unset, toArray,
 // jsonSerialize, and that resizing a fixed array preserves existing elements up to the new size.
 /// Verifies that phase4 SPL fixed array runtime methods.
