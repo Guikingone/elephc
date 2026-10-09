@@ -329,6 +329,10 @@ fn recursive_iterator_iterator_pop_invalid_frame_body() -> Vec<Stmt> {
                     TypeExpr::Int,
                     binary_expr(recursive_iterator_iterator_depth_expr(), BinOp::Sub, int_expr(1)),
                 ),
+                // Publish the frame as valid for the hook: php's `endChildren()` observes the
+                // depth of the level being left through `getDepth()`.
+                property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                expr_stmt(method_call(this_expr(), "endChildren", Vec::new())),
                 property_assign_stmt(
                     this_expr(),
                     "depth",
@@ -469,6 +473,10 @@ fn recursive_iterator_iterator_descend_current_child_body(parent_state: Expr) ->
                 property_array_push_stmt(this_expr(), "depths", var_expr("nextDepth")),
                 property_assign_stmt(this_expr(), "depth", var_expr("nextDepth")),
                 property_assign_stmt(this_expr(), "slot", var_expr("nextSlot")),
+                // The child was just proven valid; publish it so `beginChildren()`'s
+                // `getDepth()` reports the new level instead of 0.
+                property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                expr_stmt(method_call(this_expr(), "beginChildren", Vec::new())),
                 expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
                 return_void_stmt(),
             ],

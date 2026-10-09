@@ -110,6 +110,10 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
             Some(named_type("RecursiveIterator")),
             return_body(var_expr("iterator")),
         ),
+        // php's child-traversal hooks; the traversal calls them, subclasses override them.
+        method_with_body("beginChildren", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+        method_with_body("endChildren", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+        method_with_body("nextElement", Vec::new(), Some(TypeExpr::Void), Vec::new()),
     ]
 }
 
