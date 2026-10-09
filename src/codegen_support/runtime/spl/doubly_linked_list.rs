@@ -26,6 +26,8 @@ const ITER_MODE_LIFO: i64 = 2;
 const SPL_DLL_POP_EMPTY_MSG_LEN: usize = "Can't pop from an empty datastructure".len();
 const SPL_DLL_SHIFT_EMPTY_MSG_LEN: usize = "Can't shift from an empty datastructure".len();
 const SPL_DLL_PEEK_EMPTY_MSG_LEN: usize = "Can't peek at an empty datastructure".len();
+const SPL_DLL_FROZEN_MODE_MSG_LEN: usize =
+    "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen".len();
 const SPL_DLL_ADD_RANGE_MSG_LEN: usize =
     "SplDoublyLinkedList::add(): Argument #1 ($index) is out of range".len();
 const SPL_DLL_OFFSET_EXISTS_TYPE_MSG_LEN: usize =
@@ -73,6 +75,8 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_top_aarch64(emitter);
     emit_bottom_aarch64(emitter);
     emit_iterator_mode_aarch64(emitter);
+    emit_stack_iterator_mode_aarch64(emitter);
+    emit_queue_iterator_mode_aarch64(emitter);
     emit_serialize_aarch64(emitter);
     emit_unserialize_aarch64(emitter);
     emit_serialize_array_aarch64(emitter);
@@ -358,6 +362,44 @@ fn emit_iterator_mode_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
     emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode
+}
+
+/// Emits `__rt_spl_stack_set_iterator_mode` on ARM64: receiver in x0, mode bits in x1.
+///
+/// `SplStack` fixes the LIFO/FIFO mode bit to LIFO, so a request that clears it raises
+/// PHP's `RuntimeException`; the remaining mode bits (DELETE/KEEP) stay writable.
+fn emit_stack_iterator_mode_aarch64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_spl_stack_set_iterator_mode");
+    emitter.instruction("tst x1, #2");                                          // is the frozen LIFO bit still set?
+    emitter.instruction("b.eq __rt_spl_stack_mode_frozen");                     // clearing LIFO on SplStack is rejected
+    emitter.instruction(&format!("str x1, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on the receiver
+    emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_stack_mode_frozen");
+    emit_throw_exception_aarch64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
+}
+
+/// Emits `__rt_spl_queue_set_iterator_mode` on ARM64: receiver in x0, mode bits in x1.
+///
+/// `SplQueue` fixes the LIFO/FIFO mode bit to FIFO, so a request that sets LIFO raises
+/// PHP's `RuntimeException`; the remaining mode bits (DELETE/KEEP) stay writable.
+fn emit_queue_iterator_mode_aarch64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_spl_queue_set_iterator_mode");
+    emitter.instruction("tst x1, #2");                                          // is the frozen LIFO bit still clear?
+    emitter.instruction("b.ne __rt_spl_queue_mode_frozen");                     // setting LIFO on SplQueue is rejected
+    emitter.instruction(&format!("str x1, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on the receiver
+    emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_queue_mode_frozen");
+    emit_throw_exception_aarch64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
 }
 
 /// Emits `__rt_spl_dll_serialize_array` on ARM64: receiver in x0. Copies internal storage
@@ -1294,6 +1336,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_top_x86_64(emitter);
     emit_bottom_x86_64(emitter);
     emit_iterator_mode_x86_64(emitter);
+    emit_stack_iterator_mode_x86_64(emitter);
+    emit_queue_iterator_mode_x86_64(emitter);
     emit_serialize_x86_64(emitter);
     emit_unserialize_x86_64(emitter);
     emit_serialize_array_x86_64(emitter);
@@ -1576,6 +1620,44 @@ fn emit_iterator_mode_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
     emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode
+}
+
+/// Emits `__rt_spl_stack_set_iterator_mode` on x86_64: receiver in rdi, mode bits in rsi.
+///
+/// Mirrors the AArch64 helper: `SplStack`'s frozen LIFO bit makes a request that clears
+/// it raise PHP's `RuntimeException`.
+fn emit_stack_iterator_mode_x86_64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_spl_stack_set_iterator_mode");
+    emitter.instruction("test rsi, 2");                                         // is the frozen LIFO bit still set?
+    emitter.instruction("jz __rt_spl_stack_mode_frozen_x86");                   // clearing LIFO on SplStack is rejected
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rsi", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on receiver
+    emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_stack_mode_frozen_x86");
+    emit_throw_exception_x86_64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
+}
+
+/// Emits `__rt_spl_queue_set_iterator_mode` on x86_64: receiver in rdi, mode bits in rsi.
+///
+/// Mirrors the AArch64 helper: `SplQueue`'s frozen FIFO bit makes a request that sets
+/// LIFO raise PHP's `RuntimeException`.
+fn emit_queue_iterator_mode_x86_64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_spl_queue_set_iterator_mode");
+    emitter.instruction("test rsi, 2");                                         // is the frozen LIFO bit still clear?
+    emitter.instruction("jnz __rt_spl_queue_mode_frozen_x86");                  // setting LIFO on SplQueue is rejected
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rsi", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on receiver
+    emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_queue_mode_frozen_x86");
+    emit_throw_exception_x86_64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
 }
 
 /// Emits `__rt_spl_dll_serialize_array` on x86_64: receiver in rdi. Copies internal storage
