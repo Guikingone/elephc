@@ -22,13 +22,15 @@
 //!   grew a real `HashContext` object (`elephc::hash_prelude`) and became
 //!   `hash_context_draws_an_object_handle_in_creation_order`, a parity assertion.
 //! - THE DIVERGENCE PINS IN THIS FILE are
-//!   `computed_debug_info_is_ignored_and_declared_properties_print_instead` and
-//!   `reflection_owner_classes_render_no_properties_because_public_names_are_unmodelled`.
-//!   elephc honours `__debugInfo()` only when its body is a static property projection
-//!   (folded into `_class_vd_desc_*` at compile time); a body that computes values falls
-//!   back to the declared-property list. And elephc models only the private `__*` backing
-//!   slots of PHP's builtin Reflection classes, not their public `name`, so those render
-//!   as zero-property objects. Both tests assert elephc's ACTUAL output with PHP's
+//!   `computed_debug_info_is_ignored_and_declared_properties_print_instead`,
+//!   `reflection_owner_classes_render_no_properties_because_public_names_are_unmodelled`
+//!   and `reflection_subclass_debug_info_projection_drops_backing_slots`. elephc honours
+//!   `__debugInfo()` only when its body is a static property projection (folded into
+//!   `_class_vd_desc_*` at compile time); a body that computes values falls back to the
+//!   declared-property list. And elephc models only the private `__*` backing slots of PHP's
+//!   builtin Reflection classes, not their public `name`, so those render as zero-property
+//!   objects; a `__debugInfo()` projection that READS such a slot drops the pair instead of
+//!   publishing the storage. All three tests assert elephc's ACTUAL output with PHP's
 //!   spelled out beside them, so they can never be mistaken for parity.
 //! - ENUM CASES ARE LAZY NOW, AND THAT CELL IS PARITY. Cases used to be created in
 //!   bulk in `main`'s prologue, which burnt one handle per case of every referenced
@@ -1827,10 +1829,11 @@ fn reflection_subclass_hides_inherited_backing_slots() {
 }
 
 /// A `__debugInfo()` projection that reads a compiler backing slot
-/// (`return ['n' => $this->__name]`) must not publish that slot either: PHP's Reflection
-/// classes expose no `__name`, so the read is an undefined property (a warning plus a NULL
-/// entry). elephc drops the pair instead of rendering its private storage, so this fixture
-/// pins elephc's ACTUAL output (`object(Mine)#1 (0) {}`) against PHP's `["n"]=> NULL`.
+/// (`return ['n' => $this->__name, 'i' => $this->__interfaces]`) must not publish those slots
+/// either: PHP's Reflection classes expose no `__name`/`__interfaces`, so each read is an
+/// undefined property (a warning plus a NULL entry). elephc drops the pairs instead of
+/// rendering its private storage, so this fixture pins elephc's ACTUAL output
+/// (`object(Mine)#1 (0) {}`) against PHP's `["n"]=> NULL, ["i"]=> NULL`.
 #[test]
 fn reflection_subclass_debug_info_projection_drops_backing_slots() {
     let out = run_php(
@@ -1838,7 +1841,7 @@ fn reflection_subclass_debug_info_projection_drops_backing_slots() {
         concat!(
             "<?php\n",
             "class Mine extends ReflectionClass {\n",
-            "    public function __debugInfo(): array { return ['n' => $this->__name]; }\n",
+            "    public function __debugInfo(): array { return ['n' => $this->__name, 'i' => $this->__interfaces]; }\n",
             "}\n",
             "$m = new Mine('Mine');\n",
             "echo (new ReflectionClass('Mine'))->getName(), \"\\n\";\n",
