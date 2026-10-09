@@ -70,6 +70,7 @@
 
 use super::super::objects::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
+use crate::codegen_support::runtime::spl::SPL_FIXED_STORAGE_OFFSET;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -300,6 +301,18 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.comment("--- runtime: vd_obj_count ---");
     emitter.label_global("__rt_vd_obj_count");
 
+    // -- an intrinsic container supplies its own element count through a per-class adapter --
+    emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
+    abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
+    emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
+    emitter.instruction("cmp x9, x10");                                         // is the class id within the descriptor table?
+    emitter.instruction("b.hs __rt_vd_obj_count_generic");                      // an unknown class has no adapter
+    abi::emit_symbol_address(emitter, "x11", "_class_vd_count_ptrs");           // resolve the per-class count adapter table
+    emitter.instruction("ldr x2, [x11, x9, lsl #3]");                           // load this class's count adapter, or 0
+    emitter.instruction("cbz x2, __rt_vd_obj_count_generic");                   // no adapter: fall through to the property tally
+    emitter.instruction("br x2");                                               // the adapter returns the count directly
+    emitter.label("__rt_vd_obj_count_generic");
+
     emitter.instruction("mov x1, x0");                                          // keep the object pointer for slot addressing
     emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
@@ -350,6 +363,19 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: vd_obj_count ---");
     emitter.label_global("__rt_vd_obj_count");
 
+    // -- an intrinsic container supplies its own element count through a per-class adapter --
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
+    abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");           // resolve the class-id table extent
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of registered class ids
+    emitter.instruction("cmp r9, r10");                                         // is the class id within the descriptor table?
+    emitter.instruction("jae __rt_vd_obj_count_generic_x86");                   // an unknown class has no adapter
+    abi::emit_symbol_address(emitter, "r11", "_class_vd_count_ptrs");           // resolve the per-class count adapter table
+    emitter.instruction("mov rax, QWORD PTR [r11 + r9 * 8]");                   // load this class's count adapter, or 0
+    emitter.instruction("test rax, rax");                                       // does this class have an adapter?
+    emitter.instruction("jz __rt_vd_obj_count_generic_x86");                    // no adapter: fall through to the property tally
+    emitter.instruction("jmp rax");                                             // the adapter returns the count directly
+    emitter.label("__rt_vd_obj_count_generic_x86");
+
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
     abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of registered class ids
@@ -389,6 +415,39 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_vd_obj_count_none_x86");
     emitter.instruction("xor rax, rax");                                        // an unknown class dumps an empty body
     emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Emits the per-class var_dump adapters for intrinsic containers.
+///
+/// An intrinsic container stores its payload in a runtime layout the generic property walker
+/// cannot see, so `_class_vd_count_ptrs`/`_class_vd_body_ptrs` route its class id to a pair of
+/// helpers: `__rt_vd_fixed_array_count` reports the element count for the `object(C) (n)` header,
+/// and `__rt_vd_fixed_array_body` hands the backing storage to the indexed walker so each slot
+/// renders as `[N]=>` exactly like a PHP array. Both are tail-callable leaves, so the callers can
+/// `br`/`jmp` into them with no frame of their own.
+pub fn emit_vd_container_adapters(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.blank();
+        emitter.comment("--- runtime: vd_container_adapters ---");
+        emitter.label_global("__rt_vd_fixed_array_count");
+        emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load the fixed-array storage
+        emitter.instruction("mov rax, QWORD PTR [r9]");                         // return the storage length as the property count
+        emitter.instruction("ret");                                             // return to __rt_vd_obj_count
+        emitter.label_global("__rt_vd_fixed_array_body");
+        emitter.instruction(&format!("mov rdi, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load the fixed-array storage
+        emitter.instruction("jmp __rt_var_dump_indexed");                       // render each slot as an indexed element
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: vd_container_adapters ---");
+    emitter.label_global("__rt_vd_fixed_array_count");
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load the fixed-array storage
+    emitter.instruction("ldr x0, [x9]");                                        // return the storage length as the property count
+    emitter.instruction("ret");                                                 // return to __rt_vd_obj_count
+    emitter.label_global("__rt_vd_fixed_array_body");
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load the fixed-array storage
+    emitter.instruction("b __rt_var_dump_indexed");                             // render each slot as an indexed element
 }
 
 /// `__rt_var_dump_open_object`: emit `<indent>object(NAME) (COUNT) {\n`.
@@ -717,6 +776,18 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.comment("--- runtime: var_dump_object ---");
     emitter.label_global("__rt_var_dump_object");
 
+    // -- an intrinsic container renders its own body through a per-class adapter --
+    emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
+    abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
+    emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
+    emitter.instruction("cmp x9, x10");                                         // is the class id within the descriptor table?
+    emitter.instruction("b.hs __rt_vd_obj_body_generic");                       // an unknown class has no adapter
+    abi::emit_symbol_address(emitter, "x11", "_class_vd_body_ptrs");            // resolve the per-class body adapter table
+    emitter.instruction("ldr x2, [x11, x9, lsl #3]");                           // load this class's body adapter, or 0
+    emitter.instruction("cbz x2, __rt_vd_obj_body_generic");                    // no adapter: fall through to the property walk
+    emitter.instruction("br x2");                                               // the adapter renders the whole body
+    emitter.label("__rt_vd_obj_body_generic");
+
     // Frame (80 bytes): [0] object ptr, [8] descriptor ptr, [16] property index,
     //   [24] property count, [32] descriptor row ptr, [40] property slot ptr,
     //   [64] saved x29, [72] saved x30.
@@ -804,6 +875,19 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_object ---");
     emitter.label_global("__rt_var_dump_object");
+
+    // -- an intrinsic container renders its own body through a per-class adapter --
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
+    abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");           // resolve the class-id table extent
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of registered class ids
+    emitter.instruction("cmp r9, r10");                                         // is the class id within the descriptor table?
+    emitter.instruction("jae __rt_vd_obj_body_generic_x86");                    // an unknown class has no adapter
+    abi::emit_symbol_address(emitter, "r11", "_class_vd_body_ptrs");            // resolve the per-class body adapter table
+    emitter.instruction("mov rax, QWORD PTR [r11 + r9 * 8]");                   // load this class's body adapter, or 0
+    emitter.instruction("test rax, rax");                                       // does this class have an adapter?
+    emitter.instruction("jz __rt_vd_obj_body_generic_x86");                     // no adapter: fall through to the property walk
+    emitter.instruction("jmp rax");                                             // the adapter renders the whole body
+    emitter.label("__rt_vd_obj_body_generic_x86");
 
     // rbp-relative frame: [-8] object ptr, [-16] descriptor ptr, [-24] index,
     //   [-32] property count, [-40] descriptor row ptr, [-48] property slot ptr.

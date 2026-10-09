@@ -625,6 +625,43 @@ echo "dll fifo ok\n";
     );
 }
 
+/// Verifies `var_dump` renders an `SplFixedArray` as an indexed array of its backing storage.
+///
+/// The class stores its payload outside the declared-property layout, so without a per-class
+/// var_dump adapter it rendered as `object(SplFixedArray)#1 (0) {}`. PHP prints the element count
+/// in the header and one `[N]=>` line per slot, with unset slots as `NULL`.
+#[test]
+fn test_spl_fixed_array_var_dump_renders_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$a = new SplFixedArray(2);
+$a[0] = "foo";
+var_dump($a);
+$b = SplFixedArray::fromArray([1, "2", false]);
+var_dump($b);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(SplFixedArray)#1 (2) {\n",
+            "  [0]=>\n",
+            "  string(3) \"foo\"\n",
+            "  [1]=>\n",
+            "  NULL\n",
+            "}\n",
+            "object(SplFixedArray)#2 (3) {\n",
+            "  [0]=>\n",
+            "  int(1)\n",
+            "  [1]=>\n",
+            "  string(1) \"2\"\n",
+            "  [2]=>\n",
+            "  bool(false)\n",
+            "}\n",
+        )
+    );
+}
+
 /// Verifies that ordinary SplFixedArray allocation is unaffected by the storage-size guard.
 #[test]
 fn test_spl_fixed_array_normal_size_still_works() {
