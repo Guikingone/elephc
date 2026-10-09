@@ -7,8 +7,9 @@ name: PHP upstream watch
 #
 # State — the last seen tag per maintenance branch — is committed under
 # .github/upstream/php-src-watch.json, so a re-run never opens duplicates. The
-# first run opens one issue for each watched branch's current latest release and
-# records the branch pointers; later runs open one issue per newly published tag.
+# first run records the branch pointers silently; pass --kickoff (or the
+# workflow's kickoff input) to also open one issue for each watched branch's
+# current latest release. Later runs open one issue per newly published tag.
 #
 # This is deliberately disjoint from the release workflows: it only reads
 # php/php-src, writes tracking issues, and commits its own state file.
@@ -52,11 +53,30 @@ jobs:
     if: github.repository == 'illegalstudio/elephc'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The state commit is pushed with an Illegal Bot installation token, not the
+    # workflow token: `main` is protected and the App is the ruleset's only bypass
+    # actor. The workflow token only opens the issues, so it needs `issues: write`
+    # and nothing more; the App token is minted below and used for checkout/push.
     permissions:
-      contents: write # commit the watch state under .github/upstream/
+      contents: read
       issues: write   # open the tracking issues
     steps:
+      # Pinned to a full commit SHA rather than the `v2` tag: this step receives
+      # the App private key, so a moved upstream tag would change the code that
+      # handles it without any diff to review here. Every workflow that mints a
+      # bot token pins the same SHA; bump them together.
+      - name: Mint Illegal Bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
+          private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
+
       - uses: actions/checkout@v7
+        with:
+          # The App token is the ruleset's bypass actor, so the state commit
+          # below can land on protected `main`.
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Detect new releases and open issues
         env:
@@ -75,9 +95,14 @@ jobs:
 
       - name: Commit watch state
         if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Author the commit as the App that owns the pushing token.
+          BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
           if [ -f .github/upstream/php-src-watch.json ]; then
             git add .github/upstream/php-src-watch.json
           fi

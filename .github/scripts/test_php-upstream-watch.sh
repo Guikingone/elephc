@@ -299,6 +299,29 @@ else
 fi
 assert_eq "second run does not rewrite state" "$state_snapshot" "$(cat "$WORK/state.json")"
 
+# ---------------------------------------------------------------------------
+# End-to-end: flood guard must not advance a pointer past a skipped release
+# ---------------------------------------------------------------------------
+
+# planned.json is branch-ordered, so --max-issues 1 keeps only the newest
+# branch's latest (8.5.11) and drops 8.4.26 entirely. The dropped branch's
+# pointer must stay absent so the next run retries it.
+: >"$FIX/titles.log"
+bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state-flood.json" \
+  --baseline "$FIX/baseline.json" --kickoff --max-issues 1 >"$WORK/flood1.log" 2>&1 \
+  || fail "flood-guard run exited non-zero"
+assert_file_contains "flood guard opens the newest issue" "PHP 8.5.11 released" "$FIX/titles.log"
+assert_eq "flood guard records the opened branch" "php-8.5.11" "$(jq -r '.branches["8.5"]' "$WORK/state-flood.json")"
+assert_eq "flood guard leaves the skipped branch pointer unadvanced" "false" \
+  "$(jq -r '.branches | has("8.4")' "$WORK/state-flood.json")"
+
+# The skipped branch is retried on the next run.
+: >"$FIX/titles.log"
+bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state-flood.json" \
+  --baseline "$FIX/baseline.json" >"$WORK/flood2.log" 2>&1 \
+  || fail "flood-guard retry run exited non-zero"
+assert_file_contains "flood guard retries the skipped branch" "PHP 8.4.26 released" "$FIX/titles.log"
+
 echo
 if [ "$failures" -eq 0 ]; then
   echo "All watcher tests passed."

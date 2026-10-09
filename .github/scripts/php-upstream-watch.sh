@@ -18,9 +18,10 @@
 # Key details:
 #   - Only stable php-X.Y.Z releases on watched branches are considered;
 #     pre-releases (RC/beta/alpha) are ignored on purpose.
-#   - First run (no state file) opens one issue for each watched branch's current
-#     latest release and records the branch pointers; later runs open one issue
-#     per newly published tag. --seed-only records pointers without opening.
+#   - First run (no state file) records the branch pointers silently; pass
+#     --kickoff to also open one issue for each watched branch's current latest
+#     release. Later runs open one issue per newly published tag. --seed-only
+#     records pointers without opening.
 #   - --dry-run performs no writes: no issues and no state update.
 #   - Any issue-creation failure makes the run exit non-zero without advancing
 #     state, so the next run retries; already-opened issues are skipped by the
@@ -554,6 +555,11 @@ main() {
   done
 
   local created=0 already=0 failures=0
+  # Tags whose issues were opened (or already existed) this run, one JSON object
+  # per line; the state pointers below advance only through these.
+  local opened_log
+  opened_log="$tmp/opened.jsonl"
+  : >"$opened_log"
   local line tag version branch prev_tag first url published pat kind
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -616,6 +622,7 @@ main() {
       log "skip $tag: issue already exists"
       if [ "$DRY_RUN" -eq 0 ]; then
         already=$(( already + 1 ))
+        jq -cn --arg b "$branch" --arg t "$tag" '{branch: $b, tag: $t}' >>"$opened_log"
       fi
       continue
     fi
@@ -640,6 +647,7 @@ main() {
         "${milestone_args[@]+"${milestone_args[@]}"}" "${label_args[@]+"${label_args[@]}"}"; then
       log "opened: $title"
       created=$(( created + 1 ))
+      jq -cn --arg b "$branch" --arg t "$tag" '{branch: $b, tag: $t}' >>"$opened_log"
     else
       log "error: could not open issue for $tag"
       failures=$(( failures + 1 ))
@@ -647,13 +655,25 @@ main() {
     fi
   done <"$plan_file"
 
+  # Advance each branch pointer only through tags whose issues were opened (or
+  # already existed) this run. A seed run opens nothing by design, so it records
+  # the latest tag per branch instead. This keeps a branch whose releases were
+  # skipped — by --max-issues, or dropped entirely by the flood guard — pointing
+  # at its last opened tag, so the next run retries them rather than treating
+  # them as already seen.
   if [ "$DRY_RUN" -eq 0 ] && [ "$failures" -eq 0 ]; then
-    local latest_map changed
-    latest_map="$(jq -c 'group_by(.branch) | map({ key: .[0].branch, value: (last.tag) }) | from_entries' "$tmp/normalized.json")"
-    changed="$(jq -n --argjson old "$state_branches" --argjson new "$latest_map" '$new | to_entries | any(.value != ($old[.key] // null))')"
+    local new_map changed
+    if [ "$seed" -eq 1 ]; then
+      new_map="$(jq -c 'group_by(.branch) | map({ key: .[0].branch, value: (last.tag) }) | from_entries' "$tmp/normalized.json")"
+    elif [ -s "$opened_log" ]; then
+      new_map="$(jq -cs 'reduce .[] as $r ({}; .[$r.branch] = $r.tag)' "$opened_log")"
+    else
+      new_map='{}'
+    fi
+    changed="$(jq -n --argjson old "$state_branches" --argjson new "$new_map" '$new | to_entries | any(.value != ($old[.key] // null))')"
     if [ ! -f "$STATE_FILE" ] || [ "$changed" = "true" ]; then
       local updated
-      updated="$(jq -n --argjson old "$state_branches" --argjson new "$latest_map" --arg today "$(date -u +%F)" \
+      updated="$(jq -n --argjson old "$state_branches" --argjson new "$new_map" --arg today "$(date -u +%F)" \
         '{schema: 1, updated_at: $today, branches: ($old + $new)}')"
       mkdir -p "$(dirname "$STATE_FILE")"
       printf '%s\n' "$updated" >"$STATE_FILE"
