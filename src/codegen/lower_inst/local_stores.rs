@@ -111,9 +111,13 @@ fn value_is_consuming_mutation_of_ref_cell(
         return Ok(false);
     };
     let consuming_fetch = conversion.op == Op::RuntimeCall
-        && conversion.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite))
-        && matches!(conversion.result_php_type.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. });
+        && matches!(conversion.immediate, Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::ArrayFetchForWrite
+            | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)))
+        && matches!(
+            conversion.result_php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        );
     if conversion.op != Op::ArrayToHash && !consuming_fetch {
         return Ok(false);
     }
