@@ -25,6 +25,21 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
     )? {
         return Ok(());
     }
+    // A concrete Mixed-valued hash: the boxed walker borrows a cell, so box the hash for the call
+    // and republish it afterwards. A typed-value hash keeps the existing generic callback path.
+    if let PhpType::AssocArray { value, .. } = ctx.value_php_type(array)?.codegen_repr() {
+        if value.codegen_repr() == PhpType::Mixed {
+            super::boxed_walk::lower_assoc_array_walk(
+                ctx,
+                inst,
+                array,
+                callback,
+                "array_walk",
+                false,
+            )?;
+            return Ok(());
+        }
+    }
     let elem_ty = eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_walk")?;
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {

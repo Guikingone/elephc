@@ -2268,3 +2268,21 @@ echo $list[0], "|", $a[0], "|", count($a), "|", $map["k"], "|", $b["k"], "|", im
     assert_eq!(out.stdout, "direct|changed|2|1|9|k,j|two", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies array_walk() and array_walk_recursive() mutate a Mixed-valued hash through a
+/// by-reference callback, while a copied alias keeps its own values.
+#[test]
+fn test_array_walk_mixed_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => "s"];
+$copy = $a;
+array_walk($a, function (&$v, $k) { $v = "$k:$v"; });
+echo implode(",", $a), "|", implode(",", $copy), "\n";
+$b = ["x" => 1, "n" => ["p" => "q"]];
+array_walk_recursive($b, function (&$v, $k) { $v = "$k:$v"; });
+echo $b["x"], "|", $b["n"]["p"], "\n";
+"#,
+    );
+    assert_eq!(out, "x:1,y:s|1,s\nx:1|p:q\n");
+}
