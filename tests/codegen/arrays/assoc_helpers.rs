@@ -671,3 +671,24 @@ echo $saved[1];
     );
     assert_eq!(out, "8");
 }
+
+/// `array_reverse` over a Mixed-valued hash reverses insertion order and, without `preserve_keys`,
+/// renumbers the surviving integer keys from zero, matching PHP for both key policies.
+#[test]
+fn test_array_reverse_mixed_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => "s"];
+var_dump(array_reverse($a));
+$b = [1 => 1, 2 => "s"];
+var_dump(array_reverse($b));
+var_dump(array_reverse($a, true));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"y\"]=>\n  string(1) \"s\"\n  [\"x\"]=>\n  int(1)\n}\n\
+array(2) {\n  [0]=>\n  string(1) \"s\"\n  [1]=>\n  int(1)\n}\n\
+array(2) {\n  [\"y\"]=>\n  string(1) \"s\"\n  [\"x\"]=>\n  int(1)\n}\n"
+    );
+}
