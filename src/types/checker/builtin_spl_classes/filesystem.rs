@@ -636,7 +636,7 @@ fn recursive_caching_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "getChildren",
             Vec::new(),
-            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
+            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveCachingIterator")))),
             recursive_caching_get_children_body(),
         ),
         method_with_body(
