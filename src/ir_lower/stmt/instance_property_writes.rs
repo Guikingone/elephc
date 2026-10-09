@@ -38,10 +38,17 @@ pub(super) fn lower_property_assign(
             }
         }
     }
-    let object = lower_expr(ctx, object);
-    let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
     let value_expr = value;
-    let lowered_value = lower_expr(ctx, value_expr);
+    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+        let rhs = lower_expr(ctx, value_expr);
+        let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
+        (receiver, rhs)
+    } else {
+        let object = lower_expr(ctx, object);
+        let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        let rhs = lower_expr(ctx, value_expr);
+        (receiver, rhs)
+    };
     let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     // Preserve the original PHP tag until the initialization probe has chosen its branch.
     // Only an authorized first write reaches the backend's weak typed-property guard.
@@ -55,7 +62,7 @@ pub(super) fn lower_property_assign(
             ctx, &receiver, lowered_value, property, span,
         );
         let data = ctx.intern_string(property);
-        let initialized = ctx.emit_value(Op::PropInitialized, vec![object.value],
+        let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
         let overwrite = ctx.builder.create_named_block("readonly.write.initialized", Vec::new());
         let initialize = ctx.builder.create_named_block("readonly.write.uninitialized", Vec::new());
