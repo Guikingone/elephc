@@ -910,15 +910,19 @@ fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
     if forward {
         emitter.instruction("add x9, x9, #1");                                  // moving forward in FIFO increases the index
     } else {
-        emitter.instruction("cbz x9, __rt_spl_dll_prev_fifo_done");             // moving before zero leaves the iterator exhausted at zero
+        emitter.instruction("cbz x9, __rt_spl_dll_prev_fifo_exhaust");          // moving before zero exhausts the iterator
         emitter.instruction("sub x9, x9, #1");                                  // otherwise move one FIFO slot backward
     }
     emitter.instruction(&format!("str x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // persist updated FIFO iterator index
     emitter.label(done_label);
-    if !forward {
-        emitter.label("__rt_spl_dll_prev_fifo_done");
-    }
     emitter.instruction("ret");                                                 // return void
+    if !forward {
+        emitter.label("__rt_spl_dll_prev_fifo_exhaust");
+        emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load storage to compute the exhausted sentinel
+        emitter.instruction("ldr x10, [x10]");                                  // storage length is the invalid sentinel
+        emitter.instruction(&format!("str x10, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // store the exhausted FIFO sentinel
+        emitter.instruction("ret");                                             // return void
+    }
     if forward {
         emit_iterator_delete_step_aarch64(emitter, delete_label);
     }
@@ -2121,15 +2125,19 @@ fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
         emitter.instruction("add r9, 1");                                       // moving forward in FIFO increases index
     } else {
         emitter.instruction("test r9, r9");                                     // is FIFO traversal already at zero?
-        emitter.instruction("jz __rt_spl_dll_prev_fifo_done");                  // moving before zero leaves iterator at zero
+        emitter.instruction("jz __rt_spl_dll_prev_fifo_exhaust");               // moving before zero exhausts the iterator
         emitter.instruction("sub r9, 1");                                       // otherwise move one FIFO slot backward
     }
     emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r9", SPL_DLL_ITER_INDEX_OFFSET)); // persist updated FIFO iterator index
     emitter.label(done_label);
-    if !forward {
-        emitter.label("__rt_spl_dll_prev_fifo_done");
-    }
     emitter.instruction("ret");                                                 // return void
+    if !forward {
+        emitter.label("__rt_spl_dll_prev_fifo_exhaust");
+        emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load storage to compute the exhausted sentinel
+        emitter.instruction("mov r10, QWORD PTR [r10]");                        // storage length is the invalid sentinel
+        emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", SPL_DLL_ITER_INDEX_OFFSET)); // store the exhausted FIFO sentinel
+        emitter.instruction("ret");                                             // return void
+    }
     if forward {
         emit_iterator_delete_step_x86_64(emitter, delete_label);
     }

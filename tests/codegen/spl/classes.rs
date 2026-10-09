@@ -184,6 +184,24 @@ echo $list->getIteratorMode();
     assert_eq!(out, "0:a;1:b;2:c;\n2:c;1:b;0:a;\n2");
 }
 
+/// Verifies `prev()` before the first element exhausts the iterator (`current()` is null), like php.
+#[test]
+fn test_phase4_spl_doubly_linked_list_prev_before_start() {
+    let out = compile_and_run(
+        r#"<?php
+$list = new SplDoublyLinkedList();
+$list->push(1);
+$list->push(2);
+$list->rewind();
+$list->prev();
+var_dump($list->current());
+$list->rewind();
+var_dump($list->current());
+"#,
+    );
+    assert_eq!(out, "NULL\nint(1)\n");
+}
+
 // Tests IT_MODE_DELETE combined with IT_MODE_FIFO and IT_MODE_LIFO: verifies that foreach
 // consumes elements during iteration and that count reaches zero after FIFO traversal but
 // preserves order for LIFO.
