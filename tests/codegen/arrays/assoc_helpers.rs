@@ -710,3 +710,22 @@ var_dump(array_shift($c));
     );
     assert_eq!(out, "1|s|1,s\n1|s,3\nNULL\n");
 }
+
+/// `array_unshift` over a Mixed-valued hash prepends values and renumbers the surviving integer
+/// keys from zero, while a copied alias keeps its own order and keys. With no values it only
+/// reports the current count.
+#[test]
+fn test_array_unshift_mixed_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => "s"];
+$copy = $a;
+echo array_unshift($a, 9, "z"), "|", implode(",", $a), "|", implode(",", $copy), "\n";
+$b = [1 => 1, 2 => "s"];
+echo array_unshift($b, 9), "|", implode(",", $b), "\n";
+$c = ["only" => 1];
+echo array_unshift($c), "|", implode(",", $c), "\n";
+"#,
+    );
+    assert_eq!(out, "4|9,z,1,s|1,s\n3|9,1,s\n1|1\n");
+}
