@@ -347,16 +347,22 @@ fn seek_body() -> Vec<Stmt> {
     vec![property_assign_stmt(this_expr(), "position", var_expr("offset"))]
 }
 
-/// Returns info attached to a specific object or null when absent.
+/// Returns info attached to a specific object, rejecting an object that is not stored.
+///
+/// php-src's `SplObjectStorage::offsetGet()` raises
+/// `UnexpectedValueException: Object not found` for a missing object rather than
+/// returning null, unlike the iterator-facing `getInfo()` accessor.
 fn offset_get_body() -> Vec<Stmt> {
     vec![
         assign_stmt("index", index_of_expr(var_expr("object"))),
         if_stmt(
             binary_expr(var_expr("index"), BinOp::GtEq, int_expr(0)),
             return_body(info_at(var_expr("index"))),
-            None,
+            Some(vec![throw_stmt(new_object_expr(
+                "UnexpectedValueException",
+                vec![string_expr("Object not found")],
+            ))]),
         ),
-        return_stmt(null_expr()),
     ]
 }
 

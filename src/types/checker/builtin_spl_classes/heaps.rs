@@ -447,9 +447,27 @@ fn priority_insert_body() -> Vec<Stmt> {
     ]
 }
 
-/// Stores the selected extraction flags.
+/// Stores the selected extraction flags after rejecting an empty selection.
+///
+/// php-src treats `EXTR_DATA|EXTR_PRIORITY` as the only meaningful bits and raises
+/// `RuntimeException` when neither is set, so `setExtractFlags(0)` and any other
+/// value whose low two bits are clear (for example `4`) throw the same message.
 fn priority_set_extract_flags_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(this_expr(), "extractFlags", var_expr("flags"))]
+    vec![
+        if_stmt(
+            binary_expr(
+                binary_expr(var_expr("flags"), BinOp::BitAnd, int_expr(3)),
+                BinOp::StrictEq,
+                int_expr(0),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "RuntimeException",
+                vec![string_expr("Must specify at least one extract flag")],
+            ))],
+            None,
+        ),
+        property_assign_stmt(this_expr(), "extractFlags", var_expr("flags")),
+    ]
 }
 
 /// Returns the number of queued data values.

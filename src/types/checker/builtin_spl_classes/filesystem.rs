@@ -369,14 +369,57 @@ fn spl_file_info_methods() -> Vec<ClassMethod> {
             "setFileClass",
             vec![param_default("class", TypeExpr::Str, string_expr("SplFileObject"))],
             Some(TypeExpr::Void),
-            vec![property_assign_stmt(this_expr(), "fileClass", var_expr("class"))],
+            set_file_class_body(),
         ),
         method_with_body(
             "setInfoClass",
             vec![param_default("class", TypeExpr::Str, string_expr("SplFileInfo"))],
             Some(TypeExpr::Void),
-            vec![property_assign_stmt(this_expr(), "infoClass", var_expr("class"))],
+            set_info_class_body(),
         ),
+    ]
+}
+
+/// Builds the `SplFileInfo::setFileClass()` body, rejecting an unrelated class.
+fn set_file_class_body() -> Vec<Stmt> {
+    file_info_class_setter_body("fileClass", "SplFileObject", "SplFileInfo::setFileClass()")
+}
+
+/// Builds the `SplFileInfo::setInfoClass()` body, rejecting an unrelated class.
+fn set_info_class_body() -> Vec<Stmt> {
+    file_info_class_setter_body("infoClass", "SplFileInfo", "SplFileInfo::setInfoClass()")
+}
+
+/// Builds the shared validator for `setFileClass()`/`setInfoClass()`.
+///
+/// php-src accepts the base class itself or any subclass and raises `TypeError`
+/// naming the offending class otherwise, before the backing-class property is set.
+fn file_info_class_setter_body(property: &str, base: &str, prefix: &str) -> Vec<Stmt> {
+    let accepted = binary_expr(
+        binary_expr(var_expr("class"), BinOp::StrictEq, string_expr(base)),
+        BinOp::Or,
+        function_call(
+            "is_subclass_of",
+            vec![var_expr("class"), string_expr(base)],
+        ),
+    );
+    let message = format!(
+        "{prefix}: Argument #1 ($class) must be a class name derived from {base}, "
+    );
+    vec![
+        if_stmt(
+            not_expr(accepted),
+            vec![throw_stmt(new_object_expr(
+                "TypeError",
+                vec![binary_expr(
+                    binary_expr(string_expr(&message), BinOp::Concat, var_expr("class")),
+                    BinOp::Concat,
+                    string_expr(" given"),
+                )],
+            ))],
+            None,
+        ),
+        property_assign_stmt(this_expr(), property, var_expr("class")),
     ]
 }
 
@@ -448,7 +491,25 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(file_object_flags_expr())),
         method_with_body("setFlags", vec![param("flags", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))]),
         method_with_body("getMaxLineLen", Vec::new(), Some(TypeExpr::Int), return_body(property_access(this_expr(), "maxLineLen"))),
-        method_with_body("setMaxLineLen", vec![param("maxLength", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "maxLineLen", var_expr("maxLength"))]),
+        method_with_body(
+            "setMaxLineLen",
+            vec![param("maxLength", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![
+                // php rejects a negative maximum line length before storing it.
+                if_stmt(
+                    binary_expr(var_expr("maxLength"), BinOp::Lt, int_expr(0)),
+                    vec![throw_stmt(new_object_expr(
+                        "ValueError",
+                        vec![string_expr(
+                            "SplFileObject::setMaxLineLen(): Argument #1 ($maxLength) must be greater than or equal to 0",
+                        )],
+                    ))],
+                    None,
+                ),
+                property_assign_stmt(this_expr(), "maxLineLen", var_expr("maxLength")),
+            ],
+        ),
         method_with_body(
             "setCsvControl",
             vec![
