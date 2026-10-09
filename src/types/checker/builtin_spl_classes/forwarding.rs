@@ -244,6 +244,28 @@ fn limit_bound_expr() -> Expr {
 /// Builds the synthetic method body for limit iterator construct.
 fn limit_iterator_construct_body() -> Vec<Stmt> {
     vec![
+        // php validates the window bounds before storing any state: a negative offset
+        // and a limit below -1 (which alone means "no limit") both raise ValueError.
+        if_stmt(
+            binary_expr(var_expr("offset"), BinOp::Lt, int_expr(0)),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "LimitIterator::__construct(): Argument #2 ($offset) must be greater than or equal to 0",
+                )],
+            ))],
+            None,
+        ),
+        if_stmt(
+            binary_expr(var_expr("limit"), BinOp::Lt, int_expr(-1)),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "LimitIterator::__construct(): Argument #3 ($limit) must be greater than or equal to -1",
+                )],
+            ))],
+            None,
+        ),
         property_assign_stmt(this_expr(), "inner", var_expr("iterator")),
         property_assign_stmt(this_expr(), "offset", var_expr("offset")),
         property_assign_stmt(this_expr(), "limit", var_expr("limit")),

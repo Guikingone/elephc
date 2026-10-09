@@ -369,57 +369,14 @@ fn spl_file_info_methods() -> Vec<ClassMethod> {
             "setFileClass",
             vec![param_default("class", TypeExpr::Str, string_expr("SplFileObject"))],
             Some(TypeExpr::Void),
-            set_file_class_body(),
+            vec![property_assign_stmt(this_expr(), "fileClass", var_expr("class"))],
         ),
         method_with_body(
             "setInfoClass",
             vec![param_default("class", TypeExpr::Str, string_expr("SplFileInfo"))],
             Some(TypeExpr::Void),
-            set_info_class_body(),
+            vec![property_assign_stmt(this_expr(), "infoClass", var_expr("class"))],
         ),
-    ]
-}
-
-/// Builds the `SplFileInfo::setFileClass()` body, rejecting an unrelated class.
-fn set_file_class_body() -> Vec<Stmt> {
-    file_info_class_setter_body("fileClass", "SplFileObject", "SplFileInfo::setFileClass()")
-}
-
-/// Builds the `SplFileInfo::setInfoClass()` body, rejecting an unrelated class.
-fn set_info_class_body() -> Vec<Stmt> {
-    file_info_class_setter_body("infoClass", "SplFileInfo", "SplFileInfo::setInfoClass()")
-}
-
-/// Builds the shared validator for `setFileClass()`/`setInfoClass()`.
-///
-/// php-src accepts the base class itself or any subclass and raises `TypeError`
-/// naming the offending class otherwise, before the backing-class property is set.
-fn file_info_class_setter_body(property: &str, base: &str, prefix: &str) -> Vec<Stmt> {
-    let accepted = binary_expr(
-        binary_expr(var_expr("class"), BinOp::StrictEq, string_expr(base)),
-        BinOp::Or,
-        function_call(
-            "is_subclass_of",
-            vec![var_expr("class"), string_expr(base)],
-        ),
-    );
-    let message = format!(
-        "{prefix}: Argument #1 ($class) must be a class name derived from {base}, "
-    );
-    vec![
-        if_stmt(
-            not_expr(accepted),
-            vec![throw_stmt(new_object_expr(
-                "TypeError",
-                vec![binary_expr(
-                    binary_expr(string_expr(&message), BinOp::Concat, var_expr("class")),
-                    BinOp::Concat,
-                    string_expr(" given"),
-                )],
-            ))],
-            None,
-        ),
-        property_assign_stmt(this_expr(), property, var_expr("class")),
     ]
 }
 
