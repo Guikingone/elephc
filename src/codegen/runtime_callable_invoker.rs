@@ -842,7 +842,7 @@ fn emit_loaded_indexed_array_callback_call(
                 let done_label = ctx.next_label("invoker_ref_arg_done");
                 reload_len(emitter);
                 emit_compare_len_ge(emitter, len_reg, index + 1, &load_label);
-                push_default_ref_arg(default_expr, target_ty, emitter, ctx, data);
+                push_default_ref_arg(default_expr, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done_label);
                 emitter.label(&load_label);
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
@@ -1051,7 +1051,7 @@ fn emit_loaded_assoc_array_callback_call(
                 push_loaded_hash_value_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&use_default);
-                push_default_ref_arg(default_expr, target_ty, emitter, ctx, data);
+                push_default_ref_arg(default_expr, target_ty, index, emitter, ctx, data);
                 emitter.label(&done);
             } else {
                 let missing = ctx.next_label("invoker_assoc_ref_missing");
@@ -2174,6 +2174,12 @@ fn push_default_value_arg(
 ) -> PhpType {
     let source_ty = emit_default_to_result(default, target_ty, emitter, ctx, data);
     let owned_array_default = matches!(&default.kind, ExprKind::ArrayLiteral(_));
+    // A boxed null default is freshly allocated too. It already carries the
+    // invoker's owner; acquiring it like a borrowed literal leaks one cell on
+    // both normal return and a later binding failure.
+    let owned_default = owned_array_default
+        || (matches!(&default.kind, ExprKind::Null)
+            && source_ty.codegen_repr() == PhpType::Mixed);
     let (pushed_ty, boxed_to_mixed) = if owned_array_default
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
     {
@@ -2182,7 +2188,7 @@ fn push_default_value_arg(
     } else {
         coerce_current_value_to_target(emitter, ctx, data, &source_ty, target_ty)
     };
-    if !boxed_to_mixed && !owned_array_default {
+    if !boxed_to_mixed && !owned_default {
         abi::emit_incref_if_refcounted(emitter, &pushed_ty);
     }
     abi::emit_push_result_value(emitter, &pushed_ty);
@@ -2193,6 +2199,7 @@ fn push_default_value_arg(
 fn push_default_ref_arg(
     default: &Expr,
     target_ty: Option<&PhpType>,
+    parameter_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -2209,6 +2216,11 @@ fn push_default_ref_arg(
     ));                                                                         // keep the freshly allocated ref-cell address in a stable scratch
     store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
     abi::emit_push_reg(emitter, cell_reg);
+    if matches!(pushed_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        // Keep the pointer-holder ABI used by the callee's Load/StoreRefCell.
+        // Only an omitted default is ours; supplied caller markers stay borrowed.
+        pending_owners::register_pushed_ref_cell(emitter, parameter_index);
+    }
     PhpType::Int
 }
 

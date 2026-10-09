@@ -7,11 +7,12 @@
 - [x] Reuse the existing fork branch and upstream PR #958 as explicitly requested.
 - [x] Run the current checkpoint's focused build/test and generated-doc checks;
       record failures as open, not as acceptance.
-- [ ] Commit the scoped project changes, excluding local tool configuration,
+- [x] Commit the scoped project changes, excluding local tool configuration,
       scratch/review artifacts and unrelated inherited vendor changes.
-- [ ] Push normally to Guikingone/elephc:spike/runtime-ctx-register.
-- [ ] Record the exact pushed SHA and current validation limits in PR #958.
-- [ ] Continue the invocation-policy ABI migration and remaining scheduler gates.
+- [x] Push normally to Guikingone/elephc:spike/runtime-ctx-register.
+- [x] Record the exact pushed SHA and current validation limits in PR #958.
+- [x] Resume the invocation-policy ABI migration and remaining scheduler gates;
+      the named/default/nullable heap failure is under isolation, not resolved.
 - [ ] Obtain complete independent exact-artifact review consensus before acceptance.
 
 ## Publication is not acceptance
@@ -79,3 +80,61 @@ assembly-comment audit reported 52 issues; that gate remains open.
 - PR #958 has been converted to draft for this in-progress tracking publication.
   No full local suite, current complete target matrix or new independent model
   review consensus has been run or claimed.
+
+## Published checkpoint
+
+Commit `ae2c6bd8bd18bcf55152bc65539f0828c34be019` was pushed normally to the
+Guikingone fork. GitHub reports this exact SHA as PR #958's head and the PR is
+draft. The PR body now preserves the original foundation description as
+historical and adds the current scheduler scope, fresh results and open gates.
+The seven inherited deletions under examples/namespaces/vendor and
+examples/spl-autoload/vendor remain outside the commit and unchanged locally.
+The initial unpublished staging mistake was amended before any push; no remote
+history was rewritten.
+
+The first observed check on this SHA is the successful PR-label classifier,
+not a compiler/runtime CI validation. Full CI evidence must be inspected on the
+exact head after the required jobs run; do not report the classifier as test
+coverage. Follow-up source edits will need their own focused revalidation.
+
+## Follow-up worktree progress (not part of the published checkpoint)
+
+The 40-byte leak was isolated to an omitted null default: explicit null,
+nullable string, union values/rejection and named-tail rejection each replay
+heap clean independently. emit_null_default_to_result allocates a fresh Mixed
+cell, but push_default_value_arg acquired it as if borrowed. Transferring its
+existing owner fixes the combined regression. The 23-control group, including
+new omitted nullable/mixed default and later-binding-failure cases, passes.
+
+A new omitted by-reference nullable default regression initially left three
+allocations / 120 bytes live. The callee expects the existing pointer-holder
+reference ABI; a trial passing the boxed value directly was rejected by the
+regression and removed. The corrected route preserves the holder and registers
+its newly created default owner in the invoker ledger. The isolated reference
+regression now passes with the original output and heap-clean assertion.
+Raw non-Mixed reference defaults and the full supplied-reference/return contract
+still require their separate audit; do not treat this as full reference closure.
+
+The updated 83-control default-EIR group and 24 string controls with EIR disabled
+pass. Selected Magician native/ABI unit controls pass 19/19 after updating its
+FFI registration-test stub to the explicit third ABI argument. These are focused
+controls, not complete invocation or PHP-array acceptance. GitHub reports the PR
+CONFLICTING with main, so integration conflicts and actual runtime CI remain
+open independently of this focused worktree repair.
+
+Fresh Linux x86_64/ARM64 emitted-assembly probes pass for the omitted default
+and its by-reference nullable mutation route (functional, not Linux heap-debug
+suite coverage). Provenance: /tmp/elephc-linux-emitted.VtQJK3,
+/tmp/elephc-linux-emitted.uL6ywn, /tmp/elephc-linux-emitted.H8RfLw,
+/tmp/elephc-linux-emitted.3XN2fe. Compiler SHA-256:
+be6f8c3e790a2c5e4cc087af1018b1f1c0d484133051135f9708bd1baacfe98e;
+runtime emitter: 41edc33b7d28b35216be06fa8d7a01c7c7ba142aa0342b7886f8ad7c70e32bc4.
+The follow-up commit will carry the two ownership fixes, three new regressions,
+the FFI stub correction and this evidence ledger only. No broader acceptance
+gate is closed by publishing it.
+
+Ordinary iOS device/simulator by-reference-default assembly emits and assembles
+with the known host-sysroot warning; no SDK linking/hosted execution is claimed.
+The maintainer additionally requested integration of origin/main on 2026-10-09.
+Prefer a merge on the published branch to preserve history without force-push;
+keep inherited local vendor changes recoverable and outside that integration.

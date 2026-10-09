@@ -99,6 +99,47 @@ unset($optional); unset($choice); unset($texts);
 }
 
 #[test]
+fn string_parameter_boundaries_omitted_nullable_and_mixed_null_defaults_transfer_one_owner() {
+    assert_boundary(r#"<?php
+declare(strict_types=1);
+function optional(?string $value = null): mixed { return $value; }
+function untyped(mixed $value = null): mixed { return $value; }
+$optional = rtrim('optional ');
+$untyped = rtrim('untyped ');
+echo call_user_func_array($optional, []) === null ? 'nullable|' : 'bad|';
+echo call_user_func_array($untyped, []) === null ? 'mixed' : 'bad';
+unset($optional); unset($untyped);
+"#, "nullable|mixed");
+}
+
+#[test]
+fn string_parameter_boundaries_omitted_null_default_releases_on_later_named_binding_failure() {
+    assert_boundary(r#"<?php
+declare(strict_types=1);
+function optional(?string $first = null, string $second = 'valid'): mixed { return $first; }
+$callback = rtrim('optional ');
+try { call_user_func_array($callback, ['second' => 42]); }
+catch (TypeError $error) { echo 'rejected'; unset($error); }
+unset($callback);
+"#, "rejected");
+}
+
+#[test]
+fn string_parameter_boundaries_omitted_ref_null_default_has_one_cell_owner() {
+    assert_boundary(r#"<?php
+declare(strict_types=1);
+function optional(?string &$value = null): void {
+    echo $value === null ? 'null|' : 'bad|';
+    $value = rtrim('changed ');
+    echo $value;
+}
+$callback = rtrim('optional ');
+call_user_func_array($callback, []);
+unset($callback);
+"#, "null|changed");
+}
+
+#[test]
 fn string_parameter_boundaries_internal_array_map_remains_weak_in_strict_source() {
     assert_boundary(r#"<?php
 declare(strict_types=1);
