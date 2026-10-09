@@ -10,9 +10,8 @@
 
 use crate::ir::{Immediate, Op, Ownership};
 
-/// Catch predicates retire their native-object adapter boxes before branching on every target.
-#[test]
-fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_on_all_targets() {
+/// Verifies catch adapter cleanup for one independently scheduled target compilation.
+fn assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes(name: &str) {
     let source = r#"<?php
 function inspectCatchPredicateOwners(string $source): void {
     try { eval($source); }
@@ -21,23 +20,51 @@ function inspectCatchPredicateOwners(string $source): void {
 }
 inspectCatchPredicateOwners('throw new RuntimeException("right"); // ' . $argc);
 "#;
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let target = crate::codegen::platform::Target::parse(name).unwrap();
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
-        );
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let symbol = target.extern_symbol("__elephc_eval_object_is_a");
-        let mut probes = 0;
-        for path in asm.split(&format!("{symbol}\n")).skip(1) {
-            let restore = if name == "linux-x86_64" { "add rsp, 96" } else { "add sp, sp, #96" };
-            let cleanup = path.split_once(restore).expect("predicate scratch restoration").0;
-            assert!(cleanup.contains("retire temporary eval metadata operand box"), "{name}: {cleanup}");
-            assert!(cleanup.contains("__rt_decref_mixed"), "{name}: {cleanup}");
-            probes += 1;
-        }
-        assert!(probes >= 2, "{name}: both failed and matched catch predicates need coverage");
+    let target = crate::codegen::platform::Target::parse(name).unwrap();
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+    );
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let symbol = target.extern_symbol("__elephc_eval_object_is_a");
+    let mut probes = 0;
+    for path in asm.split(&format!("{symbol}\n")).skip(1) {
+        let restore = if name == "linux-x86_64" { "add rsp, 96" } else { "add sp, sp, #96" };
+        let cleanup = path.split_once(restore).expect("predicate scratch restoration").0;
+        assert!(cleanup.contains("retire temporary eval metadata operand box"), "{name}: {cleanup}");
+        assert!(cleanup.contains("__rt_decref_mixed"), "{name}: {cleanup}");
+        probes += 1;
     }
+    assert!(probes >= 2, "{name}: both failed and matched catch predicates need coverage");
+}
+
+/// Catch predicates retire native-object adapter boxes on macOS ARM64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_macos_aarch64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("macos-aarch64");
+}
+
+/// Catch predicates retire native-object adapter boxes on iOS device ARM64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_ios_arm64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("ios-arm64");
+}
+
+/// Catch predicates retire native-object adapter boxes on iOS Simulator ARM64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_ios_sim_arm64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("ios-sim-arm64");
+}
+
+/// Catch predicates retire native-object adapter boxes on Linux ARM64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_aarch64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("linux-aarch64");
+}
+
+/// Catch predicates retire native-object adapter boxes on Linux x86_64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_x86_64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("linux-x86_64");
 }
 
 /// Every ABI publishes eval scope writes before propagating an exception, with bounded cleanup.
@@ -167,9 +194,8 @@ fn first_post_eval_string_store_retires_the_runtime_reloaded_slot_linux_x86_64()
     check_first_post_eval_string_store_retires_the_runtime_reloaded_slot("linux-x86_64");
 }
 
-/// A scalar first store keeps its deferred retirement when later control flow widens the slot.
-#[test]
-fn first_post_eval_scalar_store_retires_a_later_widened_slot_on_all_targets() {
+/// Checks deferred scalar retirement and assembly emission on one independently scheduled target.
+fn check_first_post_eval_scalar_store_retires_a_later_widened_slot(target: &str) {
     let source = r#"<?php
 function opaqueEvalFutureMixed(string $value): mixed { return $value; }
 function widenAfterOpaqueEval(string $source, bool $replace): mixed {
@@ -182,33 +208,61 @@ function widenAfterOpaqueEval(string $source, bool $replace): mixed {
 }
 echo widenAfterOpaqueEval('return null; // ' . $argc, $argc > 1);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let function = module.functions.iter()
-            .find(|function| function.name == "widenAfterOpaqueEval").unwrap();
-        let eval = function.instructions.iter().position(|inst| {
-            inst.op == Op::LanguageConstructCall
-                && matches!(inst.immediate, Some(Immediate::ProfiledData { .. }))
-        }).expect("opaque eval call");
-        let local = function.locals.iter()
-            .find(|local| local.name.as_deref() == Some("future")).unwrap();
-        assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
-        let slot = Some(Immediate::LocalSlot(local.id));
-        let store = function.instructions.iter().position(|inst| {
-            inst.op == Op::StoreLocal && inst.immediate == slot
-        }).expect("first future-local store");
-        let stored = function.value(function.instructions[store].operands[0]).unwrap();
-        assert_eq!(stored.php_type.codegen_repr(), crate::types::PhpType::Int, "{target}");
-        assert!(eval < store, "{target}: the local is first assigned after eval");
-        assert_eq!(function.instructions[eval + 1..store].iter().filter(|inst| {
-            inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
-        }).count(), 1, "{target}: deferred retirement must survive until final slot typing");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-    }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let function = module.functions.iter()
+        .find(|function| function.name == "widenAfterOpaqueEval").unwrap();
+    let eval = function.instructions.iter().position(|inst| {
+        inst.op == Op::LanguageConstructCall
+            && matches!(inst.immediate, Some(Immediate::ProfiledData { .. }))
+    }).expect("opaque eval call");
+    let local = function.locals.iter()
+        .find(|local| local.name.as_deref() == Some("future")).unwrap();
+    assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+    let slot = Some(Immediate::LocalSlot(local.id));
+    let store = function.instructions.iter().position(|inst| {
+        inst.op == Op::StoreLocal && inst.immediate == slot
+    }).expect("first future-local store");
+    let stored = function.value(function.instructions[store].operands[0]).unwrap();
+    assert_eq!(stored.php_type.codegen_repr(), crate::types::PhpType::Int, "{target}");
+    assert!(eval < store, "{target}: the local is first assigned after eval");
+    assert_eq!(function.instructions[eval + 1..store].iter().filter(|inst| {
+        inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
+    }).count(), 1, "{target}: deferred retirement must survive until final slot typing");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+/// The first post-eval scalar store retires a later widened slot on macos-aarch64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_macos() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("macos-aarch64");
+}
+
+/// The first post-eval scalar store retires a later widened slot on ios-arm64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_ios_device() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("ios-arm64");
+}
+
+/// The first post-eval scalar store retires a later widened slot on ios-sim-arm64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_ios_simulator() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("ios-sim-arm64");
+}
+
+/// The first post-eval scalar store retires a later widened slot on linux-aarch64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_linux_arm64() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("linux-aarch64");
+}
+
+/// The first post-eval scalar store retires a later widened slot on linux-x86_64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_linux_x86_64() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("linux-x86_64");
 }
 
 /// Main's first process-variable write retires its entry owner without inserting a null initializer.
