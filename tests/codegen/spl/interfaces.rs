@@ -666,7 +666,10 @@ $c = new MaybeBox();
 echo ($c["k"] ??= 3);
 "#,
     );
-    assert_eq!(out, "=S5|GS17|GS3");
+    // `??=` on `ArrayAccess` probes `offsetExists()` first: a false answer assigns through
+    // `offsetSet()` without ever reading `offsetGet()`, so the trailing `MaybeBox` case echoes
+    // only `S` (verified against reference PHP: `=S5|GS17|S3`).
+    assert_eq!(out, "=S5|GS17|S3");
 }
 
 /// Verifies subscript read on a union type (`LeftBox|RightBox`) dispatches to the
