@@ -590,6 +590,25 @@ foreach ($array as $value1) {
     assert_eq!(out, "0 0\n0 1\n1 0\n1 1\n");
 }
 
+/// Verifies `$fixed[] = v` raises php's catchable `[] operator not supported for SplFixedArray`.
+///
+/// `$obj[] = v` is php's `offsetSet(null, v)`, and `SplFixedArray::offsetSet()` refuses a null
+/// key, so the append slot has to raise the `Error` rather than call a missing `append()`.
+#[test]
+fn test_spl_fixed_array_append_raises_phps_error() {
+    let out = compile_and_run(
+        r#"<?php
+$fixed = new SplFixedArray(10);
+try {
+    $fixed[] = 1;
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "[] operator not supported for SplFixedArray\n");
+}
+
 // Tests that an SplFixedArray size whose `size * 8` storage payload wraps the machine word is
 // rejected by the shared `__rt_array_new` guard instead of allocating a tiny block behind a header
 // that advertises 2^61 slots. PHP reports the same class of failure as

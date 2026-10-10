@@ -158,6 +158,12 @@ pub(super) fn try_lower_array_access_runtime_call(
     };
     match dispatch {
         ArrayAccessRuntimeDispatch::Concrete(class_name) => {
+            // `$obj[] = v` is php's `offsetSet(null, v)`. `SplFixedArray` has no append slot and
+            // its `offsetSet()` refuses a null key, so php raises this catchable `Error` instead.
+            if method_name == "append" && class_name.trim_start_matches('\\') == "SplFixedArray" {
+                exceptions::emit_error(ctx, "[] operator not supported for SplFixedArray");
+                return Ok(Some(()));
+            }
             let concrete_method =
                 if method_name == "append" && is_spl_doubly_linked_list_family(&class_name) {
                     "push"
