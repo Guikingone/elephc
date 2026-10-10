@@ -757,3 +757,36 @@ try { new GlobIterator(''); } catch (\ValueError $e) { echo $e->getMessage(), "\
         )
     );
 }
+
+/// Verifies a shallow `clone` of a directory iterator copies its inherited state.
+///
+/// `DirectoryIterator` extends `SplFileInfo`, so its layout carries the parent's `path`,
+/// `fileClass`, and `infoClass` string slots. The overriding constructor must seed the
+/// backing-class defaults; otherwise the clone adapter dereferenced a null string and the
+/// process died with SIGSEGV instead of producing an equal iterator.
+#[test]
+fn test_directory_iterator_clone_copies_state() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("cldir");
+file_put_contents("cldir/a.txt", "x");
+file_put_contents("cldir/b.txt", "y");
+
+$a = new DirectoryIterator("cldir");
+$b = clone $a;
+var_dump((string)$b === (string)$a);
+var_dump($a->key(), $b->key());
+$a->next();
+$a->next();
+$c = clone $a;
+var_dump((string)$c === (string)$a);
+var_dump($a->key(), $c->key());
+
+unlink("cldir/a.txt");
+unlink("cldir/b.txt");
+rmdir("cldir");
+"#,
+    );
+    assert_eq!(out, "bool(true)\nint(0)\nint(0)\nbool(true)\nint(2)\nint(2)\n");
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -106,6 +106,8 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.label("__rt_object_clone_shallow_boxed_string_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across string persistence
     emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the low-word slot offset across the helper
+    emitter.instruction("test rax, rax");                                       // is this string slot actually null?
+    emitter.instruction("jz __rt_object_clone_shallow_boxed_next_x86");         // a null string slot stays null on the clone instead of dereferencing null
     emitter.instruction("call __rt_str_persist");                               // duplicate the string payload for clone ownership
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // restore the low-word slot offset after persistence
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the clone object pointer after persistence

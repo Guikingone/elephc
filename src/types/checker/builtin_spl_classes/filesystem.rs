@@ -2042,6 +2042,11 @@ fn directory_construct_body(
     body.extend(directory_rebuild_entries_body(directory, flags, filter_dots));
     body.extend(vec![
         property_assign_stmt(this_expr(), "position", int_expr(0)),
+        // DirectoryIterator overrides SplFileInfo::__construct, so the inherited backing-class
+        // strings are never seeded by the parent. php keeps them as the SplFileInfo defaults;
+        // leaving them null also makes a shallow `clone` dereference a null string.
+        property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
+        property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
         expr_stmt(method_call(this_expr(), "__elephcRefreshPath", Vec::new())),
     ]);
     body
@@ -2215,6 +2220,10 @@ fn glob_iterator_construct_body() -> Vec<Stmt> {
             vec![property_array_push_stmt(this_expr(), "entries", var_expr("entry"))],
         ),
         property_assign_stmt(this_expr(), "position", int_expr(0)),
+        // GlobIterator overrides SplFileInfo::__construct too, so seed the inherited
+        // backing-class strings before the clone-relevant path refresh runs.
+        property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
+        property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
         expr_stmt(method_call(this_expr(), "__elephcRefreshPath", Vec::new())),
     ]
 }

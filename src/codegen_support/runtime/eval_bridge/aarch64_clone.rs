@@ -112,6 +112,7 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.label("__rt_object_clone_shallow_boxed_string");
     emitter.instruction("str x12, [sp, #32]");                                  // preserve property index across string persistence
     emitter.instruction("str x10, [sp, #40]");                                  // preserve the high-word slot offset across the helper
+    emitter.instruction("cbz x15, __rt_object_clone_shallow_boxed_next");       // a null string slot stays null on the clone instead of dereferencing null
     emitter.instruction("mov x1, x15");                                         // pass the source string pointer to the persistence helper
     emitter.instruction("ldr x2, [x9, x10]");                                   // pass the source string length to the persistence helper
     emitter.instruction("bl __rt_str_persist");                                 // duplicate the string payload for clone ownership
