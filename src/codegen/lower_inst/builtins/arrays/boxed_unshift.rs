@@ -97,7 +97,7 @@ pub(super) fn lower_assoc_array_unshift(
     abi::emit_call_label(ctx.emitter, "__rt_array_merge_boxed");
     abi::emit_push_reg(ctx.emitter, result);                                    // park the merged table: 0 merged, 16 old, 32 prefix
     ctx.store_result_value(array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);               // release the replaced table
     abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 32);               // release the prefix

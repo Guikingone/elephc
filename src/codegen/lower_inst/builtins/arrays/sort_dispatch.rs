@@ -175,7 +175,7 @@ pub(super) fn lower_hash_reindexing_sort(
     // Publish the rebuilt table as the receiver's value, then release the two intermediates in
     // the order they were stacked: the sorted list, then the table its values came from.
     ctx.store_result_value(array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     // Both release helpers read their pointer from the RESULT register, not the first argument
     // register — `x0` on ARM64, `rax` on x86_64. Passing it in `arg0` happened to work on ARM64,
     // where the two are the same register, and released a garbage pointer on x86_64.

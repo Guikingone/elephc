@@ -73,7 +73,7 @@ pub(super) fn lower_assoc_array_shift(
     abi::emit_temporary_stack_address(ctx.emitter, arg1, 16);
     abi::emit_call_label(ctx.emitter, "__rt_hash_shift_boxed");
     ctx.store_result_value(array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
     abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
