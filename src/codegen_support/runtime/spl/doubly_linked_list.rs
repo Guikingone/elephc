@@ -119,7 +119,23 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the object pointer
     emitter.instruction(&format!("str x0, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
     emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    // -- php defaults the iterator mode per concrete class: SplStack is LIFO, SplQueue FIFO --
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the concrete class id
+    emitter.instruction("mov x11, #0");                                         // the base list defaults to FIFO/KEEP
+    abi::emit_symbol_address(emitter, "x12", "_spl_stack_class_id");
+    emitter.instruction("ldr x12, [x12]");                                      // load the SplStack class id sentinel
+    emitter.instruction("cmp x10, x12");                                        // is this a SplStack instance?
+    emitter.instruction("b.ne __rt_spl_dll_new_mode_queue");                    // otherwise check for SplQueue
+    emitter.instruction("mov x11, #6");                                         // SplStack reports LIFO(2) plus the stack marker(4)
+    emitter.instruction("b __rt_spl_dll_new_mode_store");                       // store the SplStack default mode
+    emitter.label("__rt_spl_dll_new_mode_queue");
+    abi::emit_symbol_address(emitter, "x12", "_spl_queue_class_id");
+    emitter.instruction("ldr x12, [x12]");                                      // load the SplQueue class id sentinel
+    emitter.instruction("cmp x10, x12");                                        // is this a SplQueue instance?
+    emitter.instruction("b.ne __rt_spl_dll_new_mode_store");                    // a base list keeps the FIFO/KEEP default
+    emitter.instruction("mov x11, #4");                                         // SplQueue reports FIFO(0) plus the queue marker(4)
+    emitter.label("__rt_spl_dll_new_mode_store");
+    emitter.instruction(&format!("str x11, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store the class-appropriate default iterator mode
     emitter.instruction("mov x0, x9");                                          // return the initialized SPL object
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release constructor spill slots
@@ -1415,7 +1431,21 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload object pointer
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    // -- php defaults the iterator mode per concrete class: SplStack is LIFO, SplQueue FIFO --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the concrete class id
+    emitter.instruction("xor ecx, ecx");                                        // the base list defaults to FIFO/KEEP
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_spl_stack_class_id", 0);
+    emitter.instruction("cmp r10, r9");                                         // is this a SplStack instance?
+    emitter.instruction("jne __rt_spl_dll_new_mode_queue_x86");                 // otherwise check for SplQueue
+    emitter.instruction("mov ecx, 6");                                          // SplStack reports LIFO(2) plus the stack marker(4)
+    emitter.instruction("jmp __rt_spl_dll_new_mode_store_x86");                 // store the SplStack default mode
+    emitter.label("__rt_spl_dll_new_mode_queue_x86");
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_spl_queue_class_id", 0);
+    emitter.instruction("cmp r10, r9");                                         // is this a SplQueue instance?
+    emitter.instruction("jne __rt_spl_dll_new_mode_store_x86");                 // a base list keeps the FIFO/KEEP default
+    emitter.instruction("mov ecx, 4");                                          // SplQueue reports FIFO(0) plus the queue marker(4)
+    emitter.label("__rt_spl_dll_new_mode_store_x86");
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rcx", SPL_DLL_ITER_MODE_OFFSET)); // store the class-appropriate default iterator mode
     emitter.instruction("mov rax, r11");                                        // return initialized SPL object
     emitter.instruction("add rsp, 16");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
