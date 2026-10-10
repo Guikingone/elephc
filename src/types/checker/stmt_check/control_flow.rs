@@ -526,12 +526,11 @@ impl Checker {
                 if let Some(k) = key_var {
                     self.foreach_key_locals.insert(k.clone());
                 }
-                if *value_by_ref && matches!(arr_ty, PhpType::Object(_) | PhpType::Iterable) {
-                    return Err(CompileError::new(
-                        stmt.span,
-                        "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",
-                    ));
-                }
+                // php refuses by-reference foreach over an Iterator/IteratorAggregate object at
+                // run time (`Error: An iterator cannot be used with foreach by reference`): an
+                // iterator hands back a copy, so there is no storage to bind. EIR lowering raises
+                // that catchable Error, so the loop is accepted here rather than rejected.
+                let _ = value_by_ref;
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
                 stabilize_loop_storage(self, stmt.span, body, None, env);

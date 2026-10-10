@@ -147,6 +147,26 @@ pub(super) fn lower_foreach(
         receiver: source_receiver,
     } = lower_foreach_source(ctx, array, value_by_ref);
     if value_by_ref
+        && matches!(
+            ctx.builder.value_php_type(source.value).codegen_repr(),
+            PhpType::Object(_) | PhpType::Iterable
+        )
+    {
+        // php rejects by-reference iteration over an Iterator/IteratorAggregate object: an
+        // iterator hands back a copy, so there is no element storage to bind a reference to. The
+        // Error is catchable and raised before the loop body, exactly like php-src.
+        let message = ctx.intern_string("An iterator cannot be used with foreach by reference");
+        ctx.emit_void(
+            Op::ThrowError,
+            Vec::new(),
+            Some(Immediate::Data(message)),
+            Op::ThrowError.default_effects(),
+            Some(array.span),
+        );
+        ctx.builder.terminate(Terminator::Unreachable);
+        return;
+    }
+    if value_by_ref
         && by_ref_origin.is_none()
         && matches!(
             ctx.builder.value_php_type(source.value).codegen_repr(),

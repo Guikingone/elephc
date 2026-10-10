@@ -758,6 +758,28 @@ var_dump($dll);
     );
 }
 
+/// Verifies a by-reference `foreach` over an iterator raises php's catchable `Error`.
+///
+/// php refuses to bind a reference to an iterator's element, which is a copy. The loop is now
+/// accepted by the checker and the diagnostic is raised at run time, matching php-src.
+#[test]
+fn test_by_reference_foreach_over_iterator_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$dll = new SplDoublyLinkedList();
+$dll->push(1);
+try {
+    foreach ($dll as &$v) {
+        echo "unreachable";
+    }
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "An iterator cannot be used with foreach by reference\n");
+}
+
 /// Verifies that ordinary SplFixedArray allocation is unaffected by the storage-size guard.
 #[test]
 fn test_spl_fixed_array_normal_size_still_works() {
