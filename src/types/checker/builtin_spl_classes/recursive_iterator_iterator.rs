@@ -51,6 +51,9 @@ fn recursive_iterator_iterator_properties() -> Vec<ClassProperty> {
         storage_property("depth", TypeExpr::Int),
         storage_property("slot", TypeExpr::Int),
         storage_property("currentValid", TypeExpr::Bool),
+        // php guards `beginIteration()`/`endIteration()` with an `in_iteration` flag so a nested
+        // rewind cannot re-fire the begin hook and an exhausted `valid()` fires the end hook once.
+        storage_property("inIteration", TypeExpr::Bool),
     ]
 }
 
@@ -110,7 +113,9 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
             Some(named_type("RecursiveIterator")),
             return_body(var_expr("iterator")),
         ),
-        // php's child-traversal hooks; the traversal calls them, subclasses override them.
+        // php's traversal hooks; the traversal calls them, subclasses override them.
+        method_with_body("beginIteration", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+        method_with_body("endIteration", Vec::new(), Some(TypeExpr::Void), Vec::new()),
         method_with_body("beginChildren", Vec::new(), Some(TypeExpr::Void), Vec::new()),
         method_with_body("endChildren", Vec::new(), Some(TypeExpr::Void), Vec::new()),
         method_with_body("nextElement", Vec::new(), Some(TypeExpr::Void), Vec::new()),
