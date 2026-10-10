@@ -568,6 +568,28 @@ var_dump($it->valid());
     );
 }
 
+/// Verifies a `foreach` over an `SplFixedArray` produced by the static factory still links.
+///
+/// The factory (`SplFixedArray::fromArray`) is not an `ObjectNew`, and the implicit
+/// `getIterator()` call the backend emits for the loop is not an EIR `MethodCall`, so the
+/// reachability scan has to register the aggregate's iterator factory from `IterStart` itself;
+/// otherwise the call site references a `_method_SplFixedArray_getiterator` symbol that is never
+/// emitted and the program fails to link.
+#[test]
+fn test_spl_fixed_array_factory_nested_foreach_links_and_iterates() {
+    let out = compile_and_run(
+        r#"<?php
+$array = SplFixedArray::fromArray([0, 1]);
+foreach ($array as $value1) {
+    foreach ($array as $value2) {
+        echo "$value1 $value2\n";
+    }
+}
+"#,
+    );
+    assert_eq!(out, "0 0\n0 1\n1 0\n1 1\n");
+}
+
 // Tests that an SplFixedArray size whose `size * 8` storage payload wraps the machine word is
 // rejected by the shared `__rt_array_new` guard instead of allocating a tiny block behind a header
 // that advertises 2^61 slots. PHP reports the same class of failure as
