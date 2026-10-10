@@ -34,7 +34,13 @@ pub(super) fn lower_throw_error(ctx: &mut FunctionContext<'_>, inst: &Instructio
         .get(data.as_raw() as usize)
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?
         .clone();
-    exceptions::emit_error(ctx, &message);
+    // The location is taken from the instruction itself: a guard raised for a statement the
+    // user wrote (a by-reference `foreach` over an iterator) carries its span and php names
+    // that line, while a guard with no span keeps the previous location-less wording.
+    let location = inst
+        .span
+        .and_then(|span| ctx.module.source_path.clone().map(|file| (file, span.line)));
+    exceptions::emit_error_at(ctx, &message, location);
     Ok(())
 }
 

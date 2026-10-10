@@ -12,10 +12,13 @@
 //!   `__rt_report_uncaught_exception` and shares none of its logic. The exit status is therefore
 //!   imported rather than spelled out: an uncaught `DivisionByZeroError` and an uncaught
 //!   `throw new RuntimeException(...)` must not leave a script with different `$?` values.
-//! - These messages carry no ` in <file>:<line>` suffix, unlike the unwinder's. The error is
-//!   synthesized by a codegen guard rather than by a user `new`, and the message string is baked
-//!   at emit time from a caller that passes no span — so there is no origin to print. Reference
-//!   PHP does report one here (the operation's own line), which stays a known gap.
+//! - The ` in <file>:<line>` suffix and the following `Stack trace:` / `#0 {main}` /
+//!   `  thrown in <file> on line <n>` block are printed only when the caller supplies a location.
+//!   A guard that belongs to a statement the user wrote — a by-reference `foreach` over an
+//!   iterator — passes the instruction's span and gets php's full report; a guard with no origin
+//!   (an internal call site) keeps the previous single-line wording rather than inventing one.
+//!   `emit_error_at()` / `emit_type_error_at()` / `emit_argument_count_error()` are the located
+//!   entry points; `emit_error()` / `emit_type_error()` / `emit_value_error()` stay location-less.
 //! - `emit_value_error_unless()` is the shared builtin argument-range guard: it keeps
 //!   out-of-range arguments (empty separators, non-positive lengths, negative counts,
 //!   oversized array lengths) from ever reaching a runtime helper that would read
@@ -279,6 +282,20 @@ pub(super) fn emit_argument_count_error(
     );
 }
 
+/// Throws a catchable PHP `Error` carrying a static message and a source location.
+///
+/// The located sibling of `emit_error`, for the codegen guards whose refusal belongs to a
+/// statement the user wrote (a by-reference `foreach` over an iterator) rather than to an
+/// internal call site. php reports that statement's own line, so the uncaught report ends in
+/// ` in FILE:LINE` and `getLine()` answers when the error is caught.
+pub(super) fn emit_error_at(
+    ctx: &mut FunctionContext<'_>,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    emit_static_exception_at(ctx, "Error", "_spl_error_class_id", message, location);
+}
+
 /// Throws a catchable PHP `TypeError` carrying a static message and a source location.
 ///
 /// The located sibling of `emit_type_error`, for the same reason
@@ -372,10 +389,17 @@ fn emit_static_exception_at(
         None => String::new(),
     };
     let creation_line = location.as_ref().map_or(0, |(_, line)| *line);
-    let fatal_message = format!(
-        "\nFatal error: Uncaught {}: {}{}\n",
-        class_name, message, suffix
-    );
+    // Reference PHP continues an uncaught report with the throwable's trace and the re-stated
+    // construction site. A located guard (a by-reference `foreach` over an iterator) knows both,
+    // so it prints them; an unlocated one keeps its previous single-line wording rather than
+    // fabricating a `{main}` frame for a site that has no file to name.
+    let fatal_message = match &location {
+        Some((file, line)) => format!(
+            "\nFatal error: Uncaught {}: {}{}\nStack trace:\n#0 {{main}}\n  thrown in {} on line {}\n",
+            class_name, message, suffix, file, line
+        ),
+        None => format!("\nFatal error: Uncaught {}: {}{}\n", class_name, message, suffix),
+    };
     let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
     emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
 

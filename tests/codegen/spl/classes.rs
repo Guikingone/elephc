@@ -780,6 +780,34 @@ try {
     assert_eq!(out, "An iterator cannot be used with foreach by reference\n");
 }
 
+/// Verifies an uncaught by-reference `foreach` reports php's source location and stack trace.
+///
+/// php follows the `Fatal error:` line with ` in <file>:<line>`, `Stack trace:`, `#0 {main}` and
+/// `  thrown in <file> on line <line>`. The guard now stamps the `foreach` statement's span on
+/// the throwable, so both the report and `getLine()` name that statement.
+#[test]
+fn test_by_reference_foreach_over_iterator_uncaught_reports_location_and_trace() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$it = new SplDoublyLinkedList();
+$it->push(1);
+foreach ($it as &$v) {
+    echo "unreachable";
+}
+"#,
+    );
+    assert!(
+        err.contains(
+            "Fatal error: Uncaught Error: An iterator cannot be used with foreach by reference in "
+        ),
+        "{err}"
+    );
+    assert!(
+        err.contains("Stack trace:\n#0 {main}\n  thrown in "),
+        "{err}"
+    );
+}
+
 /// Verifies `SplObjectStorage::current()` rejects a read on an exhausted iterator.
 ///
 /// php raises `RuntimeException: Called current() on invalid iterator` rather than returning null
