@@ -214,6 +214,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
         "RecursiveRegexIterator" => &["accept", "current", "key", "hasChildren", "getChildren"],
         "ParentIterator" => &["accept", "getChildren"],
         "RecursiveIteratorIterator" => &[
+            "__construct",
             "current",
             "key",
             "next",
@@ -221,6 +222,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
             "valid",
             "getInnerIterator",
         ],
+        "RecursiveTreeIterator" => &["__construct", "current", "key"],
         "SplFileInfo" => &["__toString"],
         "SplFileObject" => &[
             "current",

@@ -34,6 +34,7 @@ mod recursive;
 mod recursive_array;
 mod recursive_iterator_iterator;
 mod recursive_iterator_iterator_traversal;
+mod recursive_tree_iterator;
 mod regex;
 mod registry;
 
@@ -66,6 +67,7 @@ pub(crate) fn inject_builtin_spl_classes(
     caching::insert_class(class_map);
     recursive::insert_classes(class_map);
     recursive_iterator_iterator::insert_class(class_map);
+    recursive_tree_iterator::insert_class(class_map);
     regex::insert_classes(class_map);
     filesystem::insert_classes(class_map);
     append::insert_classes(class_map);

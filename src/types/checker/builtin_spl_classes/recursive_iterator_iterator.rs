@@ -92,7 +92,10 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "getSubIterator",
             vec![param_default("level", TypeExpr::Int, int_expr(-1))],
-            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
+            // php declares `?RecursiveIterator`, but the active sub-iterator is a caching iterator
+            // whose `hasNext()` is not on that interface, and user code (`getArrayCopy()`) reaches
+            // past it too. A `mixed` result defers the member lookup to runtime dispatch.
+            Some(mixed_type()),
             recursive_iterator_iterator_get_sub_iterator_body(),
         ),
         method_with_body(
