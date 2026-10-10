@@ -321,15 +321,21 @@ fn key_body() -> Vec<Stmt> {
     ]
 }
 
-/// Returns the current object or null when invalid.
+/// Returns the current object, rejecting a read on an exhausted iterator.
+///
+/// php raises `RuntimeException: Called current() on invalid iterator` rather than returning
+/// null, unlike `key()` which answers null.
 fn current_body() -> Vec<Stmt> {
     vec![
         if_stmt(
-            method_call(this_expr(), "valid", Vec::new()),
-            return_body(object_at(position_expr())),
+            not_expr(method_call(this_expr(), "valid", Vec::new())),
+            vec![throw_stmt(new_object_expr(
+                "RuntimeException",
+                vec![string_expr("Called current() on invalid iterator")],
+            ))],
             None,
         ),
-        return_stmt(null_expr()),
+        return_stmt(object_at(position_expr())),
     ]
 }
 

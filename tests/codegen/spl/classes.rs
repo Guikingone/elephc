@@ -780,6 +780,26 @@ try {
     assert_eq!(out, "An iterator cannot be used with foreach by reference\n");
 }
 
+/// Verifies `SplObjectStorage::current()` rejects a read on an exhausted iterator.
+///
+/// php raises `RuntimeException: Called current() on invalid iterator` rather than returning null
+/// (which is what `key()` does), so a loop that reads past the end gets the same error as php-src.
+#[test]
+fn test_spl_object_storage_current_on_invalid_iterator_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplObjectStorage();
+var_dump($s->valid());
+try {
+    var_dump($s->current());
+} catch (RuntimeException $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "bool(false)\nCalled current() on invalid iterator\n");
+}
+
 /// Verifies that ordinary SplFixedArray allocation is unaffected by the storage-size guard.
 #[test]
 fn test_spl_fixed_array_normal_size_still_works() {
