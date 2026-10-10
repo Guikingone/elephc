@@ -300,6 +300,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. }
         | ExprKind::StaticMethodCall { args, .. } => {
             for a in args {
@@ -353,6 +354,13 @@ fn visit_expr(expr: &Expr, st: &mut State) {
             for (k, v) in pairs {
                 visit_expr(k, st);
                 visit_expr(v, st);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    visit_expr(expr, st);
+                }
             }
         }
         ExprKind::Match {

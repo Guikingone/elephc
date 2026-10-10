@@ -143,15 +143,14 @@ fn lower_region_at_type_fixpoint(
 
 /// Returns the locals whose array storage a statement could still convert, in a deterministic order.
 ///
-/// A local already held in hash storage is excluded: no op converts a hash back, so its
-/// representation is final. Everything else that is an indexed array — including an `Array(Mixed)`,
-/// which a string-keyed write still promotes to a hash — can move.
+/// Both packed and hash locals can become boxed PHP arrays through reference binding.
+/// An already-boxed PHP array needs no further representation conversion.
 fn convertible_array_locals(ctx: &LoweringContext<'_, '_>) -> Vec<String> {
     let mut names = ctx
         .local_types
         .iter()
         .filter(|(name, php_type)| {
-            matches!(php_type.codegen_repr(), PhpType::Array(_))
+            matches!(php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
                 && local_slot_is_convertible_here(ctx, name)
         })
         .map(|(name, _)| name.clone())
@@ -219,7 +218,7 @@ fn discovered_conversions(
 /// re-reads as a hash. The decision is `array_storage_conversion` — the SAME predicate the checker
 /// applies to the type environment — so the element type a callee is compiled for cannot drift from
 /// the one the caller actually passes.
-fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> {
+pub(in crate::ir_lower) fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> {
     match array_storage_conversion(Some(entry), target)? {
         PhpType::Array(_) => Some(Op::ArrayToMixed),
         PhpType::AssocArray { .. } => Some(Op::ArrayToHash),
@@ -229,11 +228,9 @@ fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> {
 
 /// Converts local arrays to the representation the region ahead was lowered against.
 ///
-/// This is the same pair of conversions the element writes themselves perform
-/// (`prepare_indexed_array_local_set` and `lower_string_key_array_promotion`), emitted where control
-/// flow needs them instead of where the write happens, and with the same ownership pairing: the
-/// helpers take the loaded array as an owned reference and `store_mutated_local` puts the result
-/// back without re-acquiring it.
+/// Element writes use consuming array conversions, while PHP array reference binding boxes and
+/// retains the payload. Hoisted conversions preserve those ownership rules: consuming helpers
+/// use `store_mutated_local`, and boxing uses normal replacement cleanup without cursor reset.
 ///
 /// Both helpers are idempotent on an already-converted array — `__rt_array_to_mixed` re-stamps a
 /// Mixed array without re-boxing it, and `Op::ArrayToHash` reuses a hash payload as-is — so a
@@ -244,6 +241,14 @@ fn canonicalize_array_locals(
     span: Span,
 ) {
     for (name, target) in conversions {
+        if target.is_php_array() {
+            if array_storage_conversion(Some(&ctx.local_type(name)), target).is_some() {
+                let array = ctx.load_local(name, Some(span));
+                let boxed = ctx.box_value_as_mixed(array, target.clone(), Some(span));
+                ctx.store_call_argument_local(name, boxed, target.clone(), Some(span));
+            }
+            continue;
+        }
         let Some(op) = conversion_op(&ctx.local_type(name), target) else {
             continue;
         };
@@ -543,7 +548,7 @@ impl<'a> ConversionScan<'a> {
                 // A handler is reachable from every point in the try, including above a conversion.
                 self.hiding();
                 self.block(try_body);
-                for CatchClause { exception_types: _, variable, body } in catches {
+                for CatchClause { exception_type_args: _, exception_types: _, variable, body } in catches {
                     if let Some(variable) = variable {
                         self.name(variable);
                     }
@@ -656,7 +661,8 @@ impl<'a> ConversionScan<'a> {
                 self.expr(value);
                 self.expr(callable);
             }
-            ExprKind::NewObject { class_name: _, args } => {
+            ExprKind::NewObject { class_name: _, args }
+            | ExprKind::NewGeneric { class_type: _, args } => {
                 self.mutation();
                 self.exprs(args);
             }
@@ -778,6 +784,13 @@ impl<'a> ConversionScan<'a> {
                 for (key, value) in items {
                     self.expr(key);
                     self.expr(value);
+                }
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                for entry in entries.iter() {
+                    for expr in entry.exprs() {
+                        self.expr(expr);
+                    }
                 }
             }
             ExprKind::ArrayAccess { array, index } => {

@@ -1,8 +1,8 @@
 ---
 title: "mysqli_fetch_object()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the next row as an object."
 sidebar:
-  order: 122
+  order: 123
 ---
 
 ## mysqli_fetch_object()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_object(mixed $result, string $class = 'stdClass', array $constructor_args = []): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the next row as an object.
 
 **Parameters**:
 - `$result` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

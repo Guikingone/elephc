@@ -7,8 +7,31 @@
 //! Key details:
 //! - Scalar consumers and independent builtin results must balance read stabilizations.
 //! - Constructor argument conversions and proven-independent call results release caller temporaries.
+//! - Constant-folded checked arithmetic must rebox assignment values without aliasing or leaks.
 
 use super::*;
+
+/// String consumers retire copies from later-widened locals while preserving independent aliases.
+#[test]
+fn test_widened_string_reads_release_call_comparison_and_assignment_copies() {
+    let source = r#"<?php
+function useWidenedString(int $seed): int {
+    $value = str_repeat("x", 32 + $seed);
+    $copy = $value;
+    $answer = strlen($value) + ($value === $copy ? 1 : 1000);
+    $value = $seed;
+    $answer += strlen($copy);
+    unset($copy);
+    return $answer;
+}
+for ($i = 0; $i < 6; $i++) { echo useWidenedString($argc), "|"; }
+"#;
+    for ir_opt in [false, true] {
+        let (stdout, stderr) = run_read_result_cleanup_fixture(source, ir_opt);
+        assert_eq!(stdout, "67|".repeat(6), "ir_opt={ir_opt}: {stderr}");
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "ir_opt={ir_opt}: {stderr}");
+    }
+}
 
 /// Compiles and runs the combined read-result ownership fixture in one optimizer mode.
 fn run_read_result_cleanup_fixture(source: &str, ir_opt: bool) -> (String, String) {
@@ -101,4 +124,17 @@ echo $arraySum . '|' . $metadataSum . '|' . $joinedSum;
             "expected a clean heap with ir_opt={ir_opt}, got: {stderr}"
         );
     }
+}
+
+/// Keeps an optimized checked-arithmetic assignment boxed, independent, and heap-clean.
+#[test]
+fn test_constant_folded_checked_assignment_is_independent_and_heap_clean() {
+    let source =
+        "<?php $value = null; $value += 10; $copy = $value; $copy += 5; echo $value . '|' . $copy;";
+    let (stdout, stderr) = run_read_result_cleanup_fixture(source, true);
+    assert_eq!(stdout, "10|15");
+    assert!(
+        stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {stderr}"
+    );
 }

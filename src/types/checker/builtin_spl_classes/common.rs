@@ -71,6 +71,7 @@ pub(super) fn class_method_with_body(
     body: Vec<Stmt>,
 ) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static,
@@ -241,9 +242,9 @@ pub(super) fn mixed_type() -> TypeExpr {
     named_type("mixed")
 }
 
-/// Computes the type metadata for array.
+/// Pins synthetic SPL arrays to their internal Mixed-element container ABI in every lowering phase.
 pub(super) fn array_type() -> TypeExpr {
-    named_type("array")
+    TypeExpr::Array(Box::new(mixed_type()))
 }
 
 /// Computes the type metadata for array<string>.

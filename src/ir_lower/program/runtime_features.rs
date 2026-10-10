@@ -8,7 +8,7 @@
 //! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
 
 use super::*;
-use crate::ir::ResourceCleanupKind;
+use crate::ir::{CoreBuiltinOp, ResourceCleanupKind, RuntimeFnId};
 
 /// Adds optional runtime features referenced by synthetic or lowered EIR functions.
 pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module) {
@@ -16,7 +16,9 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.regex |= features.regex;
     module.required_runtime_features.async_reactor |= features.async_reactor;
     module.required_runtime_features.parallel_execution |= features.parallel_execution;
-    module.required_runtime_features.mb_strlen |= features.mb_strlen;
+    module.required_runtime_features.mbstring |= features.mbstring;
+    module.required_runtime_features.mbregex |= features.mbregex;
+    module.required_runtime_features.mbstring_mime |= features.mbstring_mime;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
     module.required_runtime_features.pdo_udf |= features.pdo_udf;
@@ -24,6 +26,8 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.eval_scope |= features.eval_scope;
     module.required_runtime_features.popen_resource |= features.popen_resource;
     module.required_runtime_features.directory_resource |= features.directory_resource;
+    module.required_runtime_features.handler_state |= features.handler_state;
+    module.required_runtime_features.object_clone |= features.object_clone;
     // Not derived from the instruction stream like the rest: a Fiber object can only exist if the
     // builtin class was registered, and `types::checker::builtin_class_gate` has already decided
     // that from the program's own text. Reading the answer here is exact, where scanning EIR for
@@ -32,10 +36,77 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.generator |= module.class_infos.contains_key("Generator");
 }
 
+/// Returns whether this call is `__elephc_opcache_rt_compile`.
+///
+/// Matched on the runtime-function id rather than the builtin target, because these helpers
+/// are internal registry entries reached through `RuntimeCallTarget::Function`.
+fn runtime_call_targets_opcache_compile(inst: &crate::ir::Instruction) -> bool {
+    matches!(
+        inst.immediate,
+        Some(crate::ir::Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ElephcOpcacheRtCompile)
+        ))
+    )
+}
+
+/// Returns whether this call asks the ON-DISK cache: the file-cache query, or either half of
+/// `opcache_invalidate()`, which removes the disk entry as well as the memory one.
+fn runtime_call_reaches_the_file_cache(inst: &crate::ir::Instruction) -> bool {
+    matches!(
+        inst.immediate,
+        Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::ElephcOpcacheRtInFileCache
+                | crate::ir::RuntimeFnId::ElephcOpcacheRtDiscard
+                | crate::ir::RuntimeFnId::ElephcOpcacheRtSoftInvalidate
+        )))
+    )
+}
+
+/// Returns whether this compilation has an `opcache.file_cache` that is actually live: OPcache
+/// enabled and a directory configured. Read from the same compile settings the startup
+/// configuration is built from, which the pipeline installs before lowering runs.
+fn compile_configures_a_live_file_cache() -> bool {
+    let config = crate::opcache::runtime_cache::runtime_cache_config(
+        crate::codegen_support::compile_php_version().version_id(),
+        crate::codegen_support::compile_is_web_sapi(),
+        &crate::codegen_support::ini_overrides(),
+    );
+    config.enabled && !config.file_cache.is_empty()
+}
+
 /// Derives optional runtime features from the actual EIR instruction stream.
 pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
+    lowered_runtime_features_with(module, true)
+}
+
+/// Whether this program can EXECUTE interpreted code: `eval()`, a dynamic include, anything
+/// that runs through the interpreter — as opposed to linking it only for an OPcache operation.
+///
+/// `opcache_compile_file()` and the file-cache operations link the eval bridge (see below) but
+/// execute nothing through it: `opcache_compile_file()` parses and caches without running.
+/// The post-link note that "evaluated code that uses preg_* will fail" was printed for them
+/// too, about code such a program cannot run. Reported by DeepSeek.
+///
+/// Called only by the compiler binary's pipeline, which the lib target does not include, hence
+/// the dead-code allowance there.
+#[allow(dead_code)]
+pub(crate) fn module_runs_interpreted_code(module: &Module) -> bool {
+    lowered_runtime_features_with(module, false).eval_bridge
+}
+
+/// [`lowered_runtime_features`], optionally leaving out the OPcache operations' bridge links.
+fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
+    // Computed lazily and once: only a program that names a file-cache operation pays for it.
+    let mut live_file_cache: Option<bool> = None;
     for function in all_lowered_functions(module) {
+        features.mbstring |= function_references_callable_runtime(module, function, is_mbstring_callable_name);
+        features.mbregex |= function_references_callable_runtime(module, function, is_mbregex_callable_name);
+        features.mbstring_mime |= function_references_callable_runtime(
+            module,
+            function,
+            is_mbstring_mime_callable_name,
+        );
         if function_contains_eval_scope_state(function) {
             features.eval_scope = true;
         }
@@ -45,10 +116,45 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
         for (inst_index, inst) in function.instructions.iter().enumerate() {
             match inst.op {
                 Op::RuntimeCall => {
+                    // `opcache_compile_file()` is the ONE runtime-tier operation whose job is
+                    // to CREATE a cache entry, so it is the one whose pay-for-use fold is a
+                    // lie rather than a truth. `is_cached` and `discard` fold to `false` in a
+                    // binary with no dynamic tier and that IS the right answer — nothing can
+                    // have been cached. `compile_file` folding to `false` instead reports a
+                    // refusal reference PHP never issues: it returns `true` and the file is in
+                    // the cache, whether or not the program uses `eval()`.
+                    //
+                    // So calling it is itself a reason to link the bridge. The cost lands
+                    // exactly on programs that ask for the dynamic tier, which is what
+                    // pay-for-use means — and no wider than that: with OPcache disabled at
+                    // compile time the prelude's own gate short-circuits before this call is
+                    // ever emitted, so a disabled build never reaches here and stays small.
+                    if count_opcache_links && runtime_call_targets_opcache_compile(inst) {
+                        features.eval_bridge = true;
+                    }
+                    // THE SAME ARGUMENT, FOR THE DISK. `is_cached` and `discard` may fold
+                    // because nothing can have been cached in a binary with no dynamic tier —
+                    // but a configured `opcache.file_cache` is shared with OTHER processes, so
+                    // an entry can be on disk whatever this binary did. Folding the file-cache
+                    // query to `false` then reported a miss reference never reports, and
+                    // folding `opcache_invalidate()` left another process's entry on disk.
+                    // MEASURED: a reader with no `eval()` asked about an entry a seed process
+                    // left; reference answered `true`, elephc `false`.
+                    //
+                    // Gated on the compile-time configuration, so a build with no file cache —
+                    // php-src's default — still folds and stays small.
+                    if count_opcache_links
+                        && runtime_call_reaches_the_file_cache(inst)
+                        && *live_file_cache.get_or_insert_with(compile_configures_a_live_file_cache)
+                    {
+                        features.eval_bridge = true;
+                    }
                     if let Some(target) = typed_builtin_target(inst) {
                         features.regex |= target.uses_regex_runtime();
                         features.async_reactor |= target.uses_async_reactor_runtime();
-                        features.mb_strlen |= target.uses_mb_strlen_runtime();
+                        features.mbstring |= target.uses_mbstring_runtime();
+                        features.mbregex |= target.uses_mbregex_runtime();
+                        features.mbstring_mime |= target.uses_mbstring_mime_runtime();
                         features.phar_archive |= target.publishes_phar_symbols()
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=
@@ -64,7 +170,25 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             }
                             Some(ResourceCleanupKind::StreamFd) | None => {}
                         }
+                        features.object_clone |= target == RuntimeFnId::CloneWith;
                     }
+                }
+                Op::CoreBuiltin => {
+                    let operation = match inst.immediate {
+                        Some(Immediate::I64(value)) => CoreBuiltinOp::from_i64(value),
+                        _ => None,
+                    };
+                    features.handler_state |= matches!(
+                        operation,
+                        Some(
+                            CoreBuiltinOp::RestoreErrorHandler
+                                | CoreBuiltinOp::RestoreExceptionHandler
+                                | CoreBuiltinOp::SetErrorHandler
+                                | CoreBuiltinOp::SetExceptionHandler
+                                | CoreBuiltinOp::GetErrorHandler
+                                | CoreBuiltinOp::GetExceptionHandler
+                        )
+                    );
                 }
                 Op::LanguageConstructCall => {
                     if language_construct_call_requires_eval(module, inst) {
@@ -401,4 +525,60 @@ pub(super) fn eval_literal_static_method_supported_by_module(
         return false;
     };
     crate::eval_aot::static_function_signature_supported(signature, args)
+}
+
+/// Finds a semantic runtime family in callable instructions without enabling unrelated callbacks.
+fn function_references_callable_runtime(module: &Module, function: &Function, accepts: fn(&str) -> bool) -> bool {
+    let names = std::cell::OnceCell::new();
+    function.instructions.iter().any(|inst| {
+        if inst.op == Op::FirstClassCallableNew {
+            let data = match inst.immediate {
+                Some(Immediate::Data(data) | Immediate::ProfiledData { data, .. }) => data,
+                _ => return false,
+            };
+            return module.data.strings.get(data.as_raw() as usize)
+                .is_some_and(|name| accepts(name));
+        }
+        let index = match inst.op {
+            Op::NormalizeCallable | Op::CallablePtr | Op::ExprCall | Op::CallableDescriptorInvoke => 0,
+            Op::RuntimeCall => match typed_builtin_target(inst)
+                .and_then(|target| target.string_callback_operand_index()) {
+                    Some(index) => index,
+                    None => return false,
+                },
+            _ => return false,
+        };
+        let Some(value) = inst.operands.get(index) else { return false; };
+        let names = names.get_or_init(||
+            crate::codegen::callable_reachability::CallableReachabilityAnalysis::new(module, function));
+        names.candidates(*value).is_some_and(|names|
+            names.iter().any(|name| accepts(name)))
+    })
+}
+
+/// Resolves a callable name through the semantic registry to its optional runtime family.
+fn is_mbstring_callable_name(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        matches!(def.spec.semantics.runtime_functions,
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                if target.uses_mbstring_runtime())
+    })
+}
+
+/// Resolves matching callables through their typed operation instead of a second PHP-name inventory.
+fn is_mbregex_callable_name(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        matches!(def.spec.semantics.runtime_functions,
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                if target.uses_mbregex_runtime())
+    })
+}
+
+/// Resolves output-handler callables through the typed MIME-provider operation.
+fn is_mbstring_mime_callable_name(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        matches!(def.spec.semantics.runtime_functions,
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                if target.uses_mbstring_mime_runtime())
+    })
 }

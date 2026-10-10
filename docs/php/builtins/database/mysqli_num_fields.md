@@ -1,8 +1,8 @@
 ---
 title: "mysqli_num_fields()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many columns a result has."
 sidebar:
-  order: 141
+  order: 142
 ---
 
 ## mysqli_num_fields()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_num_fields(mixed $result): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many columns a result has.
 
 **Parameters**:
 - `$result` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -7,8 +7,8 @@
 //! - `crate::name_resolver`
 //!
 //! Key details:
-//! - `COMPILER_RESIDENT_BUILTIN_FUNCTIONS` lists only language constructs or
-//!   dedicated syntax that cannot be represented by an ordinary registry call.
+//! - `COMPILER_RESIDENT_BUILTIN_FUNCTIONS` lists language constructs, dedicated
+//!   syntax, and lexical-frame transforms that cannot use an ordinary registry call.
 //! - `LANGUAGE_CONSTRUCT_FUNCTIONS` participates in call resolution but stays
 //!   hidden from `function_exists()` and first-class callable surfaces.
 
@@ -23,6 +23,9 @@ const COMPILER_RESIDENT_BUILTIN_FUNCTIONS: &[&str] = &[
     "die",
     "empty",
     "exit",
+    "func_get_arg",
+    "func_get_args",
+    "func_num_args",
     "isset",
     "unset",
 ];
@@ -279,12 +282,23 @@ mod tests {
             "strict must hide buffer_new"
         );
         assert!(
+            crate::builtins::registry::lookup("is_real")
+                .is_some_and(|definition| definition.spec.extension),
+            "is_real must carry its shared extension contract"
+        );
+        assert!(
+            canonical_builtin_function_name("is_real").is_none(),
+            "strict must hide is_real"
+        );
+        assert!(
             !is_php_visible_builtin_function("buffer_new"),
             "strict must hide buffer_new from PHP visibility"
         );
         let names = supported_builtin_function_names();
         assert!(
-            !names.contains(&"ptr_get") && !names.contains(&"buffer_new"),
+            !names.contains(&"ptr_get")
+                && !names.contains(&"buffer_new")
+                && !names.contains(&"is_real"),
             "strict must drop extension names from the supported set"
         );
     }
@@ -298,11 +312,6 @@ mod tests {
         assert_eq!(
             canonical_builtin_function_name("strlen"),
             Some("strlen".to_string())
-        );
-        assert_eq!(
-            canonical_builtin_function_name("is_real"),
-            Some("is_real".to_string()),
-            "is_real is treated as PHP for strict purposes"
         );
         assert!(
             canonical_builtin_function_name("__elephc_ptr_read_string").is_some(),

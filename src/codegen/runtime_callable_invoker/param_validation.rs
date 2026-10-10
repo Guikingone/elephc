@@ -8,15 +8,14 @@
 //! - Validation borrows the current argument before conversion/acquisition; pending owners
 //!   from preceding parameters are released if a later parameter fails.
 //! - Numeric strings use PHP's bounded numeric scanner; invalid values throw catchable TypeError.
-//! - ABI v3 carries physical invocation strictness separately from extension visibility.
+//! - ABI v4 carries lexical scope and physical invocation strictness as independent inputs.
 
 use super::*;
 
 mod numeric_bounds;
 mod stringable;
 
-pub(super) use stringable::coerce_mixed_to_string;
-
+/// Resolves the declared PHP contract for a visible parameter, leaving undeclared slots unvalidated.
 fn contract(sig: &FunctionSig, index: usize) -> Option<PhpType> {
     sig.param_type_exprs.get(index).and_then(Option::as_ref).map(type_expr_to_php_type)
 }
@@ -74,6 +73,7 @@ pub(super) fn validate_parameter_hash_result(
     abi::emit_release_temporary_stack(emitter, 32);
 }
 
+/// Applies ordinary physical-invocation binding policy to the current borrowed result registers.
 fn validate_result(
     emitter: &mut Emitter, data: &mut DataSection, ctx: &mut InvokerEmitContext,
     source: &PhpType, expected: &PhpType, name: &str,
@@ -81,6 +81,7 @@ fn validate_result(
     validate_result_with_policy(emitter, data, ctx, source, expected, name, false, false);
 }
 
+/// Checks a string parameter with explicit strictness before conversion acquires any argument owner.
 pub(super) fn validate_string_argument(
     emitter: &mut Emitter, data: &mut DataSection, ctx: &mut InvokerEmitContext,
     source: &PhpType, name: &str, strict: bool,
@@ -88,6 +89,7 @@ pub(super) fn validate_string_argument(
     validate_result_with_policy(emitter, data, ctx, source, &PhpType::Str, name, strict, false);
 }
 
+/// Emits the string return-binding acceptance predicate instead of throwing on a type mismatch.
 pub(super) fn string_binding_predicate(
     emitter: &mut Emitter, data: &mut DataSection, ctx: &mut InvokerEmitContext,
     source: &PhpType, strict: bool,
@@ -95,6 +97,7 @@ pub(super) fn string_binding_predicate(
     validate_result_with_policy(emitter, data, ctx, source, &PhpType::Str, "return", strict, true);
 }
 
+/// Normalizes native scalar/string registers into a borrowed tag/payload validation tuple.
 fn validate_result_with_policy(
     emitter: &mut Emitter, data: &mut DataSection, ctx: &mut InvokerEmitContext,
     source: &PhpType, expected: &PhpType, name: &str, strict_string: bool, predicate: bool,
@@ -118,6 +121,7 @@ fn validate_result_with_policy(
     validate_raw_with_policy(emitter, data, ctx, tag, low, hi, expected, name, strict_string, predicate);
 }
 
+/// Validates an associative tag/payload tuple using ordinary invocation-site binding rules.
 fn validate_raw(
     emitter: &mut Emitter, data: &mut DataSection, ctx: &mut InvokerEmitContext,
     tag: &str, lo: &str, hi: &str, expected: &PhpType, name: &str,
@@ -125,6 +129,7 @@ fn validate_raw(
     validate_raw_with_policy(emitter, data, ctx, tag, lo, hi, expected, name, false, false);
 }
 
+/// Peels Mixed/reference markers, then emits policy-dependent acceptance or a catchable TypeError.
 fn validate_raw_with_policy(
     emitter: &mut Emitter, data: &mut DataSection, ctx: &mut InvokerEmitContext,
     tag: &str, lo: &str, hi: &str, expected: &PhpType, name: &str, strict_string: bool, predicate: bool,
@@ -206,6 +211,7 @@ fn accept_strict_type(emitter: &mut Emitter, data: &mut DataSection, ctx: &mut I
     for tag in tags { branch_equal(emitter, result, *tag, valid); }
 }
 
+/// Emits weak scalar, container-shape, Stringable and object-class acceptance for a borrowed tuple.
 fn accept_type(emitter: &mut Emitter, data: &mut DataSection, ctx: &mut InvokerEmitContext, expected: &PhpType, valid: &str) {
     if let PhpType::Union(members) = expected {
         for member in members { accept_type(emitter, data, ctx, member, valid); }
@@ -298,6 +304,7 @@ fn accept_type(emitter: &mut Emitter, data: &mut DataSection, ctx: &mut InvokerE
     }
 }
 
+/// Branches on one tag/value without changing the argument payload register.
 fn branch_equal(emitter: &mut Emitter, register: &str, value: i64, label: &str) {
     let scratch = abi::symbol_scratch_reg(emitter);
     abi::emit_load_int_immediate(emitter, scratch, value);
@@ -305,10 +312,12 @@ fn branch_equal(emitter: &mut Emitter, register: &str, value: i64, label: &str) 
     emitter.instruction(&format!("{} {label}", if emitter.target.arch == Arch::AArch64 { "b.eq" } else { "je" })); // select the matching PHP binding rule
 }
 
+/// Reinterprets a borrowed scalar payload as binary64 for PHP integer-bound checks.
 fn move_bits_to_float(emitter: &mut Emitter, register: &str) {
     emitter.instruction(&format!("{} {}, {register}", if emitter.target.arch == Arch::AArch64 { "fmov" } else { "movq" }, abi::float_result_reg(emitter))); // reinterpret the borrowed float bits for range checking
 }
 
+/// Rejects NaN/infinity and values outside the inclusive-negative/exclusive-positive i64 range.
 fn float_fits_int(emitter: &mut Emitter, invalid: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -338,6 +347,7 @@ fn float_fits_int(emitter: &mut Emitter, invalid: &str) {
     }
 }
 
+/// Builds a TypeError with the supplied static message and transfers it to the exception unwinder.
 fn emit_type_error(emitter: &mut Emitter, data: &mut DataSection, message: &str) {
     let (label, length) = data.add_string(message.as_bytes());
     let result = abi::int_result_reg(emitter);

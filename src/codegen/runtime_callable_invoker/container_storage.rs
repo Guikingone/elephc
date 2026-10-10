@@ -11,6 +11,7 @@
 
 use super::*;
 
+/// Identifies container parameter layouts whose stored element representation must become Mixed.
 pub(super) fn needs_mixed_slot_normalization(target: &PhpType) -> bool {
     match target {
         PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
@@ -19,6 +20,8 @@ pub(super) fn needs_mixed_slot_normalization(target: &PhpType) -> bool {
     }
 }
 
+/// Acquires and normalizes a container lease while preserving Hash keys and the borrowed source owner.
+/// A Hash passed to an indexed-only array ABI is preserved, not silently replaced with array_values.
 pub(super) fn normalize_owned_mixed_container(emitter: &mut Emitter, ctx: &mut InvokerEmitContext, target: &PhpType) {
     let result = abi::int_result_reg(emitter);
     let tag = abi::secondary_scratch_reg(emitter);

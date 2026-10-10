@@ -1,8 +1,8 @@
 ---
 title: "cairo_set_source()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Uses a pattern as the source for subsequent drawing."
 sidebar:
-  order: 438
+  order: 439
 ---
 
 ## cairo_set_source()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_source(mixed $context, mixed $pattern): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Uses a pattern as the source for subsequent drawing.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

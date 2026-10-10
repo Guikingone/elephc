@@ -503,7 +503,10 @@ fn test_emit_write_stdout_linux_x86_64_routes_through_stdout_write() {
 /// Constructs a PIC-mode x86_64/Linux emitter for verifying the GOT-routed
 /// data-reference sequences used by `--emit cdylib` artifacts.
 fn test_emitter_x86_pic() -> Emitter {
-    Emitter::new_pic(Target::new(Platform::Linux, Arch::X86_64))
+    // These controls inspect the generic global/GOT path, not ctx-routed request cells.
+    let mut emitter = Emitter::new_pic(Target::new(Platform::Linux, Arch::X86_64));
+    emitter.ctx_register = false;
+    emitter
 }
 
 /// Verifies that a PIC-mode integer symbol load resolves the GOT entry through
@@ -635,6 +638,7 @@ fn test_dec_symbol_non_pic_and_pic_on_linux_x86_64() {
 }
 
 #[test]
+/// Immediate stores and decrement operations mutate active context cells rather than global state.
 fn test_immediate_store_and_decrement_route_to_context_state() {
     let offset = crate::codegen_support::runtime::ctx::CTX_UNSER_ACTIVE_OFFSET;
     let mut emitter = test_emitter_x86();

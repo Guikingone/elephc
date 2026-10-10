@@ -1,8 +1,8 @@
 ---
 title: "session_decode()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Loads serialized session data into the session superglobal."
 sidebar:
-  order: 891
+  order: 986
 ---
 
 ## session_decode()
@@ -11,7 +11,7 @@ sidebar:
 function session_decode(string $data): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Loads serialized session data into the session superglobal.
 
 **Parameters**:
 - `$data` (`string`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

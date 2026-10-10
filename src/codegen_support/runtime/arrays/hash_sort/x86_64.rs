@@ -9,6 +9,7 @@
 //!   contract while respecting the System V register ABI.
 //! - Equal operands are taken from the left run, so relinking preserves PHP 8 stability.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::sentinels::NULL_SENTINEL;
@@ -22,14 +23,61 @@ pub(super) fn emit(emitter: &mut Emitter) {
 }
 
 /// Emits the four entry stubs that select a mode and tail-jump into the shared engine.
+///
+/// A value sort knows its whole mode word at emit time. A key sort carries PHP's `$flags` in
+/// `rsi`, so its stub only picks the direction and lets the shared resolver fold the flag word
+/// into the same register before the engine sees it.
 fn emit_entry_points(emitter: &mut Emitter) {
-    for (label, mode, description) in super::entry_points() {
+    for (label, mode, description) in super::value_entry_points() {
         emitter.blank();
         emitter.comment(&format!("--- runtime: {} ({}) ---", label, description));
         emitter.label_global(label);
         emitter.instruction(&format!("mov esi, {}", mode));                     // select the sort mode
         emitter.instruction("jmp __rt_hash_sort_links");                        // enter the shared relinking engine
     }
+    for (label, mode, description) in super::key_entry_points() {
+        emitter.blank();
+        emitter.comment(&format!("--- runtime: {} ({}) ---", label, description));
+        emitter.label_global(label);
+        emitter.instruction(&format!("mov edx, {}", mode));                     // select the key-sort direction
+        emitter.instruction("jmp __rt_hash_key_sort_enter");                    // resolve PHP sort flags into the mode word
+    }
+    emit_key_sort_entry(emitter);
+}
+
+/// Emits the shared key-sort prologue that resolves PHP's `$flags` into a comparator selector.
+///
+/// PHP picks the comparator from `$flags & ~SORT_FLAG_CASE`, and every value outside the four
+/// it recognizes, including `3`, `4` and `999`, falls back to `SORT_REGULAR` rather than
+/// raising. The resolution happens once per call rather than once per comparison, and it uses
+/// only scratch registers so the stub stays a tail jump with no frame of its own.
+fn emit_key_sort_entry(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_key_sort_enter (resolve PHP sort flags) ---");
+    emitter.label_global("__rt_hash_key_sort_enter");
+    emitter.instruction("mov r10, rsi");                                        // copy the raw PHP flag word
+    emitter.instruction("and r10, -9");                                         // drop SORT_FLAG_CASE
+    emitter.instruction("mov r11, rsi");                                        // copy the raw flag word again
+    emitter.instruction("and r11, 8");                                          // isolate SORT_FLAG_CASE
+    emitter.instruction("shr r11, 3");                                          // 1 when case folding was requested
+    emitter.instruction(&format!("mov esi, {}", super::KEY_COMPARATOR_REGULAR)); // default to SORT_REGULAR
+    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_NUMERIC)); // stage the numeric comparator selector
+    emitter.instruction("cmp r10, 1");                                          // SORT_NUMERIC
+    emitter.instruction("cmove rsi, rax");                                      // adopt the numeric selector
+    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_STRING)); // stage the string comparator selector
+    emitter.instruction("add rax, r11");                                        // case folding picks the adjacent selector
+    emitter.instruction("cmp r10, 2");                                          // SORT_STRING
+    emitter.instruction("cmove rsi, rax");                                      // adopt the binary-string selector
+    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_LOCALE)); // stage the locale comparator selector
+    emitter.instruction("cmp r10, 5");                                          // SORT_LOCALE_STRING
+    emitter.instruction("cmove rsi, rax");                                      // adopt the locale selector
+    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_NATURAL)); // stage the natural-order comparator selector
+    emitter.instruction("add rax, r11");                                        // case folding picks the adjacent selector
+    emitter.instruction("cmp r10, 6");                                          // SORT_NATURAL
+    emitter.instruction("cmove rsi, rax");                                      // adopt the natural-order selector
+    emitter.instruction(&format!("shl rsi, {}", super::KEY_COMPARATOR_SHIFT));  // park the selector clear of the mode bits
+    emitter.instruction("or rsi, rdx");                                         // publish direction plus resolved comparator
+    emitter.instruction("jmp __rt_hash_sort_links");                            // enter the shared relinking engine
 }
 
 /// Emits the allocation-free bottom-up merge sort over a hash table's order links.
@@ -57,7 +105,7 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the merge-sort frame pointer
     emitter.instruction("sub rsp, 96");                                         // allocate the aligned merge-sort frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash-table pointer
-    emitter.instruction("lea r10, [rdi + 40]");                                 // compute the first hash-entry address
+    hash_layout::emit_entries(emitter, "r10", "rdi");
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the entries-region base
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save direction and key/value mode bits
     emitter.instruction("mov QWORD PTR [rbp - 32], 1");                         // seed the first pass with one-entry runs
@@ -222,6 +270,15 @@ fn emit_compare_entries(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the left key length or integer sentinel
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // pass the right normalized key payload
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // pass the right key length or integer sentinel
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the mode word for its comparator selector
+    emitter.instruction(&format!(
+        "shr r8, {}",
+        super::KEY_COMPARATOR_SHIFT
+    ));                                                                         // nothing rides above the selector, so a shift isolates it
+    emitter.instruction("jz __rt_hsort_cmp_key_regular");                       // an omitted or SORT_REGULAR flag keeps the original comparator
+    emitter.instruction("call __rt_key_compare_flagged");                       // apply the ordering PHP's $flags selected
+    emitter.instruction("jmp __rt_hsort_cmp_done");                             // skip the general value comparator
+    emitter.label("__rt_hsort_cmp_key_regular");
     emitter.instruction("call __rt_key_compare_regular");                       // apply exact SORT_REGULAR key ordering
     emitter.instruction("jmp __rt_hsort_cmp_done");                             // skip the general value comparator
     emitter.label("__rt_hsort_cmp_value");
@@ -261,6 +318,11 @@ fn emit_sort_triple(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rdi + 40]");                       // load the per-entry value tag
     emitter.instruction("mov r10, QWORD PTR [rdi + 24]");                       // load the low value payload word
     emitter.instruction("mov rdx, QWORD PTR [rdi + 32]");                       // load the high value payload word
+    emitter.instruction("cmp r11, 11");                                         // does this entry belong to a PHP reference set?
+    emitter.instruction("jne __rt_hsort_triple_value_tagged");                  // ordinary entries already carry a value payload
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // sort the value the reference cell owns, not the cell
+    emitter.instruction("jmp __rt_hsort_triple_value_boxed");                   // the referenced payload is always a boxed Mixed value
+    emitter.label("__rt_hsort_triple_value_tagged");
     emitter.instruction("cmp r11, 7");                                          // test whether the entry holds a boxed Mixed cell
     emitter.instruction("je __rt_hsort_triple_value_boxed");                    // boxed values need unboxing
     emitter.instruction("mov rax, r11");                                        // publish the concrete runtime tag

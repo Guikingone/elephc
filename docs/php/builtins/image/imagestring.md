@@ -1,8 +1,8 @@
 ---
 title: "imagestring()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws a string horizontally with a built-in font."
 sidebar:
-  order: 530
+  order: 531
 ---
 
 ## imagestring()
@@ -11,7 +11,7 @@ sidebar:
 function imagestring(mixed $image, int $font, int $x, int $y, string $string, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws a string horizontally with a built-in font.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -28,7 +28,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

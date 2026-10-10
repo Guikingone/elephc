@@ -8,6 +8,7 @@
 //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
 
 use super::*;
+use crate::support::compile_and_run_with_heap_debug;
 
 /// Tests `array_fill(start_index, num, value)` — creates a 3-element array indexed from 0,
 /// all initialized to 42, then accesses elements via integer index.
@@ -291,4 +292,352 @@ echo "|", count($r);
 "#,
     );
     assert_eq!(out, "n0=2;z=1;|2");
+}
+
+
+/// Pins PHP's real `array_push()` signature: `array_push(array &$array, mixed ...$values)`
+/// (issue #677).
+///
+/// The arity was pinned to exactly two arguments, so `array_push($a, 3, 4)` — ordinary PHP —
+/// was rejected with `array_push() takes exactly 2 arguments`, and the value-less
+/// `array_push($a)` with it. The return type was `Void`, so `$n = array_push($a, 1)` read `NULL`
+/// where PHP gives the new element count.
+///
+/// The matrix walks the value counts, the growth that a multi-value push forces (each append can
+/// reach `__rt_array_grow` and relocate the array, so the receiver is republished BETWEEN values
+/// rather than once at the end), a bool payload, all five receiver places, and left-to-right
+/// argument evaluation.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_push_accepts_phps_full_variadic_signature() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2]; $n = array_push($a, 3, 4); echo implode(",", $a), "|", $n, "\n";
+$b = [1];    $n = array_push($b, 2);    echo implode(",", $b), "|", $n, "\n";
+$c = [1, 2]; $n = array_push($c);       echo implode(",", $c), "|", $n, "\n";
+$d = [];     $n = array_push($d, 1, 2, 3, 4, 5); echo implode(",", $d), "|", $n, "\n";
+$g = [1]; array_push($g, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13); echo implode(",", $g), "|", count($g), "\n";
+$bo = [true]; $n = array_push($bo, false, true); echo count($bo), ",", ($bo[1] ? 1 : 0), ",", ($bo[2] ? 1 : 0), "|", $n, "\n";
+function viaRef(array &$r) { return array_push($r, 8, 9); }
+$p = [1]; $n = viaRef($p); echo implode(",", $p), "|", $n, "\n";
+class PushBox { public array $items = [1]; }
+$box = new PushBox(); $n = array_push($box->items, 2, 3); echo implode(",", $box->items), "|", $n, "\n";
+class PushShelf { public static array $items = [1]; }
+$n = array_push(PushShelf::$items, 2, 3); echo implode(",", PushShelf::$items), "|", $n, "\n";
+$rows = [[1]]; $n = array_push($rows[0], 2, 3); echo implode(",", $rows[0]), "|", $n, "\n";
+function sideEffect(int $v): int { echo "eval", $v, " "; return $v; }
+$s = []; array_push($s, sideEffect(1), sideEffect(2), sideEffect(3)); echo "| ", implode(",", $s), "\n";
+$r = [1]; array_push($r, 2, 3, 4); echo $r[0], $r[1], $r[2], $r[3], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "1,2,3,4|4\n",
+            "1,2|2\n",
+            "1,2|2\n",
+            "1,2,3,4,5|5\n",
+            "1,2,3,4,5,6,7,8,9,10,11,12,13|13\n",
+            "3,0,1|3\n",
+            "1,8,9|3\n",
+            "1,2,3|3\n",
+            "1,2,3|3\n",
+            "1,2,3|3\n",
+            "eval1 eval2 eval3 | 1,2,3\n",
+            "1234\n",
+        )
+    );
+}
+
+/// Verifies a multi-value `array_push()` neither leaks the appended values nor double releases
+/// the storage its own growth relocated.
+///
+/// Thirteen appends into a one-element array force several `__rt_array_grow` calls, each of which
+/// frees the previous buffer after republishing the new pointer, so an imbalance on either side
+/// shows up here rather than in a single-iteration total.
+#[test]
+fn test_array_push_variadic_growth_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 32; $i++) {
+    $g = [1];
+    array_push($g, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
+}
+echo count($g), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "13\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "variadic array_push leaked: {}",
+        out.stderr
+    );
+}
+
+
+/// Verifies the growth republish through a BY-REFERENCE parameter, where the new pointer has to
+/// travel back out to the caller's storage rather than into a local slot.
+///
+/// `test_array_push_variadic_growth_is_heap_clean` above covers a plain local, whose republish
+/// is `store_value_to_raw_local`. A by-reference parameter is a different write: the receiver is
+/// a reference cell, loaded with `LoadRefCell` and published with `store_value_to_ref_cell_local`
+/// THROUGH the cell pointer into the caller's frame. Nothing pinned that second store — the
+/// by-ref fixture in `test_array_push_accepts_phps_full_variadic_signature` pushes two values
+/// onto `[1]`, reaching `__rt_array_grow` once, which is not enough to catch a dropped republish
+/// (issue #1088).
+///
+/// That this fixture catches it is measured rather than argued: disabling ONLY the reference-cell
+/// arm of `store_value_to_local`, leaving the plain-local arm intact, makes this the single
+/// failing test out of the 745 in `arrays::`. Disabling both arms fails six, so the suite covers
+/// the local path thoroughly and covered this one not at all. It reaches `__rt_array_grow` 39
+/// times, all of them through `__rt_array_push_int` / `_str` — the typed lowering, not the boxed
+/// `__rt_mixed_array_append` path, which would republish inside the Mixed cell and pin nothing
+/// here.
+///
+/// The variants are the ways the receiver can be shaped when growth hits: pushed all at once;
+/// one per call, which is the hedge against a future bulk-append lowering that would drain the
+/// first variant of reallocations while keeping it green; shared with a copy, so growth follows a
+/// copy-on-write split and `count($copy)` pins it; a run of string values, where a stale pointer
+/// is a use-after-free of the elements rather than only of the buffer; and a forwarding wrapper,
+/// so the reference crosses two frames.
+///
+/// The STDOUT assertion is the load-bearing one. `__rt_array_grow` frees the old buffer right
+/// after publishing the new pointer, so a dropped republish is a use-after-free rather than a
+/// leak: the caller reads a stale count instead of 33. The heap assertion catches the
+/// copy-on-write variant's orphan and any double release, which reports as a fatal before the
+/// summary prints.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_push_growth_through_a_by_ref_parameter_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pushMany(array &$a): int { return array_push($a, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); }
+function pushOne(array &$a, int $v): int { return array_push($a, $v); }
+function pushStrings(array &$a): int {
+    return array_push($a, "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s");
+}
+function forward(array &$b): int { return pushMany($b); }
+$x = [1];
+$n = pushMany($x);
+$y = [1];
+for ($i = 2; $i < 34; $i++) { pushOne($y, $i); }
+$z = [1];
+$copy = $z;
+$m = pushMany($z);
+$s = ["a"];
+$k = pushStrings($s);
+$f = [1];
+$p = forward($f);
+echo $n, ",", count($x), ",", $x[32], "|",
+     count($y), ",", $y[32], "|",
+     $m, ",", count($z), ",", count($copy), "|",
+     $k, ",", $s[0], $s[18], "|",
+     $p, ",", count($f), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "33,33,33|33,33|33,33,1|19,as|33,33\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "by-reference array_push growth leaked: {}",
+        out.stderr
+    );
+}
+
+/// Follow-up for #1191: growth republish through the BOXED `Mixed` append path.
+///
+/// The typed receivers republish a pointer the lowering writes back. A boxed receiver does
+/// not: `__rt_mixed_array_append` republishes the container INSIDE the Mixed cell, which is a
+/// different mechanism, and #1104's fixtures could not reach it. The ternary is `$argc`-keyed
+/// so the merge genuinely produces `Mixed` rather than something the folder can collapse; the
+/// harness runs the binary with no arguments, so the first arm is taken.
+///
+/// Both call shapes are covered, because they reach the append differently: one variadic call
+/// with 32 values, and 32 single-value calls.
+///
+/// The RETURN value is asserted too. It comes from `__rt_mixed_count`, which is on the
+/// single-argument int-result ABI rather than the C argument ABI, and reading it through the
+/// wrong register made `array_push()` answer 0 here while the container itself was correct.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_push_growth_through_a_boxed_mixed_receiver_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$seed = [[1]];
+$m = $argc == 1 ? $seed[0] : [9];
+$n = array_push($m, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33);
+echo $n, ",", count($m), ",", $m[32], ",", $m[0], "\n";
+$o = $argc == 1 ? $seed[0] : [9];
+for ($i = 2; $i < 34; $i++) { array_push($o, $i); }
+echo count($o), ",", $o[32], "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "33,33,33,1\n33,33\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "boxed Mixed array_push growth leaked: {}",
+        out.stderr
+    );
+}
+
+/// Follow-up for #1190: growth republish through an instance-property and a nested-element
+/// receiver, not only through a by-reference parameter.
+///
+/// #1104 pinned `store_value_to_ref_cell_local` after `__rt_array_grow`. These two receivers
+/// republish through different store paths (a property slot and an element slot) and were
+/// covered only by the 2-value `viaRef` rows of the signature test, which never reallocate.
+/// A dropped republish here is a use-after-free rather than a leak, because
+/// `__rt_array_grow` frees the old buffer as soon as it has published the new pointer, so the
+/// stdout assertion is the load-bearing one and the heap assertion catches the double release.
+///
+/// Static-property growth is also fixed. Its count/element and in-loop `implode()` cases
+/// have separate heap-clean regressions in `pinned_fixed_issues`:
+/// `test_issue_1207_array_push_into_static_property_grows_inside_a_loop` and
+/// `test_issue_1207_static_property_array_push_then_implode_in_a_loop`.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_push_growth_through_property_and_element_receivers_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public array $items = [1]; }
+$o = new Box();
+for ($i = 2; $i < 34; $i++) { array_push($o->items, $i); }
+$rows = [[1]];
+for ($i = 2; $i < 34; $i++) { array_push($rows[0], $i); }
+echo count($o->items), ",", $o->items[32], "|", count($rows[0]), ",", $rows[0][32], "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "33,33|33,33\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "array_push growth through a property or element receiver leaked: {}",
+        out.stderr
+    );
+}
+
+/// Follow-up for #1189: proves `__rt_array_grow` really ran, rather than assuming it did.
+///
+/// The fixture above asserts post-realloc values and heap cleanliness, neither of which a
+/// future pre-size or bulk-append lowering would disturb: it could satisfy every assertion
+/// with ZERO reallocations and the growth pin would silently stop pinning growth.
+///
+/// The side channel is the allocation count. `__rt_array_grow` is the only thing in these
+/// programs that allocates after the array literal — the values are integers — so each
+/// program is compared against a control that builds the SAME arrays and calls a by-reference
+/// function that appends nothing. A reallocation shows up as an extra `allocs` and nothing
+/// else can produce one.
+///
+/// The two halves are measured separately on purpose. A bulk-append lowering could pre-size
+/// the variadic call and leave the one-per-call loop growing, which a combined total would
+/// hide.
+#[test]
+fn test_array_push_growth_through_a_by_ref_parameter_really_reallocates() {
+    let allocs = |source: &str, expected_stdout: &str| -> u64 {
+        let out = compile_and_run_with_gc_stats(source);
+        assert_eq!(out.stdout, expected_stdout, "stderr: {}", out.stderr);
+        let stats = out
+            .stderr
+            .lines()
+            .find(|line| line.starts_with("GC: allocs="))
+            .unwrap_or_else(|| panic!("no GC stats line in: {}", out.stderr));
+        stats
+            .trim_start_matches("GC: allocs=")
+            .split_once(" frees=")
+            .and_then(|(allocs, _)| allocs.parse().ok())
+            .unwrap_or_else(|| panic!("unexpected GC stats shape: {stats}"))
+    };
+
+    let variadic = allocs(
+        r#"<?php
+function pushMany(array &$a): int { return array_push($a, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); }
+$x = [1];
+$n = pushMany($x);
+echo $n, ",", count($x), ",", $x[32], "\n";
+"#,
+        "33,33,33\n",
+    );
+    let variadic_control = allocs(
+        r#"<?php
+function lengthOf(array &$a): int { return count($a); }
+$x = [1];
+$n = lengthOf($x);
+echo $n, ",", count($x), ",", $x[0], "\n";
+"#,
+        "1,1,1\n",
+    );
+    assert!(
+        variadic > variadic_control,
+        "a variadic push from capacity 1 to 33 must reallocate: {variadic} allocs vs \
+         {variadic_control} for the same arrays without the push"
+    );
+
+    let one_per_call = allocs(
+        r#"<?php
+function pushOne(array &$a, int $v): int { return array_push($a, $v); }
+$y = [1];
+for ($i = 2; $i < 34; $i++) { pushOne($y, $i); }
+echo count($y), ",", $y[32], "\n";
+"#,
+        "33,33\n",
+    );
+    let one_per_call_control = allocs(
+        r#"<?php
+function lengthOf(array &$a): int { return count($a); }
+$y = [1];
+for ($i = 2; $i < 34; $i++) { lengthOf($y); }
+echo count($y), ",", $y[0], "\n";
+"#,
+        "1,1\n",
+    );
+    assert!(
+        one_per_call > one_per_call_control,
+        "32 single-value pushes must reallocate: {one_per_call} allocs vs \
+         {one_per_call_control} for the same loop without the push"
+    );
+}
+
+/// Verifies a variadic `array_push()` evaluates EVERY value before it appends any of them.
+///
+/// PHP evaluates a call's arguments and only then enters the function, so nothing an argument
+/// reads may observe an append the same call performs: `$a = [10]; array_push($a, 1, count($a));`
+/// appends `1`, leaving `[10, 1, 1]`.
+///
+/// The `ir_lower` fast path for a plain local originally interleaved the two — lower a value,
+/// append it, lower the next — which was invisible while the arity was pinned at one value and
+/// produced `[10, 1, 2]` as soon as it was not. The general runtime-call path (a property
+/// receiver, say) never had the bug, because `lower_builtin_call_args` lowers every operand
+/// first; both receiver kinds are covered here so they cannot drift apart again.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_push_evaluates_every_value_before_appending() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10]; array_push($a, 1, count($a)); echo implode(",", $a), "\n";
+$b = [10]; array_push($b, count($b), count($b), count($b)); echo implode(",", $b), "\n";
+$c = [1]; array_push($c, $c[0], 99); echo implode(",", $c), "\n";
+class PushOrderBox { public array $items = [10]; }
+$box = new PushOrderBox(); array_push($box->items, 1, count($box->items)); echo implode(",", $box->items), "\n";
+function pushViaRef(array &$r) { array_push($r, 1, count($r)); }
+$d = [10]; pushViaRef($d); echo implode(",", $d), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "10,1,1\n",
+            "10,1,1,1\n",
+            "1,1,99\n",
+            "10,1,1\n",
+            "10,1,1\n",
+        )
+    );
 }

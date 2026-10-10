@@ -2,13 +2,13 @@
 title: "chunk_split()"
 description: "Splits a string into fixed-length chunks separated by a given string."
 sidebar:
-  order: 760
+  order: 791
 ---
 
 ## chunk_split()
 
 ```php
-function chunk_split(string $string, int $length = 76, string $separator = '\r\n'): string
+function chunk_split(string $string, int $length = 76, string $separator = "\r\n"): string
 ```
 
 Splits a string into fixed-length chunks separated by a given string.
@@ -16,16 +16,16 @@ Splits a string into fixed-length chunks separated by a given string.
 **Parameters**:
 - `$string` (`string`)
 - `$length` (`int`), default `76`, optional
-- `$separator` (`string`), default `'\r\n'`, optional
+- `$separator` (`string`), default `"\r\n"`, optional
 
 **Returns**: `string`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/chunk_split.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/chunk_split.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/chunk_split.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/chunk_split.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

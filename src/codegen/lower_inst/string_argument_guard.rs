@@ -11,6 +11,7 @@
 
 use super::*;
 
+/// Validates one named parameter with the shared strict/weak string rule without conversion.
 pub(super) fn lower(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let data = expect_data(inst)?;

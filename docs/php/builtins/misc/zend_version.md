@@ -1,8 +1,8 @@
 ---
 title: "zend_version()"
-description: "Implemented by the compiler-injected version prelude."
+description: "Returns the version of the Zend engine the runtime reports."
 sidebar:
-  order: 664
+  order: 695
 ---
 
 ## zend_version()
@@ -11,7 +11,7 @@ sidebar:
 function zend_version(): string
 ```
 
-Implemented by the compiler-injected version prelude.
+Returns the version of the Zend engine the runtime reports.
 
 **Parameters**: none.
 
@@ -20,9 +20,9 @@ Implemented by the compiler-injected version prelude.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected version prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/zend_version.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/zend_version.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

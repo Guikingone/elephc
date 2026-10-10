@@ -19,7 +19,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::runtime::HashMapResultKind;
 use crate::codegen_support::DeferredCallbackWrapper;
 use crate::ir::{BlockId, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
+use crate::names::{function_symbol, php_symbol_key};
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 use super::super::super::context::FunctionContext;
@@ -34,14 +34,26 @@ mod keys;
 mod search;
 mod shift;
 mod unshift;
-pub(in crate::codegen::lower_inst::builtins) mod values;
+pub(in crate::codegen::lower_inst) mod values;
 mod basic;
+mod boxed_map_callback;
+mod boxed_merge;
+mod boxed_membership;
+mod boxed_aggregate;
+mod boxed_reduce;
+mod boxed_predicates;
+mod boxed_set_comparator;
+mod boxed_walk;
+mod boxed_reverse;
+mod boxed_mutation;
+mod boxed_unshift;
 mod filter;
 mod map_dispatch;
 mod map_results;
 mod reduce_sets;
 mod misc_dispatch;
 mod callback_builtins;
+mod multisort;
 mod sort_dispatch;
 mod type_validation;
 mod callback_binding;
@@ -89,10 +101,13 @@ pub(crate) use map_dispatch::{
     lower_array_map,
 };
 pub(crate) use reduce_sets::{
-    lower_array_reduce, lower_array_walk, lower_array_merge, lower_array_diff,
+    lower_array_walk, lower_array_merge, lower_array_diff,
     lower_array_intersect, lower_array_diff_key, lower_array_intersect_key, lower_array_slice,
     lower_array_splice,
 };
+pub(crate) use boxed_reduce::lower_array_reduce;
+pub(crate) use boxed_predicates::{lower_array_find, lower_array_any, lower_array_all};
+pub(crate) use boxed_set_comparator::{lower_array_udiff, lower_array_uintersect};
 pub(crate) use misc_dispatch::{
     lower_array_values, lower_array_keys, lower_array_rand, lower_range,
     lower_array_pop, lower_array_shift, lower_array_unshift, lower_sort,
@@ -103,10 +118,11 @@ pub(crate) use misc_dispatch::{
     lower_array_replace_recursive, lower_array_diff_assoc, lower_array_intersect_assoc, lower_array_merge_recursive,
 };
 pub(crate) use callback_builtins::{
-    lower_array_find, lower_array_any, lower_array_all, lower_array_walk_recursive,
-    lower_array_udiff, lower_array_uintersect, lower_array_multisort, lower_array_search,
+    lower_array_walk_recursive,
+    lower_array_search,
     lower_in_array,
 };
+pub(crate) use multisort::lower_array_multisort;
 pub(super) use in_array_cases::InArrayMode;
 
 /// How `array_splice()`'s optional `$replacement` argument is handed to the insert helper.
@@ -165,38 +181,6 @@ fn array_count_values_element_tag(source_ty: &PhpType) -> Result<u8> {
             "array_count_values for PHP type {:?}",
             other
         ))),
-    }
-}
-
-/// Returns the indexed-array element type accepted by the `array_reduce()` runtimes.
-///
-/// String elements are allowed because `__rt_array_reduce_str` reads the 16-byte
-/// `[ptr][len]` payload slots and hands the callback a pointer/length pair; every
-/// other accepted element kind is a single 8-byte payload consumed by
-/// `__rt_array_reduce`. The accumulator is validated separately and must still fit
-/// in one integer register, so no intermediate string ever needs persisting.
-fn array_reduce_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
-    match ty.codegen_repr() {
-        PhpType::Array(elem) => {
-            let elem = elem.codegen_repr();
-            if elem == PhpType::Str {
-                return Ok(elem);
-            }
-            eight_byte_callback_value_type(elem, "array_reduce")
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "array_reduce for PHP type {:?}",
-            other
-        ))),
-    }
-}
-
-/// Returns the `array_reduce()` runtime helper matching the source element width.
-fn array_reduce_runtime_label(elem_ty: &PhpType) -> &'static str {
-    if elem_ty.codegen_repr() == PhpType::Str {
-        "__rt_array_reduce_str"
-    } else {
-        "__rt_array_reduce"
     }
 }
 
@@ -548,25 +532,59 @@ fn lower_array_slice_preserve_keys(
 /// Ordinary receivers are split with `__rt_hash_ensure_unique` first, so an aliased copy taken
 /// before the call keeps the original iteration order, and the possibly relocated pointer is
 /// written back to the source local before the sorter runs. A hash returned by
-/// `MixedCellPromoteAttachedToHash(_)` is already unique and published into its parent-owned Mixed
-/// cell; splitting it again would create an opaque clone that cannot be republished. The helpers
-/// only rewrite the table's `prev`/`next`/`head`/`tail` links, so no key or value changes ownership.
+/// `MixedCellPromoteToHash(_)` and `MixedCellPromoteAttachedToHash(_)` both return a hash that the
+/// promotion helper has already made unique and installed into its owning Mixed cell. Splitting it
+/// again would create an opaque clone that cannot be republished. The helpers only rewrite the
+/// table's `prev`/`next`/`head`/`tail` links, so no key or value changes ownership.
 fn lower_hash_link_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     helper: &str,
 ) -> Result<()> {
+    lower_hash_link_sort_with_flags(ctx, inst, helper, HashSortFlags::None)
+}
+
+/// How a `__rt_hash_*sort` helper learns which comparison to apply.
+pub(super) enum HashSortFlags {
+    /// A value sort: its entry stub already knows the whole mode word.
+    None,
+    /// A key sort whose `$flags` argument was omitted, which is PHP's `SORT_REGULAR`.
+    Regular,
+    /// A key sort with an evaluated `$flags` operand.
+    Value(crate::ir::ValueId),
+}
+
+/// Calls a `__rt_hash_*sort` helper, handing a key sort the PHP `$flags` word it resolves.
+///
+/// The register allocator only ever hands a value a callee-saved register, so loading the
+/// receiver into the first argument register and then the flag word into the second cannot
+/// overwrite either one.
+fn lower_hash_link_sort_with_flags(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    helper: &str,
+    flags: HashSortFlags,
+) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
-    if !hash_sort_source_is_attached_mixed_cell(ctx, array)? {
-        if let Some(slot) = receiver.slot() {
-            ctx.release_mutated_source_local_owner(slot, array)?;
-        }
+    if !hash_sort_source_is_published_mixed_cell(ctx, array)? {
+        receiver.require_writable("hash link sort")?;
+        receiver.prepare_consuming_storeback(ctx, array)?;
         ensure_unique_hash_sort_source(ctx, array)?;
-        receiver.store_back_value(ctx, array)?;
+        receiver.store_back_after_consuming_split(ctx, array)?;
     }
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;
+    let flags_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    match flags {
+        HashSortFlags::None => {}
+        HashSortFlags::Regular => {
+            abi::emit_load_int_immediate(ctx.emitter, flags_arg_reg, 0);
+        }
+        HashSortFlags::Value(flags) => {
+            ctx.load_value_to_reg(flags, flags_arg_reg)?;
+        }
+    }
     abi::emit_call_label(ctx.emitter, helper);
     let result = if inst.result_php_type.codegen_repr() == PhpType::Bool {
         1
@@ -581,8 +599,8 @@ fn lower_hash_link_sort(
     store_if_result(ctx, inst)
 }
 
-/// Reports whether `value` is the hash already made unique and republished by a Mixed-cell helper.
-fn hash_sort_source_is_attached_mixed_cell(
+/// Reports whether `value` is the hash already made unique and installed by a Mixed-cell helper.
+fn hash_sort_source_is_published_mixed_cell(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> Result<bool> {
@@ -602,7 +620,8 @@ fn hash_sort_source_is_attached_mixed_cell(
         (
             Op::RuntimeCall,
             Some(Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
+                crate::ir::RuntimeCallTarget::MixedCellPromoteToHash(_)
+                    | crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
             ))
         )
     ))
@@ -614,7 +633,8 @@ fn hash_sort_source_is_attached_mixed_cell(
 /// `-1` — is a real length, so the runtime helpers cannot recognise "no length" from the length value
 /// itself. The flag is therefore materialized separately: an omitted or statically `Void` argument is
 /// the immediate `0`, a statically typed integer is the immediate `1`, and a boxed `Mixed` argument is
-/// unboxed at runtime so a `null` payload (runtime tag 8) also reports `0`.
+/// unboxed at runtime so a `null` payload (runtime tag 8) also reports `0`. Tagged nullable
+/// integers use their separate tag word, never their possibly sentinel-colliding payload.
 fn resolve_slice_length_present_to_result(
     ctx: &mut FunctionContext<'_>,
     length: Option<ValueId>,
@@ -625,15 +645,21 @@ fn resolve_slice_length_present_to_result(
         return Ok(());
     }
     let length = length.expect("length present");
-    if !matches!(
-        ctx.value_php_type(length)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
-        abi::emit_load_int_immediate(ctx.emitter, reg, 1);
-        return Ok(());
+    match ctx.value_php_type(length)?.codegen_repr() {
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(length)?;
+            let tag = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_reg_move(ctx.emitter, reg, tag);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(length)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        }
+        _ => {
+            abi::emit_load_int_immediate(ctx.emitter, reg, 1);
+            return Ok(());
+        }
     }
-    ctx.load_value_to_result(length)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 marks a boxed PHP null length argument
@@ -676,10 +702,12 @@ fn slice_like_length_operand(inst: &Instruction) -> Result<Option<ValueId>> {
     Ok(None)
 }
 
-/// Reads the literal `$preserve_keys` flag of a slice-like call.
+/// Reads the literal `$preserve_keys` flag of a slice-like call over concrete array storage.
 ///
-/// The checker rejects a non-literal flag because it decides the result's static shape, so a
-/// non-literal operand here can only mean the checker and the backend disagree about this call.
+/// The checker rejects a non-literal flag there because it decides the result's static shape, so
+/// a non-literal operand here can only mean the checker and the backend disagree about this call.
+/// A boxed `array_slice()` source reads its flag at runtime instead (see
+/// [`stage_slice_preserve_keys_flag`]).
 fn slice_like_preserve_keys(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
@@ -694,6 +722,51 @@ fn slice_like_preserve_keys(
             ))
         }),
     }
+}
+
+/// Reports whether a boxed-source `array_slice()` may keep its keys: an omitted flag or a literal
+/// `false` never does, while a literal `true` or a runtime operand may.
+fn slice_preserve_keys_may_be_set(
+    ctx: &FunctionContext<'_>,
+    flag: Option<ValueId>,
+) -> Result<bool> {
+    match flag {
+        None => Ok(false),
+        Some(flag) => Ok(const_bool_operand(ctx, flag)?.unwrap_or(true)),
+    }
+}
+
+/// Resolves the `$preserve_keys` flag of a boxed-source `array_slice()` and pushes it onto the
+/// temporary stack, where the payload dispatch reads it.
+///
+/// An omitted flag and a literal push an immediate `0` or `1`. A runtime flag only comes from the
+/// callable wrapper's `bool` parameter, which the invoker has already converted with PHP
+/// truthiness, and the consumers test the word against zero. Any other operand type is refused
+/// rather than guessed at.
+fn stage_slice_preserve_keys_flag(
+    ctx: &mut FunctionContext<'_>,
+    flag: Option<ValueId>,
+) -> Result<()> {
+    let reg = abi::int_result_reg(ctx.emitter);
+    match flag {
+        None => abi::emit_load_int_immediate(ctx.emitter, reg, 0),
+        Some(flag) => match const_bool_operand(ctx, flag)? {
+            Some(value) => abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(value)),
+            None => match ctx.value_php_type(flag)?.codegen_repr() {
+                PhpType::Bool | PhpType::False | PhpType::Int => {
+                    ctx.load_value_to_result(flag)?;
+                }
+                other => {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "array_slice preserve_keys operand of PHP type {:?}",
+                        other
+                    )))
+                }
+            },
+        },
+    }
+    abi::emit_push_reg(ctx.emitter, reg);
+    Ok(())
 }
 
 /// Reports whether a mutating array builtin's first operand is a hash-backed array.

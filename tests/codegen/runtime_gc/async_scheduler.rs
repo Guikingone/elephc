@@ -10,6 +10,7 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Requires both the expected native output and a clean heap-debug teardown for each fixture.
 fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
     assert!(
@@ -19,6 +20,7 @@ fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     );
 }
 
+/// Retires successful task results, captured arrays and the drained scheduler state.
 #[test]
 fn async_success_releases_task_results_and_captures() {
     let out = compile_and_run_with_heap_debug(
@@ -40,6 +42,7 @@ unset($value);
     assert_clean(out, "value:42");
 }
 
+/// Reclaims repeated empty Async scopes after an explicit collection checkpoint.
 #[test]
 fn async_empty_scope_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -60,6 +63,7 @@ echo "empty";
     assert_clean(out, "empty");
 }
 
+/// Keeps unused injected declarations free of runtime allocations.
 #[test]
 fn async_prelude_without_runtime_entry_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -76,6 +80,7 @@ echo "unused";
     assert_clean(out, "unused");
 }
 
+/// Releases manually constructed scope objects after detachment without creating a Fiber.
 #[test]
 fn async_internal_objects_without_a_fiber_are_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -105,6 +110,7 @@ echo "objects";
     assert_clean(out, "objects");
 }
 
+/// Releases the runner closure, argument array and Fiber wrapper used by Async task starts.
 #[test]
 fn fiber_wrapper_shape_used_by_async_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -131,6 +137,7 @@ echo "fiber";
     assert_clean(out, "fiber");
 }
 
+/// Reclaims a Fiber/argument/owner cycle after its retaining array entry is cleared.
 #[test]
 fn fiber_start_argument_cycle_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -158,6 +165,7 @@ echo "cycle";
     assert_clean(out, "cycle");
 }
 
+/// Releases a retained Mixed argument when a second Fiber start is rejected.
 #[test]
 fn rejected_second_fiber_start_releases_mixed_arguments() {
     let out = compile_and_run_with_heap_debug(
@@ -183,6 +191,7 @@ echo "fiber";
     assert_clean(out, "fiber");
 }
 
+/// Retires Mixed and typed call-result arguments on a rejected second Fiber start.
 #[test]
 fn rejected_second_fiber_start_releases_mixed_call_result() {
     let out = compile_and_run_with_heap_debug(
@@ -212,6 +221,7 @@ unset($fiber);
     assert_clean(out, "start-error-start-error");
 }
 
+/// Releases a temporary never-started Fiber when resume raises a state error.
 #[test]
 fn temporary_fiber_resume_state_error_releases_receiver() {
     let source = r#"<?php
@@ -225,6 +235,7 @@ try {
     assert_clean(out, "resume-error");
 }
 
+/// Retires a boxed object argument when resume rejects the Fiber state.
 #[test]
 fn rejected_fiber_resume_releases_boxed_argument() {
     let out = compile_and_run_with_heap_debug(
@@ -244,6 +255,7 @@ unset($fiber);
     assert_clean(out, "resume-error");
 }
 
+/// Retires a retained Mixed argument on an invalid Fiber resume.
 #[test]
 fn rejected_fiber_resume_releases_retained_mixed_argument() {
     let out = compile_and_run_with_heap_debug(
@@ -265,6 +277,7 @@ unset($fiber);
     assert_clean(out, "resume-error");
 }
 
+/// Releases a fresh Mixed call-result argument when Fiber resume fails.
 #[test]
 fn rejected_fiber_resume_releases_mixed_call_result() {
     let out = compile_and_run_with_heap_debug(
@@ -285,6 +298,7 @@ unset($fiber);
     assert_clean(out, "resume-error");
 }
 
+/// Releases a fresh typed object argument when Fiber resume fails.
 #[test]
 fn rejected_fiber_resume_releases_typed_call_result() {
     let out = compile_and_run_with_heap_debug(
@@ -302,6 +316,7 @@ unset($fiber);
     assert_clean(out, "resume-error");
 }
 
+/// Retires a temporary Fiber and injected throwable when throw rejects its state.
 #[test]
 fn rejected_temporary_fiber_throw_releases_receiver_and_throwable() {
     let out = compile_and_run_with_heap_debug(
@@ -316,6 +331,7 @@ try {
     assert_clean(out, "throw-error");
 }
 
+/// Retires a temporary suspended Fiber and throwable after injected exception escape.
 #[test]
 fn escaped_temporary_fiber_throw_releases_receiver_and_throwable() {
     let out = compile_and_run_with_heap_debug(
@@ -337,6 +353,7 @@ try {
     assert_clean(out, "escaped");
 }
 
+/// Preserves borrowed Fiber/exception owners while retiring the injected call lease.
 #[test]
 fn escaped_borrowed_fiber_throw_releases_injected_exception() {
     let out = compile_and_run_with_heap_debug(
@@ -362,6 +379,7 @@ echo "done";
     assert_clean(out, "escapeddone");
 }
 
+/// Releases a resumed Fiber after its body throws beyond the Fiber boundary.
 #[test]
 fn escaped_temporary_fiber_resume_releases_receiver() {
     let out = compile_and_run_with_heap_debug(
@@ -383,6 +401,7 @@ echo "done";
     assert_clean(out, "escapeddone");
 }
 
+/// Runs the suspended frame's local destructor when its Fiber owner is dropped.
 #[test]
 fn suspended_fiber_local_object_is_released_when_the_fiber_is_dropped() {
     let out = compile_and_run_with_heap_debug(
@@ -401,6 +420,7 @@ echo "done";
     assert_clean(out, "dropYdone");
 }
 
+/// Releases a returned temporary Fiber when restarting it raises a state error.
 #[test]
 fn returned_temporary_fiber_start_state_error_releases_receiver() {
     let out = compile_and_run_with_heap_debug(
@@ -420,6 +440,7 @@ try {
     assert_clean(out, "start-error");
 }
 
+/// Releases object elements owned through an array property.
 #[test]
 fn mixed_property_array_releases_object_elements() {
     let out = compile_and_run_with_heap_debug(
@@ -440,6 +461,7 @@ echo "array";
     assert_clean(out, "array");
 }
 
+/// Retires terminated Fiber entries and scope arguments held in private typed arrays.
 #[test]
 fn private_typed_array_releases_terminated_fiber() {
     let out = compile_and_run_with_heap_debug(
@@ -482,6 +504,7 @@ echo "private";
     assert_clean(out, "private");
 }
 
+/// Releases ordinary object entries when a private array property is cleared.
 #[test]
 fn private_typed_array_releases_ordinary_object() {
     let out = compile_and_run_with_heap_debug(
@@ -505,6 +528,7 @@ echo "object";
     assert_clean(out, "object");
 }
 
+/// Releases a TaskGroup argument when a bare Fiber and detached scope are retired.
 #[test]
 fn bare_fiber_releases_task_group_argument() {
     let out = compile_and_run_with_heap_debug(
@@ -537,6 +561,7 @@ echo "bare";
     assert_clean(out, "bare");
 }
 
+/// Retires a capture-free terminated Fiber and its start signal.
 #[test]
 fn bare_terminated_fiber_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -551,6 +576,7 @@ echo "fiber";
     assert_clean(out, "fiber");
 }
 
+/// Retires an object argument retained by a terminated Fiber.
 #[test]
 fn bare_terminated_fiber_releases_object_argument() {
     let out = compile_and_run_with_heap_debug(
@@ -568,6 +594,7 @@ echo "payload";
     assert_clean(out, "payload");
 }
 
+/// Retires a terminated Fiber's string return and every extracted result owner.
 #[test]
 fn bare_terminated_fiber_releases_return_value() {
     let out = compile_and_run_with_heap_debug(
@@ -584,6 +611,7 @@ echo "return";
     assert_clean(out, "return");
 }
 
+/// Releases signal and return ownership after normal suspension and resumption.
 #[test]
 fn suspended_then_resumed_fiber_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -605,6 +633,7 @@ echo "resume";
     assert_clean(out, "resume");
 }
 
+/// Releases an object capture after its Fiber resumes and terminates normally.
 #[test]
 fn suspended_then_resumed_fiber_releases_capture() {
     let out = compile_and_run_with_heap_debug(
@@ -629,6 +658,7 @@ echo "capture";
     assert_clean(out, "capture");
 }
 
+/// Reclaims an unawaited child's result and captures during structured scope exit.
 #[test]
 fn async_unawaited_child_releases_result_at_scope_exit() {
     let out = compile_and_run_with_heap_debug(
@@ -649,6 +679,7 @@ echo "scope";
     assert_clean(out, "scope");
 }
 
+/// Reclaims child closures that capture their own TaskGroup.
 #[test]
 fn async_child_capturing_task_group_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -665,6 +696,7 @@ echo "group-capture";
     assert_clean(out, "group-capture");
 }
 
+/// Retires a sleeping child's timer/task state after normal wake and await.
 #[test]
 fn async_sleeping_child_releases_state_after_normal_wake() {
     let out = compile_and_run_with_heap_debug(
@@ -684,6 +716,7 @@ run(function (TaskGroup $tasks): void {
     assert_clean(out, "awake");
 }
 
+/// Releases root-task timer state after a normal sleep.
 #[test]
 fn async_root_sleep_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -700,6 +733,7 @@ echo "root-sleep";
     assert_clean(out, "root-sleep");
 }
 
+/// Releases a caught standalone CancelledException with an unused Async prelude.
 #[test]
 fn cancelled_exception_is_heap_clean_after_catch() {
     let out = compile_and_run_with_heap_debug(
@@ -721,6 +755,7 @@ try {
     assert_clean(out, "caught");
 }
 
+/// Retires a dynamically supplied Fiber callable and its captured payload.
 #[test]
 fn fiber_releases_dynamic_captured_callable() {
     let out = compile_and_run_with_heap_debug(
@@ -741,6 +776,7 @@ echo "dynamic";
     assert_clean(out, "dynamic");
 }
 
+/// Retires Fiber start argument leases staged inside another function frame.
 #[test]
 fn function_frame_releases_fiber_start_argument() {
     let out = compile_and_run_with_heap_debug(
@@ -762,6 +798,7 @@ echo "frame";
     assert_clean(out, "frame");
 }
 
+/// Retires start argument ownership when the Fiber receiver was loaded through Mixed storage.
 #[test]
 fn mixed_fiber_receiver_releases_start_argument() {
     let out = compile_and_run_with_heap_debug(
@@ -784,6 +821,7 @@ echo "mixed";
     assert_clean(out, "mixed");
 }
 
+/// Releases an unused closure descriptor and its captured array owner.
 #[test]
 fn captured_closure_releases_its_descriptor_and_capture() {
     let out = compile_and_run_with_heap_debug(
@@ -800,6 +838,7 @@ echo "closure";
     assert_clean(out, "closure");
 }
 
+/// Retires callback invocation leases for a closure with captures.
 #[test]
 fn descriptor_invoker_releases_captured_closure_arguments() {
     let out = compile_and_run_with_heap_debug(
@@ -817,6 +856,7 @@ echo "invoker";
     assert_clean(out, "invoker");
 }
 
+/// Retires descriptor invocation ownership for a capture-free closure.
 #[test]
 fn descriptor_invoker_releases_capture_free_closure() {
     let out = compile_and_run_with_heap_debug(
@@ -830,6 +870,7 @@ echo "invoker-free";
     assert_clean(out, "invoker-free");
 }
 
+/// Releases the task-start capsule, Fiber and scope objects after explicit start and detachment.
 #[test]
 fn async_task_start_capsule_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -884,6 +925,7 @@ echo "capsule";
     assert_clean(out, "capsule");
 }
 
+/// Preserves the task-start failure while retiring capsule and root argument owners.
 #[test]
 fn async_task_start_capsule_rethrows_root_failure_without_refcount_loss() {
     let out = compile_and_run_with_heap_debug(
@@ -924,6 +966,7 @@ unset($state);
     assert_clean(out, "capsule-failure");
 }
 
+/// Retires a dynamic callable's capsule and Fiber after start failure.
 #[test]
 fn async_task_start_dynamic_callable_failure_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -954,6 +997,7 @@ unset($body);
     assert_clean(out, "task-start-dynamic");
 }
 
+/// Keeps a caught failure owned by both outcome and cancellation state until rethrow and cleanup.
 #[test]
 fn async_caught_fiber_failure_can_be_stored_and_rethrown_once() {
     let out = compile_and_run_with_heap_debug(
@@ -998,6 +1042,7 @@ unset($state);
     assert_clean(out, "caught-fiber");
 }
 
+/// Keeps a caught start failure live while querying the Fiber's terminal status.
 #[test]
 fn terminal_fiber_status_after_start_failure_keeps_caught_error_live() {
     let out = compile_and_run_with_heap_debug(
@@ -1019,6 +1064,7 @@ unset($fiber);
     assert_clean(out, "terminal-status");
 }
 
+/// Retires a single empty public Async root without leaking scheduler state.
 #[test]
 fn async_empty_root_scope_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1033,6 +1079,7 @@ echo "root";
     assert_clean(out, "root");
 }
 
+/// Retires public root-scope ownership after the root callable throws.
 #[test]
 fn async_root_failure_is_heap_clean_through_public_scope() {
     let out = compile_and_run_with_heap_debug(
@@ -1055,6 +1102,7 @@ unset($body);
     assert_clean(out, "root-direct");
 }
 
+/// Retires sleeping task state when the child catches requested cancellation and returns.
 #[test]
 fn async_cancellation_releases_sleeping_task_state() {
     let out = compile_and_run_with_heap_debug(
@@ -1081,6 +1129,7 @@ run(function (TaskGroup $tasks): void {
     assert_clean(out, "cleaned");
 }
 
+/// Retires a sleeping child's state after uncaught requested cancellation.
 #[test]
 fn async_cancelled_sleeping_child_without_catch_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1101,6 +1150,7 @@ echo "cancelled";
     assert_clean(out, "cancelled");
 }
 
+/// Releases root state after yielding and requesting cancellation.
 #[test]
 fn async_root_reschedule_then_cancel_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1118,6 +1168,7 @@ echo "root-cancel";
     assert_clean(out, "root-cancel");
 }
 
+/// Reclaims a cancelled suspended child without a TaskGroup capture cycle.
 #[test]
 fn async_cancelled_suspended_child_without_task_group_capture_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1138,6 +1189,7 @@ echo "suspended";
     assert_clean(out, "suspended");
 }
 
+/// Reclaims a cancelled suspended child whose closure captures the TaskGroup.
 #[test]
 fn async_cancelled_suspended_child_with_task_group_capture_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1161,6 +1213,7 @@ echo "captured";
     assert_clean(out, "captured");
 }
 
+/// Releases a sleeping child after root-requested cancellation and scope drain.
 #[test]
 fn scheduler_root_cancellation_releases_sleeping_child_state() {
     let out = compile_and_run_with_heap_debug(
@@ -1181,6 +1234,7 @@ echo "cancelled";
     assert_clean(out, "cancelled");
 }
 
+/// Retires suspended Fiber state when resumption throws an escaping exception.
 #[test]
 fn suspended_fiber_escaping_exception_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1201,6 +1255,7 @@ unset($fiber);
     assert_clean(out, "boom");
 }
 
+/// Releases an object capture when a resumed Fiber throws beyond its boundary.
 #[test]
 fn suspended_fiber_escaping_exception_releases_capture() {
     let out = compile_and_run_with_heap_debug(
@@ -1224,6 +1279,7 @@ unset($capture);
     assert_clean(out, "boom");
 }
 
+/// Releases captures when a nested function throws out of a resumed Fiber.
 #[test]
 fn suspended_fiber_escaping_nested_exception_releases_capture() {
     let out = compile_and_run_with_heap_debug(
@@ -1250,6 +1306,7 @@ unset($capture);
     assert_clean(out, "boom");
 }
 
+/// Releases captured TaskGroup scope cycles after an escaping Fiber exception.
 #[test]
 fn suspended_fiber_escaping_exception_releases_task_group_capture() {
     let out = compile_and_run_with_heap_debug(
@@ -1288,6 +1345,7 @@ unset($state);
     assert_clean(out, "boom");
 }
 
+/// Retires a suspended Fiber after a user-created CancelledException escapes.
 #[test]
 fn suspended_fiber_escaping_cancelled_exception_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1315,6 +1373,7 @@ unset($fiber);
     assert_clean(out, "cancelled");
 }
 
+/// Retires array-held Fiber receiver ownership after resumed cancellation-exception escape.
 #[test]
 fn array_stored_suspended_fiber_escaping_cancelled_exception_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1344,6 +1403,7 @@ unset($fiber);
     assert_clean(out, "cancelled");
 }
 
+/// Retires array-held Fiber receiver ownership when its initial start throws.
 #[test]
 fn array_stored_started_fiber_escaping_exception_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1371,6 +1431,7 @@ unset($fiber);
     assert_clean(out, "started");
 }
 
+/// Releases an array-loaded receiver lease after the Fiber catches an injected exception.
 #[test]
 fn array_stored_fiber_throw_releases_receiver_after_caught_delivery() {
     let out = compile_and_run_with_heap_debug(
@@ -1396,6 +1457,7 @@ unset($fiber);
     assert_clean(out, "caught");
 }
 
+/// Retires an array-loaded receiver lease before the injected exception reaches the caller.
 #[test]
 fn array_stored_fiber_throw_releases_receiver_before_escaped_exception() {
     let out = compile_and_run_with_heap_debug(
@@ -1419,6 +1481,7 @@ unset($fiber);
     assert_clean(out, "injected");
 }
 
+/// Retires array-loaded receiver and throwable leases when throw rejects Fiber state.
 #[test]
 fn array_stored_fiber_throw_releases_receiver_on_state_error() {
     let out = compile_and_run_with_heap_debug(
@@ -1439,6 +1502,7 @@ unset($fiber);
     assert_clean(out, "invalid");
 }
 
+/// Releases a local Fiber copy loaded from an array before exception escape.
 #[test]
 fn array_stored_fiber_loaded_into_local_before_exception_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1470,6 +1534,7 @@ unset($fiber);
     assert_clean(out, "cancelled");
 }
 
+/// Releases a property-array Fiber copy and clears its table after a method-local catch.
 #[test]
 fn method_catch_releases_terminated_fiber_loaded_from_property_array() {
     let out = compile_and_run_with_heap_debug(
@@ -1509,6 +1574,7 @@ unset($holder);
     assert_clean(out, "method-catch");
 }
 
+/// Releases TaskGroup captures when a resumed Fiber catches a cancellation exception.
 #[test]
 fn fiber_catching_cancelled_exception_releases_task_group_capture() {
     let out = compile_and_run_with_heap_debug(
@@ -1542,6 +1608,7 @@ unset($state);
     assert_clean(out, "caught");
 }
 
+/// Releases the cancellation state's exception and token owners after a requested throw.
 #[test]
 fn cancellation_state_throw_if_requested_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1561,6 +1628,7 @@ unset($state);
     assert_clean(out, "state");
 }
 
+/// Keeps a dynamic Fiber's caught-exception string return alive until extraction and cleanup.
 #[test]
 fn dynamic_fiber_descriptor_catch_preserves_string_return() {
     let out = compile_and_run_with_heap_debug(
@@ -1589,6 +1657,7 @@ unset($fiber);
     assert_clean(out, "cleaned");
 }
 
+/// Retires dynamic argument cells when a Fiber body throws during initial invocation.
 #[test]
 fn dynamic_fiber_descriptor_escape_releases_argument_cell() {
     let out = compile_and_run_with_heap_debug(
@@ -1616,6 +1685,7 @@ unset($fiber);
     assert_clean(out, "dynamic");
 }
 
+/// Releases the parked dynamic argument container when a suspended Fiber is destroyed.
 #[test]
 fn suspended_dynamic_fiber_releases_parked_argument_container_on_destroy() {
     let out = compile_and_run_with_heap_debug(
@@ -1640,6 +1710,7 @@ echo "parked";
     assert_clean(out, "parked");
 }
 
+/// Releases child outcome storage after its failure propagates from the scope.
 #[test]
 fn async_failure_releases_task_outcomes_after_propagation() {
     let out = compile_and_run_with_heap_debug(
@@ -1661,6 +1732,7 @@ try {
     assert_clean(out, "failed");
 }
 
+/// Releases root task/outcome state after root failure propagation.
 #[test]
 fn async_root_failure_releases_root_task_state() {
     let out = compile_and_run_with_heap_debug(
@@ -1680,6 +1752,7 @@ try {
     assert_clean(out, "root");
 }
 
+/// Keeps a recorded failure owned until explicit outcome rethrow and retirement.
 #[test]
 fn async_task_outcome_retains_a_failure_through_explicit_rethrow() {
     let out = compile_and_run_with_heap_debug(
@@ -1707,6 +1780,7 @@ unset($outcome);
     assert_clean(out, "outcome");
 }
 
+/// Keeps a Mixed outcome's failure live after its original table owner is cleared.
 #[test]
 fn async_mixed_outcome_rethrow_keeps_failure_live_after_table_owner_releases() {
     let out = compile_and_run_with_heap_debug(
@@ -1739,6 +1813,7 @@ unset($table);
     assert_clean(out, "mixed-outcome");
 }
 
+/// Preserves an acquired failure when its property outcome table is cleared before rethrow.
 #[test]
 fn clearing_an_outcome_table_before_rethrow_preserves_the_acquired_failure() {
     let out = compile_and_run_with_heap_debug(
@@ -1777,6 +1852,7 @@ unset($table);
     assert_clean(out, "table");
 }
 
+/// Keeps shared outcome/reason failure identity balanced across rethrow and reason clearing.
 #[test]
 fn async_outcome_and_cancellation_reason_share_failure_without_refcount_loss() {
     let out = compile_and_run_with_heap_debug(
@@ -1809,6 +1885,7 @@ unset($state);
     assert_clean(out, "shared");
 }
 
+/// Retires root and child ownership when an awaited child failure escapes.
 #[test]
 fn async_awaited_failure_releases_root_task_state() {
     let out = compile_and_run_with_heap_debug(
@@ -1831,6 +1908,7 @@ try {
     assert_clean(out, "awaited");
 }
 
+/// Releases descriptor-registration resources after socket readiness and task completion.
 #[test]
 fn async_reactor_releases_registration_resources() {
     let out = compile_and_run_with_heap_debug(

@@ -2,14 +2,15 @@
 //! Preserves PHP weak string parameter binding for runtime Stringable object arguments.
 //!
 //! Called from:
-//! - The descriptor parameter preflight and Mixed-to-string coercion in the parent invoker.
+//! - Descriptor parameter acceptance in the parent invoker.
 //!
 //! Key details:
-//! - Preflight checks metadata without invoking user code; conversion calls __toString exactly once.
+//! - Acceptance checks metadata without invoking user code; the shared cast handles conversion.
 //! - The lookup uses the dense class-id table with bounds checks and leaves the target callable intact.
 
 use super::*;
 
+/// Accepts weak string binding only when the borrowed object has a callable string hook.
 pub(super) fn accept_stringable_object(
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -34,35 +35,7 @@ pub(super) fn accept_stringable_object(
     emitter.label(&next);
 }
 
-/// Converts an already-validated borrowed Mixed value into a string result.
-pub(in crate::codegen::runtime_callable_invoker) fn coerce_mixed_to_string(emitter: &mut Emitter, ctx: &mut InvokerEmitContext) {
-    let result = abi::int_result_reg(emitter);
-    let object = ctx.next_label("parameter_stringable_convert");
-    let scalar = ctx.next_label("parameter_string_scalar_convert");
-    let done = ctx.next_label("parameter_string_convert_done");
-    abi::emit_push_reg(emitter, result);
-    abi::emit_call_label(emitter, "__rt_mixed_unbox");
-    branch_equal(emitter, result, 6, &object);
-    emitter.label(&scalar);
-    abi::emit_pop_reg(emitter, result);
-    abi::emit_call_label(emitter, "__rt_mixed_cast_string");
-    abi::emit_jump(emitter, &done);
-    emitter.label(&object);
-    let payload = if emitter.target.arch == Arch::AArch64 { "x1" } else { "rdi" };
-    abi::emit_reg_move(emitter, result, payload);
-    let missing = ctx.next_label("parameter_stringable_missing");
-    let entry = tostring_entry(emitter, ctx, &missing);
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
-    abi::emit_call_reg(emitter, entry);
-    abi::emit_release_temporary_stack(emitter, 16);
-    abi::emit_jump(emitter, &done);
-    // Only generic, untyped descriptor users can reach a missing __toString entry here.
-    // Preserve their existing string-cast route rather than jumping through a null method.
-    emitter.label(&missing);
-    abi::emit_jump(emitter, &scalar);
-    emitter.label(&done);
-}
-
+/// Looks up the dense class string-hook table with an unsigned class-id bound.
 fn tostring_entry(emitter: &mut Emitter, ctx: &mut InvokerEmitContext, missing: &str) -> &'static str {
     let _ = ctx;
     let object = abi::int_result_reg(emitter);

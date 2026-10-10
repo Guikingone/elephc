@@ -1,8 +1,8 @@
 ---
 title: "timezone_version_get()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the version of the bundled timezone database."
 sidebar:
-  order: 251
+  order: 252
 ---
 
 ## timezone_version_get()
@@ -11,7 +11,7 @@ sidebar:
 function timezone_version_get(): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the version of the bundled timezone database.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -60,7 +60,16 @@ pub(super) fn store_static_property(
 
 /// Formats a static receiver for metadata immediates.
 pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => name.as_str().to_string(),
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Static => "static".to_string(),
@@ -80,7 +89,7 @@ pub(super) fn static_property_type(
         .static_properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, property_ty)| property_lowering_type(property_ty))
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
@@ -88,7 +97,16 @@ pub(super) fn static_receiver_class_name(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
 ) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
         StaticReceiver::Parent => {
@@ -113,7 +131,16 @@ pub(super) fn object_property_type(
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)
-        .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, (_, property_ty))| property_lowering_type(property_ty))
+}
+
+/// Preserves boxed PHP array metadata until statement lowering selects its mutation path.
+fn property_lowering_type(php_type: &PhpType) -> PhpType {
+    if php_type.is_php_array() {
+        php_type.clone()
+    } else {
+        normalize_value_php_type(php_type.codegen_repr())
+    }
 }
 
 /// Returns true when a property type uses concrete indexed-array storage.

@@ -27,7 +27,7 @@
 //!   exception sites was still worth doing (one door, one shape, auditable), but it was
 //!   not the correctness requirement the first version of this comment asserted.
 //! - HOW THE INVENTORY WAS WRONG THREE TIMES. Grepping for the symbol beside an
-//!   `emitter.instruction` found three sites and reported them as the whole residue. There
+                                                                                //!   `emitter.instruction` found three sites and reported them as the whole residue. There
 //!   were fifteen: twelve took the two-step form, which puts the symbol on the line BEFORE
 //!   the access, and a thirteenth hand-rolled store hid behind a line break that separated
 //!   `ctx.emitter` from `.instruction(`. Every one of those greps was written to match a

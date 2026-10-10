@@ -233,6 +233,7 @@ pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason>
             Some(EvalAotFallbackReason::DynamicClassOrMember)
         }
         ExprKind::NewObject { .. }
+        | ExprKind::NewGeneric { .. }
         | ExprKind::NewScopedObject { .. }
         | ExprKind::PropertyAccess { .. }
         | ExprKind::NullsafePropertyAccess { .. }
@@ -244,7 +245,10 @@ pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason>
         | ExprKind::ObjectClassName { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::This => Some(EvalAotFallbackReason::ObjectOrMemberAccess),
-        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::Spread(_) => {
+        ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_)
+        | ExprKind::Spread(_) => {
             Some(EvalAotFallbackReason::ArrayOrIterable)
         }
         ExprKind::Assignment { .. }
@@ -258,6 +262,7 @@ pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason>
         ExprKind::InstanceOf { value, target } => expr_fallback_reason(value)
             .or_else(|| match target {
                 crate::parser::ast::InstanceOfTarget::Name(_) => None,
+                crate::parser::ast::InstanceOfTarget::Generic(_) => None,
                 crate::parser::ast::InstanceOfTarget::Expr(expr) => expr_fallback_reason(expr),
             })
             .or(Some(EvalAotFallbackReason::ObjectOrMemberAccess)),

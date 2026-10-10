@@ -20,11 +20,13 @@ mod catalog_classes;
 mod catalog_constants;
 mod catalog_constants_curl;
 mod catalog_data;
+mod catalog_mbstring;
 mod catalog_pcntl;
 mod catalog_xml;
 #[cfg(feature = "curl")]
 mod catalog_curl;
 mod catalog_surfaces;
+mod core_functions;
 mod eval_profile;
 mod id;
 mod module;
@@ -33,6 +35,10 @@ mod registry;
 mod requirements;
 mod runtime_id;
 mod spec;
+mod type_spec;
+pub mod mbstring_abi;
+pub mod output_abi;
+pub mod string_literal;
 mod support;
 mod symbol_registry;
 
@@ -45,6 +51,7 @@ pub use eval_profile::{
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
+pub use core_functions::CORE_FUNCTION_NAMES;
 pub use module::PhpModule;
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};

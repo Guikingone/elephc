@@ -40,12 +40,67 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok((identity != 0).then_some(identity))
     }
 
-    /// Releases one boxed Mixed cell through the generated runtime wrapper.
+    /// Releases a Mixed owner and schedules any contained native destructor exception for eval.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        self.release_cells([value])
+    }
+
+    /// Runs an automatic collection safe point after eval releases a scope root.
+    fn collect_cycles(&mut self) -> Result<(), EvalStatus> {
+        let status = unsafe { __elephc_eval_collect_cycles() };
+        self.handle_native_cleanup_status(status)
+    }
+
+    /// Forces collection and schedules a bounded native Throwable for eval's catch machinery.
+    fn gc_collect_cycles(&mut self) -> Result<i64, EvalStatus> {
+        let mut throwable = std::ptr::null_mut();
+        let count = unsafe { __elephc_eval_gc_collect_cycles(&mut throwable) };
+        if throwable.is_null() {
+            return Ok(count);
+        }
+        let throwable = RuntimeCellHandle::from_raw(throwable);
+        if let Err(status) = self.schedule_pending_throw(throwable) {
+            self.release(throwable)?;
+            return Err(status);
+        }
+        Err(EvalStatus::UncaughtThrowable)
+    }
+
+    /// Disables generated-runtime automatic collection safe points.
+    fn gc_disable(&mut self) -> Result<(), EvalStatus> {
         unsafe {
-            __elephc_eval_value_release(value.as_ptr());
+            __elephc_eval_gc_disable();
         }
         Ok(())
+    }
+
+    /// Enables generated-runtime automatic collection safe points.
+    fn gc_enable(&mut self) -> Result<(), EvalStatus> {
+        unsafe {
+            __elephc_eval_gc_enable();
+        }
+        Ok(())
+    }
+
+    /// Reads the generated-runtime automatic collection flag.
+    fn gc_enabled(&mut self) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_gc_enabled() } != 0)
+    }
+
+    /// Flushes generated-runtime allocator caches and returns reclaimed bytes.
+    fn gc_mem_caches(&mut self) -> Result<i64, EvalStatus> {
+        Ok(unsafe { __elephc_eval_gc_mem_caches() })
+    }
+
+    /// Reads one generated-runtime GC status metric.
+    fn gc_status_metric(&mut self, metric: u64) -> Result<i64, EvalStatus> {
+        Ok(unsafe { __elephc_eval_gc_status_metric(metric) })
+    }
+
+    /// Reads one generated-runtime GC timing metric from its scalar ABI bit pattern.
+    fn gc_status_time(&mut self, metric: u64) -> Result<f64, EvalStatus> {
+        let bits = unsafe { __elephc_eval_gc_status_metric(metric) } as u64;
+        Ok(f64::from_bits(bits))
     }
 
     /// Retains one boxed Mixed cell through the generated runtime wrapper.
@@ -55,8 +110,52 @@ macro_rules! impl_lifecycle_scalar_ops {
         }))
     }
 
+    /// Attaches retained receiver cells to the native object's GC graph and final-release callback.
+    fn retain_object_children(
+        &mut self,
+        object: RuntimeCellHandle,
+        children: &[RuntimeCellHandle],
+    ) -> Result<(), EvalStatus> {
+        crate::runtime_hooks::object_owners::retain_object_children(self, object, children)
+    }
+
+    /// Uses the runtime's GC-traced persistent reference cells.
+    fn supports_persistent_references(&self) -> bool { true }
+
+    /// Checks the runtime wrapper marker before an assignment writes through it.
+    fn is_reference(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_is_reference(value.as_ptr()) } != 0)
+    }
+
+    /// Inspects the native wrapper's physical owners before COW separates an orphan reference.
+    fn reference_is_shared(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_reference_is_shared(value.as_ptr()) } != 0)
+    }
+
+    /// Allocates an independently owned reference wrapper around a copied PHP value.
+    fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_reference_new(value.as_ptr()) })
+    }
+
+    /// Publishes a copied replacement and transfers the previous owner for cleanup.
+    fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        let previous = unsafe { __elephc_eval_value_reference_replace(reference.as_ptr(), value.as_ptr()) };
+        if previous.is_null() { self.null() } else { Self::handle(previous) }
+    }
+
+    /// Detaches a reference before returning an ordinary PHP value copy.
+    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_copy(value.as_ptr()) })
+    }
+
     /// Emits one PHP warning through the generated runtime diagnostic helper.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+        // Magician submits complete diagnostics, unlike native fragment producers.
+        let terminated;
+        let message = if message.ends_with('\n') { message } else {
+            terminated = format!("{message}\n");
+            &terminated
+        };
         unsafe {
             __elephc_eval_warning(message.as_ptr(), message.len() as u64);
         }
@@ -97,7 +196,19 @@ macro_rules! impl_lifecycle_scalar_ops {
 
     /// Creates a boxed resource Mixed cell through the generated runtime wrapper.
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe { __elephc_eval_value_resource(value) })
+        let resource = Self::handle(unsafe { __elephc_eval_value_resource(value) })?;
+        if let Some(context) = unsafe { self.context.as_ref() } {
+            let subtype = match context.stream_resources().resource_type(value) {
+                Some("stream-context") => Some(10),
+                Some("stream filter") => Some(9),
+                Some("Unknown") => Some(-1),
+                _ => None,
+            };
+            if let Some(subtype) = subtype {
+                unsafe { __elephc_eval_resource_state(resource.as_ptr(), subtype); }
+            }
+        }
+        Ok(resource)
     }
 
     /// Creates a boxed inert hash-context Mixed cell through the generated runtime wrapper.
@@ -118,6 +229,16 @@ macro_rules! impl_lifecycle_scalar_ops {
     /// Creates a boxed string Mixed cell through the generated runtime wrapper.
     fn string(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_string(value.as_ptr(), value.len() as u64) })
+    }
+
+    /// Boxes a PHP literal and registers its native payload as an interned logical origin.
+    fn string_literal(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_string_literal(value.as_ptr(), value.len() as u64) })
+    }
+
+    /// Boxes arbitrary literal bytes with the same native interned origin as UTF-8 literals.
+    fn string_literal_bytes(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_string_literal(value.as_ptr(), value.len() as u64) })
     }
 
     /// Creates a boxed string Mixed cell from raw PHP bytes through the generated runtime wrapper.

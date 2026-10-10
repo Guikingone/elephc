@@ -1,8 +1,8 @@
 ---
 title: "var_export()"
-description: "Implemented by the compiler-injected var_export prelude."
+description: "Renders a value as parsable PHP code, printed or returned."
 sidebar:
-  order: 881
+  order: 976
 ---
 
 ## var_export()
@@ -11,7 +11,7 @@ sidebar:
 function var_export(mixed $value, bool $return = false): mixed
 ```
 
-Implemented by the compiler-injected var_export prelude.
+Renders a value as parsable PHP code, printed or returned.
 
 **Parameters**:
 - `$value` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected var_export prelude.
 - **Compiled (AOT)**: supported through the compiler-injected var_export prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

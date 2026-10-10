@@ -9,6 +9,30 @@
 
 use super::*;
 
+/// Dynamic strlen releases detached copies while borrowed strings and boxed aliases remain live.
+#[test]
+fn test_strlen_boxed_strings_release_internal_casts() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function boxedLengths(array $items): void {
+    $value = $items["value"];
+    $alias = $value;
+    $length = strlen(...);
+    for ($i = 0; $i < 4; $i++) {
+        echo strlen($value), ":", call_user_func("strlen", $value), ":", $length($value), "|";
+    }
+    unset($value);
+    echo $alias, "|";
+}
+$source = str_repeat("s", 32);
+boxedLengths(["value" => $source]);
+echo strlen($source), ":", $source;
+unset($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}{}|32:{}", "32:32:32|".repeat(4), "s".repeat(32), "s".repeat(32)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies str_replace works correctly inside a foreach associative loop.
 /// Fixture: a map of "hello"→"world", "foo"→"bar" applied to "hello foo".
 #[test]
@@ -1359,6 +1383,174 @@ echo $c . "|" . $d;
 "#,
     );
     assert_eq!(out, "hello world|HELLO");
+}
+
+/// Issue #510: `$x = substr($x, …)` where `$x` holds a NON-LITERAL string.
+///
+/// Reported on v0.26.0 as a use-after-free: the first eight bytes of the result came back as
+/// allocator header/free-list metadata that changed on every call, so a `--web` page served
+/// eight different garbage bytes per request in front of otherwise correct text. The source
+/// had to be "boxed" — a function return or an object property — and assigning to a DIFFERENT
+/// variable was always clean, which is what pinned it to the self-aliasing store.
+///
+/// Every shape the issue isolated is here: a user function's return, an object property, a
+/// non-zero offset, and a positive length with no size reduction at all. Each runs in a loop so
+/// the allocator is handing back blocks it has already freed — a first-iteration-only assertion
+/// would read untouched memory and pass whatever the ownership rules did.
+///
+/// Both expectations are the host PHP 8.5.10 output for the same fixture, and this shape is
+/// already correct on HEAD; the test is what keeps it that way. Existing fixtures never caught
+/// it because they asserted substring PRESENCE, never the exact text of the first token.
+#[test]
+fn test_substr_self_reassignment_of_a_boxed_buffer_keeps_its_leading_bytes() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function body(): string { return "private function foo() {}\n"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+for ($i = 0; $i < 8; $i++) {
+    $code = body();
+    $code = substr($code, 0, -1);
+    echo $code, "|";
+
+    $p = new Paste("second body here\n");
+    $t = $p->body;
+    $t = substr($t, 0, -1);
+    echo $t, "|";
+
+    $o = body();
+    $o = substr($o, 1, -1);
+    echo $o, "|";
+
+    $n = body();
+    $n = substr($n, 0, strlen($n));
+    echo $n;
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let expected = "private function foo() {}|second body here|rivate function foo() {}|private function foo() {}\n".repeat(8);
+    assert_eq!(out.stdout, expected);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Follow-up for #1130: the property reaches the self-reassign as a CALLEE PARAMETER.
+///
+/// The fixture above copies `$p->body` into a local and self-reassigns the local. The July
+/// triage called out the other shape: the property is passed into a function and the
+/// self-reassign runs through the parameter, so the boxed buffer the store aliases belongs to
+/// an object the callee never names. Both the by-value and the by-reference spellings are
+/// covered, and the object is re-read afterwards because a store that wrote THROUGH the
+/// parameter would have truncated the property itself.
+///
+/// The loop is what makes it meaningful: the allocator has to be handing back blocks it has
+/// already freed before a stale pointer shows as anything but correct text.
+///
+/// There is no allocation-balance assertion here, unlike its siblings. Passing a property read
+/// straight into a `string` parameter whose callee calls `substr()` leaks one block per call —
+/// issue #1208, filed from this fixture, with the table of which spellings are and are not
+/// affected. The by-reference half of this program goes through a local copy and is clean;
+/// `test_substr_self_reassignment_through_a_reference_parameter_is_heap_clean` below pins that
+/// separately so the balance is not left untested altogether.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_substr_self_reassignment_through_a_callee_parameter_keeps_its_leading_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+class Paste { public function __construct(public string $body) {} }
+
+function trimTail(string $s): string { $s = substr($s, 0, -1); return $s; }
+function trimHeadAndTail(string $s): string { $s = substr($s, 0, -1); $s = substr($s, 1); return $s; }
+function trimRef(string &$s): void { $s = substr($s, 0, -1); }
+
+for ($i = 0; $i < 8; $i++) {
+    $p = new Paste("private function foo() {}\n");
+    $cut = trimTail($p->body);
+    echo $cut, "|", strlen($cut), "|";
+    echo trimHeadAndTail($p->body), "|";
+    echo $p->body === "private function foo() {}\n" ? "intact" : "CHANGED", "|";
+
+    $q = new Paste("second body here\n");
+    $v = $q->body;
+    trimRef($v);
+    echo $v, "|", strlen($v), "|";
+    echo $q->body === "second body here\n" ? "intact" : "CHANGED", ";";
+}
+"#,
+    );
+    let expected = concat!(
+        "private function foo() {}|25|rivate function foo() {}|intact|",
+        "second body here|16|intact;",
+    )
+    .repeat(8);
+    assert_eq!(out, expected);
+}
+
+/// The by-reference parameter spelling of the same shape, with the heap balance asserted.
+///
+/// `trimRef(string &$s)` self-reassigns through the caller's own slot rather than through a
+/// property-read temporary, which is the spelling #1208 does NOT affect — so this is where the
+/// allocation balance for the parameter shape can be pinned today.
+#[test]
+fn test_substr_self_reassignment_through_a_reference_parameter_is_heap_clean() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class Paste { public function __construct(public string $body) {} }
+
+function trimRef(string &$s): void { $s = substr($s, 0, -1); }
+
+for ($i = 0; $i < 16; $i++) {
+    $p = new Paste("private function foo() {}\n");
+    $v = $p->body;
+    trimRef($v);
+    trimRef($v);
+    echo $v, "|", strlen($v), ";";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "private function foo() {|24;".repeat(16));
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Issue #510, symptom 2: a NEGATIVE length on a non-literal buffer must truncate, with no
+/// self-reassignment involved.
+///
+/// `substr($code, 0, -1)` on an 80-byte boxed buffer returned all 80 bytes on v0.26.0, while
+/// the same call with an explicitly computed `strlen($code) - 1` returned 79 — so the clamp
+/// was reached on one path and not the other. The two bugs shared a line in the reporter's
+/// program but are independent, hence the separate fixture.
+#[test]
+fn test_substr_negative_length_truncates_a_boxed_buffer() {
+    let out = compile_and_run(
+        r#"<?php
+function body(): string { return "private function foo() {}\n"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+$fromReturn = body();
+echo strlen(substr($fromReturn, 0, -1)), "|";
+echo strlen(substr($fromReturn, 0, strlen($fromReturn) - 1)), "|";
+echo strlen(substr($fromReturn, 0, -3)), "|";
+
+$p = new Paste(body());
+echo strlen(substr($p->body, 0, -1)), "|";
+
+// A literal source took a different path and was always correct; assert the two agree.
+$literal = "private function foo() {}\n";
+echo strlen(substr($literal, 0, -1)), "|";
+echo substr($fromReturn, 0, -1) === substr($literal, 0, -1) ? "same" : "DIFF";
+"#,
+    );
+    assert_eq!(out, "25|25|23|25|25|same");
 }
 
 /// Verifies str_replace returns correct result when called repeatedly in a loop.

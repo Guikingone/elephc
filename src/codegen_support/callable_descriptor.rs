@@ -13,7 +13,7 @@
 //!   capture/receiver metadata available to runtime dispatch without changing the
 //!   one-word callable ABI.
 //! - The optional invoker slot points at a generated uniform runtime adapter whose
-//!   ABI v3 is `(descriptor, argument array, strict_types: u64) -> Mixed`.
+//!   ABI v4 is `(descriptor, argument array, invocation_scope: i64, strict_types: u64) -> Mixed`.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::data_section::{DataSection, DataWord};
@@ -94,7 +94,7 @@ pub(crate) struct CallableDescriptorInvocation {
 
 /// Full static callable descriptor input before data-section serialization.
 pub(crate) struct CallableDescriptorSpec<'a> {
-    pub(crate) entry_label: &'a str,
+    pub(crate) entry_label: Option<&'a str>,
     pub(crate) php_name: Option<&'a str>,
     pub(crate) kind: u64,
     pub(crate) sig: Option<&'a FunctionSig>,
@@ -180,7 +180,7 @@ pub(crate) fn static_descriptor_with_optional_invoker_meta(
     invoker_label: Option<&str>,
 ) -> String {
     let spec = CallableDescriptorSpec {
-        entry_label,
+        entry_label: Some(entry_label),
         php_name,
         kind,
         sig,
@@ -188,6 +188,26 @@ pub(crate) fn static_descriptor_with_optional_invoker_meta(
         hidden_params,
         invocation,
         invoker_label,
+    };
+    static_descriptor_from_spec(data, &spec)
+}
+
+/// Emits a descriptor for a callable whose statically tracked lowering has no runtime entry.
+pub(crate) fn static_only_descriptor(
+    data: &mut DataSection,
+    php_name: &str,
+    kind: u64,
+    invocation: CallableDescriptorInvocation,
+) -> String {
+    let spec = CallableDescriptorSpec {
+        entry_label: None,
+        php_name: Some(php_name),
+        kind,
+        sig: None,
+        captures: &[],
+        hidden_params: &[],
+        invocation,
+        invoker_label: None,
     };
     static_descriptor_from_spec(data, &spec)
 }
@@ -226,10 +246,14 @@ fn static_descriptor_from_spec(
         .invoker_label
         .map(|label| DataWord::Symbol(label.to_string()))
         .unwrap_or(DataWord::U64(0));
+    let entry_word = spec
+        .entry_label
+        .map(|label| DataWord::Symbol(label.to_string()))
+        .unwrap_or(DataWord::U64(0));
 
     data.add_words(vec![
         DataWord::U64(spec.kind),
-        DataWord::Symbol(spec.entry_label.to_string()),
+        entry_word,
         name_word,
         DataWord::U64(name_len),
         signature_word,
@@ -260,8 +284,15 @@ pub(crate) fn emit_load_invoker_from_descriptor(
 /// Materializes the physical invocation's scalar-binding policy (0 weak, 1 strict).
 /// Must run immediately before the indirect invoke, after argument/container setup.
 pub(crate) fn emit_invoker_binding_policy(emitter: &mut Emitter, strict_types: bool) {
-    let register = abi::int_arg_reg_name(emitter.target, 2);
+    let register = abi::int_arg_reg_name(emitter.target, 3);
     abi::emit_load_int_immediate(emitter, register, i64::from(strict_types));
+}
+
+/// Materializes ABI v4 context for internal dispatch with no lexical PHP caller.
+/// C adapters and Fiber entry calls bind weakly; they must not reuse stale scope registers.
+pub(crate) fn emit_global_weak_invoker_context(emitter: &mut Emitter) {
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 2), -1);
+    emit_invoker_binding_policy(emitter, false);
 }
 
 /// Retains the callable descriptor pointer currently held in the integer result register.
@@ -616,6 +647,7 @@ mod tests {
             declared_params: vec![true, true, false],
             variadic: Some("rest".to_string()),
             deprecation: None,
+            is_generator: false,
         };
         let captures = vec![("offset".to_string(), PhpType::Int, false)];
         let hidden = vec![("receiver".to_string(), PhpType::Object("Box".to_string()), false)];
@@ -662,6 +694,7 @@ mod tests {
             declared_params: vec![false],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         };
 
         let descriptor = static_descriptor_with_optional_invoker_meta(

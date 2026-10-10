@@ -1,8 +1,8 @@
 ---
 title: "mysqli_affected_rows()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many rows the last write affected."
 sidebar:
-  order: 98
+  order: 99
 ---
 
 ## mysqli_affected_rows()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_affected_rows(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many rows the last write affected.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

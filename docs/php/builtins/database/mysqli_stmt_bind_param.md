@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_bind_param()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Binds variables to a prepared statement's placeholders."
 sidebar:
-  order: 160
+  order: 161
 ---
 
 ## mysqli_stmt_bind_param()
@@ -11,12 +11,12 @@ sidebar:
 function mysqli_stmt_bind_param(mixed $statement, string $types, ...$vars): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Binds variables to a prepared statement's placeholders.
 
 **Parameters**:
 - `$statement` (`mixed`)
 - `$types` (`string`)
-- `...$vars` — variadic: collects excess arguments into `$vars`.
+- `...$vars` - variadic: collects excess arguments into `$vars`.
 
 **Returns**: `bool`
 
@@ -25,7 +25,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

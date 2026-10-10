@@ -20,6 +20,7 @@
 use crate::parser::ast::{BinOp, CastType, Program, TypeExpr};
 use crate::synthetic_class::*;
 
+/// Builds the private probe for an actively executing Async task.
 fn method_is_async_task_active() -> MethodBuilder {
     method("__isAsyncTaskActive")
         .static_()
@@ -27,6 +28,7 @@ fn method_is_async_task_active() -> MethodBuilder {
         .body(vec![s_return(e_self_static_prop("asyncTaskActive"))])
 }
 
+/// Builds the guard rejecting bare Fiber suspension while Async owns task wakeups.
 fn method_assert_fiber_suspend_allowed_in_async_task() -> MethodBuilder {
     method("__assertFiberSuspendAllowed")
         .static_()
@@ -44,6 +46,7 @@ fn method_assert_fiber_suspend_allowed_in_async_task() -> MethodBuilder {
         )])
 }
 
+/// Builds the indirect-call guard delegating to the active-task suspension check.
 fn method_assert_fiber_suspend_callable_allowed() -> MethodBuilder {
     method("__assertFiberSuspendCallableAllowed")
         .private()
@@ -56,6 +59,7 @@ fn method_assert_fiber_suspend_callable_allowed() -> MethodBuilder {
         ))])
 }
 
+/// Builds the fail-closed placeholder that callable-guard lowering must replace.
 fn method_assert_fiber_suspend_callable_guard() -> MethodBuilder {
     method("__assertFiberSuspendCallableGuard")
         .private()
@@ -71,6 +75,7 @@ fn method_assert_fiber_suspend_callable_guard() -> MethodBuilder {
         ])
 }
 
+/// Builds case-insensitive detection of Fiber::suspend callable pairs, including Fiber objects.
 fn method_is_fiber_suspend_callable_array() -> MethodBuilder {
     let is_fiber_class_name = e_binop(
         e_binop(
@@ -192,16 +197,19 @@ mod tests {
     use super::*;
     use crate::parser::ast::StmtKind;
 
+    /// Parses a user fixture with ordinary, rather than compiler-internal, declaration rules.
     fn parse(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse(&tokens).expect("fixture must parse")
     }
 
+    /// Parses the reviewable PHP scheduler oracle with internal declaration access enabled.
     fn parsed_declarations() -> Program {
         let tokens = crate::lexer::tokenize(SOURCE).expect("Async prelude must tokenize");
         crate::parser::parse_internal(&tokens).expect("Async prelude must parse")
     }
 
+    /// Removes source-position differences before comparing generated and parsed AST debug output.
     fn strip_spans(rendered: &str) -> String {
         let mut cleaned = String::with_capacity(rendered.len());
         let mut rest = rendered;
@@ -216,6 +224,7 @@ mod tests {
         cleaned
     }
 
+    /// Pins every generated declaration and scheduler method to the PHP oracle, excluding spans.
     #[test]
     fn built_declarations_match_the_php_oracle() {
         let built = async_declarations();
@@ -279,6 +288,7 @@ mod tests {
         }
     }
 
+    /// Pins the v1 class/function inventory and its shared builtin-contract catalog entries.
     #[test]
     fn declarations_expose_only_the_v1_root_scope_surface() {
         let declarations = async_declarations();
@@ -337,6 +347,7 @@ mod tests {
         assert_eq!(declared, catalogued, "Async prelude class catalog drift");
     }
 
+    /// Requires cancellation pairing to use the originating state's private token identity.
     #[test]
     fn cancellation_request_marker_requires_the_state_token() {
         assert!(SOURCE.contains("public function __markRequestPaired"));
@@ -346,6 +357,7 @@ mod tests {
         assert!(!SOURCE.contains("private function __markRequestPaired"));
     }
 
+    /// Keeps programs without scheduler roots free of Async prelude declarations.
     #[test]
     fn unrelated_programs_are_not_injected() {
         let program = parse("<?php echo 1;");
@@ -355,6 +367,7 @@ mod tests {
         assert_eq!(injected.len(), original_len);
     }
 
+    /// Confirms an imported Async run call injects the scheduler namespace.
     #[test]
     fn run_call_injects_the_async_namespace() {
         let program = parse(
@@ -371,6 +384,7 @@ run(function ($tasks): int { return 1; });
         ));
     }
 
+    /// Confirms aliased function imports still activate Async root detection.
     #[test]
     fn aliased_run_import_injects_the_async_namespace() {
         let program = parse(
@@ -388,6 +402,7 @@ asyncRun(static fn ($tasks): int => 1);
         ));
     }
 
+    /// Covers root detection through a qualified call_user_func callable string.
     #[test]
     fn fully_qualified_callable_string_injects_the_async_namespace() {
         let program = parse(
@@ -402,6 +417,7 @@ asyncRun(static fn ($tasks): int => 1);
         ));
     }
 
+    /// Leaves the source unchanged when strict PHP disables the Async extension surface.
     #[test]
     fn strict_php_does_not_inject_the_extension_surface() {
         let program = parse(

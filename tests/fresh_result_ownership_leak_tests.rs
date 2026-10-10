@@ -300,6 +300,38 @@ echo $total, "\n";
     assert_output_and_clean_heap("elephc_leak_boxed_fresh_hash", source, "400\n");
 }
 
+/// Verifies EVERY builtin that boxes a freshly built hash by raw pointer reclaims it.
+///
+/// Follow-up for #938. `getdate`/`localtime` were fixed above and `getenv()` joined them in
+/// #802, all of them through the one boxing helper that releases the raw pointer after
+/// `__rt_mixed_from_value` has increfed the payload. Nothing checked the rest of the family.
+///
+/// Measured while writing this: `stat` and `parse_url` were already on that helper and clean;
+/// `ob_get_status` had a COPY of the helper without the release and leaked nine blocks per
+/// call — 450 over fifty calls. The copy is gone and the five now share one implementation,
+/// which is what keeps a sixth from being written without the release again.
+///
+/// The total is the host PHP 8.5.10 answer for the same program.
+#[test]
+fn every_builtin_that_boxes_a_fresh_hash_reclaims_it() {
+    let source = r#"<?php
+$total = 0;
+for ($i = 0; $i < 20; $i++) {
+    $when = getdate();
+    $parts = localtime(0, true);
+    $info = stat(__FILE__);
+    $url = parse_url("https://a.example/b?c=d");
+    ob_start();
+    $status = ob_get_status();
+    ob_end_clean();
+    $total += count($when) + count($parts) + count($url) + count($status);
+    $total += is_array($info) ? 1 : 0;
+}
+echo $total, "\n";
+"#;
+    assert_output_and_clean_heap("elephc_leak_boxed_fresh_hash_family", source, "640\n");
+}
+
 // ---------------------------------------------------------------------------
 // Controls: already clean before this change, and must stay out of `Fresh`.
 // ---------------------------------------------------------------------------

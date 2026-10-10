@@ -549,6 +549,20 @@ fn test_get_resource_type_returns_stream() {
     assert_eq!(out, "stream");
 }
 
+/// Verifies compiled PHP keeps stream and stream-filter resources distinct.
+#[test]
+fn test_get_resource_type_returns_stream_filter() {
+    let out = compile_and_run(
+        r#"<?php
+$stream = fopen("php://memory", "r+");
+$filter = stream_filter_append($stream, "string.rot13", STREAM_FILTER_READ);
+echo get_resource_type($stream), "|", get_resource_type($filter), "|";
+var_dump($filter);
+"#,
+    );
+    assert_eq!(out, "stream|stream filter|resource(6) of type (stream filter)\n");
+}
+
 /// Verifies compiled PHP output for get resource id matches display marker.
 #[test]
 fn test_get_resource_id_matches_display_marker() {
@@ -1136,6 +1150,47 @@ fclose($m);
 "#,
     );
     assert_eq!(out, "4");
+}
+
+/// Verifies a `convert.iconv` write filter keeps its own `//TRANSLIT` choice while the iconv
+/// bridge converts the same charset pair between its writes.
+///
+/// Apple's iconv (Citrus-based since macOS 14) keeps the transliterate and discard options on
+/// the converter it shares between every descriptor of one charset pair, and each
+/// `iconv_open()` or option change rewrites them. The write filter keeps its descriptor open
+/// across writes, so a bridge `iconv()` call in between used to decide how the filter's next
+/// write converted: a plain filter started transliterating after an `ASCII//TRANSLIT` call, and
+/// a `//TRANSLIT` filter stopped after a plain one. The first half checks that a plain filter
+/// never approximates `é` (PHP rejects the write, elephc writes the prefix, and neither
+/// transliterates); the second that a `//TRANSLIT` filter approximates it on both writes.
+///
+/// glibc keeps the options on each descriptor, so this passes on Linux before and after the
+/// fix and can only fail on macOS. The bridge call comes first because it installs the UTF-8
+/// `LC_CTYPE` that glibc's `//TRANSLIT` needs. The approximation is the platform iconv's: `e`
+/// under glibc, `'e` under Apple's.
+#[test]
+fn test_stream_filter_iconv_write_keeps_its_options_across_bridge_conversions() {
+    let out = compile_and_run(
+        r#"<?php
+$plain = fopen("php://temp", "r+");
+stream_filter_append($plain, "convert.iconv.UTF-8/ASCII", STREAM_FILTER_WRITE);
+echo iconv("UTF-8", "ASCII//TRANSLIT", "caf\u{e9}"), "|";
+@fwrite($plain, "d\u{e9}j\u{e0}");
+rewind($plain);
+echo str_contains(stream_get_contents($plain), "e") ? "transliterated" : "plain", "|";
+fclose($plain);
+$translit = fopen("php://temp", "r+");
+stream_filter_append($translit, "convert.iconv.UTF-8/ASCII//TRANSLIT", STREAM_FILTER_WRITE);
+fwrite($translit, "caf\u{e9}|");
+echo iconv("UTF-8", "ASCII", "plain"), "|";
+fwrite($translit, "caf\u{e9}");
+rewind($translit);
+echo stream_get_contents($translit);
+fclose($translit);
+"#,
+    );
+    let cafe = if cfg!(any(target_os = "macos", target_os = "ios")) { "caf'e" } else { "cafe" };
+    assert_eq!(out, format!("{cafe}|plain|plain|{cafe}|{cafe}"));
 }
 
 /// Verifies compiled PHP output for stream filter base64 encode pads correctly.
@@ -5610,6 +5665,7 @@ fclose($m);
     assert_eq!(out, ">>x|closed");
 }
 
+/// Calls onClose once when both stream directions share the same filter instance.
 #[test]
 fn test_stream_filter_all_releases_one_shared_instance_once() {
     let out = compile_and_run(
@@ -6297,6 +6353,68 @@ echo "|", filemtime("typew://file");
 "#,
     );
     assert_eq!(out, "D-F-|4321");
+}
+
+/// Verifies every integer stat getter reaches a registered wrapper's `url_stat()` (issue #724).
+///
+/// `fileatime()`, `filectime()`, `fileperms()`, `fileowner()`, `filegroup()` and `fileinode()`
+/// lowered straight to native `stat()` on the literal `scheme://...` path, so the wrapper was
+/// never asked and each call answered `false`, while `filesize()` and `filemtime()` already
+/// dispatched. PHP asks `url_stat()` once per call with the no-cache flag (4), answers `false`
+/// when the wrapper reports the path absent, and still stats real files natively. Every call
+/// uses its own path so the output does not depend on PHP's last-path stat cache.
+#[test]
+fn test_scalar_stat_getters_dispatch_to_wrapper_url_stat() {
+    let out = compile_and_run(
+        r#"<?php
+class GetterW {
+    public $context;
+    public function url_stat(string $path, int $flags) {
+        echo substr($path, 10), "=", $flags, " ";
+        if (strpos($path, "gone") !== false) { return false; }
+        return ['dev'=>1,'ino'=>4242,'mode'=>33188,'nlink'=>1,'uid'=>501,'gid'=>20,
+                'rdev'=>0,'size'=>7,'atime'=>1111,'mtime'=>2222,'ctime'=>3333,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("getterw", "GetterW");
+echo fileatime("getterw://a"), "|";
+echo filectime("getterw://c"), "|";
+echo fileperms("getterw://p"), "|";
+echo fileowner("getterw://o"), "|";
+echo filegroup("getterw://g"), "|";
+echo fileinode("getterw://i"), "|";
+echo filemtime("getterw://m"), "|";
+echo filesize("getterw://s"), "\n";
+$gone = [
+    @fileatime("getterw://gone-a"),
+    @filectime("getterw://gone-c"),
+    @fileperms("getterw://gone-p"),
+    @fileowner("getterw://gone-o"),
+    @filegroup("getterw://gone-g"),
+    @fileinode("getterw://gone-i"),
+];
+echo "\n";
+foreach ($gone as $g) { echo $g === false ? "F" : "?"; }
+echo "\n";
+file_put_contents("getter_real.txt", "x");
+$st = stat("getter_real.txt");
+echo fileperms("getter_real.txt") === $st["mode"] ? "p" : "!";
+echo fileinode("getter_real.txt") === $st["ino"] ? "i" : "!";
+echo fileowner("getter_real.txt") === $st["uid"] ? "o" : "!";
+echo filegroup("getter_real.txt") === $st["gid"] ? "g" : "!";
+echo fileatime("getter_real.txt") === $st["atime"] ? "a" : "!";
+echo filectime("getter_real.txt") === $st["ctime"] ? "c" : "!";
+unlink("getter_real.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "a=4 1111|c=4 3333|p=4 33188|o=4 501|g=4 20|i=4 4242|m=4 2222|s=4 7\n\
+         gone-a=4 gone-c=4 gone-p=4 gone-o=4 gone-g=4 gone-i=4 \n\
+         FFFFFF\n\
+         piogac"
+    );
 }
 
 /// Verifies compiled PHP output for filesize and is file dispatch to wrapper url stat.
@@ -7755,6 +7873,23 @@ echo $f === false ? "closed" : "open";
     assert_eq!(out, "P9;closed");
 }
 
+/// Named source order evaluates and roots the params hash before the context expression.
+/// Callback discovery must follow the staged ownership values back to that literal hash.
+#[test]
+fn test_stream_notification_callback_survives_wrapped_named_params() {
+    let out = compile_and_run(
+        r#"<?php
+$ctx = stream_context_set_params(
+    params: ['notification' => function($code) { echo "W" . $code . ";"; }],
+    context: stream_context_create()
+);
+$f = fopen('http://127.0.0.1:1/', 'r');
+echo $f === false ? "closed" : "open";
+"#,
+    );
+    assert_eq!(out, "W9;closed");
+}
+
 /// A userspace wrapper whose `stream_cast()` (vtable slot 10) returns a real
 /// underlying socket fd becomes select()-able: `stream_select` resolves the
 /// synthetic wrapper fd to that real fd (STREAM_CAST_FOR_SELECT) and reports it
@@ -8049,4 +8184,42 @@ fclose($f);
 "#,
     );
     assert_eq!(out, "[abc][def]");
+}
+
+/// Issue #506, raised in review: a stream wrapper's `mkdir()` receives PHP's real `$mode` and
+/// `$options`, not two zeros.
+///
+/// Both trailing arguments used to be hard-coded, so a wrapper could see neither the
+/// requested permissions nor that recursive creation was asked for. Measured against a
+/// userland wrapper on the host PHP 8.5.10:
+///
+/// ```text
+/// mkdir("w://d")                mkdir($path, 511, 8)
+/// mkdir("w://d", 0700)          mkdir($path, 448, 8)
+/// mkdir("w://d", 0700, true)    mkdir($path, 448, 9)
+/// ```
+///
+/// The options word is `STREAM_REPORT_ERRORS` (8), which `mkdir()` always sets, plus
+/// `STREAM_MKDIR_RECURSIVE` (1) when requested — the `8`, not a `0`, is the part that a
+/// hard-coded zero got wrong even for a one-argument call.
+#[test]
+fn test_user_wrapper_mkdir_receives_mode_and_options() {
+    let out = compile_and_run(
+        r#"<?php
+class PathOp {
+    public function mkdir(string $path, int $mode, int $options): bool {
+        echo "M(", $path, ",", $mode, ",", $options, ")";
+        return true;
+    }
+}
+stream_wrapper_register("pathop", "PathOp");
+mkdir("pathop://dir");
+mkdir("pathop://dir", 0700);
+mkdir("pathop://dir", 0700, true);
+"#,
+    );
+    assert_eq!(
+        out,
+        "M(pathop://dir,511,8)M(pathop://dir,448,8)M(pathop://dir,448,9)"
+    );
 }

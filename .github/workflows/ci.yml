@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege for every job: the repository default token is read-write,
+# and no job here writes anything through it. `packages: read` lets the Linux
+# jobs pull `ghcr.io/illegalstudio/elephc-ci` with the workflow token.
+permissions:
+  contents: read
+  packages: read
+
 # Cancel superseded runs for the same ref (e.g. when a branch is force-pushed or
 # rebased) so stale jobs stop consuming runners the moment a newer commit lands.
 concurrency:
@@ -14,6 +21,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
   # Deep parser/lowering fixtures overflow Rust's small default worker stack on
   # ARM64 runners. Keep one value for every archived nextest process so shard
   # placement cannot change whether a test has enough stack.
@@ -23,6 +33,7 @@ env:
     -p elephc-pdo
     -p elephc-crypto
     -p elephc-bcmath
+    -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar
     -p elephc-tz
@@ -42,16 +53,21 @@ jobs:
   # wait for a queued or slower macOS archive job.
   build-archive-macos-aarch64:
     name: Build & Archive Tests (macos-aarch64)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      - name: Test nextest artifact validation
+        run: sh scripts/ci/test_validate_archived_nextest.sh
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -62,7 +78,7 @@ jobs:
             rust-macos-aarch64-
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@e88e69ecdb9658bd172693dcdc2c84e7f0ab6a11 # nextest, 2026-09-20
 
       - name: Install native test dependencies
         run: brew install freetds pcre2 unixodbc
@@ -119,8 +135,14 @@ jobs:
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
 
+      - name: Prepare offline Oniguruma test bundle
+        run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target macos-aarch64
+
       - name: Archive test binaries
-        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+        run: |
+          cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
+          (cd "$RUNNER_TEMP" && shasum -a 256 cargo-nextest > cargo-nextest.sha256)
 
       - name: Run doctests
         # Doctests cannot run from a nextest archive, so run them here where the
@@ -134,7 +156,7 @@ jobs:
         # curl jobs, keyed on the committed lock plus the recipe sources that decide
         # what gets built; the codegen shards below restore the same key, so the
         # from-source build happens here once and never in a shard.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -162,11 +184,45 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh macos-aarch64)" \
             cargo test -p elephc-xml
 
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Materialize the complete curl chain once in this prerequisite job. The
+        # cross-run cache avoids repeated cold downloads, while the workflow
+        # artifact below provides the same-run handoff to the four curl shards.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-macos-aarch64-
+
+      - name: Materialize managed native curl
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/curl-get/elephc.toml
+
+      - name: Pack managed native curl cache
+        run: |
+          tar -C "$HOME/.cache/elephc" -czf \
+            "$RUNNER_TEMP/managed-native-curl-macos-aarch64.tar.gz" native
+
+      - name: Upload managed native curl cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-native-curl-macos-aarch64
+          path: ${{ runner.temp }}/managed-native-curl-macos-aarch64.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Upload test archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-macos-aarch64
-          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          path: |
+            ${{ runner.temp }}/nextest-archive.tar.zst
+            ${{ runner.temp }}/cargo-nextest
+            ${{ runner.temp }}/cargo-nextest.sha256
           retention-days: 1
           if-no-files-found: error
 
@@ -185,10 +241,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # The toolchain lives at /usr/local/cargo (CARGO_HOME) inside the CI
           # image, not under $HOME.
@@ -252,6 +308,18 @@ jobs:
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
 
+      - name: Ensure Python for Oniguruma bundle preparation
+        shell: bash
+        run: |
+          if ! command -v python3 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
+          fi
+          python3 --version
+
+      - name: Prepare offline Oniguruma test bundle
+        run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-x86_64
+
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
 
@@ -267,7 +335,7 @@ jobs:
         # curl jobs, keyed on the committed lock plus the recipe sources that decide
         # what gets built; the codegen shards below restore the same key, so the
         # from-source build happens here once and never in a shard.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -295,8 +363,38 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
             cargo test -p elephc-xml
 
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Seed the cross-run cache before packaging the same-run artifact below,
+        # so a cold key causes one source build instead of four concurrent ones.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-linux-x86_64-
+
+      - name: Materialize managed native curl
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/curl-get/elephc.toml
+
+      - name: Pack managed native curl cache
+        run: |
+          tar -C "$HOME/.cache/elephc" -czf \
+            "$RUNNER_TEMP/managed-native-curl-linux-x86_64.tar.gz" native
+
+      - name: Upload managed native curl cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-native-curl-linux-x86_64
+          path: ${{ runner.temp }}/managed-native-curl-linux-x86_64.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Upload test archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}/nextest-archive.tar.zst
@@ -313,10 +411,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # The toolchain lives at /usr/local/cargo (CARGO_HOME) inside the CI
           # image, not under $HOME.
@@ -380,6 +478,18 @@ jobs:
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
 
+      - name: Ensure Python for Oniguruma bundle preparation
+        shell: bash
+        run: |
+          if ! command -v python3 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
+          fi
+          python3 --version
+
+      - name: Prepare offline Oniguruma test bundle
+        run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-aarch64
+
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
 
@@ -395,7 +505,7 @@ jobs:
         # curl jobs, keyed on the committed lock plus the recipe sources that decide
         # what gets built; the codegen shards below restore the same key, so the
         # from-source build happens here once and never in a shard.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -423,58 +533,120 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-aarch64)" \
             cargo test -p elephc-xml
 
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Seed the cross-run cache before packaging the same-run artifact below,
+        # so a cold key causes one source build instead of four concurrent ones.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-linux-aarch64-
+
+      - name: Materialize managed native curl
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/curl-get/elephc.toml
+
+      - name: Pack managed native curl cache
+        run: |
+          tar -C "$HOME/.cache/elephc" -czf \
+            "$RUNNER_TEMP/managed-native-curl-linux-aarch64.tar.gz" native
+
+      - name: Upload managed native curl cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-native-curl-linux-aarch64
+          path: ${{ runner.temp }}/managed-native-curl-linux-aarch64.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Upload test archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}/nextest-archive.tar.zst
           retention-days: 1
           if-no-files-found: error
 
+  # More than 9,000 selected tests exceed a single serial job's 45-minute budget.
+  # Eight partitions keep the slowest hash buckets near ten minutes while each runner
+  # remains serial and bounded.
   non-codegen-tests-macos-aarch64:
-    name: Non-Codegen Tests (macos-aarch64)
+    name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/8)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - uses: actions/checkout@v7
 
       - name: Install test-only native providers
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Validate archived cargo-nextest
+        id: validate_archived_nextest
+        continue-on-error: true
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Remove invalid cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/cargo-nextest"
+
+      - name: Retry cargo-nextest artifact download
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate retried cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
       - name: Run non-codegen tests
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/8 \
+            --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
   non-codegen-tests-linux-x86_64:
-    name: Non-Codegen Tests (linux-x86_64)
+    name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/8)
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -485,24 +657,30 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/8 \
+            --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
   non-codegen-tests-linux-aarch64:
-    name: Non-Codegen Tests (linux-aarch64)
+    name: Non-Codegen Tests (linux-aarch64 ${{ matrix.shard }}/8)
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -513,36 +691,57 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/8 \
+            --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
   web-tests-macos-aarch64:
     name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - uses: actions/checkout@v7
 
       - name: Install native test dependencies
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Validate archived cargo-nextest
+        id: validate_archived_nextest
+        continue-on-error: true
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Remove invalid cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/cargo-nextest"
+
+      - name: Retry cargo-nextest artifact download
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate retried cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
       - name: Run web test shard
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(web_tests) or binary(web_session_tests)' \
@@ -565,10 +764,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -598,10 +797,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -619,32 +818,51 @@ jobs:
   codegen-tests-macos-aarch64:
     name: Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - uses: actions/checkout@v7
 
       - name: Install test-only native providers
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
+
+      - name: Validate archived cargo-nextest
+        id: validate_archived_nextest
+        continue-on-error: true
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Remove invalid cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/cargo-nextest"
+
+      - name: Retry cargo-nextest artifact download
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate retried cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Cache managed native libxml2
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
         # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
         # build-archive job that already materialized it, so this is a restore.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -657,7 +875,7 @@ jobs:
         # compiler is what materializes the managed package below.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -680,13 +898,13 @@ jobs:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 1
+            -j 2
 
   codegen-tests-linux-x86_64:
     name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
@@ -703,10 +921,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -715,7 +933,7 @@ jobs:
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
         # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
         # build-archive job that already materialized it, so this is a restore.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -757,7 +975,7 @@ jobs:
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 1
+            -j 2
 
   codegen-tests-linux-aarch64:
     name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
@@ -774,10 +992,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -786,7 +1004,7 @@ jobs:
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
         # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
         # build-archive job that already materialized it, so this is a restore.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -828,7 +1046,7 @@ jobs:
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 1
+            -j 2
 
   # PDO fixtures all inject the same large standard-library prelude. Running a
   # deterministic shard in one libtest process lets parser/runtime/bridge caches
@@ -836,26 +1054,45 @@ jobs:
   pdo-codegen-tests-macos-aarch64:
     name: PDO Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - uses: actions/checkout@v7
 
       - name: Install test-only native providers
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
+
+      - name: Validate archived cargo-nextest
+        id: validate_archived_nextest
+        continue-on-error: true
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Remove invalid cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/cargo-nextest"
+
+      - name: Retry cargo-nextest artifact download
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate retried cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Run PDO codegen shard in one process
         env:
@@ -863,7 +1100,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -890,10 +1127,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -931,10 +1168,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -961,48 +1198,65 @@ jobs:
   # libcurl/libssh2/nghttp2/openssl/zlib build (see
   # tests/codegen/support/curl_native.rs) that the
   # ordinary shards' machines don't provision, so give them their own jobs that
-  # materialize that native cache first, cached across runs by an actions/cache keyed
-  # on the committed lock plus the recipe sources that decide what gets built. This
-  # dedicated matrix also exercises target callback trampolines, the combined
+  # consume the exact native cache packed by their prerequisite build job. The build
+  # job also caches it across runs by the committed lock and recipe sources. This
+  # dedicated matrix exercises target callback trampolines, the combined
   # elephc_magician + elephc_curl link shape, and managed-native materialization inside
   # the Linux CI container.
   curl-codegen-tests-macos-aarch64:
     name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - uses: actions/checkout@v7
 
       - name: Install test-only native providers
         run: brew install pcre2
 
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Deliberately the shared default path (unlike managed-native-smoke, which
-        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
-        # from-empty install): here we *want* one warm, reusable cache root that
-        # persists across runs via the key below, and it must also be the path
-        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
-        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
-        uses: actions/cache@v4
+      - name: Download managed native curl cache
+        uses: ./.github/actions/download-test-archive
         with:
-          path: ~/.cache/elephc/native
-          key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            curl-native-macos-aarch64-
+          name: managed-native-curl-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Extract managed native curl cache
+        run: |
+          mkdir -p "$RUNNER_TEMP/elephc-native"
+          tar -xzf "$RUNNER_TEMP/managed-native-curl-macos-aarch64.tar.gz" \
+            -C "$RUNNER_TEMP/elephc-native" --strip-components=1
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
+
+      - name: Validate archived cargo-nextest
+        id: validate_archived_nextest
+        continue-on-error: true
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Remove invalid cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/cargo-nextest"
+
+      - name: Retry cargo-nextest artifact download
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate retried cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Extract test archive
         # `elephc` is a build dependency of other integration tests that invoke it via
@@ -1011,7 +1265,7 @@ jobs:
         # notes in .config/nextest.toml) -- one extraction gives us both.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1025,17 +1279,20 @@ jobs:
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
-        # restored above, so this is a fast no-op once warm and only pays the
-        # ~4.5 minute from-source build (see managed-native-smoke) on a cold or
-        # invalidated cache.
+        # extracted above. The prerequisite build job owns cold materialization;
+        # shards stay offline and fail clearly if artifact provisioning regresses.
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
         run: |
-          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked --offline \
             --target macos-aarch64 \
             --manifest-path examples/curl-get/elephc.toml
 
       - name: Run curl codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_BINARY_TIMEOUT_SECS: "120"
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
@@ -1059,24 +1316,22 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Deliberately the shared default path (unlike managed-native-smoke, which
-        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
-        # from-empty install): here we *want* one warm, reusable cache root that
-        # persists across runs via the key below, and it must also be the path
-        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
-        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
-        uses: actions/cache@v4
+      - name: Download managed native curl cache
+        uses: ./.github/actions/download-test-archive
         with:
-          path: ~/.cache/elephc/native
-          key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            curl-native-linux-x86_64-
+          name: managed-native-curl-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Extract managed native curl cache
+        run: |
+          mkdir -p "$RUNNER_TEMP/elephc-native"
+          tar -xzf "$RUNNER_TEMP/managed-native-curl-linux-x86_64.tar.gz" \
+            -C "$RUNNER_TEMP/elephc-native" --strip-components=1
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -1102,17 +1357,20 @@ jobs:
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
-        # restored above, so this is a fast no-op once warm and only pays the
-        # ~4.5 minute from-source build (see managed-native-smoke) on a cold or
-        # invalidated cache.
+        # extracted above. The prerequisite build job owns cold materialization;
+        # shards stay offline and fail clearly if artifact provisioning regresses.
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
         run: |
-          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked --offline \
             --target linux-x86_64 \
             --manifest-path examples/curl-get/elephc.toml
 
       - name: Run curl codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_BINARY_TIMEOUT_SECS: "120"
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
@@ -1136,24 +1394,22 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Deliberately the shared default path (unlike managed-native-smoke, which
-        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
-        # from-empty install): here we *want* one warm, reusable cache root that
-        # persists across runs via the key below, and it must also be the path
-        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
-        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
-        uses: actions/cache@v4
+      - name: Download managed native curl cache
+        uses: ./.github/actions/download-test-archive
         with:
-          path: ~/.cache/elephc/native
-          key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            curl-native-linux-aarch64-
+          name: managed-native-curl-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Extract managed native curl cache
+        run: |
+          mkdir -p "$RUNNER_TEMP/elephc-native"
+          tar -xzf "$RUNNER_TEMP/managed-native-curl-linux-aarch64.tar.gz" \
+            -C "$RUNNER_TEMP/elephc-native" --strip-components=1
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -1179,17 +1435,20 @@ jobs:
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
-        # restored above, so this is a fast no-op once warm and only pays the
-        # ~4.5 minute from-source build (see managed-native-smoke) on a cold or
-        # invalidated cache.
+        # extracted above. The prerequisite build job owns cold materialization;
+        # shards stay offline and fail clearly if artifact provisioning regresses.
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
         run: |
-          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked --offline \
             --target linux-aarch64 \
             --manifest-path examples/curl-get/elephc.toml
 
       - name: Run curl codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_BINARY_TIMEOUT_SECS: "120"
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
@@ -1206,7 +1465,7 @@ jobs:
   # or misses a framework/archive on either platform, fails here.
   curl-ios-compile-link:
     name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1221,15 +1480,16 @@ jobs:
             sdk: iphonesimulator
             clang_target: arm64-apple-ios13.0-simulator
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust with the iOS standard library
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -1240,7 +1500,7 @@ jobs:
             rust-curl-${{ matrix.elephc_target }}-
 
       - name: Cache managed native curl for iOS
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/elephc-native
           key: curl-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
@@ -1266,7 +1526,7 @@ jobs:
   # libxml2, `-liconv`, or the SDK's zlib/bzip2 on either platform, fails here.
   xml-ios-compile-link:
     name: XML iOS Compile & Link (${{ matrix.elephc_target }})
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1281,15 +1541,16 @@ jobs:
             sdk: iphonesimulator
             clang_target: arm64-apple-ios13.0-simulator
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust with the iOS standard library
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -1300,7 +1561,7 @@ jobs:
             rust-xml-${{ matrix.elephc_target }}-
 
       - name: Cache managed native libxml2 for iOS
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/elephc-native
           key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -1318,44 +1579,77 @@ jobs:
             "${{ matrix.clang_target }}"
 
   # Eval integration tests compile, link, and run full programs while exercising
-  # eval/magician paths, so keep them out of the ordinary codegen shards. Two
-  # workers per shard reduce wall time without increasing the number of test runs.
+  # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
+  # deterministic shard in one libtest process so runtime-object and bridge caches
+  # survive between cases, with two workers preserving bounded parallelism.
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - uses: actions/checkout@v7
 
       - name: Install native test dependencies
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
+
+      - name: Validate archived cargo-nextest
+        id: validate_archived_nextest
+        continue-on-error: true
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Remove invalid cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/cargo-nextest"
+
+      - name: Retry cargo-nextest artifact download
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate retried cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Extract test archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
 
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
+          EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
+          # The shard runner installs no nextest of its own: pass 2 runs the
+          # binary packaged with the archive (see build-archive-macos-aarch64).
+          EVAL_SHARD_NEXTEST_BIN: ${{ runner.temp }}/cargo-nextest
         run: |
-          cargo nextest run --profile ci \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap . \
-            -E 'binary(codegen_tests) and test(~codegen::eval)' \
-            --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+          eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$eval_test_binary"
+          bash scripts/ci/run_eval_codegen_shard.sh \
+            "$eval_test_binary" "${{ matrix.shard }}" 16
 
   eval-codegen-tests-linux-x86_64:
     name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
@@ -1372,26 +1666,36 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
+
+      - name: Extract test archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
 
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
+          EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
         run: |
-          cargo nextest run --profile ci \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap . \
-            -E 'binary(codegen_tests) and test(~codegen::eval)' \
-            --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+          eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$eval_test_binary"
+          bash scripts/ci/run_eval_codegen_shard.sh \
+            "$eval_test_binary" "${{ matrix.shard }}" 16
 
   eval-codegen-tests-linux-aarch64:
     name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
@@ -1408,32 +1712,42 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
+
+      - name: Extract test archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
 
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
+          EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
         run: |
-          cargo nextest run --profile ci \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap . \
-            -E 'binary(codegen_tests) and test(~codegen::eval)' \
-            --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+          eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$eval_test_binary"
+          bash scripts/ci/run_eval_codegen_shard.sh \
+            "$eval_test_binary" "${{ matrix.shard }}" 16
 
   image-api-sync:
     name: Image API stubs in sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Regenerate image API stubs
         # Re-run the generator from its pinned spec; the committed prelude stubs and
@@ -1451,17 +1765,59 @@ jobs:
         # use the symbol fail to link.
         run: python3 crates/elephc-image/tools/check_extern_exports.py
 
+  security-audit:
+    name: RustSec advisory audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        # The exact toolchain `.github/docker/ci.Dockerfile` pins (RUST_VERSION),
+        # selected here through RUST_TOOLCHAIN, not floating `stable`: an unchanged
+        # commit must not start failing because a new compiler shipped.
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Install cargo-audit
+        # Pinned for the same reason, and `--locked` so its own dependency tree is the
+        # reviewed one. Bump both deliberately, in their own PR.
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Audit Cargo.lock against the RustSec database
+        # Fails on any advisory that is not listed in `.cargo/audit.toml`, so a NEW
+        # vulnerability entering the dependency graph breaks the build instead of being
+        # noticed in a periodic manual sweep. Every ignored advisory carries its
+        # justification and its removal condition next to it in that file; unmaintained,
+        # unsound and yanked notices stay warnings rather than failures, because they have
+        # no fixed version to move to and would otherwise make the gate unactionable.
+        run: cargo audit
+
+  action-pins:
+    name: Third-party Action pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Test Action pin checker
+        run: python3 -m unittest discover -s .github/scripts -p 'test_check_action_pins.py' -v
+
+      - name: Check workflow and composite Action refs
+        run: ruby .github/scripts/check_action_pins.rb
+
   builtins-docs-sync:
     name: Builtins docs in sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -1534,13 +1890,15 @@ jobs:
     name: Curl feature contract coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -1593,13 +1951,13 @@ jobs:
       matrix:
         include:
           - target: macos-aarch64
-            runner: macos-14
+            runner: macos-15
           - target: linux-x86_64
             runner: ubuntu-24.04
           - target: linux-aarch64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure isolated native cache
         # `runner.temp` is unavailable while GitHub validates job-level `env`;
@@ -1608,10 +1966,12 @@ jobs:
         run: echo "ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/elephc-managed-native-cache" >> "$GITHUB_ENV"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -1669,6 +2029,41 @@ jobs:
             --offline \
             --target "${{ matrix.target }}" \
             --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
+
+      - name: Materialize Oniguruma and verify locked offline reuse
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/oniguruma-project"
+          ./target/debug/elephc native add oniguruma \
+            --target "${{ matrix.target }}" \
+            --manifest-path "$RUNNER_TEMP/oniguruma-project/elephc.toml"
+          ./target/debug/elephc native install --locked --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path "$RUNNER_TEMP/oniguruma-project/elephc.toml"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["ELEPHC_NATIVE_CACHE"]) / "artifacts/oniguruma"
+          archives = list(root.rglob("libelephc_oniguruma_shim.a"))
+          assert len(archives) == 1, archives
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"ELEPHC_ONIGURUMA_TEST_PREFIX={archives[0].parent.parent}\n")
+          PY
+
+      - name: Compare the managed mbregex provider with the PHP oracle
+        run: cargo test -p elephc-mbstring --test regex --test regex_request --test regex_ini_abi --test invoke regex -- --include-ignored
+
+      - name: Build Oniguruma providers for iOS device and Simulator
+        if: matrix.target == 'macos-aarch64'
+        shell: bash
+        run: |
+          for target in ios-arm64 ios-sim-arm64; do
+            source scripts/ci/configure_ios_native_toolchain.sh "$target"
+            mkdir -p "$RUNNER_TEMP/oniguruma-$target"
+            ./target/debug/elephc native add oniguruma \
+              --target "$target" \
+              --manifest-path "$RUNNER_TEMP/oniguruma-$target/elephc.toml"
+          done
 
       - name: Materialize catalog curl (and its libssh2/nghttp2/openssl/zlib dependencies) from verified source
         # curl's recipe declares libssh2, nghttp2, openssl and zlib as
@@ -1779,6 +2174,21 @@ jobs:
             --target "${{ matrix.target }}" \
             --manifest-path examples/xml/elephc.toml
 
+  frame-assertions-release:
+    name: Frame assertions (release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Check undersized frame rejection in release mode
+        run: cargo test -p elephc --release --lib test_emit_frame_
+
   test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -1810,6 +2220,9 @@ jobs:
       - builtins-docs-sync
       - managed-native-smoke
       - curl-feature-contract
+      - security-audit
+      - action-pins
+      - frame-assertions-release
     if: always()
     steps:
       - name: Verify test jobs
@@ -1841,18 +2254,23 @@ jobs:
           test "${{ needs.builtins-docs-sync.result }}" = "success"
           test "${{ needs.managed-native-smoke.result }}" = "success"
           test "${{ needs.curl-feature-contract.result }}" = "success"
+          test "${{ needs.security-audit.result }}" = "success"
+          test "${{ needs.action-pins.result }}" = "success"
+          test "${{ needs.frame-assertions-release.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
-    runs-on: macos-14  # Apple Silicon runner
+    runs-on: macos-15  # Apple Silicon runner
     # The benchmark suite does a full release build and only tracks trends, so it
     # runs on pushes to main rather than on every pull request.
     if: github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Build release binary
         run: cargo build --release
@@ -1870,7 +2288,7 @@ jobs:
           cat magician-benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
           path: |

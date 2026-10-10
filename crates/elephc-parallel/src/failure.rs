@@ -126,6 +126,7 @@ struct ParsedFailure<'a> {
     frames: Vec<ParsedFrame<'a>>,
 }
 
+/// Accepts only the version-one failure categories understood by worker and parent decoders.
 fn valid_kind(kind: i32) -> bool {
     matches!(
         kind,
@@ -140,6 +141,7 @@ fn valid_kind(kind: i32) -> bool {
     )
 }
 
+/// Borrows required input bytes, allowing null only for empty data; storage must remain readable.
 unsafe fn required_bytes(value: ParallelBytes) -> Option<&'static [u8]> {
     if value.ptr.is_null() {
         return (value.len == 0).then_some(&[]);
@@ -147,6 +149,7 @@ unsafe fn required_bytes(value: ParallelBytes) -> Option<&'static [u8]> {
     Some(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
 }
 
+/// Distinguishes absent null/zero input from a present byte slice without transferring ownership.
 unsafe fn optional_bytes(value: ParallelBytes) -> Option<Option<&'static [u8]>> {
     if value.ptr.is_null() {
         return (value.len == 0).then_some(None);
@@ -156,10 +159,12 @@ unsafe fn optional_bytes(value: ParallelBytes) -> Option<Option<&'static [u8]>> 
     }))
 }
 
+/// Checks that an input length fits the wire header before narrowing its native usize.
 fn wire_u32_len(len: usize) -> Option<u32> {
     u32::try_from(len).ok()
 }
 
+/// Counts optional payload bytes while rejecting a present length that collides with the None sentinel.
 fn encoded_len(value: Option<&[u8]>) -> Option<usize> {
     match value {
         None => Some(0),
@@ -170,14 +175,17 @@ fn encoded_len(value: Option<&[u8]>) -> Option<usize> {
     }
 }
 
+/// Appends a little-endian unsigned header word to the owned failure payload.
 fn push_u32(output: &mut Vec<u8>, value: u32) {
     output.extend_from_slice(&value.to_le_bytes());
 }
 
+/// Appends a signed failure code as its exact little-endian integer bits.
 fn push_i64(output: &mut Vec<u8>, value: i64) {
     output.extend_from_slice(&value.to_le_bytes());
 }
 
+/// Writes a checked present-string length or the explicit absent-string sentinel.
 fn push_optional_len(output: &mut Vec<u8>, value: Option<&[u8]>) {
     push_u32(
         output,
@@ -185,6 +193,8 @@ fn push_optional_len(output: &mut Vec<u8>, value: Option<&[u8]>) {
     );
 }
 
+/// Copies validated failure fields/frames into a pointer-free owned EPFL transfer envelope.
+/// The caller must keep every nonnull input slice and frame array readable during encoding.
 pub(crate) unsafe fn encode_failure(
     input: &ParallelFailureInput,
 ) -> Result<ParallelTransferBlob, i32> {
@@ -264,6 +274,7 @@ pub(crate) unsafe fn encode_failure(
     copy_transfer_payload(payload.as_ptr(), payload.len())
 }
 
+/// Reads one bounded little-endian header word, advancing only after a complete read.
 fn read_u32(bytes: &[u8], cursor: &mut usize) -> Option<u32> {
     let end = cursor.checked_add(4)?;
     let raw: [u8; 4] = bytes.get(*cursor..end)?.try_into().ok()?;
@@ -271,6 +282,7 @@ fn read_u32(bytes: &[u8], cursor: &mut usize) -> Option<u32> {
     Some(u32::from_le_bytes(raw))
 }
 
+/// Reads an exact signed failure code from eight bounded payload bytes.
 fn read_i64(bytes: &[u8], cursor: &mut usize) -> Option<i64> {
     let end = cursor.checked_add(8)?;
     let raw: [u8; 8] = bytes.get(*cursor..end)?.try_into().ok()?;
@@ -278,6 +290,7 @@ fn read_i64(bytes: &[u8], cursor: &mut usize) -> Option<i64> {
     Some(i64::from_le_bytes(raw))
 }
 
+/// Borrows a counted payload slice with checked cursor addition and no allocation.
 fn take<'a>(bytes: &'a [u8], cursor: &mut usize, len: u32) -> Option<&'a [u8]> {
     let len = usize::try_from(len).ok()?;
     let end = cursor.checked_add(len)?;
@@ -286,6 +299,7 @@ fn take<'a>(bytes: &'a [u8], cursor: &mut usize, len: u32) -> Option<&'a [u8]> {
     Some(value)
 }
 
+/// Reads an optional string, preserving absence separately from a present empty slice.
 fn take_optional<'a>(
     bytes: &'a [u8],
     cursor: &mut usize,
@@ -298,6 +312,8 @@ fn take_optional<'a>(
     }
 }
 
+/// Validates kind, lengths, frame records and exact envelope exhaustion before exposing borrowed views.
+/// All returned slices borrow the caller's still-live blob allocation.
 fn parse_failure(blob: ParallelTransferBlob) -> Option<ParsedFailure<'static>> {
     if !transfer_blob_is_valid(blob) {
         return None;
@@ -350,12 +366,14 @@ fn parse_failure(blob: ParallelTransferBlob) -> Option<ParsedFailure<'static>> {
     })
 }
 
+/// Appends PHP serialized integer syntax for one already validated scalar field.
 fn push_php_int(output: &mut Vec<u8>, value: i64) {
     output.extend_from_slice(b"i:");
     output.extend_from_slice(value.to_string().as_bytes());
     output.push(b';');
 }
 
+/// Appends a byte-length-prefixed PHP serialized string without interpreting its content.
 fn push_php_string(output: &mut Vec<u8>, value: &[u8]) {
     output.extend_from_slice(b"s:");
     output.extend_from_slice(value.len().to_string().as_bytes());
@@ -364,6 +382,7 @@ fn push_php_string(output: &mut Vec<u8>, value: &[u8]) {
     output.extend_from_slice(b"\";");
 }
 
+/// Serializes an optional failure field as either a counted string or PHP null.
 fn push_php_optional_string(output: &mut Vec<u8>, value: Option<&[u8]>) {
     if let Some(value) = value {
         push_php_string(output, value);
@@ -372,6 +391,7 @@ fn push_php_optional_string(output: &mut Vec<u8>, value: Option<&[u8]>) {
     }
 }
 
+/// Emits the numeric key of a bounded failure-field or frame array.
 fn push_php_index(output: &mut Vec<u8>, index: usize) {
     push_php_int(output, index as i64);
 }
@@ -417,10 +437,12 @@ pub(crate) fn failure_to_php_serialized(
     copy_transfer_payload(output.as_ptr(), output.len())
 }
 
+/// Returns a failure category only after validating its entire owned envelope.
 pub(crate) fn failure_envelope_kind(blob: ParallelTransferBlob) -> Option<i32> {
     parse_failure(blob).map(|failure| failure.kind)
 }
 
+/// Builds an owned failure envelope with only a category/message and no remote object or frames.
 pub(crate) fn simple_failure_blob(
     kind: i32,
     message: &[u8],
@@ -442,6 +464,7 @@ pub(crate) fn simple_failure_blob(
     unsafe { encode_failure(&input) }
 }
 
+/// Converts an optional borrowed slice into a C view, using null/zero for absence.
 fn bytes_view(value: Option<&[u8]>) -> ParallelBytes {
     value.map_or(ParallelBytes::EMPTY, |bytes| ParallelBytes {
         ptr: bytes.as_ptr(),
@@ -449,6 +472,11 @@ fn bytes_view(value: Option<&[u8]>) -> ParallelBytes {
     })
 }
 
+/// Copies caller failure fields into a new owned envelope while mapping encoding errors and panics.
+///
+/// # Safety
+/// Nonnull input/output must reference readable/writable structs; all counted input slices and
+/// frames must remain readable for their declared lengths during the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_failure_encode(
     input: *const ParallelFailureInput,
@@ -471,6 +499,10 @@ pub unsafe extern "C" fn elephc_parallel_failure_encode(
     }
 }
 
+/// Publishes borrowed failure fields only after full validation, clearing output on rejected input.
+///
+/// # Safety
+/// The blob must remain readable and output writable; returned byte views borrow that live blob.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_failure_view(
     blob: ParallelTransferBlob,
@@ -497,6 +529,10 @@ pub unsafe extern "C" fn elephc_parallel_failure_view(
     PARALLEL_TRANSFER_OK
 }
 
+/// Returns one bounded failure-frame view, distinguishing malformed envelopes from invalid indices.
+///
+/// # Safety
+/// The blob must remain readable and output writable; returned byte views borrow that live blob.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_failure_frame(
     blob: ParallelTransferBlob,

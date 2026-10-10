@@ -81,7 +81,6 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
 
     emit_x86_64_object_from_raw_wrapper(emitter);
     emit_x86_64_install_dynamic_object_destructor_hook(emitter);
-    emit_x86_64_object_clone_shallow_wrapper(emitter);
 
     label_c_global(emitter, "__elephc_eval_class_exists");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
@@ -229,6 +228,11 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boolean class-relation result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_class_name");
+    emitter.instruction("push rbp");                                            // align the helper call and preserve caller linkage
+    emitter.instruction("mov rax, rdi");                                        // pass the possibly referenced object
+    emitter.instruction("call __rt_mixed_deref");                               // resolve the concrete receiver before class-name lookup
+    emitter.instruction("pop rbp");                                             // restore linkage for the leaf metadata lookup
+    emitter.instruction("mov rdi, rax");                                        // inspect the concrete object cell
     emitter.instruction("test rdi, rdi");                                       // reject null boxed handles before reading their tag
     emitter.instruction("jz __elephc_eval_value_object_class_name_miss_x86");   // null handles cannot provide a class name
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed eval value runtime tag

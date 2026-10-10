@@ -13,12 +13,13 @@
 //! - Hook enums keep calls monomorphized over `RuntimeValueOps`.
 
 use elephc_builtin_contract::{
-    eval_execution, eval_signature, lookup_id, BuiltinId, DefaultSpec, EvalExecution, ParamSpec,
-    RuntimeBuiltinId,
+    eval_execution, eval_signature, lookup_constant, lookup_id, BuiltinId, BuiltinKind, ConstValue,
+    DefaultSpec, EvalExecution, ParamSpec, RuntimeBuiltinId,
 };
 
 pub(in crate::interpreter) use super::hooks::{EvalDirectHook, EvalValuesHook};
 pub(in crate::interpreter) use super::registry::EvalBuiltinDefaultValue;
+use super::registry::EvalBuiltinArity;
 
 /// Broad domain used to group eval builtin home files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +104,8 @@ pub(in crate::interpreter) struct EvalBuiltinBinding {
     pub(in crate::interpreter) id: BuiltinId,
     /// Builtin family used by the file layout.
     pub(in crate::interpreter) area: EvalArea,
+    /// Whether direct syntax must preserve the original source expressions.
+    pub(in crate::interpreter) source_arguments: bool,
     /// Direct expression-level dispatch hook.
     pub(in crate::interpreter) direct: Option<EvalDirectHook>,
     /// Evaluated-argument dispatch hook.
@@ -127,6 +130,8 @@ pub(in crate::interpreter) struct EvalBuiltinSpec {
     pub(in crate::interpreter) by_ref_params: Box<[&'static str]>,
     /// Explicit required parameter count for non-trailing default shapes.
     pub(in crate::interpreter) required_param_count: Option<usize>,
+    /// Whether direct syntax must preserve the original source expressions.
+    pub(in crate::interpreter) source_arguments: bool,
     /// Direct expression-level dispatch hook.
     pub(in crate::interpreter) direct: Option<EvalDirectHook>,
     /// Evaluated-argument dispatch hook.
@@ -139,6 +144,10 @@ pub(in crate::interpreter) struct EvalBuiltinSpec {
     pub(in crate::interpreter) execution: EvalExecution,
     /// Whether strict-PHP hides this elephc-only surface.
     extension: bool,
+    /// Whether the contract is a language construct (`isset`, `exit`) rather than a function.
+    language_construct: bool,
+    /// Argument counts PHP accepts, which may be wider than this signature's parameter list.
+    php_arity: EvalBuiltinArity,
 }
 
 impl EvalBuiltinSpec {
@@ -167,15 +176,28 @@ impl EvalBuiltinSpec {
         if let Some(variadic) = signature.variadic {
             param_names.push(variadic);
         }
-        let by_ref_params = signature
+        let mut by_ref_params = signature
             .params
             .iter()
             .filter(|param| param.by_ref)
             .map(|param| param.name)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let execution = eval_execution(contract)
-            .expect("eval builtin binding must reference an eval-supported shared contract");
+            .collect::<Vec<_>>();
+        if contract.variadic_by_ref {
+            by_ref_params.extend(signature.variadic);
+        }
+        let by_ref_params = by_ref_params.into_boxed_slice();
+        let php_arity = EvalBuiltinArity::for_signature(
+            contract.name,
+            signature.required_param_count(),
+            signature.params.len(),
+            signature.variadic.is_some(),
+        );
+        let execution = eval_execution(contract).unwrap_or_else(|| {
+            panic!(
+                "eval builtin binding for {} from {} must reference an eval-supported shared contract",
+                contract.name, binding.home_file
+            )
+        });
 
         Self {
             name: contract.name,
@@ -185,12 +207,35 @@ impl EvalBuiltinSpec {
             variadic: signature.variadic,
             by_ref_params,
             required_param_count: signature.required_param_count,
+            source_arguments: binding.source_arguments,
             direct: binding.direct,
             values: binding.values,
             home_file: binding.home_file,
             runtime_builtin: execution.runtime_builtin(),
             execution,
             extension: contract.extension,
+            language_construct: contract.kind == BuiltinKind::LanguageConstruct,
+            php_arity,
+        }
+    }
+
+    /// Returns whether this contract is a language construct rather than a PHP function.
+    pub(in crate::interpreter) fn is_language_construct(&self) -> bool {
+        self.language_construct
+    }
+
+    /// Returns the argument counts PHP accepts for this builtin.
+    pub(in crate::interpreter) fn php_arity(&self) -> EvalBuiltinArity {
+        self.php_arity
+    }
+
+    /// Returns whether the argument at `position` binds caller storage by reference.
+    pub(in crate::interpreter) fn param_is_by_ref(&self, position: usize) -> bool {
+        match self.params.get(position) {
+            Some(param) => param.by_ref,
+            None => self
+                .variadic
+                .is_some_and(|variadic| self.by_ref_params.contains(&variadic)),
         }
     }
 
@@ -256,13 +301,22 @@ fn eval_default_value(default: DefaultSpec) -> EvalBuiltinDefaultValue {
         DefaultSpec::Float(value) => EvalBuiltinDefaultValue::Float(value),
         DefaultSpec::Str(value) => EvalBuiltinDefaultValue::String(value),
         DefaultSpec::IntMax => EvalBuiltinDefaultValue::Int(i64::MAX),
+        DefaultSpec::ErrorAll => {
+            EvalBuiltinDefaultValue::Int(crate::eval_php_profile::eval_all_error_mask())
+        }
         DefaultSpec::EmptyArray => EvalBuiltinDefaultValue::EmptyArray,
-        // Only prelude-provided contracts declare these, and none of them has an eval
-        // registry binding (see `elephc_builtin_contract::eval_support`).
-        DefaultSpec::Constant(name) => panic!(
-            "DefaultSpec::Constant({name:?}) reached an eval registry binding; only \
-             prelude-provided contracts may declare a constant default"
-        ),
+        DefaultSpec::Constant(name) => match lookup_constant(name).map(|constant| constant.value) {
+            Some(ConstValue::Null) => EvalBuiltinDefaultValue::Null,
+            Some(ConstValue::Bool(value)) => EvalBuiltinDefaultValue::Bool(value),
+            Some(ConstValue::Int(value)) => EvalBuiltinDefaultValue::Int(value),
+            Some(ConstValue::Float(value)) => EvalBuiltinDefaultValue::Float(value),
+            Some(ConstValue::Str(value)) => EvalBuiltinDefaultValue::String(value),
+            Some(ConstValue::StreamResource(_) | ConstValue::TargetDependent(_)) | None => panic!(
+                "DefaultSpec::Constant({name:?}) reached an eval registry binding without a fixed scalar constant"
+            ),
+        },
+        // Only prelude-provided contracts declare expression defaults, and none of them has
+        // an eval registry binding (see `elephc_builtin_contract::eval_support`).
         DefaultSpec::Expr(source) => panic!(
             "DefaultSpec::Expr({source:?}) reached an eval registry binding; only \
              prelude-provided contracts may declare a non-literal default"

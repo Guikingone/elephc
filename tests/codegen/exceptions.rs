@@ -9,6 +9,47 @@
 
 use crate::support::*;
 
+/// Descendants preserve properties and custom constructor behavior inherited through user parents.
+#[test]
+fn test_throwable_grandchildren_preserve_inherited_storage_and_constructor() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StoredException extends Exception { public int $marker = 42; }
+class LeafStoredException extends StoredException {}
+class ConstructedException extends Exception {
+    public function __construct(string $message) { parent::__construct("custom:" . $message); }
+}
+class LeafConstructedException extends ConstructedException {}
+$stored = new LeafStoredException("outer", 7, new Error("inner"));
+echo $stored->marker, ":", $stored->getMessage(), ":", $stored->getPrevious()->getMessage(), "|";
+$constructed = new LeafConstructedException("leaf");
+echo $constructed->getMessage();
+unset($stored, $constructed);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "42:outer:inner|custom:leaf", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Reinitializing a builtin constructor releases displaced owners while preserving a shared previous.
+#[test]
+fn test_throwable_constructor_reinitialization_preserves_compact_and_ordinary_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReinitializedException extends Exception { public int $marker = 13; }
+$previous = new Error("inner");
+$compact = new Exception("old", 1, $previous);
+$ordinary = new ReinitializedException("old", 1, $previous);
+$compact->__construct("compact", 2, $compact->getPrevious());
+$ordinary->__construct("ordinary", 3, $ordinary->getPrevious());
+unset($previous);
+echo $compact->getMessage(), ":", $compact->getCode(), ":", $compact->getPrevious()->getMessage(), "|";
+echo $ordinary->getMessage(), ":", $ordinary->getCode(), ":", $ordinary->getPrevious()->getMessage(), ":", $ordinary->marker;
+unset($compact, $ordinary);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "compact:2:inner|ordinary:3:inner:13", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies a Throwable owns a dynamically concatenated message after the source
 /// temporary is released and unrelated catch-block strings reuse scratch storage.
 #[test]
@@ -744,6 +785,28 @@ fn test_nullable_throwable_get_message_via_previous() {
     assert_eq!(out, "inner");
 }
 
+/// Compact and ordinary Throwable subclasses expose the same nullable chain and retain returned links.
+#[test]
+fn test_exception_previous_uses_concrete_payload_layout() {
+    let out = compile_and_run(r#"<?php
+class OrdinaryPreviousException extends Exception { public int $marker = 7; }
+class OrdinaryPreviousError extends Error { public string $marker = "kept"; }
+function readPrevious(Throwable $error): ?Throwable { return $error->getPrevious(); }
+$inner = new Exception("inner");
+$ordinary = new OrdinaryPreviousException("ordinary", 0, $inner);
+$outer = new OrdinaryPreviousError("outer", 0, $ordinary);
+echo readPrevious(new OrdinaryPreviousException()) === null ? "null|" : "bad|";
+$saved = readPrevious($outer);
+unset($outer, $ordinary, $inner);
+if ($saved !== null) {
+    echo get_class($saved), ":", $saved->getMessage(), ":", readPrevious($saved)->getMessage();
+} else {
+    echo "lost-previous";
+}
+"#);
+    assert_eq!(out, "null|OrdinaryPreviousException:ordinary:inner");
+}
+
 /// Verifies exception edges preserve register-allocated values that remain live
 /// into a catch block under enough pressure to require spills.
 #[test]
@@ -1059,4 +1122,189 @@ echo $failure->getMessage(), "|", $failure->countItems();
 "#,
     );
     assert_eq!(out, "custom|2");
+}
+
+/// Exception's seven accessors are final, while its constructor and string conversion stay overridable.
+#[test]
+fn test_exception_method_finality_matches_php() {
+    let out = compile_and_run(r#"<?php
+echo (new ReflectionMethod(Exception::class, 'getMessage'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getCode'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getFile'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getLine'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getTrace'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getTraceAsString'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getPrevious'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, '__toString'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, '__construct'))->isFinal() ? '1|' : '0|';
+"#);
+    assert_eq!(out, "1|1|1|1|1|1|1|0|0|");
+}
+
+/// Finality and declaring class survive inheritance, including PDOException's getCode override.
+#[test]
+fn test_inherited_exception_reflection_keeps_finality_and_declaring_class() {
+    let out = compile_and_run(r#"<?php
+$runtime = new ReflectionMethod(RuntimeException::class, 'getMessage');
+$code = new ReflectionMethod(PDOException::class, 'getCode');
+$previous = new ReflectionMethod(PDOException::class, 'getPrevious');
+foreach ([$runtime, $code, $previous] as $method) {
+    echo $method->isFinal() ? 'final:' : 'open:';
+    echo $method->getDeclaringClass()->getName(), '|';
+}
+"#);
+    assert_eq!(out, "final:Exception|final:Exception|final:Exception|");
+}
+
+/// Eval reflection reports the same declaring class as AOT for PDOException's inherited final
+/// `getCode()`: the prelude's SQLSTATE body does not make `PDOException` its declarer (#1440).
+#[test]
+fn test_eval_reflection_keeps_pdo_exception_get_code_declaring_class() {
+    let out = compile_and_run(r#"<?php
+$aot = new ReflectionMethod(PDOException::class, 'getCode');
+echo "aot:", $aot->getDeclaringClass()->getName(), "|";
+eval('$code = new ReflectionMethod("PDOException", "getCode");
+echo "eval:", $code->getDeclaringClass()->getName(), ":", $code->isFinal() ? "final" : "open", "|";
+$previous = new ReflectionMethod("PDOException", "getPrevious");
+echo "previous:", $previous->getDeclaringClass()->getName(), "|";');
+"#);
+    assert_eq!(out, "aot:Exception|eval:Exception:final|previous:Exception|");
+}
+
+/// Every exit that leaves a `try`/`catch` without `finally` pops its handler; none that stays does.
+///
+/// A `break`, `continue` or `return` out of such a `try` left its handler active, so a later
+/// throw landed in the abandoned `catch` and execution resumed after it. The PR #968 review's
+/// include reproducer printed `AFTER WRONG-INNER:outside AFTER OUTER:outside` for reference's
+/// `AFTER OUTER:outside`, and a `return` carried the stale handler into the CALLER.
+///
+/// Two details keep this test able to fail, and both were found by it passing with the fix
+/// removed. The condition is a call INSIDE each `try`: with a precomputed flag the body cannot
+/// throw, the optimizer drops the `try` and its handler, and there is nothing left to leak. And
+/// each throw happens in the function that holds the stale handler, not in a caller the frame
+/// already returned to. With the fix removed, nine of these twelve lines print `WRONG-…`.
+///
+/// Every line was MEASURED on reference PHP 8.5.10. A loop opened INSIDE the `try` pins the
+/// other direction: its `break` stays in the `try`, so the handler must still catch.
+#[test]
+fn test_every_exit_leaving_a_bare_try_pops_its_handler() {
+    let out = compile_and_run(
+        r#"<?php
+// Each shape throws in the SAME function as the try the exit left, after the exit.
+// The condition is a call INSIDE each try, so the try body can throw and keeps its handler.
+function go(): bool { return getenv("ELEPHC_UNSET_PROBE") === false; }
+
+try {
+    foreach ([1, 2] as $x) {
+        try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-break\n"; }
+    }
+    throw new Exception("break");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1, 2] as $x) {
+        try { if (go()) { continue; } } catch (Exception $e) { echo "WRONG-continue\n"; }
+    }
+    throw new Exception("continue");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1] as $o) {
+        foreach ([1] as $i) {
+            try { if (go()) { break 2; } } catch (Exception $e) { echo "WRONG-break2\n"; }
+        }
+    }
+    throw new Exception("break2");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    while (true) {
+        try {
+            try { if (go()) { break; } } catch (RuntimeException $e) { echo "WRONG-inner\n"; }
+        } catch (Exception $e) { echo "WRONG-outer\n"; }
+        break;
+    }
+    throw new Exception("nested");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    switch (1) {
+        case 1:
+            try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-switch\n"; }
+    }
+    throw new Exception("switch");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1] as $x) {
+        try {
+            try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-in-finally\n"; }
+        } finally { echo "F "; }
+    }
+    throw new Exception("in-finally");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1] as $x) {
+        try {
+            try { throw new Exception("x"); } catch (Exception $e) { if (go()) { break; } }
+        } catch (Exception $e) { echo "WRONG-from-catch\n"; }
+    }
+    throw new Exception("from-catch");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+function returns_out_of_try(): int {
+    try { if (go()) { return 1; } } catch (Exception $e) { echo "WRONG-return\n"; }
+    return 0;
+}
+try {
+    returns_out_of_try();
+    throw new Exception("return");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+function returns_then_throws(): void {
+    foreach ([1] as $x) {
+        try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-fn\n"; }
+    }
+    throw new Exception("fn");
+}
+try {
+    returns_then_throws();
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1, 2] as $x) { if (go()) { break; } }
+    throw new Exception("inside");
+} catch (Exception $e) { echo "inner-loop CAUGHT:", $e->getMessage(), "\n"; }
+
+$n = 0;
+foreach ([1, 2, 3] as $x) {
+    try {
+        foreach ([1] as $y) {
+            try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-iter\n"; }
+        }
+        if ($x === 2) { throw new Exception("iter$x"); }
+    } catch (Exception $e) {
+        echo "iter CAUGHT:", $e->getMessage(), "\n";
+    }
+    $n++;
+}
+echo "n=$n\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "OUTER:break\n\
+         OUTER:continue\n\
+         OUTER:break2\n\
+         OUTER:nested\n\
+         OUTER:switch\n\
+         F OUTER:in-finally\n\
+         OUTER:from-catch\n\
+         OUTER:return\n\
+         OUTER:fn\n\
+         inner-loop CAUGHT:inside\n\
+         iter CAUGHT:iter2\n\
+         n=3\n"
+    );
 }

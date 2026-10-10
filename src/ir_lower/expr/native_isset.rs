@@ -82,7 +82,7 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
             let mut index_value = lower_expr(ctx, index);
             let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
             if index_ty == PhpType::Int {
-                index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+                index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
                 ctx.emit_value(
                     Op::ArrayIsset,
                     vec![array_value.value, index_value.value],
@@ -229,8 +229,13 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
-        if class_info.visible_property_is_declared(property) {
-            return Some(IssetPropertyAction::Initialized);
+        if let Some((index, (_, property_ty))) = class_info.visible_property(property) {
+            if class_info.property_slot_is_declared(index, property)
+                || (!class_info.property_slot_is_reference(index, property)
+                    && property_ty.codegen_repr() == PhpType::Mixed)
+            {
+                return Some(IssetPropertyAction::Initialized);
+            }
         }
         return Some(IssetPropertyAction::Fallback);
     }

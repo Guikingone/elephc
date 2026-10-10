@@ -1,8 +1,8 @@
 ---
 title: "getimagesizefromstring()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the size, type, and MIME type of an image held in a string."
 sidebar:
-  order: 452
+  order: 453
 ---
 
 ## getimagesizefromstring()
@@ -11,7 +11,7 @@ sidebar:
 function getimagesizefromstring(string $data): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the size, type, and MIME type of an image held in a string.
 
 **Parameters**:
 - `$data` (`string`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

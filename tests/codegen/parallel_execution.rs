@@ -11,7 +11,62 @@
 
 use crate::support::*;
 
+/// A worker-local Fiber keeps worker GC/heap state instead of entering the main runtime context.
 #[test]
+fn parallel_worker_local_fiber_inherits_worker_runtime_context() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+use Elephc\Parallel\TaskGroup;
+use function Elephc\Parallel\run;
+
+gc_enable();
+$result = run(static function (TaskGroup $tasks): int {
+    return $tasks->spawn(static function (): int {
+        $fiber = new Fiber(static function (): int {
+            gc_disable();
+            return 42;
+        });
+        $fiber->start();
+        return (int) $fiber->getReturn();
+    })->join();
+});
+echo $result, '|', gc_enabled() ? 'main-enabled' : 'main-disabled';
+"#);
+    assert!(out.success, "worker Fiber failed: {}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "42|main-enabled");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Generators share initial coroutine frames and must retain the worker's arena and request state.
+#[test]
+fn parallel_worker_local_generator_inherits_worker_runtime_context() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+use Elephc\Parallel\TaskGroup;
+use function Elephc\Parallel\run;
+
+function worker_context_values(): iterable {
+    gc_disable();
+    yield 40;
+    yield 2;
+}
+gc_enable();
+$result = run(static function (TaskGroup $tasks): int {
+    return $tasks->spawn(static function (): int {
+        $sum = 0;
+        foreach (worker_context_values() as $value) {
+            $sum += $value;
+        }
+        return $sum;
+    })->join();
+});
+echo $result, '|', gc_enabled() ? 'main-enabled' : 'main-disabled';
+"#);
+    assert!(out.success, "worker Generator failed: {}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "42|main-enabled");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+#[test]
+/// A transferred string argument cannot invoke an unrelated parent's global Stringable object.
 fn parallel_string_entry_does_not_inherit_unrelated_stringifier_globals() {
     let out = compile_and_run(r#"<?php
 class GlobalText {
@@ -30,6 +85,7 @@ echo Elephc\Parallel\run(static function (Elephc\Parallel\TaskGroup $tasks): str
 }
 
 #[test]
+/// Namespace aliases and relative names resolve the same public Parallel root API.
 fn parallel_run_works_through_namespace_alias_and_relative_namespace_names() {
     for source in [
         r#"<?php namespace Client; use Elephc\Parallel as P;
@@ -42,6 +98,7 @@ echo run(static fn (TaskGroup $tasks): string => "ok");"#,
 }
 
 #[test]
+/// Catching a joined worker failure still cancels its group and forbids a later spawn.
 fn parallel_caught_join_failure_requests_cancellation_and_rejects_late_spawn() {
     let out = compile_and_run(
         r#"<?php
@@ -73,6 +130,7 @@ echo $result;
 }
 
 #[test]
+/// User PHP cannot access compiler-private scope helpers through ordinary calls.
 fn parallel_private_scope_helpers_cannot_be_called_by_user_code() {
     let out = compile_and_run(
         r#"<?php
@@ -102,6 +160,7 @@ echo run(static function (Elephc\Parallel\TaskGroup $tasks): int {
 }
 
 #[test]
+/// Normal compilation exposes the catalogued Parallel prelude types.
 fn parallel_catalogued_prelude_types_are_visible_in_normal_mode() {
     let out = compile_and_run(
         r#"<?php
@@ -132,6 +191,7 @@ echo run(static function (TaskGroup $tasks): string {
 }
 
 #[test]
+/// An invalid zero job id settles as infrastructure failure rather than a pending worker.
 fn parallel_zero_job_id_drains_as_an_infrastructure_failure() {
     let out = compile_and_run(
         r#"<?php
@@ -159,6 +219,7 @@ try {
 }
 
 #[test]
+/// Live Parallel handles cannot escape their ownership scope through PHP serialization.
 fn parallel_handles_cannot_be_serialized_or_unserialized() {
     let out = compile_and_run(
         r#"<?php
@@ -181,6 +242,7 @@ echo run(static function (TaskGroup $tasks): string {
 }
 
 #[test]
+/// A cycle-collector destructor's exit is contained by the worker fatal boundary.
 fn parallel_worker_cycle_destructor_exit_stays_inside_the_worker() {
     let out = compile_and_run(
         r#"<?php
@@ -215,6 +277,7 @@ try {
 }
 
 #[test]
+/// Concurrent worker streams preserve unique ids in the synchronized resource registry.
 fn parallel_worker_resource_ids_remain_unique_under_concurrent_stream_use() {
     let out = compile_and_run(
         r#"<?php
@@ -250,6 +313,7 @@ echo run(static function (TaskGroup $tasks): string {
 }
 
 #[test]
+/// A static first-class function closure is accepted as a copied worker entry.
 fn parallel_spawn_accepts_static_first_class_function_closure() {
     let out = compile_and_run(
         r#"<?php
@@ -273,6 +337,7 @@ echo run(static function (Elephc\Parallel\TaskGroup $tasks): int {
 }
 
 #[test]
+/// Worker argument transport is independent of the seven-slot raw Fiber start ABI.
 fn parallel_spawn_accepts_more_than_seven_arguments() {
     let out = compile_and_run(
         r#"<?php
@@ -302,6 +367,7 @@ echo run(static function (TaskGroup $tasks): int {
 }
 
 #[test]
+/// Dynamic callable strings cannot dispatch compiler-only Parallel bridge externs.
 fn parallel_bridge_extern_is_not_dispatchable_through_a_runtime_string() {
     let error = compile_and_run_expect_failure(
         r#"<?php
@@ -323,6 +389,7 @@ echo "completed";
 }
 
 #[test]
+/// Copied arguments, closure captures and nested results round-trip through the worker wire format.
 fn parallel_worker_round_trips_arguments_captures_and_nested_results() {
     let out = compile_and_run(
         r#"<?php
@@ -348,6 +415,7 @@ echo $result[0], "|", $result[1], "|", strlen($result[2][0]), "|", $result[2][1]
 }
 
 #[test]
+/// A remote worker Throwable settles as a parent-side TaskFailure.
 fn parallel_worker_throwable_becomes_parent_task_failure() {
     let out = compile_and_run(
         r#"<?php
@@ -372,6 +440,7 @@ try {
 }
 
 #[test]
+/// Simultaneous root/child failures remain represented when scope teardown aggregates them.
 fn parallel_combines_simultaneous_root_and_child_failures_without_loss() {
     let out = compile_and_run(
         r#"<?php
@@ -397,6 +466,7 @@ try {
 }
 
 #[test]
+/// A root failure without competing child failures is rethrown unchanged.
 fn parallel_rethrows_a_lone_root_failure_unchanged() {
     let out = compile_and_run(
         r#"<?php
@@ -415,6 +485,7 @@ try {
 }
 
 #[test]
+/// Leaving a root drains every unjoined child before releasing group state.
 fn parallel_scope_drains_multiple_unjoined_workers() {
     let out = compile_and_run(
         r#"<?php
@@ -432,6 +503,7 @@ echo $value;
 }
 
 #[test]
+/// A scope failure cancels queued siblings without treating those cancellations as new causes.
 fn parallel_scope_failure_cancels_queued_siblings_and_reports_only_the_cause() {
     let out = compile_and_run(
         r#"<?php
@@ -460,6 +532,7 @@ try {
 }
 
 #[test]
+/// A running child observes cancellation through its copied cancellation capture/proxy.
 fn parallel_running_worker_observes_shared_cancellation_capture() {
     let out = compile_and_run(
         r#"<?php
@@ -496,6 +569,7 @@ try {
 }
 
 #[test]
+/// A direct cancellation argument becomes a worker-local observation proxy.
 fn parallel_spawn_transfers_a_direct_cancellation_argument_as_a_worker_local_proxy() {
     let out = compile_and_run(
         r#"<?php
@@ -517,6 +591,7 @@ echo run(static function (TaskGroup $tasks) use ($token): string {
 }
 
 #[test]
+/// Group cancellation requests children without copying the parent's Throwable reason across arenas.
 fn parallel_group_cancel_requests_workers_without_transferring_parent_reason() {
     let out = compile_and_run(
         r#"<?php
@@ -554,6 +629,7 @@ echo $result;
 }
 
 #[test]
+/// A Fiber-owned root drains its workers before its exception escapes to the resumer.
 fn parallel_scope_drains_before_a_fiber_root_exception_escapes() {
     let out = compile_and_run(
         r#"<?php
@@ -577,6 +653,7 @@ echo run(static fn (Elephc\Parallel\TaskGroup $tasks): int => 7);
 }
 
 #[test]
+/// A retained TaskGroup is closed even when its root throws before ordinary completion.
 fn parallel_task_group_retained_by_caller_is_closed_when_root_throws() {
     let out = compile_and_run(
         r#"<?php
@@ -608,6 +685,7 @@ echo run(static fn (TaskGroup $tasks): int => 7);
 }
 
 #[test]
+/// A queued cancelled Future delivers worker-local cancellation instead of running its body.
 fn parallel_group_cancel_makes_queued_future_throw_worker_local_cancellation() {
     let out = compile_and_run(
         r#"<?php
@@ -637,6 +715,7 @@ echo $result;
 }
 
 #[test]
+/// Joining a failure does not make teardown aggregate the same observed failure twice.
 fn parallel_joined_failure_is_not_aggregated_again_at_scope_exit() {
     let out = compile_and_run(
         r#"<?php
@@ -660,6 +739,7 @@ echo $result;
 }
 
 #[test]
+/// A worker exit becomes a typed fatal result while the parent process survives.
 fn parallel_worker_exit_becomes_typed_php_fatal_without_exiting_parent() {
     let out = compile_and_run(
         r#"<?php
@@ -694,6 +774,7 @@ try {
 }
 
 #[test]
+/// Fatal reentry during destructor/Buffer cleanup remains contained rather than killing the parent.
 fn parallel_worker_fatal_reentry_from_destructor_with_buffer_stays_contained() {
     let out = compile_and_run(
         r#"<?php
@@ -725,6 +806,7 @@ try {
 }
 
 #[test]
+/// User code cannot forge the authority used by private scope bookkeeping.
 fn parallel_internal_bookkeeping_authority_is_private_to_the_scope() {
     let out = compile_and_run(
         r#"<?php
@@ -766,6 +848,7 @@ echo $result;
 }
 
 #[test]
+/// A reflection-forged group cannot acquire valid worker-side TaskGroup authority.
 fn parallel_worker_cannot_use_a_reflection_forged_task_group() {
     let out = compile_and_run(
         r#"<?php
@@ -794,6 +877,7 @@ echo run(static function (TaskGroup $tasks): string {
 }
 
 #[test]
+/// A successfully settled Future retains its cached parent result after group teardown.
 fn parallel_future_remains_cached_after_owning_scope_drains() {
     let out = compile_and_run(
         r#"<?php
@@ -810,6 +894,7 @@ echo $future->join(), "|", $future->join();
 }
 
 #[test]
+/// An escaped failed Future preserves its parent-side failure after its scope drains.
 fn parallel_escaped_failed_future_retains_its_parent_failure_after_scope_drain() {
     let out = compile_and_run(
         r#"<?php
@@ -841,6 +926,7 @@ try {
 }
 
 #[test]
+/// A runtime-resolved Async root cannot start inside a Parallel worker.
 fn parallel_worker_dynamic_async_run_is_rejected_by_the_runtime_guard() {
     let out = compile_and_run(
         r#"<?php
@@ -874,6 +960,7 @@ try {
 }
 
 #[test]
+/// Direct worker Fiber suspension produces the defined v1 rejection instead of stranding a child.
 fn parallel_worker_fiber_suspend_fails_closed() {
     let out = compile_and_run(
         r#"<?php
@@ -900,6 +987,7 @@ try {
 }
 
 #[test]
+/// Runtime-resolved worker suspension is rejected before its argument side effects occur.
 fn parallel_worker_runtime_resolved_fiber_suspend_fails_before_args() {
     let out = compile_and_run(
         r#"<?php
@@ -930,6 +1018,7 @@ try {
 }
 
 #[test]
+/// Spawning after cancellation fails before a native worker job is created.
 fn parallel_spawn_after_cancellation_fails_before_creating_a_job() {
     let out = compile_and_run(
         r#"<?php
@@ -954,6 +1043,7 @@ echo $result;
 }
 
 #[test]
+/// Uncaught child cancellation keeps cancellation identity rather than becoming TaskFailure.
 fn parallel_uncaught_worker_cancellation_is_not_a_task_failure() {
     let out = compile_and_run(
         r#"<?php
@@ -979,6 +1069,7 @@ echo $result;
 }
 
 #[test]
+/// A token retained beyond scope closure remains observation-only.
 fn parallel_escaped_cancellation_token_is_observation_only_after_scope_close() {
     let out = compile_and_run(
         r#"<?php
@@ -1001,6 +1092,7 @@ try {
 }
 
 #[test]
+/// A dynamically requested nested worker scope settles through the typed failure envelope.
 fn parallel_worker_dynamic_nested_scope_becomes_a_typed_task_failure() {
     let out = compile_and_run(
         r#"<?php
@@ -1029,6 +1121,7 @@ try {
 }
 
 #[test]
+/// A Parallel parent may run an Async root while retaining its own structured worker scope.
 fn async_run_is_supported_inside_the_parallel_parent_root_body() {
     let out = compile_and_run(
         r#"<?php
@@ -1048,6 +1141,7 @@ echo $result;
 }
 
 #[test]
+/// Scheduler-managed owner-Fiber yields preserve Parallel ownership and child teardown.
 fn parallel_run_allows_async_scheduler_yields_from_its_owner_fiber() {
     let out = compile_and_run(
 r#"<?php
@@ -1094,6 +1188,7 @@ echo \Elephc\Async\run(static function (\Elephc\Async\TaskGroup $async): int {
 }
 
 #[test]
+/// A Parallel root inside an Async task cannot recursively start a second Async root.
 fn async_task_parallel_parent_root_cannot_start_another_async_root() {
     let out = compile_and_run(
         r#"<?php
@@ -1123,6 +1218,7 @@ echo $result;
 }
 
 #[test]
+/// An ordinary Fiber may synchronously own a Parallel root and retrieve its result.
 fn parallel_run_is_supported_inside_an_ordinary_user_fiber() {
     let out = compile_and_run(
         r#"<?php
@@ -1142,6 +1238,7 @@ echo $fiber->getReturn();
 }
 
 #[test]
+/// An active parent scope blocks raw Fiber suspension before argument evaluation and leaks nothing.
 fn parallel_parent_fiber_cannot_suspend_while_its_scope_is_active() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
@@ -1198,6 +1295,7 @@ echo run(static fn (TaskGroup $tasks): int => 7);
 }
 
 #[test]
+/// Runtime-resolved callable forms of parent suspension reach the same v1 guard.
 fn parallel_parent_scope_rejects_runtime_resolved_fiber_suspend_callables() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
@@ -1292,6 +1390,7 @@ echo $result;
 }
 
 #[test]
+/// Builtin callback dispatch cannot bypass active-scope Fiber suspension checks.
 fn parallel_parent_scope_rejects_fiber_suspend_through_builtin_callbacks() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
@@ -1472,6 +1571,7 @@ echo $result;
 }
 
 #[test]
+/// A dynamic worker callable's string return crosses arenas with balanced heap ownership.
 fn parallel_dynamic_callable_string_return_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
@@ -1493,6 +1593,7 @@ echo call_user_func($callback, "value");
 }
 
 #[test]
+/// An instance callable array targeting Fiber suspension is rejected by the parent guard.
 fn parallel_parent_scope_rejects_fiber_instance_suspend_callable_array() {
     let out = compile_and_run(
         r#"<?php
@@ -1527,6 +1628,7 @@ $outer->getReturn();
 }
 
 #[test]
+/// Suspension checks preserve ordinary callback descriptor dispatch and ownership.
 fn parallel_parent_scope_preserves_non_suspend_callback_descriptors() {
     let out = compile_and_run(
         r#"<?php
@@ -1589,6 +1691,7 @@ echo $result;
 }
 
 #[test]
+/// The bridge guard also rejects dynamically resolved raw suspension inside an Async task.
 fn parallel_bridge_also_guards_dynamic_fiber_suspend_inside_async_tasks() {
     let out = compile_and_run(
         r#"<?php
@@ -1618,6 +1721,7 @@ try {
 }
 
 #[test]
+/// Both scheduler preludes compose without declaration or namespace conflicts.
 fn parallel_and_async_scheduler_preludes_compile_together() {
     let out = compile_and_run(
         r#"<?php
@@ -1630,6 +1734,7 @@ echo $parallelResult . $result;
 }
 
 #[test]
+/// Escaped first-class suspension callables fail before argument evaluation in the parent scope.
 fn parallel_parent_scope_rejects_escaped_first_class_fiber_suspend_before_args() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
@@ -1701,6 +1806,7 @@ echo $result;
 }
 
 #[test]
+/// The active parent root rejects a dynamically resolved nested Parallel root.
 fn parallel_parent_root_rejects_dynamic_nested_scope() {
     let out = compile_and_run(
         r#"<?php

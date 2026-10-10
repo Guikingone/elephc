@@ -1,16 +1,16 @@
 ---
-title: "__elephc_async_monitor_event() — internals"
+title: "__elephc_async_monitor_event() - internals"
 description: "Compiler internals for __elephc_async_monitor_event(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 978
+  order: 1072
 ---
 
-## `__elephc_async_monitor_event()` — internals
+## `__elephc_async_monitor_event()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_async_monitor_event.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_async_monitor_event.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,8 +48,8 @@ function __elephc_async_monitor_event(int $domain, int $task_id, int $parent_id,
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

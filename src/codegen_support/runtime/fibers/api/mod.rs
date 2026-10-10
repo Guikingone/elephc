@@ -30,7 +30,7 @@ pub fn emit_fiber_throw_state_error(emitter: &mut Emitter) {
 }
 
 /// Allocates a new Fiber object: zeroes all runtime-managed fields, allocates
-/// the per-fiber stack via mmap, carves out a zeroed fake initial frame, and
+/// the per-fiber stack via mmap, seeds its initial frame with the creator's context, and
 /// sets state to `NotStarted`. Returns the new Fiber pointer in rax/x0.
 ///
 /// Input: rdi/x0 = callable (closure pointer), rsi/x1 = Fiber class_id, rdx/x2 = entry wrapper pointer.

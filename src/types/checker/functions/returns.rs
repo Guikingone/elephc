@@ -10,6 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind};
+use crate::types::checker::type_compat::unions::normalize_union_members;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -21,6 +22,21 @@ pub(crate) struct ReturnInfo {
     pub ty: PhpType,
     pub has_value: bool,
     pub expr: Option<crate::parser::ast::Expr>,
+}
+
+/// Adds one scalar member to an inferred return type, the way [`nullable_return_type`] adds
+/// `Void` — the shared shape behind `string|false` and `?string`.
+///
+/// `Checker::resolve_type_expr` expands a declared `string|false` to `Union([Str, False])`,
+/// so building the same shape here keeps a hint-less union return byte-identical to the
+/// declared spelling, which already lowered correctly. `codegen_repr()` maps such a union to
+/// a boxed representation, which is what carries `false` distinctly from `""` instead of
+/// coercing it into the other arm's zero value.
+///
+/// `Mixed` already admits every value and is left alone; an existing union gains the member
+/// rather than nesting, so folding three or more returns pairwise stays flat.
+fn union_return_type(other: &PhpType, member: PhpType) -> PhpType {
+    normalize_union_members(vec![other.clone(), member])
 }
 
 /// Makes an inferred return type nullable, the way a declared `?T` hint resolves.
@@ -342,7 +358,7 @@ impl Checker {
     /// Checks that an actual return type is compatible with the declared return type.
     /// Handles three cases: void-returning functions (no value allowed), value-returning
     /// functions (value required and must be assignable to `expected`), and nullability
-    /// via `return_type_accepts_null`. Delegates to `require_compatible_arg_type` for
+    /// via `declared_type_accepts_null`. Delegates to `require_compatible_arg_type` for
     /// the final assignability check.
     pub(crate) fn require_compatible_return_type(
         &self,
@@ -369,22 +385,130 @@ impl Checker {
             ));
         }
 
-        if matches!(actual, PhpType::Void) && !Self::return_type_accepts_null(expected) {
+        if matches!(actual, PhpType::Void) && !Self::declared_type_accepts_null(expected) {
             return Err(CompileError::new(
                 span,
-                &format!("{} expects {:?}, got Void", context, expected),
+                &format!("{} expects {}, got null", context, expected),
             ));
         }
+
+        Self::require_matching_array_element_storage(expected, actual, span, context)?;
 
         self.require_compatible_arg_type(expected, actual, span, context)
     }
 
+    /// Rejects a declared `array<T>` return whose body produces an array with a DIFFERENT
+    /// element representation.
+    ///
+    /// Assignability alone cannot catch this: `Mixed` is compatible with every type, so
+    /// `require_compatible_arg_type` accepts an `array<mixed>` body for a declared
+    /// `array<int>`. Their STORAGE is not interchangeable, though — an `array<int>` holds raw
+    /// 64-bit values while an `array<mixed>` holds pointers to boxed cells, and the element
+    /// layout lives in the array header tag rather than in the static type. Letting the
+    /// declaration through unchecked makes every caller read the callee's boxed pointers as
+    /// integers; measured, `function squares(int $n): array<int>` built with
+    /// `$out = []; $out[] = $i * $i;` returned pointer values instead of squares.
+    ///
+    /// A declared bare `array` is `Array(Mixed)` and imposes no element contract, so it is
+    /// exempt. Only a CONCRETE declared element type is enforced here.
+    fn require_matching_array_element_storage(
+        expected: &PhpType,
+        actual: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        // A declared bare `array` is `Array(Mixed)` and imposes no element contract.
+        if Self::is_generic_array_hint(expected) {
+            return Ok(());
+        }
+        let (expected_elem, actual_elem) = match (expected, actual) {
+            (PhpType::Array(expected_elem), PhpType::Array(actual_elem)) => {
+                (expected_elem, actual_elem)
+            }
+            // Hash storage: only the VALUE is compared. The key is a runtime-tagged hash key
+            // either way, so `array<string, int>` and `array<int, int>` share a layout, while
+            // `array<string, int>` and `array<string, mixed>` do not.
+            (
+                PhpType::AssocArray {
+                    value: expected_value,
+                    ..
+                },
+                PhpType::AssocArray {
+                    value: actual_value,
+                    ..
+                },
+            ) => (expected_value, actual_value),
+            // A packed element vector and a hash table are not interchangeable at all, so a
+            // declared form that disagrees with the body's is rejected outright — unless the
+            // body returns an empty literal, which carries no storage to disagree with.
+            (PhpType::Array(_), PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
+                if !Self::returns_empty_array_literal_inner(actual) =>
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{} declares {} but returns {}; the storage differs",
+                        context, expected, actual
+                    ),
+                ));
+            }
+            _ => return Ok(()),
+        };
+        let expected_repr = expected_elem.codegen_repr();
+        let actual_repr = actual_elem.codegen_repr();
+        if expected_repr == actual_repr || matches!(**actual_elem, PhpType::Never) {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            span,
+            &format!(
+                "{} declares {} but returns {}; the element storage differs{}",
+                context,
+                expected,
+                actual,
+                Self::element_storage_hint(expected_elem, actual_elem)
+            ),
+        ))
+    }
+
+    /// Returns the way out of an element-storage mismatch, when there is a known one.
+    ///
+    /// `int|float` elements are almost always a loop counter: PHP promotes an integer at the
+    /// overflow boundary, so `for ($i = 0; …) { $out[] = $i; }` builds a list of numbers that
+    /// are each an int OR a float, and that is boxed storage rather than a packed `int` vector.
+    /// A cast at the append pins the element type and costs nothing at runtime for a value that
+    /// is already an int, which is the fix a reader would otherwise have to guess.
+    fn element_storage_hint(expected_elem: &PhpType, actual_elem: &PhpType) -> String {
+        if actual_elem.is_int_float_union() && matches!(expected_elem, PhpType::Int) {
+            return ". A loop counter is `int|float` after `++`, because PHP promotes it at the \
+                    overflow boundary; write `(int) $counter` at the append to pin the element \
+                    type"
+                .to_string();
+        }
+        String::new()
+    }
+
+    /// Returns true when `ty` is the element type an EMPTY array literal infers.
+    ///
+    /// `return [];` carries no element storage, so it satisfies any declared container form,
+    /// indexed or associative. The checker types it `Array(Never)`.
+    fn returns_empty_array_literal_inner(ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Array(elem) if matches!(**elem, PhpType::Never))
+    }
+
     /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,
     /// PhpType::Void, and PhpType::Union types where any member accepts null.
-    fn return_type_accepts_null(ty: &PhpType) -> bool {
+    ///
+    /// Shared with the by-reference PARAMETER position
+    /// (`Checker::require_by_ref_argument_storage`), which asks the identical question of a
+    /// declared type: PHP's `?int`/`mixed` accept null in both positions and a bare `int`
+    /// accepts it in neither. Kept as one predicate rather than two so the two sites cannot
+    /// drift on a type either of them later learns about.
+    pub(crate) fn declared_type_accepts_null(ty: &PhpType) -> bool {
         match ty {
             PhpType::Mixed => true,
-            PhpType::Union(members) => members.iter().any(Self::return_type_accepts_null),
+            PhpType::Union(members) => members.iter().any(Self::declared_type_accepts_null),
             PhpType::Void => true,
             _ => false,
         }
@@ -474,11 +598,45 @@ impl Checker {
     /// saw `""` instead of `NULL`. Writing `: ?string` was already correct, and the ternary
     /// spelling of the same function already inferred `string|null` through
     /// `nullable_match_arm_type` — this makes the multi-`return` fold agree with both.
+    /// `False` and `Bool` are subject to the SAME rule as `Void`, for the same reason, and
+    /// their arms must likewise precede `Str`/`Float` (issue #398).
+    ///
+    /// `false` is a VALUE, not a width. A function that returns `false` on failure and a
+    /// string otherwise returns `string|false`, and every PHP caller tests that with
+    /// `=== false`. Letting `Str` absorb it below inferred plain `Str`, so the failure arm
+    /// was lowered as a string and the caller saw `""` — `image_type_to_extension()` on an
+    /// unknown type returned `""` instead of `false`, and so did any hint-less user function
+    /// of that shape. `Float` did the same with `0.0`, and `Bool` was absorbed into `"1"`.
+    ///
+    /// `int|false` never had the bug only because it fell through to `Mixed`, which carries
+    /// the value distinctly — the accident that made the defect look image-specific.
+    ///
+    /// Writing `: string|false` was already correct; this makes the hint-less fold agree
+    /// with the declared spelling, exactly as the `Void` arm above does for `?string`.
     pub(crate) fn wider_type(a: &PhpType, b: &PhpType) -> PhpType {
         match (a, b) {
             _ if a == b => a.clone(),
             (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
             (PhpType::Void, other) | (other, PhpType::Void) => nullable_return_type(other),
+            // `false` is the literal subtype of `bool`, so together they are just `bool`.
+            (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool) => PhpType::Bool,
+            (PhpType::False, other @ (PhpType::Str | PhpType::Float))
+            | (other @ (PhpType::Str | PhpType::Float), PhpType::False) => {
+                union_return_type(other, PhpType::False)
+            }
+            (PhpType::Bool, other @ (PhpType::Str | PhpType::Float))
+            | (other @ (PhpType::Str | PhpType::Float), PhpType::Bool) => {
+                union_return_type(other, PhpType::Bool)
+            }
+            // A union already carries its members distinctly, so `Str`/`Float` below must
+            // not absorb one back into a single scalar. Without this the fold only survived
+            // TWO returns: a third collapsed the union the first two had correctly built.
+            // That applied to the `Void` arm above as well — `null`, `"one"`, `"two"`
+            // inferred plain `Str`, and the null arm came back as `""`.
+            (PhpType::Mixed, _) | (_, PhpType::Mixed) => PhpType::Mixed,
+            (PhpType::Union(_), _) | (_, PhpType::Union(_)) => {
+                normalize_union_members(vec![a.clone(), b.clone()])
+            }
             (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
             (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
             _ => PhpType::Mixed,

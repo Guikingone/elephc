@@ -90,6 +90,8 @@ pub fn emit_stream_owner_drain(emitter: &mut Emitter) {
     emitter.instruction("ldrb w10, [x9, x19]");                                 // test whether this context owns the descriptor
     emitter.instruction("cbz w10, __rt_stream_owner_drain_next");               // leave descriptors owned by other contexts untouched
     emitter.instruction("strb wzr, [x9, x19]");                                 // detach ownership before any close permits fd reuse
+    emitter.instruction("mov x0, x19");                                         // identify the descriptor being abandoned by this worker
+    abi::emit_call_label(emitter, "__rt_resource_inventory_abandon_fd");
 
     for (name, table, function, pass_handle) in [
         ("zlib", "_zstream_handles", "_zlib_close_fn", false),
@@ -154,6 +156,7 @@ pub fn emit_stream_owner_drain(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return only after no owned descriptor remains
 }
 
+/// Drains SysV descriptor/filter/TLS owners after retiring their resource inventory incarnations.
 fn emit_stream_owner_drain_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_owner_drain ---");
@@ -170,6 +173,8 @@ fn emit_stream_owner_drain_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp BYTE PTR [r9 + r12], 0");                          // does this context own the descriptor?
     emitter.instruction("je __rt_stream_owner_drain_next_x86");                 // leave descriptors owned by other contexts untouched
     emitter.instruction("mov BYTE PTR [r9 + r12], 0");                          // detach ownership before any close permits fd reuse
+    emitter.instruction("mov rdi, r12");                                        // identify the descriptor being abandoned by this worker
+    abi::emit_call_label(emitter, "__rt_resource_inventory_abandon_fd");
 
     for (name, table, function, pass_handle) in [
         ("zlib", "_zstream_handles", "_zlib_close_fn", false),
@@ -243,6 +248,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};
 
+    /// Both ABI emitters mark and clear only the calling context's bounded ownership table.
     #[test]
     fn ownership_helpers_are_bounded_context_writes_on_both_abis() {
         for target in [
@@ -271,12 +277,11 @@ mod tests {
         }
     }
 
+    /// A descriptor's inventory incarnation retires before native cleanup permits fd reuse.
     #[test]
     fn drain_detaches_ownership_then_closes_special_or_plain_descriptors() {
-        for target in [
-            Target::new(Platform::MacOS, Arch::AArch64),
-            Target::new(Platform::Linux, Arch::X86_64),
-        ] {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             emitter.ctx_register = true;
             emit_stream_owner_drain(&mut emitter);
@@ -289,7 +294,8 @@ mod tests {
             .expect("ownership detach");
             let special = asm.find("__rt_pclose").expect("popen cleanup");
             let directory = asm.find("__rt_closedir").expect("directory cleanup");
-            assert!(detach < special && detach < directory, "{target:?}:\n{asm}");
+            let retire = asm.find("__rt_resource_inventory_abandon_fd").expect("inventory incarnation retire");
+            assert!(detach < retire && retire < special && retire < directory, "{target:?}:\n{asm}");
             for symbol in [
                 "_zlib_close_fn",
                 "_bz2_close_fn",

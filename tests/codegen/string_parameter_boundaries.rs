@@ -11,12 +11,14 @@
 
 use crate::support::*;
 
+/// Checks one string-binding or return fixture's visible effects and balanced heap ownership.
 fn assert_boundary(body: &str, expected: &str) {
     let out = compile_and_run_with_heap_debug(body);
     assert_eq!(out.stdout, expected, "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Enforces invocation-site strictness on fixed, named and variadic dynamic string bindings.
 #[test]
 fn string_parameter_boundaries_dynamic_strict_fixed_named_and_variadic_reject_without_conversion() {
     assert_boundary(r#"<?php
@@ -39,6 +41,7 @@ unset($callback); unset($variadic);
 "#, "scalar|object|named|variadic|ok");
 }
 
+/// Rejects strict scalar coercions while preserving PHP's int-to-float widening.
 #[test]
 fn string_parameter_boundaries_dynamic_strict_scalar_contracts_allow_only_float_widening() {
     assert_boundary(r#"<?php
@@ -61,6 +64,7 @@ unset($value); unset($integer); unset($boolean); unset($floating);
 "#, "string|float|bool|double|42");
 }
 
+/// Carries strict invocation policy through an otherwise unknown callable parameter.
 #[test]
 fn string_parameter_boundaries_strict_unknown_closure_uses_invocation_policy() {
     assert_boundary(r#"<?php
@@ -74,6 +78,7 @@ unset($callback);
 "#, "rejected|valid");
 }
 
+/// Checks strict nullable/union defaults and invalid named variadic entries.
 #[test]
 fn string_parameter_boundaries_dynamic_strict_nullable_union_defaults_and_named_tail() {
     assert_boundary(r#"<?php
@@ -98,6 +103,7 @@ unset($optional); unset($choice); unset($texts);
 "#, "default|null|text|nullable|42|42|union|tail");
 }
 
+/// Transfers exactly one boxed null owner for omitted nullable and Mixed defaults.
 #[test]
 fn string_parameter_boundaries_omitted_nullable_and_mixed_null_defaults_transfer_one_owner() {
     assert_boundary(r#"<?php
@@ -112,6 +118,7 @@ unset($optional); unset($untyped);
 "#, "nullable|mixed");
 }
 
+/// Retires an omitted default owner when a later named parameter fails binding.
 #[test]
 fn string_parameter_boundaries_omitted_null_default_releases_on_later_named_binding_failure() {
     assert_boundary(r#"<?php
@@ -124,6 +131,7 @@ unset($callback);
 "#, "rejected");
 }
 
+/// Keeps one managed cell owner for an omitted nullable reference default.
 #[test]
 fn string_parameter_boundaries_omitted_ref_null_default_has_one_cell_owner() {
     assert_boundary(r#"<?php
@@ -139,6 +147,7 @@ unset($callback);
 "#, "null|changed");
 }
 
+/// Preserves PHP internal weak callback binding for array_map in strict source.
 #[test]
 fn string_parameter_boundaries_internal_array_map_remains_weak_in_strict_source() {
     assert_boundary(r#"<?php
@@ -151,6 +160,7 @@ unset($values);
 "#, "42|1");
 }
 
+/// Requires all input-element side effects before the first array_map callback.
 #[test]
 fn string_parameter_boundaries_array_map_evaluates_complete_input_before_callbacks() {
     assert_boundary(r#"<?php
@@ -162,6 +172,7 @@ unset($values);
 "#, "source1|source2|callback1|callback2|12");
 }
 
+/// Runs finally after implicit return conversion fails but before the outer catch.
 #[test]
 fn string_parameter_boundaries_return_failure_runs_finally_before_outer_catch() {
     assert_boundary(r#"<?php
@@ -179,6 +190,7 @@ catch (TypeError $error) {
 "#, "convert|finally|cause");
 }
 
+/// Keeps the original Stringable exception as previous on a method return TypeError.
 #[test]
 fn string_parameter_boundaries_method_return_failure_keeps_previous() {
     assert_boundary(r#"<?php
@@ -195,6 +207,7 @@ unset($factory);
 "#, "cause");
 }
 
+/// Keeps the original Stringable exception as previous on a closure return TypeError.
 #[test]
 fn string_parameter_boundaries_closure_return_failure_keeps_previous() {
     assert_boundary(r#"<?php
@@ -210,6 +223,7 @@ unset($callback);
 "#, "cause");
 }
 
+/// Converts runtime false to the empty string on weak parameter and return boundaries.
 #[test]
 fn string_parameter_boundaries_runtime_false_uses_empty_string() {
     assert_boundary(r#"<?php
@@ -220,6 +234,7 @@ echo '[', consume($flag), ']|[', return_text($flag), ']';
 "#, "[]|[]");
 }
 
+/// Rejects strict non-string returns without calling Stringable or creating a previous cause.
 #[test]
 fn string_parameter_boundaries_strict_return_rejects_without_stringable_invocation() {
     assert_boundary(r#"<?php
@@ -234,6 +249,7 @@ echo return_text('valid');
 "#, "return_text(): Return value must be of type string, int returned|object|valid");
 }
 
+/// Transfers one previous-exception lease independently of its wrapping error.
 #[test]
 fn string_parameter_boundaries_previous_getter_transfers_exactly_one_object_lease() {
     assert_boundary(r#"<?php
@@ -246,6 +262,7 @@ unset($previous); unset($error);
 "#, "RuntimeException|cause");
 }
 
+/// Wraps an implicit Stringable return failure while preserving the original class/message/code.
 #[test]
 fn string_parameter_boundaries_implicit_return_wraps_original_exception() {
     assert_boundary(r#"<?php
@@ -263,6 +280,7 @@ unset($value);
 "#, "TypeError|RuntimeException|original|17");
 }
 
+/// Rejects an array return with no fabricated previous exception.
 #[test]
 fn string_parameter_boundaries_implicit_return_rejects_array_without_previous() {
     assert_boundary(r#"<?php
@@ -272,6 +290,7 @@ catch (TypeError $error) { echo $error->getMessage(), '|', $error->getPrevious()
 "#, "return_text(): Return value must be of type string, array returned|none");
 }
 
+/// Converts a valid implicit Stringable return exactly once and accepts weak scalars.
 #[test]
 fn string_parameter_boundaries_valid_implicit_return_converts_once() {
     assert_boundary(r#"<?php
@@ -281,6 +300,7 @@ echo return_text(new Text()), '|', return_text(42);
 "#, "once|text|42");
 }
 
+/// Leaves an explicit string cast's original exception unwrapped.
 #[test]
 fn string_parameter_boundaries_explicit_return_cast_preserves_original_exception() {
     assert_boundary(r#"<?php
@@ -291,6 +311,7 @@ catch (RuntimeException $error) { echo get_class($error); unset($error); }
 "#, "RuntimeException");
 }
 
+/// Preserves earlier conversion effects before later invalid indexed or named parameter binding.
 #[test]
 fn string_parameter_boundaries_dynamic_descriptor_converts_before_later_invalid_parameter() {
     assert_boundary(r#"<?php
@@ -305,6 +326,7 @@ unset($callback);
 "#, "converted|indexed|converted|named");
 }
 
+/// Preserves earlier conversion effects before a later invalid variadic element.
 #[test]
 fn string_parameter_boundaries_dynamic_variadic_converts_before_later_invalid_element() {
     assert_boundary(r#"<?php
@@ -319,6 +341,7 @@ unset($callback);
 "#, "converted|indexed|converted|named");
 }
 
+/// Rejects non-string-compatible boxed payloads on fixed and variadic boundaries.
 #[test]
 fn string_parameter_boundaries_reject_array_null_resource_and_non_stringable_object() {
     assert_boundary(r#"<?php
@@ -339,6 +362,7 @@ unset($array); unset($null); unset($resource); unset($object);
 "#, "array|variadic|null|resource|object");
 }
 
+/// Accepts weak scalar bindings and invokes Stringable conversion exactly once.
 #[test]
 fn string_parameter_boundaries_weak_scalars_and_stringable_convert_once() {
     assert_boundary(r#"<?php
@@ -349,6 +373,7 @@ echo consume(boxed(42)), '|', consume(boxed(true)), '|', consume(boxed(new Text(
 "#, "42|1|once|text");
 }
 
+/// Rejects scalar/Stringable arguments under strict call-site policy before conversion.
 #[test]
 fn string_parameter_boundaries_strict_call_site_rejects_scalar_and_stringable_without_conversion() {
     assert_boundary(r#"<?php

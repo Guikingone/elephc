@@ -88,6 +88,13 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     } else {
         rhs
     };
+    // A compound operation reads and writes one dimension. Capture a mutable index after
+    // any eager RHS evaluation, before a diagnostic handler can change its source variable.
+    let lhs_expr = if matches!(op, AssignmentOperator::Compound(_)) {
+        hoisted.snapshot_update_dimension(lhs_expr)
+    } else {
+        lhs_expr
+    };
     let lhs_span = lhs_expr.span;
     if is_append {
         let stmt = match lhs_expr.kind {
@@ -274,6 +281,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
     if incdec_pos < start + 3 {
         return Ok(None);
     }
+    if assignment_precedes(tokens, start, incdec_pos) {
+        return Ok(None);
+    }
 
     let lhs = &tokens[start..incdec_pos];
     let mut lhs_pos = 0;
@@ -309,6 +319,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     if incdec_pos < start + 3 {
         return Ok(None);
     }
+    if assignment_precedes(tokens, start, incdec_pos) {
+        return Ok(None);
+    }
 
     let lhs = &tokens[start..incdec_pos];
     let contains_complex_target = lhs
@@ -329,6 +342,18 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     expect_semicolon(tokens, pos)?;
 
     lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
+}
+
+/// Reports whether a top-level assignment operator comes BEFORE `incdec_pos`.
+///
+/// When it does, the `++`/`--` belongs to the assignment's right-hand side, not to the statement:
+/// `$t += $b[0]++;` increments `$b[0]`, it does not increment `$t += $b[0]`. Both postfix-incdec
+/// statement parsers used to claim such a statement anyway, parse the whole `$t += $b[0]` as their
+/// target, and reject it with `Invalid assignment target` (issue #682). Declining here hands the
+/// statement to the assignment parsers, which lower the increment inside the value expression.
+fn assignment_precedes(tokens: &[SpannedToken], start: usize, incdec_pos: usize) -> bool {
+    find_top_level_assignment(tokens, start)
+        .is_some_and(|(assign_pos, _)| assign_pos < incdec_pos)
 }
 
 /// Parses a scoped (static class member) postfix assignment, handling targets like
@@ -373,6 +398,19 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
     }
+    // A compound update settles a disturbing right-hand side, then captures a mutable index,
+    // exactly as `try_parse_postfix_assignment` does for local and property targets.
+    let mut hoisted = EffectfulTargetLowerer::new(span);
+    let (lhs_expr, rhs) = if matches!(op, AssignmentOperator::Compound(_)) {
+        let rhs = if compound_rhs_can_disturb_index(&lhs_expr, &rhs) {
+            hoisted.stabilize_unconditionally(rhs)
+        } else {
+            rhs
+        };
+        (hoisted.snapshot_update_dimension(lhs_expr), rhs)
+    } else {
+        (lhs_expr, rhs)
+    };
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
     // `self::$b[$k][] = $v` (and its `static::` / `parent::` / `Named::` siblings) is an append
@@ -418,7 +456,7 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
-    Ok(Some(Stmt::new(stmt, span)))
+    Ok(Some(hoisted.finish_if_used(stmt, span)))
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
@@ -483,6 +521,16 @@ fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Optio
             // it to the expression parser, which desugars the increment in place; without
             // this the whole line was claimed here and rejected as an invalid target.
             Token::Assign if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                return None;
+            }
+            // A top-level `?` opens a ternary, so the `++` sits in one of its BRANCHES:
+            // `$c ? $a[0]++ : $b;` increments `$a[0]`, it does not increment `$c ? $a[0]`.
+            // Claiming it anyway made the scan parse `$c ? $a[0]` as its target and report
+            // `Expected ':' in ternary operator` from the middle of a statement the scan had
+            // truncated itself (issue #1139). Declining leaves the honest diagnostic, which is
+            // that a ternary at statement position is not parsed at all yet (#827, #841).
+            // `??` and `?->` are their own tokens, so neither reaches this arm.
+            Token::Question if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
             Token::PlusPlus if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
@@ -552,10 +600,35 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
     }
 }
 
+/// Returns whether an update's array base is one whose single dimension gets an index snapshot.
+///
+/// A local, a property, or a static property is written by the statement itself, so its key
+/// can be captured before the read. Deeper places keep their own nested-write handling.
+pub(crate) fn update_dimension_base_is_snapshotted(array: &Expr) -> bool {
+    matches!(
+        array.kind,
+        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+    )
+}
+
+/// Returns whether an update must capture an index before its read and write halves.
+pub(crate) fn update_index_needs_snapshot(index: &Expr) -> bool {
+    match &index.kind {
+        ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => false,
+        ExprKind::Variable(name) if crate::names::is_generated_local_name(name) => false,
+        _ => true,
+    }
+}
+
 /// Recursively checks whether `target` can be used as an r-value in a replay-safe assignment.
 fn can_replay_instanceof_target(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => true,
+        InstanceOfTarget::Generic(_) => true,
         InstanceOfTarget::Expr(expr) => can_replay_assignment_target(expr),
     }
 }
@@ -662,6 +735,8 @@ pub(crate) fn lower_postfix_incdec_assignment(
         return lower_effectful_postfix_assignment(lhs_expr, op, one, span);
     }
 
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let lhs_expr = lowerer.snapshot_update_dimension(lhs_expr);
     let value = assignment_value(lhs_expr.clone(), op, one, span);
     let kind = match lhs_expr.kind {
         ExprKind::ArrayAccess { array, index } => match array.kind {
@@ -696,7 +771,7 @@ pub(crate) fn lower_postfix_incdec_assignment(
         _ => return Err(CompileError::new(span, "Invalid increment target")),
     };
 
-    Ok(Stmt::new(kind, span))
+    Ok(lowerer.finish_if_used(kind, span))
 }
 
 /// Lowers a compound static property assignment where the target cannot be replayed safely.
@@ -800,12 +875,37 @@ impl EffectfulTargetLowerer {
         Expr::new(ExprKind::Variable(name), self.span)
     }
 
+    /// Captures a mutable index once for both halves of an update.
+    ///
+    /// Covers one dimension of a local, property, or static-property array: the read reports a
+    /// float key's conversion, and the write must land on that same key even when a diagnostic
+    /// handler reassigns the index variable in between.
+    fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
+        let span = target.span;
+        match target.kind {
+            ExprKind::ArrayAccess { array, index }
+                if update_dimension_base_is_snapshotted(&array) =>
+            {
+                let index = if update_index_needs_snapshot(&index) {
+                    self.stabilize_unconditionally(*index)
+                } else {
+                    *index
+                };
+                Expr::new(ExprKind::ArrayAccess {
+                    array,
+                    index: Box::new(index),
+                }, span)
+            }
+            kind => Expr::new(kind, span),
+        }
+    }
+
     /// Returns a unique synthetic temporary name for this lowered statement.
     fn next_temp_name(&mut self) -> String {
-        let name = format!(
+        let name = crate::names::generated_local_name(&format!(
             "__elephc_compound_{}_{}_{}",
             self.span.line, self.span.col, self.next_temp
-        );
+        ));
         self.next_temp += 1;
         name
     }
@@ -817,13 +917,13 @@ impl EffectfulTargetLowerer {
     /// lower it as a fused, in-place append instead of the read/copy/write-back it desugars
     /// to here. `next_temp_name`'s prefix is shared with the `.=` / `+=` desugars, which emit
     /// the same statement shapes, so it cannot serve as that signal. PHP source cannot forge
-    /// either lock: the name is not a legal PHP identifier and `StmtKind::Synthetic` has no
-    /// surface syntax.
+    /// either lock: the name carries `crate::names::GENERATED_LOCAL_MARKER`, whose `#` is not a
+    /// legal PHP identifier character, and `StmtKind::Synthetic` has no surface syntax.
     fn next_nested_append_temp_name(&mut self) -> String {
-        let name = format!(
+        let name = crate::names::generated_local_name(&format!(
             "{}{}_{}_{}",
             NESTED_APPEND_TEMP_PREFIX, self.span.line, self.span.col, self.next_temp
-        );
+        ));
         self.next_temp += 1;
         name
     }

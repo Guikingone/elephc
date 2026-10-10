@@ -15,13 +15,24 @@ pub(super) fn method_signature(
     object: crate::ir::ValueId,
     method: &str,
 ) -> Option<FunctionSig> {
-    let object_ty = ctx.builder.value_php_type(object);
+    method_signature_for_receiver_type(ctx, &ctx.builder.value_php_type(object), method)
+}
+
+/// Returns the checked signature for an instance method call on a receiver of `object_ty`.
+///
+/// The type-level core of `method_signature`, for callers that know the receiver's type but have
+/// no lowered receiver value, such as a closure signature derived before its body is lowered.
+pub(super) fn method_signature_for_receiver_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method: &str,
+) -> Option<FunctionSig> {
     let key = php_symbol_key(method);
-    if let Some((class_name, _)) = singular_object_class(&object_ty) {
+    if let Some((class_name, _)) = singular_object_class(object_ty) {
         let normalized = class_name.trim_start_matches('\\');
         return class_method_signature(ctx, normalized, &key).cloned();
     }
-    if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+    if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
         if ctx.has_eval_barrier() {
             return None;
         }
@@ -182,19 +193,40 @@ pub(super) fn method_call_result_type(
     op: Op,
     expr: &Expr,
 ) -> PhpType {
-    let object_ty = ctx.builder.value_php_type(object);
-    let nullable = singular_object_class(&object_ty)
+    method_call_result_type_for_receiver_type(
+        ctx,
+        &ctx.builder.value_php_type(object),
+        method,
+        op,
+        expr,
+    )
+}
+
+/// Returns the checked return type for an instance method call on a receiver of `object_ty`.
+///
+/// The type-level core of `method_call_result_type`: late-static returns are bound to the
+/// receiver class and a nullsafe call on a nullable receiver adds `null`. A closure whose body is
+/// `return $o->m();` derives its signature through this before the body is lowered, so the two
+/// agree on the result the call hands back (issue #1269).
+pub(super) fn method_call_result_type_for_receiver_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method: &str,
+    op: Op,
+    expr: &Expr,
+) -> PhpType {
+    let nullable = singular_object_class(object_ty)
         .map(|(_, nullable)| nullable)
         .unwrap_or(false);
-    let Some(return_ty) = method_signature(ctx, object, method)
+    let Some(return_ty) = method_signature_for_receiver_type(ctx, object_ty, method)
         .map(|signature| normalize_value_php_type(signature.return_type))
     else {
-        if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+        if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
             return PhpType::Mixed;
         }
         return fallback_expr_type(expr);
     };
-    let return_ty = if let Some((receiver_name, _)) = singular_object_class(&object_ty) {
+    let return_ty = if let Some((receiver_name, _)) = singular_object_class(object_ty) {
         instance_method_late_static_return_for_ir(ctx, receiver_name, &php_symbol_key(method))
             .map(|return_type| late_static_return_type_for_ir(ctx, &return_type, receiver_name))
             .unwrap_or(return_ty)
@@ -206,6 +238,32 @@ pub(super) fn method_call_result_type(
     } else {
         return_ty
     }
+}
+
+/// Returns the return type a closure signature records for a directly returned
+/// `$receiver->method(...)` whose receiver has type `object_ty`.
+///
+/// Mirrors `method_call_result_type` wherever the metadata names the method, and answers boxed
+/// `Mixed` wherever the call could dispatch somewhere this metadata cannot see: a receiver that
+/// is not an object type, or a method its class does not declare (a `__call` dispatch, or a
+/// closure later rebound to a class that does). Boxing is always a sound return contract. The
+/// syntactic fallback this replaces answered `Int` for every method call, so a closure returning
+/// `$o->name()` handed a string back through an int slot and printed 0 (issue #1269).
+pub(in crate::ir_lower) fn closure_return_method_call_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method: &str,
+    expr: &Expr,
+) -> PhpType {
+    if singular_object_class(object_ty).is_none()
+        && !dynamic_method_receiver_needs_mixed_fallback(object_ty)
+    {
+        return PhpType::Mixed;
+    }
+    if method_signature_for_receiver_type(ctx, object_ty, method).is_none() {
+        return PhpType::Mixed;
+    }
+    method_call_result_type_for_receiver_type(ctx, object_ty, method, Op::MethodCall, expr)
 }
 
 /// Returns preserved late-static return syntax for EIR instance dispatch.

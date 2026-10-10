@@ -1,8 +1,8 @@
 ---
 title: "session_write_close()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Writes the session data and releases the session lock."
 sidebar:
-  order: 908
+  order: 1003
 ---
 
 ## session_write_close()
@@ -11,7 +11,7 @@ sidebar:
 function session_write_close(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Writes the session data and releases the session lock.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

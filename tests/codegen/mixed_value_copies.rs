@@ -10,6 +10,7 @@
 
 use crate::support::*;
 
+/// Requires complete source evaluation before fixed and variadic Stringable binding.
 #[test]
 fn mixed_value_copies_argument_sources_precede_fixed_and_variadic_binding() {
     assert_clean_copy(
@@ -26,6 +27,7 @@ variadic(boxed(new Text()), later());
     );
 }
 
+/// Snapshots a typed array argument before a later argument mutates the original.
 #[test]
 fn mixed_value_copies_typed_array_argument_is_pinned_before_later_mutation() {
     assert_clean_copy(
@@ -40,6 +42,7 @@ unset($source);
     );
 }
 
+/// Keeps captured and argument heap results alive after immediate closure descriptors retire.
 #[test]
 fn mixed_value_copies_immediate_closure_heap_results_outlive_descriptors() {
     assert_clean_copy(
@@ -56,6 +59,7 @@ unset($captured); unset($argument);
     );
 }
 
+/// Preserves throwing string conversions even when immediate closure results are unused.
 #[test]
 fn mixed_value_copies_unused_immediate_closures_preserve_string_bindings() {
     assert_clean_copy(
@@ -74,6 +78,7 @@ unset($value);
     );
 }
 
+/// Releases boxed argument ownership when a static closure body throws.
 #[test]
 fn mixed_value_copies_static_closure_body_throw_releases_argument_owner() {
     assert_clean_copy(
@@ -87,6 +92,7 @@ unset($callback);
     );
 }
 
+/// Retires the partially converted named collector when a later Stringable element throws.
 #[test]
 fn mixed_value_copies_named_variadic_partial_conversion_unwinds_collector() {
     assert_clean_copy(
@@ -103,6 +109,7 @@ catch (RuntimeException $error) { echo 'caught'; unset($error); }
     );
 }
 
+/// Keeps variadic string-binding exceptions observable when the call result is unused.
 #[test]
 fn mixed_value_copies_unused_variadic_call_preserves_string_binding_exception() {
     assert_clean_copy(
@@ -120,6 +127,7 @@ unset($value);
     );
 }
 
+/// Preserves fixed-argument string-binding exceptions and the original source owner.
 #[test]
 fn mixed_value_copies_unused_call_preserves_string_binding_exception() {
     assert_clean_copy(
@@ -139,6 +147,7 @@ unset($source); unset($throwing);
     );
 }
 
+/// Avoids double retirement of an earlier named snapshot when later coercion fails.
 #[test]
 fn mixed_value_copies_named_coercion_failure_does_not_release_consumed_snapshot() {
     assert_clean_copy(
@@ -158,6 +167,7 @@ unset($source); unset($throwing);
     );
 }
 
+/// Does not release argument snapshots whose source expressions never ran.
 #[test]
 fn mixed_value_copies_preparation_unwind_skips_unevaluated_snapshots() {
     assert_clean_copy(
@@ -171,6 +181,7 @@ catch (RuntimeException $error) { echo 'caught'; unset($error); }
     );
 }
 
+/// Unwinds both inner and outer argument-owner ledgers without mutating the source.
 #[test]
 fn mixed_value_copies_nested_argument_evaluation_unwinds_both_ledgers() {
     assert_clean_copy(
@@ -188,6 +199,7 @@ unset($source);
     );
 }
 
+/// Retires an earlier named argument snapshot when later source evaluation throws.
 #[test]
 fn mixed_value_copies_named_preparation_exception_releases_snapshot() {
     assert_clean_copy(
@@ -204,6 +216,7 @@ unset($source);
     );
 }
 
+/// Retires a positional argument snapshot when a later argument throws before entry.
 #[test]
 fn mixed_value_copies_argument_snapshot_is_released_when_later_argument_throws() {
     assert_clean_copy(
@@ -220,6 +233,7 @@ unset($source);
     );
 }
 
+/// Preserves named source-order snapshots across later by-reference mutation.
 #[test]
 fn mixed_value_copies_named_argument_snapshot_precedes_later_mutation() {
     assert_clean_copy(
@@ -235,6 +249,7 @@ unset($source); unset($copy);
     );
 }
 
+/// Detaches a static assignment's value cell from its source parameter.
 #[test]
 fn mixed_value_copies_static_assignment_is_not_a_shared_value_cell() {
     assert_clean_copy(
@@ -254,6 +269,7 @@ unset($source); unset($copy);
     );
 }
 
+/// Preserves positional source-order snapshots across later by-reference mutation.
 #[test]
 fn mixed_value_copies_argument_snapshot_precedes_later_argument_mutation() {
     assert_clean_copy(
@@ -269,6 +285,7 @@ unset($source); unset($copy);
     );
 }
 
+/// Makes an ordinary copy from a reference independent of its reference set.
 #[test]
 fn mixed_value_copies_from_reference_are_values_not_aliases() {
     assert_clean_copy(
@@ -284,6 +301,7 @@ unset($copy); unset($reference); unset($source);
     );
 }
 
+/// Copies a value into an existing reference set without aliasing the source cell.
 #[test]
 fn mixed_value_copies_assignment_into_reference_copies_the_value() {
     assert_clean_copy(
@@ -300,6 +318,7 @@ unset($reference); unset($target); unset($source);
     );
 }
 
+/// Keeps a published global snapshot separate from a later local parameter mutation.
 #[test]
 fn mixed_value_copies_global_assignment_is_not_a_shared_value_cell() {
     assert_clean_copy(
@@ -320,6 +339,7 @@ unset($source); unset($published); unset($changed);
     );
 }
 
+/// Captures a by-value boxed array before later mutation of its source.
 #[test]
 fn mixed_value_copies_closure_capture_is_a_value_snapshot() {
     assert_clean_copy(
@@ -335,6 +355,7 @@ unset($copy); unset($callback); unset($source);
     );
 }
 
+/// Runs one boxed-copy fixture and requires its expected representation and clean heap teardown.
 fn assert_clean_copy(body: &str, expected: &str) {
     let source = format!(
         "<?php\nfunction boxed(mixed $value): mixed {{ return $value; }}\n{body}\n"
@@ -344,6 +365,7 @@ fn assert_clean_copy(body: &str, expected: &str) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Requires ordinary boxed-array assignment to detach mutable value cells.
 #[test]
 fn mixed_value_copies_assignment_detaches_array_cell() {
     assert_clean_copy(
@@ -358,6 +380,7 @@ unset($source); unset($copy);
     );
 }
 
+/// Keeps a by-value parameter's array mutation isolated from caller storage.
 #[test]
 fn mixed_value_copies_byvalue_parameter_detaches_array_cell() {
     assert_clean_copy(
@@ -372,6 +395,7 @@ unset($source); unset($copy);
     );
 }
 
+/// Keeps an identity function's returned value cell independent of the source.
 #[test]
 fn mixed_value_copies_identity_return_remains_an_independent_value() {
     assert_clean_copy(
@@ -387,6 +411,7 @@ unset($source); unset($copy);
     );
 }
 
+/// Preserves value-copy isolation through an additional forwarding function.
 #[test]
 fn mixed_value_copies_forwarded_parameter_does_not_alias_source() {
     assert_clean_copy(
@@ -402,6 +427,7 @@ unset($source); unset($copy);
     );
 }
 
+/// Preserves value-copy isolation through an instance-method argument boundary.
 #[test]
 fn mixed_value_copies_method_parameter_does_not_alias_source() {
     assert_clean_copy(
@@ -419,6 +445,7 @@ unset($source); unset($copy); unset($mutator);
     );
 }
 
+/// Preserves value-copy isolation through a closure argument boundary.
 #[test]
 fn mixed_value_copies_closure_parameter_does_not_alias_source() {
     assert_clean_copy(
@@ -433,6 +460,7 @@ unset($source); unset($copy); unset($callback);
     );
 }
 
+/// Keeps genuine by-reference parameters connected to the caller's mutable value.
 #[test]
 fn mixed_value_copies_reference_parameter_keeps_caller_alias() {
     assert_clean_copy(
@@ -447,6 +475,7 @@ unset($source);
     );
 }
 
+/// Preserves by-value isolation through runtime string callable dispatch.
 #[test]
 fn mixed_value_copies_runtime_string_descriptor_does_not_alias_source() {
     assert_clean_copy(
@@ -462,6 +491,7 @@ unset($source); unset($copy);
     );
 }
 
+/// Detaches value cells without duplicating object identity or shared properties.
 #[test]
 fn mixed_value_copies_preserve_object_identity_and_shared_properties() {
     assert_clean_copy(
@@ -483,6 +513,7 @@ unset($source); unset($copy);
     );
 }
 
+/// Keeps resource identity and shared position alive until the final copied owner retires.
 #[test]
 fn mixed_value_copies_preserve_resource_identity_position_and_lifetime() {
     assert_clean_copy(
@@ -503,6 +534,7 @@ unset($copy);
     );
 }
 
+/// Releases an exceptional callee's private cell without changing the caller's array.
 #[test]
 fn mixed_value_copies_exception_releases_private_cell_without_mutating_source() {
     assert_clean_copy(

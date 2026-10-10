@@ -10,6 +10,7 @@
 
 use crate::support::*;
 
+/// Drains spawned children before returning the root's result.
 #[test]
 fn async_run_waits_for_children_and_returns_the_root_value() {
     let out = compile_and_run(
@@ -32,6 +33,7 @@ echo implode(",", $events) . "|" . $value;
     assert_eq!(out, "root,child|done");
 }
 
+/// Exercises the Async root through an aliased function import.
 #[test]
 fn async_run_works_through_an_aliased_function_import() {
     let out = compile_and_run(
@@ -44,6 +46,7 @@ echo asyncRun(static fn (\Elephc\Async\TaskGroup $tasks): string => "alias");
     assert_eq!(out, "alias");
 }
 
+/// Rejects cancellation authority and token access through an escaped closed TaskGroup.
 #[test]
 fn async_task_group_has_no_cancellation_authority_after_its_scope_ends() {
     let out = compile_and_run(
@@ -73,6 +76,7 @@ try {
     );
 }
 
+/// Makes a cloned TaskGroup observe the same closed-scope authority boundary.
 #[test]
 fn async_cloned_task_group_has_no_cancellation_authority_after_scope_exit() {
     let out = compile_and_run(
@@ -100,6 +104,7 @@ try {
     assert_eq!(out, "Elephc Async TaskGroup scope has ended|Elephc Async TaskGroup scope has ended");
 }
 
+/// Resolves Async root calls through namespace aliases and relative namespace names.
 #[test]
 fn async_run_works_through_namespace_alias_and_relative_namespace_names() {
     for source in [
@@ -116,6 +121,7 @@ echo run(static fn (TaskGroup $tasks): string => "ok");"#,
     }
 }
 
+/// Rejects completion queries and awaiting after the handle's owning scope closes.
 #[test]
 fn async_completed_awaitable_expires_after_scope_close() {
     let out = compile_and_run(
@@ -145,6 +151,7 @@ try {
     );
 }
 
+/// Lets sibling tasks run while a consumer awaits its dependency.
 #[test]
 fn async_await_suspends_until_the_dependency_completes() {
     let out = compile_and_run(
@@ -182,6 +189,7 @@ echo implode(",", $events) . "|" . $value;
     );
 }
 
+/// Reports deadlock when bare suspension leaves live tasks without a managed wakeup.
 #[test]
 fn async_raw_fiber_suspend_without_scheduler_wakeup_fails_closed() {
     let out = compile_and_run(
@@ -206,6 +214,7 @@ try {
     );
 }
 
+/// Keeps ordinary callback dispatch valid inside and outside an Async task.
 #[test]
 fn async_callable_guard_allows_ordinary_callbacks() {
     let out = compile_and_run(
@@ -229,6 +238,7 @@ echo implode(",", $events) . "|" . array_map("async_ordinary_callback", [6])[0];
     assert_eq!(out, "7|7");
 }
 
+/// Rejects runtime string callbacks to unmanaged Fiber suspension.
 #[test]
 fn async_dynamic_callback_fiber_suspend_without_scheduler_wakeup_fails_closed() {
     let out = compile_and_run(
@@ -258,6 +268,7 @@ try {
     );
 }
 
+/// Rejects Fiber::suspend callable arrays before callback dispatch.
 #[test]
 fn async_array_callable_fiber_suspend_is_rejected_before_dispatch() {
     let out = compile_and_run(
@@ -287,6 +298,7 @@ try {
     );
 }
 
+/// Uses internal reflection to reject handles from an earlier task-slot generation.
 #[test]
 fn async_task_generation_rejects_a_stale_handle_after_slot_reuse() {
     let out = compile_and_run(
@@ -329,6 +341,7 @@ echo $result;
     assert_eq!(out, "Stale Elephc Async task handle");
 }
 
+/// Keeps internal runRoot inaccessible to ordinary user calls.
 #[test]
 fn async_internal_runroot_cannot_be_called_directly() {
     let out = compile_and_run(
@@ -359,6 +372,7 @@ try {
     );
 }
 
+/// Forwards source arguments to a statically resolved spawned callable.
 #[test]
 fn async_spawn_forwards_arguments() {
     let out = compile_and_run(
@@ -380,6 +394,7 @@ echo $value;
     assert_eq!(out, "42");
 }
 
+/// Forwards static task arguments beyond the historical seven-slot cap.
 #[test]
 fn async_spawn_accepts_more_than_seven_statically_known_arguments() {
     let out = compile_and_run(
@@ -408,6 +423,7 @@ echo run(static function (TaskGroup $tasks): int {
     assert_eq!(out, "36");
 }
 
+/// Keeps source name order when forwarding more than seven task arguments.
 #[test]
 fn async_spawn_preserves_named_arguments_above_seven() {
     let out = compile_and_run(
@@ -444,6 +460,7 @@ echo run(static function (TaskGroup $tasks): string {
     );
 }
 
+/// Applies string variadic binding to positional and named task arguments.
 #[test]
 fn async_spawn_applies_typed_variadic_callback_binding() {
     let out = compile_and_run(
@@ -468,6 +485,7 @@ echo run(static function (TaskGroup $tasks): string {
     assert_eq!(out, "string|string");
 }
 
+/// Preserves keys when an associative PHP array is passed as one task argument.
 #[test]
 fn async_spawn_preserves_an_associative_array_argument() {
     let out = compile_and_run(
@@ -490,6 +508,7 @@ echo run(static function (TaskGroup $tasks) use ($payload): string {
 }
 
 #[test]
+/// Relays insertion-ordered named variadics as a PHP array accepted by callback dispatch.
 fn user_function_relays_named_variadic_arguments() {
     let out = compile_and_run(
         r#"<?php
@@ -524,6 +543,7 @@ echo async_relay_named_args(
     );
 }
 
+/// Keeps named variadic entries when a user method collects task-style arguments.
 #[test]
 fn user_method_captures_named_variadic_arguments() {
     let out = compile_and_run(
@@ -541,6 +561,7 @@ echo (new NamedVariadicCounter())->count(first: 1, eighth: 8);
     assert_eq!(out, "2");
 }
 
+/// Preserves variadic key order after a regular callable method parameter.
 #[test]
 fn user_method_with_regular_parameter_preserves_named_variadic_arguments() {
     let out = compile_and_run(
@@ -571,6 +592,7 @@ echo (new NamedVariadicCounter())->capture(
     );
 }
 
+/// Places a yielding task behind already-runnable siblings in FIFO order.
 #[test]
 fn async_reschedule_moves_the_current_task_to_the_fifo_tail() {
     let out = compile_and_run(
@@ -599,6 +621,7 @@ echo implode(",", $events);
     assert_eq!(out, "left-1,right-1,left-2,right-2");
 }
 
+/// Orders timer wakeups while other runnable tasks continue executing.
 #[test]
 fn async_sleep_wakes_by_monotonic_deadline_without_blocking_runnable_tasks() {
     let out = compile_and_run(
@@ -627,6 +650,7 @@ echo implode(",", $events);
     assert_eq!(out, "slow-start,fast-start,fast-end,slow-end");
 }
 
+/// Rejects negative sleep duration before registering a timer.
 #[test]
 fn async_sleep_rejects_a_negative_duration() {
     let out = compile_and_run(
@@ -650,6 +674,7 @@ try {
     );
 }
 
+/// Rejects NaN, infinity and durations outside the deadline range.
 #[test]
 fn async_sleep_rejects_non_finite_and_unrepresentable_durations() {
     let out = compile_and_run(
@@ -679,6 +704,7 @@ run(function (TaskGroup $tasks): void {
     );
 }
 
+/// Propagates an unobserved child failure from the drained root scope.
 #[test]
 fn async_child_failure_fails_the_root_scope() {
     let out = compile_and_run(
@@ -700,6 +726,7 @@ try {
     assert_eq!(out, "child failed");
 }
 
+/// Finishes started children's cancellation cleanup before exposing root failure.
 #[test]
 fn async_root_failure_cancels_started_children_before_propagating() {
     let out = compile_and_run(
@@ -734,6 +761,7 @@ echo implode(",", $events);
     );
 }
 
+/// Delivers one dependency result to multiple suspended task waiters.
 #[test]
 fn async_multiple_waiters_receive_the_same_result() {
     let out = compile_and_run(
@@ -760,6 +788,7 @@ echo $value;
     assert_eq!(out, "42");
 }
 
+/// Rejects self-await instead of stranding the active task.
 #[test]
 fn async_task_cannot_await_itself() {
     let out = compile_and_run(
@@ -787,6 +816,7 @@ echo $result;
     assert_eq!(out, "An Elephc Async task cannot await itself");
 }
 
+/// Chooses the earliest unobserved failure rather than always preferring root failure.
 #[test]
 fn async_scope_reports_the_first_unobserved_failure_in_occurrence_order() {
     let out = compile_and_run(
@@ -810,6 +840,7 @@ try {
     assert_eq!(out, "LogicException|child-first");
 }
 
+/// Preserves a normal root result after deliberate child cancellation.
 #[test]
 fn async_deliberate_group_cancellation_allows_a_normal_root_return() {
     let out = compile_and_run(
@@ -831,6 +862,7 @@ echo $result;
     assert_eq!(out, "root-return");
 }
 
+/// Drains grandchildren even after their parent and root bodies finish.
 #[test]
 fn async_scope_waits_for_grandchildren_spawned_by_child_tasks() {
     let out = compile_and_run(
@@ -856,6 +888,7 @@ echo implode(",", $events);
     assert_eq!(out, "parent,root,grandchild");
 }
 
+/// Keeps later cleanup failure visible after an earlier failure was observed.
 #[test]
 fn async_observed_failure_does_not_hide_a_later_cleanup_failure() {
     let out = compile_and_run(
@@ -890,6 +923,7 @@ try {
     assert_eq!(out, "first|cleanup");
 }
 
+/// Does not rethrow a child failure consumed through its Awaitable.
 #[test]
 fn async_observed_failure_is_not_rethrown_by_the_scope() {
     let out = compile_and_run(
@@ -916,6 +950,7 @@ try {
     assert_eq!(out, "caught");
 }
 
+/// Requests sibling cancellation after failure and waits for cleanup.
 #[test]
 fn async_fail_fast_cancels_siblings_and_waits_for_cleanup() {
     let out = compile_and_run(
@@ -949,6 +984,7 @@ echo implode(",", $events);
     assert_eq!(out, "sibling-start,caught,cleanup:failed");
 }
 
+/// Cancels a queued child before its body starts.
 #[test]
 fn async_cancel_prevents_an_unstarted_child_from_running() {
     let out = compile_and_run(
@@ -970,6 +1006,7 @@ echo implode(",", $events) . "|" . $value;
     assert_eq!(out, "|root-finished");
 }
 
+/// Wakes a sleeping child for cleanup and preserves its completed result.
 #[test]
 fn async_cancel_wakes_a_sleeping_child_and_allows_cleanup() {
     let out = compile_and_run(
@@ -999,6 +1036,7 @@ echo implode(",", $events) . "|" . $value;
     assert_eq!(out, "child-start,child-cleanup|clean");
 }
 
+/// Reports uncaught target cancellation through Awaitable::await.
 #[test]
 fn async_await_throws_when_the_target_accepts_cancellation() {
     let out = compile_and_run(
@@ -1024,6 +1062,7 @@ run(function (TaskGroup $tasks): void {
     assert_eq!(out, "Elephc Async task cancelled");
 }
 
+/// Distinguishes cleanup exceptions from successful requested cancellation.
 #[test]
 fn async_cleanup_failure_is_not_swallowed_as_cancellation() {
     let out = compile_and_run(
@@ -1052,6 +1091,7 @@ try {
     assert_eq!(out, "cleanup failed");
 }
 
+/// Observes request state and reason through the read-only cancellation token.
 #[test]
 fn async_cancellation_is_a_read_only_observation_token() {
     let out = compile_and_run(
@@ -1076,6 +1116,7 @@ run(function (TaskGroup $tasks): void {
     assert_eq!(out, "open|requested|stop requested");
 }
 
+/// Probes immediate socket readability and writability before and after a write.
 #[test]
 fn async_descriptor_zero_timeout_probes_readable_and_writable_state() {
     let out = compile_and_run(
@@ -1103,6 +1144,7 @@ run(function (TaskGroup $tasks): void {
     assert_eq!(out, "idle|writable|ready|x");
 }
 
+/// Runs a writer while its reader suspends on descriptor readiness.
 #[test]
 fn async_descriptor_readiness_interleaves_socket_tasks() {
     let out = compile_and_run(
@@ -1139,6 +1181,7 @@ echo implode(",", $events);
     assert_eq!(out, "reader-wait,writer,reader-ready:x");
 }
 
+/// Runs siblings while a descriptor waiter reaches its timeout.
 #[test]
 fn async_descriptor_timeout_does_not_block_runnable_tasks() {
     let out = compile_and_run(
@@ -1172,6 +1215,7 @@ echo implode(",", $events);
     assert_eq!(out, "wait,sibling,timeout");
 }
 
+/// Wakes descriptor waits on cancellation so task cleanup can execute.
 #[test]
 fn async_descriptor_wait_is_a_cancellation_point() {
     let out = compile_and_run(
@@ -1209,6 +1253,7 @@ echo implode(",", $events);
     assert_eq!(out, "wait,cancel,cleanup");
 }
 
+/// Exercises poll readiness beyond a small descriptor-bitset range.
 #[test]
 fn async_descriptor_poll_supports_descriptors_above_sixty_three() {
     let out = compile_and_run(
@@ -1253,6 +1298,7 @@ free($pair);
     assert_eq!(out, "high-ready");
 }
 
+/// Delivers simultaneous readiness in waiter registration order, not writer order.
 #[test]
 fn async_descriptor_ready_events_preserve_registration_order() {
     let out = compile_and_run(
@@ -1293,6 +1339,7 @@ echo implode(",", $events);
     assert_eq!(out, "first,second");
 }
 
+/// Rejects invalid stream sources and negative readiness timeouts.
 #[test]
 fn async_descriptor_wait_validates_source_and_timeout() {
     let out = compile_and_run(
@@ -1324,6 +1371,7 @@ run(function (TaskGroup $tasks): void {
     );
 }
 
+/// Checks descriptor C-int bounds and finite representable timeouts.
 #[test]
 fn async_descriptor_wait_rejects_negative_non_finite_and_unrepresentable_inputs() {
     let out = compile_and_run(
@@ -1363,6 +1411,7 @@ run(function (TaskGroup $tasks): void {
     );
 }
 
+/// Refuses nested Async roots without replacing the active scheduler.
 #[test]
 fn async_run_rejects_a_nested_scheduler() {
     let out = compile_and_run(
@@ -1385,6 +1434,7 @@ run(function (TaskGroup $tasks): void {
     );
 }
 
+/// Refuses root entry from a Fiber outside scheduler ownership.
 #[test]
 fn async_run_rejects_entry_from_an_unrelated_fiber() {
     let out = compile_and_run(
@@ -1408,6 +1458,7 @@ $fiber->start();
     );
 }
 
+/// Keeps expired registrations inactive when readiness arrives later.
 #[test]
 fn async_descriptor_registration_stays_inactive_after_timeout() {
     let out = compile_and_run(
@@ -1442,6 +1493,7 @@ echo implode(",", $events);
     assert_eq!(out, "timeout,write");
 }
 
+/// Preserves cancellation-first precedence when readiness coincides.
 #[test]
 fn async_cancellation_wins_over_simultaneous_descriptor_readiness() {
     let out = compile_and_run(
@@ -1517,6 +1569,7 @@ echo implode(",", $events);
     assert_eq!(out, "blocking-write,timeout");
 }
 
+/// Does not redirect an old wait to a reused native descriptor number.
 #[test]
 fn async_descriptor_reuse_does_not_deliver_a_stale_wakeup() {
     let out = compile_and_run(
@@ -1570,6 +1623,7 @@ free($pair);
     assert_eq!(out, "reused|timeout");
 }
 
+/// Retires owned duplicates across repeated zero-timeout probes.
 #[test]
 fn async_zero_timeout_probes_release_owned_descriptor_duplicates() {
     let out = compile_and_run(
@@ -1601,6 +1655,7 @@ run(function (TaskGroup $tasks): void {
     assert_eq!(out, "released");
 }
 
+/// Rejects admission after cancellation without constructing another child.
 #[test]
 fn async_spawn_after_cancellation_fails_before_creating_a_child() {
     let out = compile_and_run(
@@ -1626,6 +1681,7 @@ echo $result;
     );
 }
 
+/// Keeps the first reason available through an escaped observation token.
 #[test]
 fn async_escaped_cancellation_token_preserves_its_reason_after_scope_close() {
     let out = compile_and_run(
@@ -1649,6 +1705,7 @@ try {
     assert_eq!(out, "requested|async-reason");
 }
 
+/// Does not replace the first cancellation reason with later requests.
 #[test]
 fn async_awaiting_a_cancelled_child_preserves_the_first_request_reason() {
     let out = compile_and_run(
@@ -1673,6 +1730,7 @@ echo $result;
     assert_eq!(out, "first-reason");
 }
 
+/// Preserves an initial null reason while propagating later cleanup failure.
 #[test]
 fn async_first_null_cancellation_reason_is_not_superseded_by_cleanup_failure() {
     let out = compile_and_run(
@@ -1713,6 +1771,7 @@ try {
     assert_eq!(out, "null|cleanup");
 }
 
+/// Treats user-created CancelledException as failure rather than request-paired cancellation.
 #[test]
 fn async_user_cancelled_exception_after_a_request_remains_a_task_failure() {
     let out = compile_and_run(
@@ -1738,6 +1797,7 @@ try {
     assert_eq!(out, "failed");
 }
 
+/// Classifies requested child cancellation without failing a normal root result.
 #[test]
 fn async_uncaught_requested_cancellation_is_terminal_cancelled_not_failed() {
     let out = compile_and_run(
@@ -1760,6 +1820,7 @@ echo $result;
     assert_eq!(out, "42");
 }
 
+/// Lets a child catching requested cancellation complete with a normal value.
 #[test]
 fn async_caught_cancellation_can_return_a_completed_value() {
     let out = compile_and_run(
@@ -1786,6 +1847,7 @@ echo $result;
     assert_eq!(out, "7");
 }
 
+/// Prevents separately constructed group state from cancelling the active root.
 #[test]
 fn async_forged_group_is_isolated_from_the_active_scope() {
     let out = compile_and_run(
@@ -1808,6 +1870,7 @@ echo $result;
     assert_eq!(out, "isolated");
 }
 
+/// Preserves the exact cancelled-child exception and reason when the root rethrows it.
 #[test]
 fn async_root_awaiting_a_child_cancelled_by_its_own_request_reports_terminal_outcome() {
     let out = compile_and_run(
@@ -1844,6 +1907,7 @@ try {
     );
 }
 
+/// Does not cancel the root implicitly at its own reschedule or sleep checkpoints.
 #[test]
 fn async_root_is_not_implicitly_cancelled_at_its_own_yield_points() {
     let out = compile_and_run(
@@ -1865,6 +1929,7 @@ echo $value;
     assert_eq!(out, "42");
 }
 
+/// Keeps an earlier child failure ahead of a later cancelled-child observation.
 #[test]
 fn async_root_cancelled_child_does_not_override_an_earlier_child_failure() {
     let out = compile_and_run(
@@ -1891,6 +1956,7 @@ try {
     assert_eq!(out, "earlier-child");
 }
 
+/// Forwards runtime spreads beyond seven slots without starting the child eagerly.
 #[test]
 fn async_spawn_accepts_more_than_seven_dynamic_spread_arguments() {
     let out = compile_and_run(

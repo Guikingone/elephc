@@ -29,7 +29,7 @@ mod runtime_ops;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) enum FakeKey {
     Int(i64),
-    String(String),
+    String(Vec<u8>),
 }
 
 /// Test-only runtime value representation used behind opaque cell handles.
@@ -67,6 +67,9 @@ pub(super) const FAKE_STD_STREAM_MAX_PAYLOAD: i64 = 2;
 pub(super) struct FakeOps {
     pub(super) next_id: usize,
     pub(super) values: HashMap<usize, FakeValue>,
+    /// Independent fake storage history for automatic associative-array indices.
+    pub(super) array_next_indices: HashMap<usize, i64>,
+    pub(super) references: HashMap<usize, RuntimeCellHandle>,
     /// Fake mirror of the runtime resource-id registry: native payload to PHP id.
     ///
     /// WHY THIS EXISTS. The fake used to answer `payload + 1` for every resource
@@ -92,13 +95,29 @@ pub(super) struct FakeOps {
     /// counter would keep advancing exactly as the buggy runtime's did.
     pub(super) inert_resources: std::collections::HashSet<i64>,
     pub(super) object_classes: HashMap<usize, String>,
+    /// Native clone calls recorded as `(declaring frame class, called class override)`.
+    pub(super) native_clone_calls: Vec<(String, Option<String>)>,
+    /// Physical clone argument shapes recorded as `(slot count, hidden collector length)`.
+    pub(super) native_clone_arg_shapes: Vec<(usize, Option<usize>)>,
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
+    /// Zero-based release call that consumes its owner but reports an injected cleanup exception.
+    pub(super) fail_release_call: Option<usize>,
+    /// Zero-based native reference-marker allocation that fails before acquiring its cell.
+    pub(super) fail_invoker_marker_call: Option<usize>,
+    pub(super) invoker_marker_calls: usize,
+    pub(super) retains: Vec<RuntimeCellHandle>,
+    /// Explicit cell owners only; fake containers do not model native heap payload refcounts.
+    pub(super) cell_owners: HashMap<usize, usize>,
     pub(super) warnings: Vec<String>,
+    pub(super) pending_runtime_throwable: Option<RuntimeCellHandle>,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,
     pub(super) ob_stack: Vec<FakeObLevel>,
     pub(super) ob_implicit_flush: bool,
+    pub(super) gc_disabled: bool,
+    pub(super) gc_runs: i64,
+    pub(super) gc_collected: i64,
 }
 
 /// One fake output-buffer level: captured text plus the ob_start metadata the
@@ -125,7 +144,15 @@ impl FakeOps {
         }
         self.next_id += 1;
         let id = self.next_id;
+        if let FakeValue::Assoc(entries) = &value {
+            let next = entries.iter().filter_map(|(key, _)| match key {
+                FakeKey::Int(key) => Some(key.saturating_add(1)),
+                FakeKey::String(_) => None,
+            }).max().unwrap_or(i64::MIN);
+            self.array_next_indices.insert(id, next);
+        }
         self.values.insert(id, value);
+        self.cell_owners.insert(id, 1);
         RuntimeCellHandle::from_raw(id as *mut RuntimeCell)
     }
 
@@ -146,6 +173,9 @@ impl FakeOps {
     /// shifting the ids of resources created after it.
     fn bind_resource_id(&mut self, payload: i64) {
         if self.inert_resources.contains(&payload) {
+            return;
+        }
+        if payload == crate::stream_resources::EVAL_DEFAULT_CONTEXT_PAYLOAD {
             return;
         }
         if payload <= FAKE_STD_STREAM_MAX_PAYLOAD || self.resource_ids.contains_key(&payload) {
@@ -191,6 +221,9 @@ impl FakeOps {
         if payload < 0 {
             return -payload;
         }
+        if payload == crate::stream_resources::EVAL_DEFAULT_CONTEXT_PAYLOAD {
+            return 4;
+        }
         if payload <= FAKE_STD_STREAM_MAX_PAYLOAD {
             return payload + 1;
         }
@@ -203,6 +236,7 @@ impl FakeOps {
     /// Reads a fake runtime cell by opaque handle.
     pub(super) fn get(&self, handle: RuntimeCellHandle) -> FakeValue {
         let id = handle.as_ptr() as usize;
+        if let Some(value) = self.references.get(&id) { return self.get(*value); }
         self.values.get(&id).cloned().expect("fake cell missing")
     }
 
@@ -213,18 +247,11 @@ impl FakeOps {
             FakeValue::Int(value) => Ok(FakeKey::Int(value)),
             FakeValue::String(value) => eval_numeric_string_array_key(value.as_bytes())
                 .map(FakeKey::Int)
-                .map_or_else(|| Ok(FakeKey::String(value)), Ok),
+                .map_or_else(|| Ok(FakeKey::String(value.into_bytes())), Ok),
             FakeValue::Bytes(value) => eval_numeric_string_array_key(&value)
                 .map(FakeKey::Int)
-                .map_or_else(
-                    || {
-                        Ok(FakeKey::String(
-                            String::from_utf8_lossy(&value).into_owned(),
-                        ))
-                    },
-                    Ok,
-                ),
-            FakeValue::Null => Ok(FakeKey::String(String::new())),
+                .map_or_else(|| Ok(FakeKey::String(value)), Ok),
+            FakeValue::Null => Ok(FakeKey::String(Vec::new())),
             value => Ok(FakeKey::Int(self.fake_int(&value))),
         }
     }
@@ -233,7 +260,7 @@ impl FakeOps {
     pub(super) fn alloc_key(&mut self, key: &FakeKey) -> Result<RuntimeCellHandle, EvalStatus> {
         match key {
             FakeKey::Int(value) => self.int(*value),
-            FakeKey::String(value) => self.string(value),
+            FakeKey::String(value) => self.string_bytes_value(value),
         }
     }
 
@@ -258,6 +285,7 @@ impl FakeOps {
 pub(super) unsafe extern "C" fn fake_native_return_descriptor(
     descriptor: *mut c_void,
     _args: *mut RuntimeCell,
+    _invocation_scope: i64,
     _binding_policy: u64,
 ) -> *mut RuntimeCell {
     descriptor.cast()

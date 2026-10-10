@@ -1,8 +1,8 @@
 ---
 title: "session_encode()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Serializes the current session data into a string."
 sidebar:
-  order: 893
+  order: 988
 ---
 
 ## session_encode()
@@ -11,7 +11,7 @@ sidebar:
 function session_encode(): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Serializes the current session data into a string.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

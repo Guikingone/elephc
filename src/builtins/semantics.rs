@@ -109,6 +109,8 @@ pub type CallableSourceFn = for<'a> fn(Option<&'a PhpType>) -> bool;
 pub enum BuiltinCallablePolicy {
     /// Direct, first-class, and runtime-known dynamic callable paths are supported.
     Dynamic(CallableSourceFn),
+    /// Only direct calls work; PHP forbids first-class and generic dynamic invocation.
+    DirectOnly(&'static str),
     /// Dynamic dispatch eligibility is defined by the typed builtin target descriptor.
     DynamicRuntime(RuntimeFnId),
     /// Direct and first-class calls work, but runtime-selected names are unsupported.
@@ -153,6 +155,10 @@ pub enum BuiltinRuntimeFunctions {
 pub enum BuiltinArgumentLowering {
     /// Use shared signature planning and ordinary source-order evaluation.
     Standard,
+    /// Preserve concrete values and nullable types for runtime PHP parameter conversion.
+    PreserveValues,
+    /// Materialize every regular default through shared planning, including positional calls.
+    MaterializeDefaults,
     /// Drop the unsupported statically-default count mode after shared planning.
     Count,
     /// Preserve date's literal-format specialization inputs.
@@ -185,6 +191,19 @@ pub enum BuiltinArgumentLowering {
     /// Type an unannotated `xml_set_*_handler()` closure's parameters from the SAX event
     /// it receives, so the EIR closure signature matches what the checker hook validated.
     XmlHandlerSetter,
+    /// Lower a bare-`array` argument through `array_values()` first, for a builtin that reads
+    /// only its VALUES, in order.
+    ///
+    /// A declared `array` is `array<mixed>|array<mixed, mixed>`: boxed storage whose layout —
+    /// packed or hash — is known only at run time. Builtins that never look at keys (`max`,
+    /// `vsprintf`, `array_count_values`, ...) have typed `array<mixed>` paths and none for a boxed
+    /// operand, so they either refused a bare array or read the cell as a raw array: `vsprintf`
+    /// printed `0-0` for `["x", "y"]`. `array_values()` already dispatches on the runtime layout
+    /// and yields an owned `array<mixed>` list, which is exactly what those paths take.
+    ///
+    /// `sole` limits it to a call where this is the ONLY argument — `max($a)`, not `max($a, $b)`,
+    /// where the array itself is the value compared and its keys come back with it.
+    BareArrayValues { arg: usize, sole: bool },
     /// Bind the receiver to its hidden internal-array-pointer cursor slot.
     ///
     /// PHP's `key`/`current`/`next`/`prev`/`reset`/`end` read and move a per-array
@@ -276,8 +295,31 @@ impl fmt::Display for BuiltinLoweringError {
 
 /// Minimal EIR construction surface exposed to builtin semantic lowering.
 pub trait BuiltinLoweringContext {
+    /// Returns the current source path when the lowering owns a user-written call site.
+    fn source_path(&self) -> Option<&str> {
+        None
+    }
+
+    /// Returns the active PHP profile's `E_ALL` mask for profile-sensitive defaults.
+    fn error_reporting_mask(&self) -> i64 {
+        crate::php_version::PhpVersion::default().error_reporting_mask()
+    }
+
+    /// Loads the caller-visible parameters from their current bindings for frame introspection.
+    ///
+    /// Synthetic callable wrappers have no PHP caller frame of their own, so the default is empty.
+    fn current_frame_arguments(&mut self, _span: Span) -> Vec<ValueId> {
+        Vec::new()
+    }
+
     /// Returns the PHP type metadata attached to an existing SSA operand.
     fn value_php_type(&self, value: ValueId) -> PhpType;
+
+    /// Interns a class-name literal for EIR operations such as `ConstClassName`.
+    fn intern_class_name(&mut self, value: &str) -> crate::ir::DataId;
+
+    /// Interns an ordinary string literal for graph-based builtin lowering.
+    fn intern_string(&mut self, value: &str) -> crate::ir::DataId;
 
     /// Emits one typed value-producing EIR operation with explicit effects and span.
     fn emit_value(
@@ -289,6 +331,16 @@ pub trait BuiltinLoweringContext {
         effects: Effects,
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
+
+    /// Emits one void EIR operation with explicit effects and source span.
+    fn emit_void(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        effects: Effects,
+        span: Option<Span>,
+    );
 
     /// Emits one typed runtime operation whose symbol and ABI are backend-owned.
     fn emit_runtime_call(
@@ -447,7 +499,7 @@ pub const fn unary_string_runtime(
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
         argument_lowering: BuiltinArgumentLowering::Standard,
-        callable: BuiltinCallablePolicy::Dynamic(callable_accepts_string_source),
+        callable: BuiltinCallablePolicy::Dynamic(callable_accepts_string_coercible_source),
         lowering: BuiltinLowering::Runtime(target),
     }
 }
@@ -463,7 +515,9 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(target),
-        argument_lowering: BuiltinArgumentLowering::Standard,
+        argument_lowering: if target.uses_mbstring_runtime() {
+            BuiltinArgumentLowering::PreserveValues
+        } else { BuiltinArgumentLowering::Standard },
         callable: if target.runtime_callable_supported() {
             BuiltinCallablePolicy::DynamicRuntime(target)
         } else {
@@ -616,13 +670,20 @@ fn type_predicate_effects(_input: &BuiltinSemanticInput<'_>) -> Effects {
 }
 
 /// Accepts every source representation for a fully generic callable wrapper.
-fn callable_accepts_any_source(_source: Option<&PhpType>) -> bool {
+pub fn callable_accepts_any_source(_source: Option<&PhpType>) -> bool {
     true
 }
 
-/// Accepts runtime wrapper sources that already use concrete string storage.
-pub fn callable_accepts_string_source(source: Option<&PhpType>) -> bool {
-    source.is_none_or(|source| source.codegen_repr() == PhpType::Str)
+/// Accepts the sources a `Str -> Str` transform's wrapper can coerce to its string parameter.
+///
+/// A bare `array` hands its callback boxed elements, so `array_map($name, $bare)` asks for a
+/// wrapper over `mixed`. Refusing it took `strtoupper` out of the runtime case table and the call
+/// died with "array_map callback string does not name a supported callable"; the wrapper's own
+/// call to the transform converts the boxed element exactly as a direct call does.
+pub fn callable_accepts_string_coercible_source(source: Option<&PhpType>) -> bool {
+    source.is_none_or(|source| {
+        matches!(source.codegen_repr(), PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+    })
 }
 
 /// Accepts the dynamic string-like sources supported by shared `strlen` validation.

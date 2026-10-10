@@ -37,7 +37,18 @@ impl Checker {
         }
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
-            return self.infer_property_on_class_type(class_name, property, expr);
+            let inferred = self.infer_property_on_class_type(class_name, property, expr);
+            if inferred.is_err()
+                && self.closure_depth > 0
+                && matches!(object.kind, ExprKind::This)
+            {
+                // A method-nested closure initially captures the enclosing receiver, but PHP
+                // can later rebind it to an unrelated class. Keep precise types for properties
+                // that exist on the enclosing class; an otherwise-invalid `$this` member is a
+                // runtime-shaped access whose validity and type depend on the bound receiver.
+                return Ok(PhpType::Mixed);
+            }
+            return inferred;
         }
         // Non-nullsafe property access on a nullable / union object type is
         // allowed when the union resolves to a single object class.
@@ -166,6 +177,11 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
+        // NOT relaxed for `int|float`, deliberately. Accepting it here only moves the refusal:
+        // the lowering has no arm for a boxed runtime property name and answers
+        // `dynamic_prop_set with runtime property name PHP type Mixed`, which is the same gap a
+        // genuinely `mixed` name hits. The checker's message is the better one until the backend
+        // grows that arm.
         if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
             return Err(CompileError::new(
                 property.span,
@@ -211,6 +227,21 @@ impl Checker {
         }
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(visibility) = class_info.property_visibilities.get(property) {
+                // `property_visibilities` answers for the PHYSICAL slot table, which still carries
+                // a strict ancestor's private slot under its plain name. php 7.4 removed shadow
+                // properties, so outside the class that declared it that name is a DYNAMIC
+                // property: a read warns `Undefined property` and answers null rather than being
+                // an access error. `resolve_property_name` is the authority for which of the two
+                // this is, so the refusal below stays exactly where php raises it.
+                let resolution = crate::types::resolve_property_name(
+                    &self.classes,
+                    class_name,
+                    property,
+                    self.current_class.as_deref(),
+                );
+                if resolution == crate::types::PropertyNameResolution::Dynamic {
+                    return Ok(PhpType::Mixed);
+                }
                 let declaring_class = class_info
                     .property_declaring_classes
                     .get(property)
@@ -236,6 +267,11 @@ impl Checker {
             if let Some((_, (_, ty))) = class_info.visible_property(property) {
                 return Ok(ty.clone());
             }
+            if super::super::super::scope_dynamic_storage::magic_set_reentry_property_is_readable(
+                self, class_name, property,
+            ) {
+                return Ok(PhpType::Mixed);
+            }
             if let Some(sig) = class_info.methods.get("__get") {
                 return Ok(sig.return_type.clone());
             }
@@ -249,6 +285,11 @@ impl Checker {
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
+        }
+        if self.awaits_generic_instantiation(class_name) {
+            // Resolved by this round, spliced by the next one. `Mixed` keeps the rest of this
+            // round meaningful; the next sees an ordinary class and types the read properly.
+            return Ok(PhpType::Mixed);
         }
         Err(CompileError::new(
             expr.span,
@@ -446,7 +487,16 @@ impl Checker {
         receiver: &StaticReceiver,
         expr: &Expr,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(class_name) => Ok(class_name.as_str().to_string()),
             StaticReceiver::Self_ => self.current_class.as_ref().cloned().ok_or_else(|| {
                 CompileError::new(expr.span, "Cannot use self:: outside class method scope")

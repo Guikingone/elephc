@@ -13,7 +13,6 @@ use crate::ir::block::{BasicBlock, BlockId};
 use crate::ir::instr::{InstId, Instruction};
 use crate::ir::types::IrType;
 use crate::ir::value::{Value, ValueId};
-use crate::parser::ast::Stmt;
 use crate::types::{AttrArgEntry, FunctionSig, PhpType};
 
 /// Module-local identifier for an EIR function.
@@ -65,7 +64,6 @@ pub struct Function {
     pub signature: Option<FunctionSig>,
     pub attribute_names: Vec<String>,
     pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
-    pub generator_source: Option<GeneratorSource>,
     /// PHP lexical class scope inherited by methods and closures declared inside them.
     pub lexical_class: Option<String>,
     pub flags: FunctionFlags,
@@ -99,7 +97,6 @@ impl Function {
             signature: None,
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
-            generator_source: None,
             lexical_class: None,
             flags: FunctionFlags::default(),
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
@@ -156,13 +153,6 @@ impl Function {
     }
 }
 
-/// Source metadata retained for generator functions during the Phase 04 EIR backend bridge.
-#[derive(Debug, Clone)]
-pub struct GeneratorSource {
-    pub body: Vec<Stmt>,
-    pub visible_param_count: usize,
-}
-
 /// Caller-visible function parameter metadata.
 #[derive(Debug, Clone)]
 pub struct FunctionParam {
@@ -190,6 +180,8 @@ pub enum LocalKind {
     GlobalAlias,
     StaticLocal,
     RefCell,
+    /// A reference-return lease transferred on normal exit and retired if frame cleanup throws.
+    ReturnRefCell,
     HiddenTemp,
     /// Non-owning slot introduced by an EIR transform, excluded from epilogue cleanup.
     BorrowedTemp,
@@ -207,6 +199,8 @@ pub enum LocalKind {
 /// Function-level shape flags used by lowering and later codegen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FunctionFlags {
+    /// Whether compiler-internal source declared this function rather than the user's program.
+    pub is_internal: bool,
     pub is_main: bool,
     pub is_method: bool,
     pub is_closure: bool,

@@ -1,28 +1,28 @@
 ---
 title: "opcache_get_configuration()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Returns the OPcache directives, blacklist, and version, or false when API access is restricted."
 sidebar:
-  order: 614
+  order: 639
 ---
 
 ## opcache_get_configuration()
 
 ```php
-function opcache_get_configuration(): array
+function opcache_get_configuration(): array|false
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Returns the OPcache directives, blacklist, and version, or false when API access is restricted.
 
 **Parameters**: none.
 
-**Returns**: `array`
+**Returns**: `array|false`
 
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported through native OPcache prelude declarations or dedicated interpreter handlers; see [OPcache](../../opcache.md).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

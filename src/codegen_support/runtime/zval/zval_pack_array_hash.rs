@@ -18,6 +18,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::arrays::hash_layout::NEXT_INDEX_OFFSET;
 
 /// zval_pack_array_hash: build a PHP hash HashTable from an elephc assoc array.
 /// Walks the elephc hash in insertion order via `__rt_hash_iter_next`, computes the
@@ -94,7 +95,7 @@ pub fn emit_zval_pack_array_hash(emitter: &mut Emitter) {
     emitter.label("__rt_zval_pack_array_hash_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the elephc hash pointer
     emitter.instruction("ldr x1, [sp, #56]");                                   // reload the iter cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0=next cursor, x1=key_lo, x2=key_hi, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=next cursor, x1=key_lo, x2=key_hi, x3=val_lo, x4=val_hi, x5=val_tag
     emitter.instruction("str x0, [sp, #56]");                                   // save the next cursor for the following iteration
     emitter.instruction("cmp x0, #-1");                                         // is the walk done (-1)?
     emitter.instruction("b.eq __rt_zval_pack_array_hash_loop_done");            // stop once the hash walk is exhausted
@@ -197,7 +198,9 @@ pub fn emit_zval_pack_array_hash(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #28]");                                   // store nNumOfElements at offset 28 (32-bit)
     emitter.instruction("mov x9, #-1");                                         // HT_INVALID_IDX for the internal pointer
     emitter.instruction("str w9, [x0, #32]");                                   // store nInternalPointer at offset 32 (32-bit)
-    emitter.instruction("str xzr, [x0, #40]");                                  // nNextFreeElement = 0 at offset 40 (64-bit)
+    emitter.instruction("ldr x9, [sp]");                                        // recover the source hash after packing every live entry
+    emitter.instruction(&format!("ldr x9, [x9, #{NEXT_INDEX_OFFSET}]"));        // preserve automatic indexing, including deleted integer keys
+    emitter.instruction("str x9, [x0, #40]");                                   // publish the signed nNextFreeElement in Zend's header
     emitter.instruction("str xzr, [x0, #48]");                                  // pDestructor = NULL at offset 48
     emitter.instruction("ldr x0, [sp, #80]");                                   // return the HashTable pointer
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
@@ -274,7 +277,7 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_zval_pack_array_hash_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the elephc hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload the iter cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax=next cursor, rdi=key_lo, rdx=key_hi, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=next cursor, rdi=key_lo, rdx=key_hi, rcx=val_lo, r8=val_hi, r9=val_tag
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the next cursor for the following iteration
     emitter.instruction("cmp rax, -1");                                         // is the walk done (-1)?
     emitter.instruction("je __rt_zval_pack_array_hash_loop_done");              // stop once the hash walk is exhausted
@@ -378,7 +381,9 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rax + 24], ecx");                       // store nNumUsed at offset 24 (32-bit)
     emitter.instruction("mov DWORD PTR [rax + 28], ecx");                       // store nNumOfElements at offset 28 (32-bit)
     emitter.instruction("mov DWORD PTR [rax + 32], -1");                        // nInternalPointer = HT_INVALID_IDX (32-bit)
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // nNextFreeElement = 0 at offset 40 (64-bit)
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // recover the source hash after packing every live entry
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rcx + {NEXT_INDEX_OFFSET}]")); // preserve automatic indexing and deleted-key history
+    emitter.instruction("mov QWORD PTR [rax + 40], rcx");                       // publish the signed nNextFreeElement in Zend's header
     emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // return the HashTable pointer
     emitter.instruction("mov rbx, QWORD PTR [rbp - 120]");                      // restore the caller's callee-saved rbx value

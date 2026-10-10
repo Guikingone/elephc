@@ -1,8 +1,8 @@
 ---
 title: "session_commit()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Alias of session_write_close()."
 sidebar:
-  order: 889
+  order: 984
 ---
 
 ## session_commit()
@@ -11,7 +11,7 @@ sidebar:
 function session_commit(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Alias of session_write_close().
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

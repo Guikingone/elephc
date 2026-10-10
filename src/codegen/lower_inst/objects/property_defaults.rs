@@ -113,6 +113,56 @@ pub(super) fn emit_property_default(
             abi::emit_store_to_address(ctx.emitter, ptr_reg, object_reg, default.offset);
             abi::emit_store_to_address(ctx.emitter, len_reg, object_reg, default.offset + 8);
         }
+        LiteralDefaultValue::EnumCase {
+            enum_name,
+            case_name,
+        } => {
+            // The receiver was taken on shape alone by `literal_default_value`, which has no
+            // module. This is where that is settled: a scoped constant in an object slot whose
+            // receiver is not an enum, or whose name is not one of its cases, has no singleton
+            // to load and is reported unsupported rather than turned into a symbol reference
+            // the assembler would then fail on.
+            let is_case = ctx
+                .module
+                .enum_infos
+                .get(enum_name.as_str())
+                .is_some_and(|info| info.cases.iter().any(|case| &case.name == case_name));
+            if !is_case {
+                return Err(CodegenIrError::unsupported(format!(
+                    "enum case default {}::{} for property slot at offset {}",
+                    enum_name, case_name, default.offset
+                )));
+            }
+            // The singleton is materialized lazily, so the store has to go through the
+            // materializer rather than read the slot: a default written before the case's
+            // first use would otherwise store the still-null slot and every
+            // `$obj->prop === Enum::Case` after it would be false.
+            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                ctx.emitter,
+                ctx.module,
+                enum_name,
+                case_name,
+            );
+            // The slot becomes a new OWNER of the singleton, so it has to retain it —
+            // exactly as an ordinary `Enum::Case` read does (`lower_inst::scoped_constants`,
+            // issue #349). Without this, the first thing that releases the slot consumes the
+            // global's only reference: `$c = new Config(); $c->level = Level::High;` in a loop
+            // freed `Level::Low`, and after 500 iterations `Level::Low->name` read back as
+            // `""` from the reused block.
+            //
+            // `__rt_incref` is an ordinary helper, so `object_reg` is preserved across it the
+            // way the boxed-literal arms below preserve it. The materializer above makes no
+            // such demand: it promises to preserve every caller-saved integer register.
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            abi::emit_incref_if_refcounted(
+                ctx.emitter,
+                &crate::types::PhpType::Object(enum_name.clone()),
+            );
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
+            abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
+        }
         LiteralDefaultValue::Null => {
             abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset);
             abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
@@ -208,6 +258,16 @@ pub(super) fn emit_property_default(
             abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
             abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
         }
+        LiteralDefaultValue::BoxedAssocArray { value_type, entries } => {
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            crate::codegen::literal_defaults::emit_boxed_assoc_array_literal_to_result(
+                ctx, value_type, entries,
+            )?;
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
+            abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
+        }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             abi::emit_push_reg(ctx.emitter, object_reg);
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
@@ -241,17 +301,14 @@ pub(super) fn emit_constructor_call(
     let mut ref_params = Vec::with_capacity(constructor_ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend_from_slice(constructor_ref_params);
-    // `MayOutliveCall`: a constructor may PROMOTE a by-reference parameter into a property
-    // (`__construct(public int &$value = 1)`), and that property borrows the argument's cell
-    // for the whole life of the object. A caller-stack cell would be gone by the object's
-    // first read of it, so this call keeps the heap cell (see `RefArgCellLifetime`).
+    let lifetime = super::super::constructor_ref_cell_lifetime(ctx, class_name);
     let call_args = super::super::materialize_direct_call_args_with_refs_and_options(
         ctx,
         &args,
         &param_types,
         &ref_params,
         true,
-        crate::codegen::lower_inst::RefArgCellLifetime::MayOutliveCall,
+        lifetime,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);

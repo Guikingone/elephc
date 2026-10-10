@@ -1,11 +1,11 @@
 ---
-title: "elephc\async\run() — internals"
+title: "elephc\async\run() - internals"
 description: "Compiler internals for elephc\async\run(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 605
+  order: 609
 ---
 
-## `elephc\async\run()` — internals
+## `elephc\async\run()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function elephc\async\run(callable $body): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

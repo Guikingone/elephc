@@ -1,8 +1,8 @@
 ---
 title: "cairo_restore()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Restores the context state saved by the matching cairo_save()."
 sidebar:
-  order: 429
+  order: 430
 ---
 
 ## cairo_restore()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_restore(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Restores the context state saved by the matching cairo_save().
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

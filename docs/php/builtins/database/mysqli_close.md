@@ -1,8 +1,8 @@
 ---
 title: "mysqli_close()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Closes a connection."
 sidebar:
-  order: 102
+  order: 103
 ---
 
 ## mysqli_close()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_close(mixed $mysql): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Closes a connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

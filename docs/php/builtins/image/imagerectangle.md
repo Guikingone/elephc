@@ -1,8 +1,8 @@
 ---
 title: "imagerectangle()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws the outline of a rectangle."
 sidebar:
-  order: 522
+  order: 523
 ---
 
 ## imagerectangle()
@@ -11,7 +11,7 @@ sidebar:
 function imagerectangle(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws the outline of a rectangle.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -28,7 +28,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

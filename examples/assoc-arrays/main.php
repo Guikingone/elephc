@@ -26,6 +26,12 @@ echo "Code 1: " . $codes[1] . "\n";
 echo "Code 2: " . $codes["2"] . "\n";
 echo "Code 01: " . $codes["01"] . "\n";
 echo "Codes JSON: " . json_encode($codes) . "\n";
+// A fractional float key truncates toward zero, so 1.9 is stored as integer key 1.
+// The write emits one deprecation on stderr:
+// Deprecated: Implicit conversion from float 1.9 to int loses precision
+$codes[1.9] = "truncated";
+echo "Code 1 from 1.9: " . $codes[1] . "\n";
+echo "Codes after float key: " . json_encode($codes) . "\n";
 
 // Iterate with key => value
 echo "\nAll fields:\n";
@@ -126,3 +132,88 @@ foreach ($scores as $name => $points) {
     echo $name . "=" . $points . " ";
 }
 echo "\nAs entered: " . implode(", ", array_keys($asEntered)) . "\n";
+
+// unset() reaches the caller's array through a by-reference parameter, like every other write
+// through one -- and copy-on-write still protects a copy taken before the call.
+function drop_field(array &$record, string $field): void
+{
+    unset($record[$field]);
+}
+
+$profile = ["name" => "Ada", "age" => 36, "city" => "London"];
+$before = $profile;
+drop_field($profile, "age");
+echo "\nAfter drop_field: " . implode(", ", array_keys($profile)) . "\n";
+echo "Copy taken first: " . implode(", ", array_keys($before)) . "\n";
+
+// array_slice() takes a window of an associative array by POSITION, not by key, and
+// $preserve_keys only decides what happens to INTEGER keys -- a string key survives either way.
+$roster = ["ada" => 9, "bruno" => 7, "carl" => 7, "dina" => 4];
+echo "\nSlice by position: " . implode(", ", array_keys(array_slice($roster, 1, 2))) . "\n";
+
+$numbered = [5 => "ada", 9 => "bruno", 12 => "carl"];
+echo "Renumbered: " . implode(", ", array_keys(array_slice($numbered, 1, 2))) . "\n";
+echo "Kept:       " . implode(", ", array_keys(array_slice($numbered, 1, 2, true))) . "\n";
+
+// A mixed-key array shows the rule directly: only the integer entries move.
+$mixed = [5 => "a", "k" => "b", 9 => "c"];
+echo "Mixed keys: " . implode(", ", array_keys(array_slice($mixed, 0, 3))) . "\n";
+// ksort() and krsort() take PHP's $flags argument, which chooses how two keys are
+// compared. The mode changes the answer, not just the path.
+$builds = ["build10" => "ok", "build9" => "ok", "build2" => "ok"];
+ksort($builds, SORT_STRING);
+echo "\nAs text:    " . implode(", ", array_keys($builds)) . "\n";
+ksort($builds, SORT_NATURAL);
+echo "Naturally:  " . implode(", ", array_keys($builds)) . "\n";
+
+// An integer key has no bytes of its own, so a byte-comparing mode spells it out
+// as decimal text first: SORT_STRING puts 100 between 10 and 9.
+$sizes = [10 => "l", 9 => "m", 100 => "xl"];
+ksort($sizes, SORT_NUMERIC);
+echo "By number:  " . implode(", ", array_keys($sizes)) . "\n";
+ksort($sizes, SORT_STRING);
+echo "By text:    " . implode(", ", array_keys($sizes)) . "\n";
+
+// SORT_FLAG_CASE folds ASCII case. Keys that compare equal keep their insertion
+// order, which is why IMG1 stays ahead of img1 here.
+$shots = ["IMG1" => 1, "img1" => 2, "IMG10" => 3, "img2" => 4];
+ksort($shots, SORT_NATURAL | SORT_FLAG_CASE);
+echo "Ignoring case: " . implode(", ", array_keys($shots)) . "\n";
+
+// A spread can sit beside explicit keys, in any order. A spread's elements take the next free
+// INTEGER key at the position the spread occupies, so the order is observable in the result.
+$ports = [8080, 8081];
+$withDefault = [...$ports, "fallback" => 9000];
+$defaultFirst = ["fallback" => 9000, ...$ports];
+$surrounded = ["lo" => 1, ...$ports, "hi" => 2];
+
+echo "\nspread then key: " . implode(",", array_keys($withDefault)) . "\n";
+echo "key then spread: " . implode(",", array_keys($defaultFirst)) . "\n";
+echo "spread between:  " . implode(",", array_keys($surrounded)) . "\n";
+
+// Spreading reads the source; it is unchanged afterwards and can be spread again.
+echo "source intact:   " . implode(",", $ports) . "\n";
+
+// array_chunk() splits an associative array too. Its $preserve_keys rule is not
+// array_slice()'s: with false it drops EVERY key, string keys included, and each
+// chunk renumbers from 0.
+$stock = ["apples" => 12, "pears" => 4, "plums" => 7, "figs" => 2, "kiwis" => 9];
+$kept = array_chunk($stock, 2, true);
+echo "\nPages of two, keys kept:\n";
+foreach ($kept as $page => $items) {
+    echo "  page " . $page . ":";
+    foreach ($items as $fruit => $count) {
+        echo " " . $fruit . "=" . $count;
+    }
+    echo "\n";
+}
+$dropped = array_chunk($stock, 2);
+echo "Pages of two, keys dropped:\n";
+foreach ($dropped as $page => $items) {
+    echo "  page " . $page . ":";
+    foreach ($items as $slot => $count) {
+        echo " " . $slot . "=" . $count;
+    }
+    echo "\n";
+}
+echo "Source is untouched: " . count($stock) . " entries\n";

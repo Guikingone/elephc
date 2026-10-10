@@ -100,6 +100,7 @@ impl Checker {
         Ok(())
     }
 
+    /// Restricts internal Parallel FFI access to generated bodies with an approved class/function.
     fn is_compiler_owned_parallel_body(&self, span: crate::span::Span) -> bool {
         if span.is_from_source() {
             return false;

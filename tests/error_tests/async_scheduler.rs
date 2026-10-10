@@ -10,6 +10,7 @@
 
 use super::*;
 
+/// Reports the real injected run signature's missing body argument.
 #[test]
 fn async_run_requires_a_body() {
     expect_error(
@@ -21,6 +22,7 @@ run();
     );
 }
 
+/// Rejects a non-callable Async root body before native lowering.
 #[test]
 fn async_run_requires_a_callable_body() {
     expect_error(
@@ -32,6 +34,7 @@ run(42);
     );
 }
 
+/// Warns when a blocking Parallel join runs in the cooperative Async root task.
 #[test]
 fn parallel_join_in_async_root_task_warns_about_blocking_the_scheduler() {
     expect_warning(
@@ -47,6 +50,7 @@ fn parallel_join_in_async_root_task_warns_about_blocking_the_scheduler() {
     );
 }
 
+/// Warns that draining a Parallel root inside Async blocks its scheduler thread.
 #[test]
 fn parallel_run_in_async_root_task_warns_about_blocking_the_scheduler() {
     expect_warning(
@@ -61,6 +65,7 @@ fn parallel_run_in_async_root_task_warns_about_blocking_the_scheduler() {
     );
 }
 
+/// Emits exactly one blocking-join warning for a spawned Async task body.
 #[test]
 fn parallel_join_in_spawned_async_task_warns_once() {
     let result = check_source_full(
@@ -84,6 +89,7 @@ fn parallel_join_in_spawned_async_task_warns_once() {
     assert_eq!(warnings, 1, "expected one blocking-join warning: {:?}", result.warnings);
 }
 
+/// Avoids Async blocking warnings for joins executed solely in a Parallel scope.
 #[test]
 fn parallel_join_outside_async_task_does_not_warn() {
     expect_no_warning(
@@ -97,6 +103,7 @@ fn parallel_join_outside_async_task_does_not_warn() {
     );
 }
 
+/// Does not treat an unexecuted nested closure as an active Async blocking call.
 #[test]
 fn parallel_join_in_unexecuted_nested_closure_does_not_warn() {
     expect_no_warning(

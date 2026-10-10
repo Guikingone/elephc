@@ -1,8 +1,8 @@
 ---
 title: "imagescale()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns a copy of an image scaled to a new size."
 sidebar:
-  order: 526
+  order: 527
 ---
 
 ## imagescale()
@@ -11,7 +11,7 @@ sidebar:
 function imagescale(mixed $image, int $width, int $height = -1, int $mode = IMG_BILINEAR_FIXED): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns a copy of an image scaled to a new size.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

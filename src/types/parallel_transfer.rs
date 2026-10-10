@@ -28,6 +28,7 @@ pub(crate) enum ParallelTransferRejection {
 }
 
 impl fmt::Display for ParallelTransferRejection {
+    /// Formats the rejected runtime shape and the direct-only Cancellation capability rule.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Mixed => formatter.write_str("mixed value whose runtime shape is not proven"),
@@ -60,6 +61,7 @@ pub(crate) fn parallel_transfer_return_rejection(
     parallel_transfer_rejection_at(ty, false)
 }
 
+/// Recursively rejects runtime-backed identities, allowing Cancellation only at the input root.
 fn parallel_transfer_rejection_at(
     ty: &PhpType,
     allow_direct_cancellation: bool,
@@ -100,6 +102,7 @@ fn parallel_transfer_rejection_at(
     }
 }
 
+/// Recognizes the canonical Cancellation class case-insensitively with an optional leading slash.
 pub(crate) fn is_parallel_cancellation(class: &str) -> bool {
     class
         .trim_start_matches('\\')
@@ -111,6 +114,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Accepts copied scalars, recursively safe arrays and the direct Cancellation input capability.
     fn scalars_nested_arrays_and_cancellation_are_transferable() {
         for ty in [
             PhpType::Int,
@@ -133,6 +137,7 @@ mod tests {
     }
 
     #[test]
+    /// Rejects Cancellation when nested in arrays/unions or returned across the worker boundary.
     fn cancellation_is_only_transferable_as_a_direct_task_input() {
         let cancellation = PhpType::Object("\\Elephc\\Async\\Cancellation".to_string());
         assert_eq!(
@@ -150,6 +155,7 @@ mod tests {
     }
 
     #[test]
+    /// Rejects unresolved and identity-bearing types, including a buffer nested inside an array.
     fn identity_and_runtime_backed_types_are_rejected_recursively() {
         let cases = [
             (PhpType::Mixed, ParallelTransferRejection::Mixed),

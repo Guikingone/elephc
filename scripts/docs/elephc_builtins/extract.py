@@ -109,7 +109,9 @@ def _gen_builtins_command(repo: Path) -> list[str]:
     source_inputs.extend((repo / "crates" / "elephc-builtin-contract").rglob("*.rs"))
     source_inputs.extend((repo / "crates" / "elephc-magician" / "src").rglob("*.rs"))
     newest_source_mtime = max(path.stat().st_mtime for path in source_inputs if path.exists())
-    for profile in ("release", "debug"):
+    # CI builds the debug exporter immediately before this script runs. Prefer it over a
+    # release executable whose timestamp may have been refreshed by cache restoration.
+    for profile in ("debug", "release"):
         exe = repo / "target" / profile / "examples" / "gen_builtins"
         if exe.exists() and exe.stat().st_mtime >= newest_source_mtime:
             cmd = [str(exe), "--include-internal"]
@@ -177,6 +179,7 @@ _NON_HOME_FILES = {
 }
 
 _CONTRACT_RE = re.compile(r'contract:\s*"([^"]+)"')
+_CORE_HOME_RE = re.compile(r'core_builtin_home!\(\s*"([^"]+)"')
 
 
 def build_home_file_map(repo: Path) -> dict[str, str]:
@@ -193,9 +196,9 @@ def build_home_file_map(repo: Path) -> dict[str, str]:
         if path.name in _NON_HOME_FILES:
             continue
         text = path.read_text(encoding="utf-8")
-        if "builtin!" not in text:
-            continue
         contract_match = _CONTRACT_RE.search(text)
+        if contract_match is None:
+            contract_match = _CORE_HOME_RE.search(text)
         if not contract_match:
             continue
         canonical = contract_match.group(1).lower()
@@ -331,16 +334,9 @@ def resolve_registry_area(canonical: str, registry_area: str) -> tuple[str, str]
 # ---------------------------------------------------------------------------
 
 def _normalize_type(reg_type: str) -> str:
-    """Map a registry type string to the doc's simple type vocabulary.
-
-    The registry renders `TypeSpec::ArrayOf`/`AssocOf` as ``array<...>`` and
-    unions as ``a|b``; the docs collapse those to ``array`` / ``mixed``. Scalars
-    (``int``/``float``/``string``/``bool``/``mixed``/``null``/``void``) pass through.
-    """
+    """Preserve shared PHP unions and nullable types, simplifying standalone arrays."""
     reg_type = reg_type.strip()
-    if "|" in reg_type:
-        return "mixed"
-    if reg_type.startswith("array"):
+    if reg_type.startswith("array") and "|" not in reg_type:
         return "array"
     return reg_type
 
@@ -435,7 +431,7 @@ def _render_default(value, optional: bool) -> Optional[str]:
 
     Required params (``optional`` false) have no default (``None``). Optional
     params render their default: ``null``, ``true``/``false``, integers/floats
-    verbatim, strings single-quoted, the ``PHP_INT_MAX``/``PHP_INT_MIN`` sentinels
+    verbatim, strings single-quoted, the ``PHP_INT_MAX``/``PHP_INT_MIN``/``E_ALL`` sentinels
     as constants, class-constant descriptors as ``Class::NAME``, and the empty-array
     sentinel as ``[]``.
     """
@@ -459,9 +455,16 @@ def _render_default(value, optional: bool) -> Optional[str]:
         # `{"constant": NAME}` names a global constant; `{"expr": SRC}` is verbatim PHP.
         return value.get("constant") or value.get("expr") or str(value)
     if isinstance(value, str):
-        if value in ("PHP_INT_MAX", "PHP_INT_MIN"):
+        if value in ("PHP_INT_MAX", "PHP_INT_MIN", "E_ALL"):
             return value
-        return repr(value)
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            escapes = {"\\": "\\\\", '"': '\\"', "$": "\\$", "\r": "\\r", "\n": "\\n", "\t": "\\t"}
+            content = "".join(
+                escapes.get(char, f"\\x{ord(char):02X}" if ord(char) < 32 or ord(char) == 127 else char)
+                for char in value
+            )
+            return f'"{content}"'
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
     return str(value)
 
 
@@ -546,7 +549,7 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
-PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
+PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     "callables": (
         "async_prelude/source.php",
         "Async scheduler",
@@ -566,7 +569,11 @@ PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
     # Prelude-provided contracts seeded from the built prelude declarations live in
     # catalog_data.rs; each area maps to the prelude (or preludes) declaring it.
     "image": ("image_prelude.rs", "image", "crates/elephc-builtin-contract/src/catalog_data.rs"),
-    "web": ("web_prelude/build.rs", "web", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "web": (
+        ("web_prelude/build.rs", "shared_ini_prelude.rs"),
+        "web",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
     "mysqli": (
         ("mysqli_prelude/build/procedural.rs", "mysqli_prelude/build/exception.rs"),
         "mysqli",
@@ -651,6 +658,14 @@ def resolve_non_registry_lowering(
 ) -> LoweringInfo:
     """Describe a compiler route that intentionally has no ``builtin!`` home."""
     contract_file = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
+    if aot_support.get("kind") == "none":
+        # Unbound contracts may live outside the older exceptional-surface catalog.
+        needle = re.compile(rf'"{re.escape(canonical)}"')
+        homes = [path for path in (repo / "crates/elephc-builtin-contract/src").glob("catalog*.rs")
+                 if needle.search(read(path))]
+        if len(homes) != 1:
+            raise ValueError(f"expected one neutral source for {canonical}, found {homes}")
+        contract_file = str(homes[0].relative_to(repo))
     emitter_fn = NON_REGISTRY_LOWERING_FUNCTIONS.get(canonical)
     if emitter_fn:
         lowering = resolve_lowering(repo, read, dispatch, lowering_dir, emitter_fn, None)
@@ -816,7 +831,7 @@ def build_registry(repo: Path) -> list[Builtin]:
                 examples=list(entry.get("examples") or []),
                 eval_support=entry.get("eval"),
                 aot_support=aot_support,
-                eval_only=not bool(aot_support.get("supported")),
+                eval_only=not bool(aot_support.get("supported")) and bool((entry.get("eval") or {}).get("supported")),
                 is_extension=bool(entry.get("extension")),
                 semantics=entry.get("semantics"),
                 module=entry["module"],

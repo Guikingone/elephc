@@ -11,10 +11,26 @@
 use std::collections::HashSet;
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::{EnumInfo, PhpType, TypeEnv};
 
 use super::super::Checker;
+
+/// Returns PHP's canonical spelling for a global builtin iterable interface name.
+///
+/// Matching the complete normalized name keeps a namespaced user interface such as
+/// `Domain\Traversable` nominal and prevents it from acquiring builtin foreach semantics.
+pub(super) fn canonical_builtin_iterable_interface_name(
+    type_name: &str,
+) -> Option<&'static str> {
+    match php_symbol_key(type_name.trim_start_matches('\\')).as_str() {
+        "traversable" => Some("Traversable"),
+        "iterator" => Some("Iterator"),
+        "iteratoraggregate" => Some("IteratorAggregate"),
+        _ => None,
+    }
+}
 
 impl Checker {
     /// Checks whether the current class context can access a member with the given visibility
@@ -119,6 +135,14 @@ impl Checker {
         false
     }
 
+    /// Returns true when a name is unresolved after eval made the runtime class set open.
+    /// Such an object needs the runtime throw check instead of a closed-world diagnostic.
+    pub(crate) fn object_type_may_be_eval_declared(&self, type_name: &str) -> bool {
+        self.eval_barrier_active
+            && !self.classes.contains_key(type_name)
+            && !self.interfaces.contains_key(type_name)
+    }
+
     /// Returns true if `type_name` (a class or interface) implements `Throwable`,
     /// checking both direct implementation and interface extension chains.
     pub(crate) fn object_type_implements_throwable(&self, type_name: &str) -> bool {
@@ -134,7 +158,8 @@ impl Checker {
     /// Returns true if `type_name` (a class or interface) implements `Iterator` or
     /// `IteratorAggregate`, which are the interfaces that make a type usable in `foreach`.
     pub(crate) fn object_type_implements_iterable(&self, type_name: &str) -> bool {
-        if type_name == "Traversable" {
+        let type_name = type_name.trim_start_matches('\\');
+        if canonical_builtin_iterable_interface_name(type_name).is_some() {
             return true;
         }
         if self.classes.contains_key(type_name) {
@@ -345,6 +370,13 @@ impl Checker {
         arg_ty: &PhpType,
         param_has_declared_type: bool,
     ) {
+        let param_is_ref = self
+            .classes
+            .get(instantiated_class)
+            .and_then(|class_info| class_info.methods.get("__construct"))
+            .and_then(|sig| sig.ref_params.get(param_index))
+            .copied()
+            .unwrap_or(false);
         let Some((prop_name, declaring_class)) =
             self.classes.get(instantiated_class).and_then(|class_info| {
                 class_info
@@ -378,7 +410,11 @@ impl Checker {
             if !property_has_declared_type {
                 if let Some(slot) = class_info.visible_property_index(&prop_name) {
                     if let Some(prop) = class_info.properties.get_mut(slot) {
-                        prop.1 = arg_ty.clone();
+                        prop.1 = if param_is_ref {
+                            PhpType::Mixed
+                        } else {
+                            arg_ty.clone()
+                        };
                     }
                 }
             }
@@ -401,8 +437,14 @@ impl Checker {
                 .is_some_and(|(_, type_ann, _, _)| type_ann.is_some());
             if maps_same_property && !param_has_declared_type && !target_has_declared_type {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
-                    if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                        *param_ty = arg_ty.clone();
+                    if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
+                        if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                            *param_ty = if param_is_ref {
+                                PhpType::Mixed
+                            } else {
+                                arg_ty.clone()
+                            };
+                        }
                     }
                 }
             }

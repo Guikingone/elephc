@@ -1,8 +1,8 @@
 ---
 title: "date_sunset()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the sunset time for a day and location. Deprecated since PHP 8.1."
 sidebar:
-  order: 210
+  order: 211
 ---
 
 ## date_sunset()
@@ -11,7 +11,7 @@ sidebar:
 function date_sunset(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the sunset time for a day and location. Deprecated since PHP 8.1.
 
 **Parameters**:
 - `$timestamp` (`int`)
@@ -28,7 +28,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

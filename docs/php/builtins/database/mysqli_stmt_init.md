@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_init()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Creates a statement object bound to a connection."
 sidebar:
-  order: 169
+  order: 170
 ---
 
 ## mysqli_stmt_init()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_init(mixed $mysql): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Creates a statement object bound to a connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

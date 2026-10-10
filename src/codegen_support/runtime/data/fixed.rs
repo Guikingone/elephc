@@ -6,18 +6,21 @@
 //! - `crate::codegen_support::runtime::data::emit_runtime_data_fixed()`.
 //!
 //! Key details:
-//! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
+//! - Fixed symbols are cached across compilations, with target and PHP-profile inputs covered by the cache key.
 
 use super::{
     ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
-    MB_STRLEN_UNKNOWN_ENCODING_MSG, MIXED_SORT_NON_SCALAR_MSG,
+    MIXED_SORT_NON_SCALAR_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
+    NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
+    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
+    CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
@@ -33,7 +36,9 @@ use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
-use crate::codegen_support::platform::Target;
+use crate::codegen_support::data_section::comm_directive_aligned;
+use crate::codegen_support::platform::{Platform, Target};
+use crate::php_version::PhpVersion;
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
 };
@@ -47,21 +52,48 @@ use crate::types::checker::builtins::{
 /// `heap_size` is the maximum heap bytes requested by the user program;
 /// it is baked into `_heap_max` to enforce the heap limit at runtime.
 ///
-/// `target` is needed only for the one symbol the `--web` bridge references
+/// `target` selects object-format spelling for target-visible symbols.
+/// `php_version` selects version-sensitive initial state and is included in the
+/// runtime cache identity by the caller.
+///
+/// The `--web` bridge references one C-ABI symbol
 /// (`elephc_web_capture`): it must carry the platform's C-ABI mangling so the
 /// runtime's `.comm`, the runtime's load, and the Rust bridge's `extern "C"`
 /// all name the same symbol (`_elephc_web_capture` on macOS, `elephc_web_capture`
 /// on Linux). The cache key already includes the target, so this stays cache-safe.
-pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
+pub(crate) fn emit_runtime_data_fixed(
+    heap_size: usize,
+    target: Target,
+    php_version: PhpVersion,
+) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
+    out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
+    out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
+    out.push_str(&comm_directive("_mbstring_deferred_capture_tail", 8, target));
+    out.push_str(&comm_directive("_mbstring_deferred_capture_draining", 8, target));
+    out.push_str(&comm_directive("_mbstring_ini_native_active", 8, target));
+    out.push_str(&format!(
+        ".globl _serialize_return_array_msg\n_serialize_return_array_msg:\n    .ascii \"{}\"\n",
+        super::SERIALIZE_RETURN_ARRAY_MSG,
+    ));
     out.push_str(&comm_directive("_unser_depth", 8, target));
+    for (symbol, message) in [
+        ("_sleep_warning_prefix", super::SLEEP_WARNING_PREFIX),
+        ("_sleep_warning_suffix", super::SLEEP_WARNING_SUFFIX),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii \"{}\"\n",
+            message.replace('\n', "\\n"),
+        ));
+    }
     out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
     out.push_str(&comm_directive("_unser_allowed_mode", 8, target));
     out.push_str(&comm_directive("_unser_allowed_list", 8, target));
     out.push_str(&comm_directive("_unser_allowed_list_mixed", 8, target));
     out.push_str(&comm_directive("_unser_active", 8, target));
     out.push_str(&comm_directive("_unser_context", 8, target));
+    out.push_str(&comm_directive("_unser_temporaries", 8, target));
     out.push_str(".globl _unser_allowed_classes_key\n_unser_allowed_classes_key:\n    .ascii \"allowed_classes\"\n");
     out.push_str(&format!(
         ".globl _unser_options_type_prefix\n_unser_options_type_prefix:\n    .ascii {UNSER_OPTIONS_TYPE_PREFIX:?}\n"
@@ -77,6 +109,30 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(&format!(
         ".globl _object_not_array_suffix\n_object_not_array_suffix:\n    .ascii {OBJECT_NOT_ARRAY_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _serialization_denied_prefix\n_serialization_denied_prefix:\n    .ascii {SERIALIZATION_DENIED_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _serialization_denied_suffix\n_serialization_denied_suffix:\n    .ascii {SERIALIZATION_DENIED_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unserialization_denied_prefix\n_unserialization_denied_prefix:\n    .ascii {UNSERIALIZATION_DENIED_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _closure_class_name\n_closure_class_name:\n    .ascii {CLOSURE_CLASS_NAME:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _named_parameter_overwrite_prefix\n_named_parameter_overwrite_prefix:\n    .ascii {NAMED_PARAMETER_OVERWRITE_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _named_parameter_overwrite_suffix\n_named_parameter_overwrite_suffix:\n    .ascii {NAMED_PARAMETER_OVERWRITE_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unknown_named_parameter_prefix\n_unknown_named_parameter_prefix:\n    .ascii {UNKNOWN_NAMED_PARAMETER_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _positional_after_named_msg\n_positional_after_named_msg:\n    .ascii {POSITIONAL_AFTER_NAMED_MSG:?}\n"
     ));
     out.push_str(&format!(
         ".globl _unser_object_string_error_prefix\n_unser_object_string_error_prefix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_PREFIX:?}\n"
@@ -104,6 +160,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     }
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
+    out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
+    out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
+    out.push_str(".globl _mbstring_deprecated_prefix\n_mbstring_deprecated_prefix:\n    .ascii \"Deprecated: \"\n");
+    out.push_str(".globl _mbstring_diagnostic_newline\n_mbstring_diagnostic_newline:\n    .ascii \"\\n\"\n");
     out.push_str(&format!(
         ".globl _diag_sprintf_array_to_string\n_diag_sprintf_array_to_string:\n    .ascii {SPRINTF_ARRAY_TO_STRING_WARNING:?}\n"
     ));
@@ -129,6 +189,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // an eval-registered ob_start() handler: fn(id, buf, len, phase) -> Mixed
     // result cell pointer (0 = pass-through). Called via __rt_ob_eval_trampoline.
     out.push_str(&comm_directive("_elephc_eval_ob_handler_fn", 8, target));
+    // Eval callback retirement accepts (registry id, boxed Throwable output) and returns a status.
+    out.push_str(&comm_directive("_elephc_eval_ob_release_fn", 8, target));
     // "Closure::__invoke": PHP display name for closure / first-class-callable
     // output handlers in ob_get_status()/ob_list_handlers().
     out.push_str(&format!(
@@ -197,6 +259,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_unser_count", 8, target));
     out.push_str(&comm_directive("_unser_values", 524288, target));
     out.push_str(&comm_directive("_strtotime_clock", 8, target));
+    // Scratch copy a one-digit-month/day ISO date (`2020-1-5`) is zero-padded into before the
+    // fixed-offset ISO parser reads it (see `system::strtotime::iso_date`).
+    out.push_str(&comm_directive(
+        "_strtotime_iso_buf",
+        system::STRTOTIME_ISO_PAD_BUF_LEN,
+        target,
+    ));
     // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
     // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
     // "UTC" literal returned in that default case.
@@ -230,7 +299,34 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     }
     out.push_str(&comm_directive("_global_argc", 8, target));
     out.push_str(&comm_directive("_global_argv", 8, target));
+    // Head of the stack-resident boxed-array-walk borrow chain. Each active callback
+    // publishes the exact hash-entry value slot it lends as `mixed &$value`, allowing
+    // escape boundaries to reject only that unmanaged reference instead of ordinary
+    // frame aliases. The owning walk boundary restores the saved head after unwinding.
+    out.push_str(&comm_directive("_rt_unmanaged_ref_borrow_top", 8, target));
+    out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
+    for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
+        out.push_str(&comm_directive(symbol, 8, target));
+    }
+    for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
+    }
+    out.push_str(&comm_directive("_magic_set_guard_head", 8, target));
+    out.push_str(&comm_directive("_fiber_main_saved_magic_set_guard", 8, target));
+    // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
+    // execution context that is running right now: every compiled function prologue does an
+    // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
+    // when it is below. Zero (the .comm default) disables the guard, so a program that never
+    // runs __rt_stack_limit_init keeps the pre-guard behavior. _stack_limit_main remembers
+    // the OS-thread floor so __rt_fiber_switch can restore it when control leaves a fiber
+    // stack; while a fiber runs, _stack_limit holds that fiber's own floor instead.
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_eval_closure_bind_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_eval_wrap_callback_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_eval_object_gc_child_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_eval_object_release_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_eval_array_reference_retire_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_eval_object_clone_fn", 8, target));
     // elephc_probe_route_fn: a function-pointer slot the sampling probe fills at init
     // (with elephc_probe_set_route) and the --web bridge reads to tag samples by route.
     // Zero unless --probe linked the probe, so route tagging is pay-for-use with no
@@ -337,7 +433,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         8,
         target,
     ));
-    out.push_str(&comm_directive("_heap_buf", heap_size, target));
+    // Heap headers and object-handle side-table indices use 16-byte granules.
+    // Keep payload alignment stable when preceding runtime symbols change.
+    out.push_str(&comm_directive_aligned("_heap_buf", heap_size, 16, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
     // Generation-safe buffer descriptor registry. Public Buffer values are
@@ -393,7 +491,58 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         target,
     ));
     out.push_str(&comm_directive("_resource_id_lock", 4, target));
+    // Per-resource incarnation inventory used by get_resources(). Unlike the
+    // payload-to-id hash, this list keeps closed resources after descriptor reuse.
+    out.push_str(&comm_directive("_resource_inventory_head", 8, target));
+    out.push_str(&comm_directive("_resource_inventory_tail", 8, target));
+    out.push_str(".globl _gc_enabled\n_gc_enabled:\n    .quad 1\n");
+    out.push_str(&comm_directive("_gc_freeing_unreachable", 8, target));
+    out.push_str(&comm_directive("_gc_pin_head", 8, target));
+    out.push_str(&comm_directive("_gc_pending_throw", 8, target));
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
+    out.push_str(&comm_directive("_hash_write_guard_top", 8, target));
+    out.push_str(&comm_directive("_gc_runs", 8, target));
+    out.push_str(&comm_directive("_gc_collected", 8, target));
+    out.push_str(&comm_directive("_gc_application_started", 8, target));
+    out.push_str(&comm_directive("_gc_collector_started", 8, target));
+    out.push_str(&comm_directive("_gc_free_started", 8, target));
+    out.push_str(&comm_directive("_gc_destructor_started", 8, target));
+    out.push_str(&comm_directive("_gc_collector_time", 8, target));
+    out.push_str(&comm_directive("_gc_destructor_time", 8, target));
+    out.push_str(&comm_directive("_gc_free_time", 8, target));
+    out.push_str(&comm_directive("_gc_destructor_depth", 8, target));
+    out.push_str(&format!(
+        ".globl _php_error_reporting\n_php_error_reporting:\n    .quad {}\n",
+        php_version.error_reporting_mask()
+    ));
+    // Immutable initial mask; request-local error_reporting() must never seed another context.
+    out.push_str(&format!(
+        ".globl _php_error_reporting_default\n_php_error_reporting_default:\n    .quad {}\n",
+        php_version.error_reporting_mask()
+    ));
+    // PHP user-handler state. Each current callback owns one boxed Mixed cell and
+    // one normalized callable descriptor. Replacements move the previous state
+    // into an unbounded heap-backed linked stack so restore_*_handler() can unwind
+    // arbitrarily nested registrations without a fixed runtime limit.
+    out.push_str(&comm_directive("_php_error_handler_value", 8, target));
+    out.push_str(&comm_directive("_php_error_handler_callable", 8, target));
+    out.push_str(&comm_directive("_php_error_handler_mask", 8, target));
+    out.push_str(&comm_directive("_php_error_handler_context", 8, target));
+    out.push_str(&comm_directive(
+        "_php_error_handler_context_release",
+        8,
+        target,
+    ));
+    out.push_str(&comm_directive("_php_error_handler_stack", 8, target));
+    out.push_str(&comm_directive("_php_exception_handler_value", 8, target));
+    out.push_str(&comm_directive("_php_exception_handler_callable", 8, target));
+    out.push_str(&comm_directive("_php_exception_handler_context", 8, target));
+    out.push_str(&comm_directive(
+        "_php_exception_handler_context_release",
+        8,
+        target,
+    ));
+    out.push_str(&comm_directive("_php_exception_handler_stack", 8, target));
     out.push_str(&comm_directive("_json_last_error", 8, target));
     out.push_str(&comm_directive("_json_active_flags", 8, target));
     out.push_str(&comm_directive("_json_active_depth", 8, target));
@@ -429,6 +578,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ARRAY_ALLOC_SIZE_MSG
     ));
     out.push_str(&format!(
+        ".globl _hash_append_err_msg\n_hash_append_err_msg:\n    .ascii {:?}\n",
+        super::HASH_APPEND_ERROR_MSG
+    ));
+    out.push_str(&format!(
         ".globl _mixed_sort_non_scalar_msg\n_mixed_sort_non_scalar_msg:\n    .ascii {:?}\n",
         MIXED_SORT_NON_SCALAR_MSG
     ));
@@ -445,6 +598,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _buffer_registry_exhausted_msg\n_buffer_registry_exhausted_msg:\n    .ascii \"Fatal error: buffer registry exhausted\\n\"\n");
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
+    out.push_str(".globl _unmanaged_reference_escape_msg\n_unmanaged_reference_escape_msg:\n    .ascii \"Escaping a borrowed boxed array_walk() element reference is not supported\"\n");
+    out.push_str(".globl _borrowed_reference_return_msg\n_borrowed_reference_return_msg:\n    .ascii \"Cannot return a reference to storage that has no independent reference cell\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
@@ -502,16 +657,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _hash_copy_finalized_ctx_msg\n_hash_copy_finalized_ctx_msg:\n    .ascii {:?}\n",
         HASH_COPY_FINALIZED_CTX_MSG
     ));
-    out.push_str(&format!(
-        ".globl _mb_strlen_unknown_encoding_msg\n_mb_strlen_unknown_encoding_msg:\n    .ascii {:?}\n",
-        MB_STRLEN_UNKNOWN_ENCODING_MSG
-    ));
-    out.push_str(".globl _mb_strlen_utf8_name\n_mb_strlen_utf8_name:\n    .asciz \"UTF-8\"\n");
-    out.push_str(".globl _mb_strlen_utf8_alias\n_mb_strlen_utf8_alias:\n    .asciz \"UTF8\"\n");
-    out.push_str(".globl _mb_strlen_utf32le_name\n_mb_strlen_utf32le_name:\n    .asciz \"UTF-32LE\"\n");
-    out.push_str(".globl _mb_strlen_8bit_name\n_mb_strlen_8bit_name:\n    .asciz \"8bit\"\n");
-    out.push_str(".globl _mb_strlen_binary_name\n_mb_strlen_binary_name:\n    .asciz \"binary\"\n");
-    out.push_str(".globl _mb_strlen_7bit_name\n_mb_strlen_7bit_name:\n    .asciz \"7bit\"\n");
     // Fixed algorithm-name constants for md5()/sha1(): both route through the
     // same elephc_crypto_hash entry point as hash(), so __rt_md5 / __rt_sha1
     // load these literal names into the algorithm-name register pair before
@@ -584,10 +729,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
             "array must contain only positive integer keys",
         ),
         (
-            "_array_filter_mode_msg",
-            "array_filter(): Argument #3 ($mode) must be one of ARRAY_FILTER_USE_VALUE, ARRAY_FILTER_USE_KEY, or ARRAY_FILTER_USE_BOTH.",
-        ),
-        (
             "_iterator_iterator_downcast_msg",
             "Class to downcast to not found or not base class or does not implement Traversable",
         ),
@@ -627,6 +768,16 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_undefined_array_key_prefix\n_diag_undefined_array_key_prefix:\n    .ascii \"Warning: Undefined array key \"\n");
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _diag_string_offset_prefix\n_diag_string_offset_prefix:\n    .ascii \"Warning: Uninitialized string offset \"\n");
+    out.push_str(".globl _diag_string_offset_nl\n_diag_string_offset_nl:\n    .ascii \"\\n\"\n");
+    for (label, message) in [
+        ("_diag_float_key_precision_prefix", "Deprecated: Implicit conversion from float "),
+        ("_diag_float_key_precision_suffix", " to int loses precision\n"),
+        ("_diag_float_key_range_prefix", "Warning: The float "),
+        ("_diag_float_key_range_suffix", " is not representable as an int, cast occurred\n"),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
     // -- curl_setopt()'s unsupported-option warning, split around the option number --
     // `__rt_curl_warn_unsupported_option` derives both `write()` lengths from the same
@@ -656,6 +807,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // `__rt_hash_flip` derives its `write()` length from the same table, so the bytes here and
     // the immediate there can never drift apart.
     for (label, message) in crate::codegen_support::runtime::arrays::ARRAY_FLIP_SKIPPED_MESSAGES {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
+    for (label, message) in crate::codegen_support::runtime::arrays::ARRAY_AGGREGATE_MESSAGES {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     // -- php-src's array_count_values() skipped-entry warning, shared with its runtime emitter --
@@ -704,6 +858,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // process-global so the shared runtime never names libc iconv (which needs -liconv on macOS).
     out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_iconv_close_fn", 8, target));
+    // Apple iconv shares //TRANSLIT and //IGNORE per charset pair, so Apple targets record
+    // each write filter's own option bits per fd (256 fds x 1B) for the fwrite helper to
+    // restore before converting; glibc keeps them per descriptor and needs no table.
+    if target.platform == Platform::MacOS {
+        out.push_str(&comm_directive("_iconv_write_options", 256, target));
+    }
     out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
     out.push_str(&comm_directive("_ftp_data_addr", 64, target));
     // _ftp_use_tls: set to 1 by fopen("ftps://...") before __rt_ftp_open is
@@ -1267,8 +1427,36 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _heap_dbg_live_blocks_short_label\n_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
     out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _heap_dbg_block_offset\n_heap_dbg_block_offset:\n    .ascii \"HEAP DEBUG: live offset=\"\n");
+    out.push_str(".globl _heap_dbg_block_bytes\n_heap_dbg_block_bytes:\n    .ascii \" bytes=\"\n");
+    out.push_str(".globl _heap_dbg_block_kind\n_heap_dbg_block_kind:\n    .ascii \" kind=\"\n");
+    out.push_str(".globl _heap_dbg_block_refs\n_heap_dbg_block_refs:\n    .ascii \" refs=\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
+    for (label, value) in [
+        ("_bt_arg_unknown", "Unknown"),
+        ("_bt_arg_false", "false"),
+        ("_bt_arg_true", "true"),
+        ("_bt_arg_array", "Array"),
+        ("_bt_arg_null", "NULL"),
+        ("_bt_arg_callable", "Object(Closure)"),
+        ("_bt_arg_object_open", "Object("),
+        ("_bt_arg_close", ")"),
+        ("_bt_arg_quote", "'"),
+        ("_bt_arg_escape_slash", "\\\\"),
+        ("_bt_arg_escape_n", "\\n"),
+        ("_bt_arg_escape_t", "\\t"),
+        ("_bt_arg_escape_r", "\\r"),
+        ("_bt_arg_escape_v", "\\v"),
+        ("_bt_arg_escape_f", "\\f"),
+        ("_bt_arg_escape_e", "\\e"),
+    ] {
+        out.push_str(&format!(
+            ".globl {label}\n{label}:\n    .ascii {value:?}\n"
+        ));
+    }
     out.push_str(".globl _resource_type_stream\n_resource_type_stream:\n    .ascii \"stream\"\n");
+    out.push_str(".globl _resource_type_stream_context\n_resource_type_stream_context:\n    .ascii \"stream-context\"\n");
+    out.push_str(".globl _resource_type_stream_filter\n_resource_type_stream_filter:\n    .ascii \"stream filter\"\n");
     out.push_str(".globl _resource_type_unknown\n_resource_type_unknown:\n    .ascii \"Unknown\"\n");
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
     out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
@@ -1482,8 +1670,8 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform};
 
-    /// Every common symbol the runtime data section declares must carry an alignment operand
-    /// the target's own assembler reads as 8 bytes.
+    /// Every common symbol carries at least 8-byte alignment, while the heap keeps its
+    /// allocator-wide 16-byte granule alignment.
     ///
     /// This is a whole-section sweep rather than a spot check because the failure is silent at
     /// assembly time and only shows up at link time, once per program rather than once per
@@ -1494,22 +1682,26 @@ mod tests {
     /// that is not 8-byte aligned. `_stack_limit` took out every linux-aarch64 link this way.
     #[test]
     fn test_runtime_common_symbols_are_aligned_for_each_object_format() {
-        for (platform, arch, expected) in [
-            (Platform::MacOS, Arch::AArch64, "3"),
-            (Platform::Linux, Arch::AArch64, "8"),
-            (Platform::Linux, Arch::X86_64, "8"),
+        for (platform, arch, expected, heap_expected) in [
+            (Platform::MacOS, Arch::AArch64, "3", "4"),
+            (Platform::Linux, Arch::AArch64, "8", "16"),
+            (Platform::Linux, Arch::X86_64, "8", "16"),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target);
+            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
 
             let mut seen = 0usize;
             for line in asm.lines().filter(|line| line.starts_with(".comm ")) {
                 seen += 1;
                 let alignment = line.rsplit(',').next().unwrap().trim();
+                let expected = if line.starts_with(".comm _heap_buf,") {
+                    heap_expected
+                } else {
+                    expected
+                };
                 assert_eq!(
                     alignment, expected,
-                    "{:?}/{:?} emitted `{}`, whose alignment operand is not the {}-spelling \
-                     that this object format's assembler reads as 8 bytes",
+                    "{:?}/{:?} emitted `{}`, whose alignment operand is not the expected {}",
                     platform, arch, line, expected
                 );
             }
@@ -1518,6 +1710,24 @@ mod tests {
                 "expected the fixed runtime data to declare its usual common symbols, saw {}",
                 seen
             );
+        }
+    }
+
+    /// The per-fd `convert.iconv` write-filter option table exists only on Apple targets,
+    /// whose iconv shares `//TRANSLIT` and `//IGNORE` per charset pair (#811).
+    #[test]
+    fn test_iconv_write_options_table_is_apple_only() {
+        for (target, expected) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), true),
+            (
+                Target::new_apple(Arch::AArch64, crate::codegen_support::platform::AppleVariant::IOS),
+                true,
+            ),
+            (Target::new(Platform::Linux, Arch::AArch64), false),
+            (Target::new(Platform::Linux, Arch::X86_64), false),
+        ] {
+            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
+            assert_eq!(asm.contains("_iconv_write_options"), expected, "{target:?}");
         }
     }
 
@@ -1530,9 +1740,20 @@ mod tests {
     /// sweep above covers the rest.
     #[test]
     fn test_eight_byte_comms_are_eight_byte_aligned_on_elf() {
-        let asm = emit_runtime_data_fixed(8_388_608, Target::new(Platform::Linux, Arch::AArch64));
+        let asm = emit_runtime_data_fixed(8_388_608, Target::new(Platform::Linux, Arch::AArch64), PhpVersion::Php85);
 
         assert!(asm.contains(".comm _unser_depth, 8, 8\n"), "{asm}");
+    }
+
+    /// Verifies the initial reporting mask follows PHP's version-specific `E_ALL` value.
+    #[test]
+    fn test_error_reporting_mask_tracks_php_profile() {
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let php84 = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php84);
+        let php85 = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
+
+        assert!(php84.contains("_php_error_reporting:\n    .quad 32767\n"));
+        assert!(php85.contains("_php_error_reporting:\n    .quad 30719\n"));
     }
 
     /// The function-pointer slots a *Rust* bridge crate resolves must be spelled with the
@@ -1561,7 +1782,7 @@ mod tests {
             (Platform::Linux, Arch::X86_64, ""),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target);
+            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
             for slot in &bridge_slots {
                 let wanted = format!(".comm {prefix}{slot}, 8, ");
                 assert!(

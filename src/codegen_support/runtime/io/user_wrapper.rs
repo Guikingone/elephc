@@ -156,6 +156,7 @@ pub fn emit_user_wrapper_abandon_all(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return after all wrapper owners are detached
 }
 
+/// Detaches all x86_64 wrapper-table owners before deep release can re-enter fatal cleanup.
 fn emit_user_wrapper_abandon_all_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: user_wrapper_abandon_all ---");
@@ -943,6 +944,7 @@ fn emit_x86_scalar_slot_call(emitter: &mut Emitter, vtable_slot: usize, tag: &st
     emitter.label(&done);
 }
 
+/// Emits an AArch64 wrapper-vtable lookup that branches to the missing-method path when absent.
 fn emit_aarch64_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slot: usize) {
     emitter.instruction("ldr x10, [x0]");                                       // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");

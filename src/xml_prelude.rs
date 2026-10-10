@@ -50,7 +50,22 @@ pub(crate) fn xml_declarations() -> Program {
 /// `force` comes from `--with-xml` (or the codegen harness); otherwise the decision is
 /// `detect::program_uses_xml`. The prelude carries only declarations, so prepending it is
 /// order-independent — PHP hoists them.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, force, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,

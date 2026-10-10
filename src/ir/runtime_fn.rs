@@ -153,6 +153,7 @@ pub enum RuntimeFnId {
     Usort,
     CallUserFunc,
     CallUserFuncArray,
+    CloneWith,
     ClassAlias,
     ClassExists,
     ClassImplements,
@@ -402,10 +403,22 @@ pub enum RuntimeFnId {
     ElephcAsyncGcCollect,
     ElephcAsyncMonitorEvent,
     ElephcAsyncPoll,
+    ElephcCloneOverrideReferenceGuard,
     ElephcObjectIsEnum,
     ElephcObjectPropCount,
     ElephcObjectPropName,
     ElephcObjectPropValue,
+    ElephcOpcacheRtBlacklistEntry,
+    ElephcOpcacheRtScriptField,
+    ElephcOpcacheRtScriptPath,
+    ElephcOpcacheRtReset,
+    ElephcOpcacheRtIsCached,
+    ElephcOpcacheRtDiscard,
+    ElephcOpcacheRtSoftInvalidate,
+    ElephcOpcacheRtCompile,
+    ElephcOpcacheRtInFileCache,
+    ElephcOpcacheRtStat,
+    ElephcOpcacheRtSwap,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
@@ -589,7 +602,96 @@ pub enum RuntimeFnId {
     Long2ip,
     Ltrim,
     MbEregMatch,
+    /// Searches a multibyte pattern with an optional live capture reference.
+    MbEreg,
+    /// Parses multibyte query input into a live output reference using Core INI settings.
+    MbParseStr,
+    /// Converts live variables, arrays, and object properties through shared mbstring policy.
+    MbConvertVariables,
+    /// Encodes and sends a message using shared mbstring language settings.
+    MbSendMail,
+    /// Searches a multibyte pattern without case sensitivity and preserves capture identity.
+    MbEregi,
+    /// Shared `mb_ereg_search_init` request operation.
+    MbEregSearchInit,
+    /// Shared `mb_ereg_search` request operation.
+    MbEregSearch,
+    /// Shared `mb_ereg_search_pos` request operation.
+    MbEregSearchPos,
+    /// Shared `mb_ereg_search_regs` request operation.
+    MbEregSearchRegs,
+    /// Shared `mb_ereg_search_getpos` request operation.
+    MbEregSearchGetpos,
+    /// Shared `mb_ereg_search_getregs` request operation.
+    MbEregSearchGetregs,
+    /// Shared `mb_ereg_search_setpos` request operation.
+    MbEregSearchSetpos,
+    /// Splits a multibyte subject through the shared regex engine.
+    MbSplit,
+    /// Replaces multibyte matches through the shared regex engine.
+    MbEregReplace,
+    /// Replaces multibyte regex matches through protected callback invocation.
+    MbEregReplaceCallback,
+    /// Replaces multibyte matches with case-insensitive shared regex semantics.
+    MbEregiReplace,
     MbStrlen,
+    MbStrwidth,
+    MbStrtoupper,
+    MbStrtolower,
+    MbConvertCase,
+    MbUcfirst,
+    MbLcfirst,
+    MbStrimwidth,
+    MbSubstr,
+    MbStrcut,
+    MbScrub,
+    MbTrim,
+    MbLtrim,
+    MbRtrim,
+    MbStrPad,
+    MbConvertKana,
+    MbSubstrCount,
+    MbOrd,
+    MbChr,
+    MbStrpos,
+    MbStripos,
+    MbStrrpos,
+    MbStrripos,
+    MbStrstr,
+    MbStristr,
+    MbStrrchr,
+    MbStrrichr,
+    MbLanguage,
+    MbInternalEncoding,
+    MbHttpOutput,
+    MbEncodingAliases,
+    MbStrSplit,
+    MbPreferredMimeName,
+    MbCheckEncoding,
+    MbSubstituteCharacter,
+    MbListEncodings,
+    MbDetectOrder,
+    MbDetectEncoding,
+    /// Converts strings and recursive arrays through the shared mbstring engine.
+    MbConvertEncoding,
+    MbEncodeNumericentity,
+    MbDecodeNumericentity,
+    /// Decodes MIME headers through the shared mbstring engine.
+    MbDecodeMimeheader,
+    /// Encodes MIME headers through the shared mbstring engine.
+    MbEncodeMimeheader,
+    /// Converts output-buffer phases through shared request codecs and response metadata.
+    MbOutputHandler,
+    /// Reads the shared request information as a scalar or heterogeneous array.
+    MbGetInfo,
+    /// Internal prelude access to shared INI state with protected diagnostic reentry.
+    SharedIni,
+    /// Reads recorded HTTP input identification and configured encoding names.
+    MbHttpInput,
+    /// Reads or changes the shared multibyte regex encoding.
+    MbRegexEncoding,
+    /// Reads or changes the shared multibyte regex option defaults.
+    MbRegexSetOptions,
     Md5,
     NumberFormat,
     Ord,
@@ -643,6 +745,7 @@ pub enum RuntimeFnId {
     ExtensionLoaded,
     Getdate,
     Getenv,
+    Getmypid,
     Gmdate,
     Gmmktime,
     Header,
@@ -719,6 +822,11 @@ impl RuntimeFnId {
     /// cursor (and, for a seek, the seek mode) as extra operands. Declaring the real
     /// runtime arity here keeps EIR validation meaningful instead of switching it off.
     const fn lowering_owned_arity_bounds(self) -> Option<(usize, Option<usize>)> {
+        // The shared mbstring engine reports PHP arity errors at runtime, including calls
+        // through first-class callables whose argument count is only known when invoked.
+        if self.uses_mbstring_runtime() {
+            return Some((0, None));
+        }
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
@@ -738,9 +846,18 @@ impl RuntimeFnId {
     ) -> crate::types::PhpType {
         use crate::types::PhpType;
         match self {
-            RuntimeFnId::ArrayKeys | RuntimeFnId::ArraySlice => {
-                PhpType::Array(Box::new(PhpType::Mixed))
-            }
+            // Narrowing a hash keeps its key and value layout in both `preserve_keys` modes,
+            // which is the layout `__rt_hash_slice` builds. A callee resolved only by lowering,
+            // such as `$fn = "array_slice"; $fn($assoc, 1, 2)`, has no checked type to supply it,
+            // and the indexed fallback refused the associative source outright.
+            RuntimeFnId::ArraySlice => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(hash @ PhpType::AssocArray { .. }) => hash,
+                // A boxed source may hold a list or a hash, so the result is the boxed PHP array
+                // type, exactly as the checker types a boxed source.
+                Some(PhpType::Mixed | PhpType::Union(_)) => PhpType::php_array(),
+                _ => PhpType::Array(Box::new(PhpType::Mixed)),
+            },
+            RuntimeFnId::ArrayKeys => PhpType::Array(Box::new(PhpType::Mixed)),
             // The removed-elements array copies the receiver's payload slots, so its element
             // layout is the receiver's. A type-changing `$replacement` promotes that receiver to
             // `array<mixed>` during lowering, and the checker's pre-promotion `array<int>` no
@@ -749,6 +866,12 @@ impl RuntimeFnId {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 _ => declared.clone(),
             },
+            RuntimeFnId::ArrayValues if arg_types.first().is_some_and(PhpType::is_php_array) => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            RuntimeFnId::ArrayMerge if arg_types.iter().any(PhpType::is_php_array) => {
+                PhpType::php_array()
+            }
             RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
@@ -762,6 +885,9 @@ impl RuntimeFnId {
             // read the pointer as a Mixed cell and crashed. The `$preserve_keys` hash shape needs
             // a compile-time literal, which a dynamic wrapper cannot provide, so it is dropped
             // from the callable ABI by `refine_runtime_callable_wrapper_sig`.
+            RuntimeFnId::ArrayReverse if arg_types.first().is_some_and(PhpType::is_php_array) => {
+                PhpType::php_array()
+            }
             RuntimeFnId::ArrayReverse => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(element @ (PhpType::Array(_) | PhpType::AssocArray { .. })) => element,
                 _ => declared.clone(),
@@ -834,6 +960,33 @@ impl RuntimeFnId {
     ) -> bool {
         use crate::types::PhpType;
         match self {
+            // Reversing a boxed source answers with a boxed hash, so a concrete checked shape only
+            // fits a concrete source. A local that a `global` somewhere binds to program storage
+            // is checked by its concrete assignments but LOADED as a boxed `Mixed` cell, and the
+            // checker's `array<int>` there refused the boxed reversal outright.
+            RuntimeFnId::ArrayReverse => !(matches!(
+                arg_types.first().map(PhpType::codegen_repr),
+                Some(PhpType::Mixed | PhpType::Union(_))
+            ) && matches!(
+                checked.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            )),
+            // An indexed source slices to a list, or to an integer-keyed hash under a literal
+            // `preserve_keys`, and a boxed source answers with the boxed PHP array. A checked hash
+            // outside those shapes describes some other operand: a call-site-specialized untyped
+            // parameter, or the two slices the `func_get_args()` rewrite nests under one span,
+            // which then read each other's checked type.
+            RuntimeFnId::ArraySlice
+                if matches!(
+                    (arg_types.first().map(PhpType::codegen_repr), checked.codegen_repr()),
+                    (Some(PhpType::Array(_)), PhpType::AssocArray { key, .. }) if *key != PhpType::Int
+                ) || matches!(
+                    (arg_types.first().map(PhpType::codegen_repr), checked.codegen_repr()),
+                    (Some(PhpType::Mixed | PhpType::Union(_)), PhpType::AssocArray { .. })
+                ) =>
+            {
+                false
+            }
             RuntimeFnId::ArraySlice | RuntimeFnId::ArraySplice => {
                 let PhpType::Array(result_element) = checked.codegen_repr() else {
                     return true;
@@ -854,6 +1007,12 @@ impl RuntimeFnId {
     pub fn refine_first_class_callable_sig(self, sig: &mut crate::types::FunctionSig) {
         use crate::types::PhpType;
         match self {
+            RuntimeFnId::CloneWith => {
+                // A first-class invocation can carry a runtime Mixed value that must be checked
+                // before any clone is allocated or hook is invoked. Keep the public builtin
+                // contract typed as array while widening only the callable ABI.
+                set_callable_param_type(sig, 1, PhpType::Mixed);
+            }
             RuntimeFnId::Getenv => {
                 // Preserve null in both direct operands and generated callable wrappers.
                 if let Some((_, name_ty)) = sig.params.get_mut(0) {
@@ -864,6 +1023,11 @@ impl RuntimeFnId {
                 if let Some((_, callback_ty)) = sig.params.get_mut(1) {
                     *callback_ty = PhpType::Callable;
                 }
+            }
+            RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect => {
+                // Every invocation route receives the same owned hash-capable Mixed cell.
+                // Do not let an FCC wrapper narrow that ABI to a packed Array<Mixed> pointer.
+                sig.return_type = PhpType::php_array();
             }
             RuntimeFnId::ZvalPack => {
                 if let Some((_, value_ty)) = sig.params.get_mut(0) {
@@ -902,23 +1066,35 @@ impl RuntimeFnId {
     /// Refines the PHP-ABI wrapper signature required by this runtime implementation.
     pub fn refine_runtime_callable_wrapper_sig(self, sig: &mut crate::types::FunctionSig) {
         use crate::types::PhpType;
+        if self.uses_mbstring_runtime() {
+            for (_, ty) in &mut sig.params { *ty = PhpType::Mixed; }
+            sig.declared_params = vec![true; sig.params.len()];
+            return;
+        }
         match self {
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
-            // `array_reverse()`'s `$preserve_keys` and `array_slice()`'s `$preserve_keys` pick
-            // between an indexed array and an integer-keyed hash, so the backend needs them as
-            // compile-time literals. A dynamic callable wrapper receives runtime parameters, so
-            // the flag is dropped from the wrapper ABI exactly like `count()`'s `$mode`; the
-            // wrapper then always produces the renumbered indexed result. `array_slice()`'s
-            // return type is pinned to the concrete indexed layout its helpers materialize,
-            // because the wrapper has no per-call-site checked type to read.
-            RuntimeFnId::ArrayReverse => truncate_callable_params(sig, 1),
-            RuntimeFnId::ArrayChunk => truncate_callable_params(sig, 2),
-            RuntimeFnId::ArraySlice => {
-                truncate_callable_params(sig, 3);
-                sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
+            RuntimeFnId::CloneWith => {
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+                // Dynamic callable arguments reach the runtime before their PHP parameter type
+                // is known. Preserve the value as Mixed so `CloneWith` can raise the catchable
+                // second-argument TypeError before allocating a clone or invoking `__clone`.
+                set_callable_param_type(sig, 1, PhpType::Mixed);
+                sig.return_type = PhpType::Mixed;
             }
+            // `array_chunk()`'s `$preserve_keys` picks between nested lists and nested
+            // integer-keyed hashes, so the backend needs it as a compile-time literal. A dynamic
+            // callable wrapper receives runtime parameters, so the flag is dropped from the
+            // wrapper ABI exactly like `count()`'s `$mode`. `array_reverse()` and `array_slice()`
+            // keep every parameter: their wrappers take a boxed source, whose result is the boxed
+            // PHP array whatever the flag says, so the boxed lowering reads `$preserve_keys` at
+            // runtime (the invoker converts a dynamic argument with PHP truthiness for the `bool`
+            // parameter). `array_slice()`'s return type is pinned to that boxed PHP array,
+            // because the wrapper has no per-call-site checked type to read.
+            RuntimeFnId::ArrayChunk => truncate_callable_params(sig, 2),
+            RuntimeFnId::ArraySlice => sig.return_type = PhpType::php_array(),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => {
-                set_callable_param_type(sig, 0, PhpType::Array(Box::new(PhpType::Int)));
+                set_callable_param_type(sig, 0, PhpType::php_array());
+                sig.return_type = PhpType::Mixed;
             }
             RuntimeFnId::Clamp => {
                 set_callable_param_type(sig, 0, PhpType::Int);
@@ -941,6 +1117,16 @@ impl RuntimeFnId {
 
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
+        if self.uses_mbstring_runtime() {
+            // Parameter conversion can invoke Stringable methods and destructors. Their
+            // global writes are observable; nested I/O keeps its own monitoring policy.
+            return crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::REFCOUNT_OP.bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            );
+        }
         match self {
             RuntimeFnId::ElephcAsyncGcCollect => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
@@ -956,6 +1142,39 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::READS_PROCESS.bits()
                     | crate::ir::Effects::BLOCKING_IO.bits(),
+            ),
+            // Clone hooks and property hooks can execute arbitrary user code. I/O effects are
+            // attributed to the nested operation that performs them.
+            RuntimeFnId::CloneWith => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
+            RuntimeFnId::ArrayMultisort => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            // Callback results and snapshots can run destructors independently of the callback body.
+            // Keep every observable callback effect, but classify I/O at the nested runtime
+            // boundary that performs it, not at the surrounding array operation.
+            RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayFind | RuntimeFnId::ArrayAny
+            | RuntimeFnId::ArrayAll | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayUdiff
+            | RuntimeFnId::ArrayUintersect | RuntimeFnId::ArrayWalk
+            | RuntimeFnId::ArrayWalkRecursive => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
+            // Unsupported entries can invoke arbitrary warning handlers, including
+            // mutation of globals and destruction of the replaced source array.
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
             ),
             // Both transfer drivers may invoke arbitrary PHP callbacks. Keep the
             // callback-capable conservative set, then preserve their typed network and
@@ -1007,6 +1226,22 @@ impl RuntimeFnId {
                     | crate::ir::Effects::ALLOC_HEAP.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
             ),
+            RuntimeFnId::ArrayMerge | RuntimeFnId::ArrayReverse | RuntimeFnId::ArrayValues => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            // String conversions, flip warnings and cleanup destructors may execute
+            // arbitrary PHP. Discarded calls must retain these observable effects.
+            // I/O inside those callbacks is monitored at its own runtime boundary;
+            // the join itself does not perform a network or blocking operation.
+            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
@@ -1015,7 +1250,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |
             RuntimeFnId::ArrayFillKeys |
-            RuntimeFnId::ArrayFlip |
             RuntimeFnId::ArrayIntersect |
             RuntimeFnId::ArrayIntersectAssoc |
             RuntimeFnId::ArrayIntersectKey |
@@ -1024,17 +1258,12 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeyFirst |
             RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
-            RuntimeFnId::ArrayMerge |
             RuntimeFnId::ArrayMergeRecursive |
-            RuntimeFnId::ArrayProduct |
             RuntimeFnId::ArrayReplace |
             RuntimeFnId::ArrayReplaceRecursive |
-            RuntimeFnId::ArrayReverse |
             RuntimeFnId::ArraySearch |
             RuntimeFnId::ArraySlice |
-            RuntimeFnId::ArraySum |
             RuntimeFnId::ArrayUnique |
-            RuntimeFnId::ArrayValues |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
             // `base64_decode()` only reads the subject's bytes and writes its answer into a
@@ -1072,7 +1301,6 @@ impl RuntimeFnId {
             RuntimeFnId::Htmlspecialchars |
             RuntimeFnId::Hexdec |
             RuntimeFnId::Hypot |
-            RuntimeFnId::Implode |
             RuntimeFnId::InetNtop |
             RuntimeFnId::InetPton |
             RuntimeFnId::Ip2long |
@@ -1167,12 +1395,86 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_GLOBAL.bits()
                     | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
+            // The clone override guard only reads one hash entry's reference state, and
+            // raises the catchable refusal itself when that entry is still a PHP reference.
+            RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::MAY_THROW.bits(),
+                )
+            }
             RuntimeFnId::GetClass
-            | RuntimeFnId::GetParentClass
-            | RuntimeFnId::ElephcObjectIsEnum
+            | RuntimeFnId::GetParentClass => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::MAY_THROW.bits(),
+                )
+            }
+            RuntimeFnId::ElephcObjectIsEnum
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            // The runtime script cache is process state: these read it and nothing else,
+            // so they must NOT be folded across an include that can move the counters.
+            RuntimeFnId::ElephcOpcacheRtScriptField | RuntimeFnId::ElephcOpcacheRtStat => {
+                crate::ir::Effects::READS_GLOBAL
+            }
+            // WRITES, unlike every other `rt_*` reader: it installs a directive on the
+            // live cache configuration and answers the value it replaced. Marking it a
+            // pure read would let the optimizer fold two `ini_set()` calls into one, or
+            // drop one whose result is discarded — which is the common spelling.
+            RuntimeFnId::ElephcOpcacheRtSwap => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            // Also a WRITE: it latches a restart on the process-wide cache. Its result is
+            // the once-then-false answer `opcache_reset()` reports, so a second call must
+            // not be folded into the first.
+            RuntimeFnId::ElephcOpcacheRtReset => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            // The three path-taking runtime-tier operations. `is_cached` only reads, but
+            // `discard` and `compile` MUTATE the process-wide cache, and neither may be
+            // folded away or hoisted: two `opcache_compile_file()` calls on one path are
+            // not one call, and a discard between two `is_cached` reads changes the answer.
+            // `is_cached` RENEWS the revalidation window on a successful check (and bumps the
+            // status generation), and it stats the source. `in_file_cache` reads the disk and
+            // REMOVES a stale entry it rejects. Both were declared pure reads.
+            RuntimeFnId::ElephcOpcacheRtIsCached => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::WRITES_GLOBAL.bits()
+                    | crate::ir::Effects::READS_FS.bits(),
+            ),
+            RuntimeFnId::ElephcOpcacheRtInFileCache => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::READS_FS.bits()
+                    | crate::ir::Effects::WRITES_FS.bits(),
+            ),
+            // Both halves of `opcache_invalidate()` also REMOVE the on-disk entry, and the
+            // non-forced one stats the source to decide.
+            RuntimeFnId::ElephcOpcacheRtDiscard | RuntimeFnId::ElephcOpcacheRtSoftInvalidate => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_GLOBAL.bits()
+                        | crate::ir::Effects::WRITES_GLOBAL.bits()
+                        | crate::ir::Effects::READS_FS.bits()
+                        | crate::ir::Effects::WRITES_FS.bits(),
+                )
+            }
+            // `compile` also READS the source and WARNS when it cannot open it: the bridge
+            // prints `opcache_compile_file()`'s two open-failure warnings itself.
+            RuntimeFnId::ElephcOpcacheRtCompile => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::WRITES_GLOBAL.bits()
+                    | crate::ir::Effects::READS_FS.bits()
+                    | crate::ir::Effects::MAY_WARN.bits(),
+            ),
+            // Same read, plus the owned PHP string copied out of the bridge's buffer.
+            RuntimeFnId::ElephcOpcacheRtScriptPath => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            // Identical shape: reads the bridge's loaded blacklist, allocates the copy.
+            RuntimeFnId::ElephcOpcacheRtBlacklistEntry => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
@@ -1190,7 +1492,8 @@ impl RuntimeFnId {
             RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
             ),
-            RuntimeFnId::Time => crate::ir::Effects::READS_PROCESS,
+            // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
+            RuntimeFnId::Time | RuntimeFnId::Getmypid => crate::ir::Effects::READS_PROCESS,
             RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
@@ -1284,6 +1587,17 @@ impl RuntimeFnId {
                     | crate::ir::Effects::MAY_WARN.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
             ),
+            RuntimeFnId::MbSendMail => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::OUTPUT.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::BLOCKING_IO.bits()
+                    | crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
@@ -1301,18 +1615,15 @@ impl RuntimeFnId {
     pub const fn intrinsic_effects(self) -> crate::ir::Effects {
         use crate::ir::Effects as E;
         match self {
-            RuntimeFnId::ArrayAll
-            | RuntimeFnId::ArrayAny
-            | RuntimeFnId::ArrayFilter
-            | RuntimeFnId::ArrayFind
-            | RuntimeFnId::ArrayMap
-            | RuntimeFnId::ArrayReduce
-            | RuntimeFnId::ArrayWalk
-            | RuntimeFnId::ArrayWalkRecursive
-            | RuntimeFnId::ArrayUdiff
-            | RuntimeFnId::ArrayUintersect => {
+            RuntimeFnId::ArrayMap => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
+            // Carry, predicate-result and snapshot cleanup can invoke destructors independently
+            // of the selected callback's effect summary. Validation may also throw.
+            RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
+            | RuntimeFnId::ArrayAny | RuntimeFnId::ArrayAll
+            | RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect
+            | RuntimeFnId::ArrayWalk | RuntimeFnId::ArrayWalkRecursive => self.effects(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
             ),
@@ -1350,6 +1661,11 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcAsyncPoll => MonitoringPolicy::Io {
                 kind: IoKind::Descriptor,
                 wait: WaitPolicy::GenericTiming,
+                trace_context: TraceContextPolicy::NotApplicable,
+            },
+            RuntimeFnId::MbSendMail => MonitoringPolicy::Io {
+                kind: IoKind::Network,
+                wait: WaitPolicy::Measured,
                 trace_context: TraceContextPolicy::NotApplicable,
             },
             RuntimeFnId::CurlEasyPerform => MonitoringPolicy::Io {
@@ -1456,6 +1772,71 @@ impl RuntimeFnId {
             | RuntimeFnId::IconvStrpos
             | RuntimeFnId::IconvStrrpos
             | RuntimeFnId::IconvSubstr
+            | RuntimeFnId::MbStrlen
+            | RuntimeFnId::MbStrwidth
+            | RuntimeFnId::MbStrtoupper
+            | RuntimeFnId::MbStrtolower
+            | RuntimeFnId::MbConvertCase
+            | RuntimeFnId::MbUcfirst
+            | RuntimeFnId::MbLcfirst
+            | RuntimeFnId::MbStrimwidth
+            | RuntimeFnId::MbSubstr
+            | RuntimeFnId::MbStrcut
+            | RuntimeFnId::MbScrub
+            | RuntimeFnId::MbTrim
+            | RuntimeFnId::MbLtrim
+            | RuntimeFnId::MbRtrim
+            | RuntimeFnId::MbStrPad
+            | RuntimeFnId::MbConvertKana
+            | RuntimeFnId::MbSubstrCount
+            | RuntimeFnId::MbOrd
+            | RuntimeFnId::MbChr
+            | RuntimeFnId::MbStrpos
+            | RuntimeFnId::MbStripos
+            | RuntimeFnId::MbStrrpos
+            | RuntimeFnId::MbStrripos
+            | RuntimeFnId::MbStrstr
+            | RuntimeFnId::MbStristr
+            | RuntimeFnId::MbStrrchr
+            | RuntimeFnId::MbStrrichr
+            | RuntimeFnId::MbLanguage
+            | RuntimeFnId::MbInternalEncoding
+            | RuntimeFnId::MbHttpOutput
+            | RuntimeFnId::MbEncodingAliases
+            | RuntimeFnId::MbStrSplit
+            | RuntimeFnId::MbSubstituteCharacter
+            | RuntimeFnId::MbListEncodings
+            | RuntimeFnId::MbDetectOrder
+            | RuntimeFnId::MbDetectEncoding
+            | RuntimeFnId::MbConvertEncoding
+            | RuntimeFnId::MbConvertVariables
+            | RuntimeFnId::MbEncodeNumericentity
+            | RuntimeFnId::MbDecodeMimeheader
+            | RuntimeFnId::MbEncodeMimeheader
+            | RuntimeFnId::MbOutputHandler
+            | RuntimeFnId::MbGetInfo
+            | RuntimeFnId::SharedIni
+            | RuntimeFnId::MbParseStr
+            | RuntimeFnId::MbHttpInput
+            | RuntimeFnId::MbRegexEncoding
+            | RuntimeFnId::MbRegexSetOptions
+            | RuntimeFnId::MbEregMatch
+            | RuntimeFnId::MbEreg
+            | RuntimeFnId::MbEregi
+            | RuntimeFnId::MbEregSearchInit
+            | RuntimeFnId::MbEregSearch
+            | RuntimeFnId::MbEregSearchPos
+            | RuntimeFnId::MbEregSearchRegs
+            | RuntimeFnId::MbEregSearchGetpos
+            | RuntimeFnId::MbEregSearchGetregs
+            | RuntimeFnId::MbEregSearchSetpos
+            | RuntimeFnId::MbSplit
+            | RuntimeFnId::MbEregReplace
+            | RuntimeFnId::MbEregReplaceCallback
+            | RuntimeFnId::MbEregiReplace
+            | RuntimeFnId::MbDecodeNumericentity
+            | RuntimeFnId::MbCheckEncoding
+            | RuntimeFnId::MbPreferredMimeName
             | RuntimeFnId::Md5
             | RuntimeFnId::Sha1
             | RuntimeFnId::StreamSocketEnableCrypto => MonitoringPolicy::GenericTiming,
@@ -1468,6 +1849,12 @@ impl RuntimeFnId {
         self,
     ) -> &'static [crate::builtins::semantics::BuiltinRequirement] {
         use crate::builtins::semantics::BuiltinRequirement;
+        if self.uses_mbregex_runtime() {
+            return &[
+                BuiltinRequirement::Bridge("elephc_mbstring"),
+                BuiltinRequirement::RuntimeFeature("oniguruma"),
+            ];
+        }
         match self {
             RuntimeFnId::BcAdd
             | RuntimeFnId::BcCeil
@@ -1576,7 +1963,58 @@ impl RuntimeFnId {
                 BuiltinRequirement::Bridge("elephc_iconv"),
                 BuiltinRequirement::MacOsLibrary("iconv"),
             ],
-            RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
+            RuntimeFnId::MbStrlen
+            | RuntimeFnId::MbStrwidth
+            | RuntimeFnId::MbStrtoupper
+            | RuntimeFnId::MbStrtolower
+            | RuntimeFnId::MbConvertCase
+            | RuntimeFnId::MbUcfirst
+            | RuntimeFnId::MbLcfirst
+            | RuntimeFnId::MbStrimwidth
+            | RuntimeFnId::MbSubstr
+            | RuntimeFnId::MbStrcut
+            | RuntimeFnId::MbScrub
+            | RuntimeFnId::MbTrim
+            | RuntimeFnId::MbLtrim
+            | RuntimeFnId::MbRtrim
+            | RuntimeFnId::MbStrPad
+            | RuntimeFnId::MbConvertKana
+            | RuntimeFnId::MbSubstrCount
+            | RuntimeFnId::MbOrd
+            | RuntimeFnId::MbChr
+            | RuntimeFnId::MbStrpos
+            | RuntimeFnId::MbStripos
+            | RuntimeFnId::MbStrrpos
+            | RuntimeFnId::MbStrripos
+            | RuntimeFnId::MbStrstr
+            | RuntimeFnId::MbStristr
+            | RuntimeFnId::MbStrrchr
+            | RuntimeFnId::MbStrrichr
+            | RuntimeFnId::MbLanguage
+            | RuntimeFnId::MbInternalEncoding
+            | RuntimeFnId::MbHttpOutput
+            | RuntimeFnId::MbEncodingAliases
+            | RuntimeFnId::MbStrSplit
+            | RuntimeFnId::MbSubstituteCharacter
+            | RuntimeFnId::MbListEncodings
+            | RuntimeFnId::MbDetectOrder
+            | RuntimeFnId::MbDetectEncoding
+            | RuntimeFnId::MbConvertEncoding
+            | RuntimeFnId::MbConvertVariables
+            | RuntimeFnId::MbEncodeNumericentity
+            | RuntimeFnId::MbDecodeMimeheader
+            | RuntimeFnId::MbEncodeMimeheader
+            | RuntimeFnId::MbOutputHandler
+            | RuntimeFnId::MbGetInfo
+            | RuntimeFnId::SharedIni
+            | RuntimeFnId::MbParseStr
+            | RuntimeFnId::MbSendMail
+            | RuntimeFnId::MbHttpInput
+            | RuntimeFnId::MbRegexEncoding
+            | RuntimeFnId::MbRegexSetOptions
+            | RuntimeFnId::MbDecodeNumericentity
+            | RuntimeFnId::MbCheckEncoding
+            | RuntimeFnId::MbPreferredMimeName => &[BuiltinRequirement::Bridge("elephc_mbstring")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::StreamSocketEnableCrypto => &[BuiltinRequirement::Bridge("elephc_tls")],
@@ -1584,12 +2022,97 @@ impl RuntimeFnId {
         }
     }
 
+    /// Maps an EIR runtime identity to the shared mbstring engine operation.
+    pub const fn mbstring_operation(self) -> Option<elephc_builtin_contract::RuntimeBuiltinId> {
+        use elephc_builtin_contract::RuntimeBuiltinId;
+        match self {
+            Self::MbStrlen => Some(RuntimeBuiltinId::MbStrlen),
+            Self::MbStrwidth => Some(RuntimeBuiltinId::MbStrwidth),
+            Self::MbStrtoupper => Some(RuntimeBuiltinId::MbStrtoupper),
+            Self::MbStrtolower => Some(RuntimeBuiltinId::MbStrtolower),
+            Self::MbConvertCase => Some(RuntimeBuiltinId::MbConvertCase),
+            Self::MbUcfirst => Some(RuntimeBuiltinId::MbUcfirst),
+            Self::MbLcfirst => Some(RuntimeBuiltinId::MbLcfirst),
+            Self::MbStrimwidth => Some(RuntimeBuiltinId::MbStrimwidth),
+            Self::MbSubstr => Some(RuntimeBuiltinId::MbSubstr),
+            Self::MbStrcut => Some(RuntimeBuiltinId::MbStrcut),
+            Self::MbScrub => Some(RuntimeBuiltinId::MbScrub),
+            Self::MbTrim => Some(RuntimeBuiltinId::MbTrim),
+            Self::MbLtrim => Some(RuntimeBuiltinId::MbLtrim),
+            Self::MbRtrim => Some(RuntimeBuiltinId::MbRtrim),
+            Self::MbStrPad => Some(RuntimeBuiltinId::MbStrPad),
+            Self::MbConvertKana => Some(RuntimeBuiltinId::MbConvertKana),
+            Self::MbSubstrCount => Some(RuntimeBuiltinId::MbSubstrCount),
+            Self::MbOrd => Some(RuntimeBuiltinId::MbOrd),
+            Self::MbChr => Some(RuntimeBuiltinId::MbChr),
+            Self::MbStrpos => Some(RuntimeBuiltinId::MbStrpos),
+            Self::MbStripos => Some(RuntimeBuiltinId::MbStripos),
+            Self::MbStrrpos => Some(RuntimeBuiltinId::MbStrrpos),
+            Self::MbStrripos => Some(RuntimeBuiltinId::MbStrripos),
+            Self::MbStrstr => Some(RuntimeBuiltinId::MbStrstr),
+            Self::MbStristr => Some(RuntimeBuiltinId::MbStristr),
+            Self::MbStrrchr => Some(RuntimeBuiltinId::MbStrrchr),
+            Self::MbStrrichr => Some(RuntimeBuiltinId::MbStrrichr),
+            Self::MbLanguage => Some(RuntimeBuiltinId::MbLanguage),
+            Self::MbInternalEncoding => Some(RuntimeBuiltinId::MbInternalEncoding),
+            Self::MbHttpOutput => Some(RuntimeBuiltinId::MbHttpOutput),
+            Self::MbEncodingAliases => Some(RuntimeBuiltinId::MbEncodingAliases),
+            Self::MbStrSplit => Some(RuntimeBuiltinId::MbStrSplit),
+            Self::MbPreferredMimeName => Some(RuntimeBuiltinId::MbPreferredMimeName),
+            Self::MbCheckEncoding => Some(RuntimeBuiltinId::MbCheckEncoding),
+            Self::MbSubstituteCharacter => Some(RuntimeBuiltinId::MbSubstituteCharacter),
+            Self::MbListEncodings => Some(RuntimeBuiltinId::MbListEncodings),
+            Self::MbDetectOrder => Some(RuntimeBuiltinId::MbDetectOrder),
+            Self::MbDetectEncoding => Some(RuntimeBuiltinId::MbDetectEncoding),
+            Self::MbConvertEncoding => Some(RuntimeBuiltinId::MbConvertEncoding),
+            Self::MbConvertVariables => Some(RuntimeBuiltinId::MbConvertVariables),
+            Self::MbEncodeNumericentity => Some(RuntimeBuiltinId::MbEncodeNumericentity),
+            Self::MbDecodeNumericentity => Some(RuntimeBuiltinId::MbDecodeNumericentity),
+            Self::MbDecodeMimeheader => Some(RuntimeBuiltinId::MbDecodeMimeheader),
+            Self::MbEncodeMimeheader => Some(RuntimeBuiltinId::MbEncodeMimeheader),
+            Self::MbOutputHandler => Some(RuntimeBuiltinId::MbOutputHandler),
+            Self::MbGetInfo => Some(RuntimeBuiltinId::MbGetInfo),
+            Self::SharedIni => Some(RuntimeBuiltinId::SharedIni),
+            Self::MbParseStr => Some(RuntimeBuiltinId::MbParseStr),
+            Self::MbSendMail => Some(RuntimeBuiltinId::MbSendMail),
+            Self::MbHttpInput => Some(RuntimeBuiltinId::MbHttpInput),
+            Self::MbRegexEncoding => Some(RuntimeBuiltinId::MbRegexEncoding),
+            Self::MbRegexSetOptions => Some(RuntimeBuiltinId::MbRegexSetOptions),
+            Self::MbEregMatch => Some(RuntimeBuiltinId::MbEregMatch),
+            Self::MbEreg => Some(RuntimeBuiltinId::MbEreg),
+            Self::MbEregi => Some(RuntimeBuiltinId::MbEregi),
+            Self::MbEregSearchInit => Some(RuntimeBuiltinId::MbEregSearchInit),
+            Self::MbEregSearch => Some(RuntimeBuiltinId::MbEregSearch),
+            Self::MbEregSearchPos => Some(RuntimeBuiltinId::MbEregSearchPos),
+            Self::MbEregSearchRegs => Some(RuntimeBuiltinId::MbEregSearchRegs),
+            Self::MbEregSearchGetpos => Some(RuntimeBuiltinId::MbEregSearchGetpos),
+            Self::MbEregSearchGetregs => Some(RuntimeBuiltinId::MbEregSearchGetregs),
+            Self::MbEregSearchSetpos => Some(RuntimeBuiltinId::MbEregSearchSetpos),
+            Self::MbSplit => Some(RuntimeBuiltinId::MbSplit),
+            Self::MbEregReplace => Some(RuntimeBuiltinId::MbEregReplace),
+            Self::MbEregReplaceCallback => Some(RuntimeBuiltinId::MbEregReplaceCallback),
+            Self::MbEregiReplace => Some(RuntimeBuiltinId::MbEregiReplace),
+            _ => None,
+        }
+    }
+
     /// Returns whether the operation has a proven generic runtime-callable wrapper.
+    ///
+    /// `Getmypid` qualifies because its wrapper has no parameters to adapt and returns a plain
+    /// integer: `$name = "getmypid"; $name()` and `call_user_func($name)` must reach it like PHP.
     pub const fn runtime_callable_supported(self) -> bool {
+        if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr) { return false; }
+        if self.uses_mbstring_runtime() { return true; }
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::ArraySum
+                | RuntimeFnId::ArrayProduct
+                | RuntimeFnId::CloneWith
+                | RuntimeFnId::Count
+                | RuntimeFnId::Getmypid
                 | RuntimeFnId::Gettype
+                | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
         )
     }
@@ -1597,8 +2120,12 @@ impl RuntimeFnId {
     /// Returns whether a dynamic source value can use this target's generic wrapper.
     pub fn callable_accepts(self, source: Option<&crate::types::PhpType>) -> bool {
         use crate::types::PhpType;
+        if self.uses_mbstring_runtime() { return true; }
         let source = source.map(PhpType::codegen_repr);
         match self {
+            RuntimeFnId::CloneWith => source.is_none_or(|ty| {
+                matches!(ty, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_))
+            }),
             RuntimeFnId::Abs => source.is_none_or(|ty| {
                 matches!(
                     ty,
@@ -1612,10 +2139,17 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::Gettype => true,
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
+            | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
+    }
+
+    /// Accepts a proven callback arity when a builtin's wrapper supports a narrower optional-argument subset.
+    pub fn callable_accepts_arity(self, source: Option<&crate::types::PhpType>, arity: Option<usize>) -> bool {
+        if self == Self::Count { return arity == Some(1); }
+        self.callable_accepts(source)
     }
 
     /// Returns whether this operation requires the optional regex runtime family.
@@ -1640,9 +2174,19 @@ impl RuntimeFnId {
         )
     }
 
-    /// Returns whether this operation requires the optional multibyte-length runtime.
-    pub const fn uses_mb_strlen_runtime(self) -> bool {
-        matches!(self, RuntimeFnId::MbStrlen)
+    /// Returns whether this operation requires the optional shared mbstring runtime.
+    pub const fn uses_mbstring_runtime(self) -> bool {
+        self.mbstring_operation().is_some()
+    }
+
+    /// Selects the managed Oniguruma runtime separately from ordinary multibyte text and PCRE2.
+    pub const fn uses_mbregex_runtime(self) -> bool {
+        match self.mbstring_operation() { Some(operation) => operation.is_mbregex(), None => false }
+    }
+
+    /// Selects the managed PCRE2 MIME provider only for output MIME matching.
+    pub const fn uses_mbstring_mime_runtime(self) -> bool {
+        matches!(self, RuntimeFnId::MbOutputHandler)
     }
 
     /// Returns the scope-cleanup kind stamped into the resource this operation boxes.
@@ -1661,6 +2205,18 @@ impl RuntimeFnId {
             RuntimeFnId::Opendir => Some(ResourceCleanupKind::Directory),
             _ => None,
         }
+    }
+
+    /// Returns whether this operation can add an owned OS handle to the resource inventory.
+    pub const fn produces_resource_inventory_entry(self) -> bool {
+        matches!(
+            self,
+            RuntimeFnId::Fopen
+                | RuntimeFnId::Fsockopen
+                | RuntimeFnId::Opendir
+                | RuntimeFnId::Popen
+                | RuntimeFnId::Tmpfile
+        )
     }
 
     /// Returns whether this operation can publish PHAR bridge helper symbols.
@@ -1735,6 +2291,12 @@ impl RuntimeFnId {
         self,
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
+        if self.uses_mbstring_runtime() {
+            return if matches!(self, Self::MbStrlen | Self::MbStrwidth | Self::MbSubstrCount | Self::MbCheckEncoding
+                | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::MbSendMail | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {
+                BuiltinResultOwnership::NonHeap
+            } else { BuiltinResultOwnership::Fresh };
+        }
         // `intval($value, $base)` hands back a raw machine integer, never storage. Leaving it
         // in the default `MayAliasArguments` bucket would keep an owned subject temporary
         // alive for the integer's whole lifetime, which is the leak shape already documented
@@ -1746,10 +2308,19 @@ impl RuntimeFnId {
                 | RuntimeFnId::ElephcAsyncMonitorEvent
                 | RuntimeFnId::ElephcAsyncPoll
                 | RuntimeFnId::IntvalBase
+                // Both array mutators answer the resulting element count. The returned
+                // machine integer cannot keep any variadic value operand alive.
+                | RuntimeFnId::ArrayPush
+                | RuntimeFnId::ArrayUnshift
+                | RuntimeFnId::ArrayAny
+                | RuntimeFnId::ArrayAll
                 | RuntimeFnId::BcComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
                 | RuntimeFnId::IconvSetEncoding
+                // The clone override reference guard answers nothing at all: it returns or
+                // throws, so a result temporary would only keep the override array alive.
+                | RuntimeFnId::ElephcCloneOverrideReferenceGuard
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
@@ -1766,6 +2337,22 @@ impl RuntimeFnId {
                 | RuntimeFnId::IconvStrpos
                 | RuntimeFnId::IconvStrrpos
                 | RuntimeFnId::IconvSubstr
+        ) {
+            return BuiltinResultOwnership::Fresh;
+        }
+        // The two OPcache runtime-status string helpers hand back a BORROWED `(ptr, len)`
+        // into a thread-local buffer, which the lowering immediately copies with
+        // `__rt_str_persist`. That copy is owned heap storage and somebody has to free it.
+        //
+        // Left in the default `MayAliasArguments` bucket they were classified as scratch
+        // strings by `value_is_scratch_string`, whose whole purpose is to DROP the release —
+        // correct for a pointer into `_concat_buf`, wrong for a persisted copy. MEASURED:
+        // `opcache_get_status(true)` over a six-script runtime cache grew `live_blocks` from
+        // 146 at one call to 1550 at forty, about five blocks per cached script per call. A
+        // `--web` status endpoint leaked on every request.
+        if matches!(
+            self,
+            RuntimeFnId::ElephcOpcacheRtScriptPath | RuntimeFnId::ElephcOpcacheRtBlacklistEntry
         ) {
             return BuiltinResultOwnership::Fresh;
         }
@@ -1864,6 +2451,8 @@ impl RuntimeFnId {
                 // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
                 | RuntimeFnId::ArrayCountValues
                 | RuntimeFnId::ArrayFlip
+                | RuntimeFnId::ArrayFind
+                | RuntimeFnId::ArrayFilter
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap
@@ -1875,11 +2464,18 @@ impl RuntimeFnId {
                 // the box is independently owned and never aliases the receiving array.
                 | RuntimeFnId::ArrayPtrKey
                 | RuntimeFnId::ArrayPtrValue
+                | RuntimeFnId::ArrayProduct
+                | RuntimeFnId::ArrayReduce
                 | RuntimeFnId::ArrayReplace
                 | RuntimeFnId::ArrayReplaceRecursive
                 | RuntimeFnId::ArrayReverse
                 | RuntimeFnId::ArrayShift
                 | RuntimeFnId::ArraySlice
+                | RuntimeFnId::ArraySum
+                // Comparator set operations always allocate a fresh hash-backed result and
+                // retain each selected value independently of both borrowed source operands.
+                | RuntimeFnId::ArrayUdiff
+                | RuntimeFnId::ArrayUintersect
                 | RuntimeFnId::ArrayUnique
                 | RuntimeFnId::ArrayValues
                 // `base64_decode()`'s result is `string|false`, so its lowering boxes BOTH
@@ -1950,6 +2546,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
+                // These mixed-return helpers always allocate a new result cell. Date
+                // decomposition boxes a newly allocated hash, `strtotime` boxes its scalar
+                // answer, `hrtime` boxes either a scalar or a new hash, and grapheme reversal
+                // boxes both its string and false paths. None can alias an argument.
+                | RuntimeFnId::Getdate
+                | RuntimeFnId::Hrtime
                 // `getcwd()` takes NO arguments, so its result cannot alias one by
                 // construction; `__rt_getcwd` copies the kernel's buffer out through
                 // `__rt_str_persist`. The default `MayAliasArguments` bucket made
@@ -1957,17 +2559,23 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                | RuntimeFnId::GraphemeStrrev
                 // `getenv($name)` boxes `false` or an owned copy made by `__rt_str_persist`
                 // in a fresh Mixed cell. `getenv()` boxes a newly built environment hash.
                 // Neither result can alias an argument, so the default `MayAliasArguments`
                 // bucket would keep an owned name temporary — and skip releasing the hash.
                 | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
+                | RuntimeFnId::CloneWith
+                // The join lowerer persists every result before retiring normalized
+                // input values, so destructor reentry cannot overwrite returned bytes.
+                | RuntimeFnId::Implode
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
                 // three siblings already documented below.
                 | RuntimeFnId::JsonEncode
+                | RuntimeFnId::Localtime
                 // `microtime()` formats into fresh storage from the clock; it has no string
                 // argument to alias. Its float mode is non-heap and unaffected.
                 | RuntimeFnId::Microtime
@@ -2007,6 +2615,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
+                | RuntimeFnId::Strtotime
                 // Every `str_word_count()` shape allocates its own result: format 0 is a plain
                 // integer, format 1 pushes persisted copies into a brand-new indexed array, and
                 // format 2 persists each word before inserting it into a brand-new hash. Nothing
@@ -2052,6 +2661,13 @@ impl RuntimeFnId {
         } else if matches!(
             self,
             RuntimeFnId::BaseConvert
+                // Type names live in static data, never in the inspected value. A possible
+                // alias would suppress cleanup of boxed array/property read temporaries.
+                | RuntimeFnId::Gettype
+                // Class names come from metadata, including Closure and incomplete-class
+                // literals, not the inspected object's storage or its boxed read cell.
+                | RuntimeFnId::GetClass
+                | RuntimeFnId::GetParentClass
                 // `__rt_chunk_split` always writes into a reservation taken from
                 // `__rt_concat_reserve`, so the split result can never alias the subject or
                 // the separator. The default `MayAliasArguments` bucket kept an owned subject
@@ -2062,16 +2678,18 @@ impl RuntimeFnId {
                 // resource argument's Mixed cell. Retaining that argument as a
                 // possible result alias leaks its temporary resource lease.
                 | RuntimeFnId::Fread
-                // Type/class names are separate static/runtime metadata strings,
-                // not the input's value cell or object storage.
-                | RuntimeFnId::Gettype
-                | RuntimeFnId::GetClass
                 | RuntimeFnId::Decbin
                 | RuntimeFnId::Dechex
                 | RuntimeFnId::Decoct
                 | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
-                | RuntimeFnId::Implode
+                // Replacement always writes into a separate concat reservation, even
+                // for an empty search or no match. It never returns an argument view,
+                // but scratch-backed results still need ordinary string persistence.
+                | RuntimeFnId::StrReplace
+                | RuntimeFnId::StrIreplace
+                // Repetition uses separate concat storage and cannot alias its subject.
+                | RuntimeFnId::StrRepeat
         ) {
             BuiltinResultOwnership::Independent
         } else {
@@ -2149,6 +2767,7 @@ impl RuntimeFnId {
             RuntimeFnId::Usort => "usort",
             RuntimeFnId::CallUserFunc => "call_user_func",
             RuntimeFnId::CallUserFuncArray => "call_user_func_array",
+            RuntimeFnId::CloneWith => "clone",
             RuntimeFnId::ClassAlias => "class_alias",
             RuntimeFnId::ClassExists => "class_exists",
             RuntimeFnId::ClassImplements => "class_implements",
@@ -2397,10 +3016,24 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcAsyncGcCollect => "__elephc_async_gc_collect",
             RuntimeFnId::ElephcAsyncMonitorEvent => "__elephc_async_monitor_event",
             RuntimeFnId::ElephcAsyncPoll => "__elephc_async_poll",
+            RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
+                "__elephc_clone_override_reference_guard"
+            }
             RuntimeFnId::ElephcObjectIsEnum => "__elephc_object_is_enum",
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",
             RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
+            RuntimeFnId::ElephcOpcacheRtScriptField => "__elephc_opcache_rt_script_field",
+            RuntimeFnId::ElephcOpcacheRtScriptPath => "__elephc_opcache_rt_script_path",
+            RuntimeFnId::ElephcOpcacheRtBlacklistEntry => "__elephc_opcache_rt_blacklist_entry",
+            RuntimeFnId::ElephcOpcacheRtReset => "__elephc_opcache_rt_reset",
+            RuntimeFnId::ElephcOpcacheRtIsCached => "__elephc_opcache_rt_is_cached",
+            RuntimeFnId::ElephcOpcacheRtDiscard => "__elephc_opcache_rt_discard",
+            RuntimeFnId::ElephcOpcacheRtSoftInvalidate => "__elephc_opcache_rt_soft_invalidate",
+            RuntimeFnId::ElephcOpcacheRtCompile => "__elephc_opcache_rt_compile",
+            RuntimeFnId::ElephcOpcacheRtInFileCache => "__elephc_opcache_rt_in_file_cache",
+            RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
+            RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",
@@ -2532,7 +3165,71 @@ impl RuntimeFnId {
             RuntimeFnId::Long2ip => "long2ip",
             RuntimeFnId::Ltrim => "ltrim",
             RuntimeFnId::MbEregMatch => "mb_ereg_match",
+            RuntimeFnId::MbEreg => "mb_ereg",
+            RuntimeFnId::MbEregi => "mb_eregi",
+            RuntimeFnId::MbEregSearchInit => "mb_ereg_search_init",
+            RuntimeFnId::MbEregSearch => "mb_ereg_search",
+            RuntimeFnId::MbEregSearchPos => "mb_ereg_search_pos",
+            RuntimeFnId::MbEregSearchRegs => "mb_ereg_search_regs",
+            RuntimeFnId::MbEregSearchGetpos => "mb_ereg_search_getpos",
+            RuntimeFnId::MbEregSearchGetregs => "mb_ereg_search_getregs",
+            RuntimeFnId::MbEregSearchSetpos => "mb_ereg_search_setpos",
+            RuntimeFnId::MbSplit => "mb_split",
+            RuntimeFnId::MbEregReplace => "mb_ereg_replace",
+            RuntimeFnId::MbEregReplaceCallback => "mb_ereg_replace_callback",
+            RuntimeFnId::MbEregiReplace => "mb_eregi_replace",
             RuntimeFnId::MbStrlen => "mb_strlen",
+            RuntimeFnId::MbStrwidth => "mb_strwidth",
+            RuntimeFnId::MbStrtoupper => "mb_strtoupper",
+            RuntimeFnId::MbStrtolower => "mb_strtolower",
+            RuntimeFnId::MbConvertCase => "mb_convert_case",
+            RuntimeFnId::MbUcfirst => "mb_ucfirst",
+            RuntimeFnId::MbLcfirst => "mb_lcfirst",
+            RuntimeFnId::MbStrimwidth => "mb_strimwidth",
+            RuntimeFnId::MbSubstr => "mb_substr",
+            RuntimeFnId::MbStrcut => "mb_strcut",
+            RuntimeFnId::MbScrub => "mb_scrub",
+            RuntimeFnId::MbTrim => "mb_trim",
+            RuntimeFnId::MbLtrim => "mb_ltrim",
+            RuntimeFnId::MbRtrim => "mb_rtrim",
+            RuntimeFnId::MbStrPad => "mb_str_pad",
+            RuntimeFnId::MbConvertKana => "mb_convert_kana",
+            RuntimeFnId::MbSubstrCount => "mb_substr_count",
+            RuntimeFnId::MbOrd => "mb_ord",
+            RuntimeFnId::MbChr => "mb_chr",
+            RuntimeFnId::MbStrpos => "mb_strpos",
+            RuntimeFnId::MbStripos => "mb_stripos",
+            RuntimeFnId::MbStrrpos => "mb_strrpos",
+            RuntimeFnId::MbStrripos => "mb_strripos",
+            RuntimeFnId::MbStrstr => "mb_strstr",
+            RuntimeFnId::MbStristr => "mb_stristr",
+            RuntimeFnId::MbStrrchr => "mb_strrchr",
+            RuntimeFnId::MbStrrichr => "mb_strrichr",
+            RuntimeFnId::MbLanguage => "mb_language",
+            RuntimeFnId::MbInternalEncoding => "mb_internal_encoding",
+            RuntimeFnId::MbHttpOutput => "mb_http_output",
+            RuntimeFnId::MbEncodingAliases => "mb_encoding_aliases",
+            RuntimeFnId::MbStrSplit => "mb_str_split",
+            RuntimeFnId::MbPreferredMimeName => "mb_preferred_mime_name",
+            RuntimeFnId::MbCheckEncoding => "mb_check_encoding",
+            RuntimeFnId::MbSubstituteCharacter => "mb_substitute_character",
+            RuntimeFnId::MbListEncodings => "mb_list_encodings",
+            RuntimeFnId::MbDetectOrder => "mb_detect_order",
+            RuntimeFnId::MbDetectEncoding => "mb_detect_encoding",
+            RuntimeFnId::MbConvertEncoding => "mb_convert_encoding",
+            RuntimeFnId::MbConvertVariables => "mb_convert_variables",
+            RuntimeFnId::MbEncodeNumericentity => "mb_encode_numericentity",
+            RuntimeFnId::MbDecodeNumericentity => "mb_decode_numericentity",
+            RuntimeFnId::MbDecodeMimeheader => "mb_decode_mimeheader",
+            RuntimeFnId::MbEncodeMimeheader => "mb_encode_mimeheader",
+            RuntimeFnId::MbOutputHandler => "mb_output_handler",
+            RuntimeFnId::MbGetInfo => "mb_get_info",
+            RuntimeFnId::SharedIni => "__elephc_shared_ini",
+            RuntimeFnId::MbParseStr => "mb_parse_str",
+            RuntimeFnId::MbSendMail => "mb_send_mail",
+            RuntimeFnId::MbHttpInput => "mb_http_input",
+            RuntimeFnId::MbRegexEncoding => "mb_regex_encoding",
+            RuntimeFnId::MbRegexSetOptions => "mb_regex_set_options",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
             RuntimeFnId::Octdec => "octdec",
@@ -2587,6 +3284,7 @@ impl RuntimeFnId {
             RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
+            RuntimeFnId::Getmypid => "getmypid",
             RuntimeFnId::Gmdate => "gmdate",
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",
@@ -2633,6 +3331,8 @@ impl RuntimeFnId {
 /// Truncates a runtime callable signature while keeping all parameter metadata aligned.
 fn truncate_callable_params(sig: &mut crate::types::FunctionSig, count: usize) {
     sig.params.truncate(count);
+    sig.param_type_exprs.truncate(count);
+    sig.param_attributes.truncate(count);
     sig.defaults.truncate(count);
     sig.ref_params.truncate(count);
     sig.declared_params.truncate(count);
@@ -2653,5 +3353,44 @@ fn set_callable_param_type(
 ) {
     if let Some((_, param_ty)) = sig.params.get_mut(index) {
         *param_ty = php_type;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeFnId;
+    use crate::builtins::semantics::BuiltinResultOwnership;
+    use crate::types::PhpType;
+
+    /// The declared-array union is boxed, but `array_values()` always returns dense Mixed slots.
+    #[test]
+    fn array_values_fallback_normalizes_declared_array_union_result() {
+        assert_eq!(
+            RuntimeFnId::ArrayValues.fallback_result_type(
+                &[PhpType::php_array()],
+                &PhpType::Mixed,
+            ),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+    }
+
+    /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
+    #[test]
+    fn runtime_result_ownership_distinguishes_fresh_boxes_from_concat_storage() {
+        for target in [
+            RuntimeFnId::Getdate,
+            RuntimeFnId::Localtime,
+            RuntimeFnId::Strtotime,
+            RuntimeFnId::Hrtime,
+            RuntimeFnId::GraphemeStrrev,
+        ] {
+            assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
+        }
+        for target in [RuntimeFnId::StrRepeat, RuntimeFnId::StrReplace] {
+            assert_eq!(
+                target.result_ownership(),
+                BuiltinResultOwnership::Independent
+            );
+        }
     }
 }

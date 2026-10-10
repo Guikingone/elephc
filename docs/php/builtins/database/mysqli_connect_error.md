@@ -1,8 +1,8 @@
 ---
 title: "mysqli_connect_error()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the error message of the last connection attempt."
 sidebar:
-  order: 106
+  order: 107
 ---
 
 ## mysqli_connect_error()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_connect_error(): ?string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the error message of the last connection attempt.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

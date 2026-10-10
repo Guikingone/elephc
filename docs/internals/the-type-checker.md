@@ -68,6 +68,26 @@ This is still much smaller than full PHP's runtime type system, but it now inclu
 
 `Resource(Option<String>)` represents PHP resource handles. `Resource(None)` is a generic resource, while `Resource(Some("stream"))` is the stream-handle shape used by successful `fopen()` calls and the `STDIN` / `STDOUT` / `STDERR` constants. Resource values are stored as one 8-byte native payload in codegen, but the type checker keeps them distinct from integers so stream built-ins can reject plain numeric descriptors.
 
+## Generic specialization
+
+`src/generics.rs::monomorphize()` drives checking to a fixed point: each round
+collects requested function, class, constructor, and method instantiations,
+substitutes their concrete types, splices declarations into the AST, and checks
+again. Generic traits are instantiated before trait flattening. Templates are
+removed before downstream optimization and EIR lowering, which receive ordinary
+concrete declarations such as `Box<int>` and `identity<int>`.
+
+The checker validates bounds and variance, and records resolved call, construction,
+and method sites in `CheckResult`. Site keys include the enclosing body scope and
+source span, so one template coordinate can select different instantiations.
+Typed arrays retain their declared element or key/value storage, and callable
+signatures carry inference information while keeping ordinary descriptor storage.
+
+Supported PHPDoc templates are applied per physical file after the strict-PHP
+audit. They affect type checking and specialization in both modes; strict mode
+rejects the native generic syntax. See [Generics](../beyond-php/generics.md) for
+bounds, defaults, variance, runtime class identities, and current limitations.
+
 ## How inference works
 
 The type checker walks the AST top-down, maintaining a **type environment** — a `HashMap<String, PhpType>` that maps variable names to their types. It also tracks a **constants map** — a `HashMap<String, PhpType>` that records the type of each user-defined constant (declared via `const` or `define()`).
@@ -183,6 +203,56 @@ also record the target depth at entry: `break` or `continue` may target
 loops/switches created inside that `finally`, but jumping out of a `finally`
 block is rejected to match PHP.
 
+### Loop-carried storage contracts
+
+**File:** `src/types/checker/loop_storage.rs`
+
+A loop body is checked **once**, with the environment as it stands at loop
+entry. That is fine for a local the body only reads, and wrong for one the body
+rebinds: the back edge carries the new value back to the top, so the second
+iteration starts holding something the first iteration's types never described.
+
+`loop_carried_storage_types()` runs before the body is checked and closes that
+gap. It collects every value assignment and every array write in the body (plus
+the `for` update clause), then replays them against a copy of the entry
+environment until the types stop changing — a fixed point, so a promotion can
+cascade through intermediate locals and through later iterations. The result is
+a list of *storage contracts*: the representation each affected local must have
+for the whole loop. `stabilize_loop_storage()` installs them into the
+environment, and EIR lowering consumes the recorded contract instead of
+re-inferring, which keeps non-literal right-hand sides aligned across the two
+layers.
+
+Only locals that need an up-front representation are reported. Two entry shapes
+qualify:
+
+- **Array locals** whose stable form needs boxed payloads (`array<int>` that
+  also receives a string becomes `array<mixed>`), or a boxed whole value when
+  the container kind itself varies across the body.
+- **Null locals** — a local that enters holding `null` and is assigned something
+  else inside the body becomes boxed `Mixed`.
+
+The null contract is boxed `Mixed` rather than the fixed point's own join. The
+join of `null` and `int` is already `Mixed`, but the join of `null` and `array`
+is `array` — right for an array-typed entry that is merely growing, wrong here,
+because the **first** read still happens before the assignment and still sees
+null. `Mixed` is the one representation that holds both on every path, and it is
+what keeps a `=== null` guard a real runtime tag test instead of a constant the
+optimizer folds:
+
+```php
+$n = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($n === null) { $n = 0; }   // without the contract: folded always-true
+    $n++;
+    echo $n;                       // ...so this printed 111, not 123
+}
+```
+
+The widening is driven by evidence, not by the entry type alone: a loop that
+never assigns the local leaves it `null`, so a null local a loop only reads is
+untouched (issue #562).
+
 ## Expression type inference
 
 The type checker computes the type of every expression:
@@ -201,6 +271,10 @@ The type checker computes the type of every expression:
 | `["a" => 1]` | `AssocArray { key: Str, value: Int }` |
 | `["a" => 1, "b" => "two"]` | `AssocArray { key: Str, value: Mixed }` |
 
+A literal that mixes spreads and explicit keys uses `AssocArray` with `Mixed`
+keys. Each spread contributes its source's element type once, so spreading an
+array of arrays preserves the nested array type in the resulting value slots.
+
 ### Binary operations
 
 | Operation | Types | Result |
@@ -217,7 +291,7 @@ The type checker computes the type of every expression:
 | `Int & Int` | bitwise | `Int` |
 | `Int <=> Int` | spaceship | `Int` (-1, 0, or 1) |
 | `expr instanceof ClassName` | class/interface metadata check | `Bool` |
-| `expr ?? expr` | null coalescing | Type of the non-null operand |
+| `expr ?? expr` | null coalescing | Left type without `null`, joined with the default's type; the left type alone when the left operand is never null (see [Null-coalesce results](#null-coalesce-results)) |
 | `print expr` | output expression | `Int` (`1`) |
 
 ### Function calls
@@ -331,6 +405,27 @@ initializes. A name that is *also* assigned at top level (`if (!isset($cfg)) { $
 get that assigned type on a slot the probe reads before the store, so the original diagnostic is
 restored for it.
 
+### Null-coalesce results
+
+**Files:** `src/types/checker/inference/expr/null_coalesce.rs`, `src/types/checker/inference/expr/mod.rs`
+
+`value ?? default` removes `null` from the left type and joins what is left with the default's
+type. Arrays widen elementwise, two object arms meet at the supertype one side already accepts (or
+stay a union of both), and an arm that already mixes an object with a scalar keeps a union:
+`?(Contract|int) ?? new Implementation()` is `Contract|int`, which an `is_int()` guard narrows back
+to `Contract`. Every other heterogeneous pair joins to `mixed`, as a ternary's branches do, so a
+pure object arm against a pure scalar arm (`?Contract ?? 'none'`) is `mixed`.
+
+The default is left out entirely when the left operand can never be null, because it is dead code
+there: a fresh value (a literal, `new`, `clone`, a closure, `$this`) or a call whose target
+declares a return type that excludes null (a function, a method called on `$this` or on a
+variable, or a static method). `find() ?? new Other()` over `function find(): Implementation|false`
+is therefore still `Implementation|false`. Storage operands never qualify, whatever their type:
+`??` reads an unassigned or `unset()` variable, a missing array key and an uninitialized property
+as null, and the checker has no definite-assignment analysis to rule those out. Inferred returns do
+not qualify either, since a body that falls off its end returns an implicit `null` its inferred
+type omits, and neither do builtin and extern results.
+
 ## User-defined function checking
 
 **Files:** `src/types/checker/functions.rs`, `src/types/checker/functions/`
@@ -364,8 +459,26 @@ pub struct FunctionSig {
 
 - `param_type_exprs` preserves the exact source `TypeExpr` of each written parameter hint, alongside the resolved `PhpType` in `params`.
 - `param_attributes` carries PHP 8 attribute groups attached to each parameter, for Reflection metadata.
-- `by_ref_return` records `function &f()` / `fn &()` declarations — the function returns a reference (alias) to the returned lvalue rather than a copy.
+- `by_ref_return` records `function &f()` / `fn &()` declarations: the function returns a reference (alias) to the returned lvalue rather than a copy. It is also the only source for `ReflectionFunction::returnsReference()` / `ReflectionMethod::returnsReference()`. Every reflection record codegen builds for a callable (a class, interface or trait method, where the trait's own EIR signature keeps the flag too; the listed entry `getMethods()` returns; and the declaring-function record a parameter's `getDeclaringFunction()` returns) copies it into its `returns_reference` field, and none of them bakes a value. A property hook's `ReflectionMethod` record reads the hook's `&get` declaration (`PropertyHooks::get_by_ref`, or the abstract contract's), and eval reflection reads the same flag through the generated method rows and native-function registration; an abstract or interface `&get` contract, which has no accessor, keeps it on the Magician property metadata (`EvalClassProperty::get_contract_returns_by_ref`, `EvalInterfaceProperty::get_returns_by_ref`, and the `NATIVE_PROPERTY_GET_BY_REF` registration flag for a compiled contract). A record built without a signature (constants, enum cases, properties) carries `false`.
 - `ref_params` tracks which parameters use `&` (pass by reference). The codegen passes the stack address of the argument instead of its value.
+
+#### Storage rules for a declared by-reference argument
+
+Because codegen passes the stack address, a declared by-reference parameter is checked against the caller's **storage**, not just against the incoming value. `Checker::require_by_ref_argument_storage` (`src/types/checker/type_compat/declarations.rs`) is the one place that decides it, and it is the reason a by-reference position is stricter than the by-value position next to it:
+
+| declared parameter | caller's variable | verdict |
+|---|---|---|
+| needs boxed storage (`mixed`, `?int`, a union) | a concrete non-boxed slot | rejected — the callee can write values the slot cannot represent |
+| does not accept null (`int`, `float`, `bool`, `string`) | holds `null` (`PhpType::Void`) | rejected — nothing coerces the slot on the way in |
+| anything else | matching representation | accepted |
+
+Boxed object references are a narrow exception. When a by-reference call can change an object variable to another type, elephc promotes the variable and its aliases to one shared `Mixed` cell. A later `ClassName &$value` call reuses that cell and emits a runtime entry guard, which throws a catchable `TypeError` unless the current payload is an instance of the declared class. Interface dispatch can likewise widen `ClassName &$value` to an implementing `mixed &$value` parameter without copying the cell, so writes remain visible through every alias.
+
+The second row is the one that is easy to get backwards, and it was: `types_compatible` deliberately accepts `Void` for `Int`, `Float` and `Bool`, which is **correct by value** (PHP coerces `null` to `0`/`0.0`/`false` for an internal function's by-value parameter) and wrong by reference. That acceptance short-circuited every later by-reference check, so the argument was admitted with the caller's local still typed `Void` while the callee wrote an int through the reference; the first thing the caller then did with the local reached EIR lowering as an operation on a null and produced a positionless `unsupported EIR backend feature: icmp for PHP type Void` (issue #892, reported through `curl_multi_exec()`'s `$still_running`).
+
+php-src draws the same line for a **userland** function — `function out(int &$s) {} $x = null; out($x);` is a `TypeError` there too. It is laxer only for its own **internal** functions, which is why a `curl_*` wrapper written in elephc-PHP rejects a `null` seed that php.net's examples use; `docs/php/curl.md` says so where the multi loop is documented.
+
+`Checker::declared_type_accepts_null` answers "does this declared type admit `null`" for both this rule and the return position, as one predicate, so the two cannot drift.
 - `declared_params` lets later phases distinguish explicit PHP type hints from inferred/defaulted parameter types.
 - `declared_return` lets later phases distinguish explicit PHP return hints from inferred return types.
 - `variadic` holds the name of the variadic parameter (e.g., `$args` in `function foo(...$args)`). Extra arguments beyond the regular parameters are collected into an array.
@@ -377,13 +490,186 @@ Parameters without a type hint start from an `Int` fallback and are specialized 
 
 The same accumulation applies to instance-method and static-method parameters. Closure parameters specialize to the first observed argument type but do not widen to a union, so a closure invoked with incompatible argument types is rejected rather than coerced.
 
+Source instance interface methods have no body or concrete call-site type to infer from. Their untyped parameters and untyped returns use `Mixed` at the interface ABI. Untyped parameters in the corresponding implementing methods also keep `Mixed` storage instead of being specialized by direct calls. A declared implementation parameter cannot narrow an untyped interface parameter. This gives interface dispatch one stable argument layout while concrete return values are boxed by the interface wrapper when needed.
+
+After a method body stabilizes, its inferred return type and callable-return metadata are propagated to every inheriting class view that dispatches to that implementation. Calls through a child type therefore use the same return ABI as the inherited method body.
+
+Because that specialization is final, a `null` argument is excluded from it (`specialize_callable_var_sig_from_args`). `Void` is the one type no later call could satisfy, so adopting it would close the parameter to null alone — `$f(null); $f(5);` was rejected with *"parameter $v expects Void, got Int"* where PHP prints `nx` (issue #567). Skipping it also makes the two spellings of the same call agree: for `function ($v = null)`, `$f()` and `$f(null)` pass the same value, and only the second one used to close the parameter.
+
 This information is then used when checking calls to that function.
+
+#### When no direct call site exists
+
+The `Int` fallback is only sound because a direct call site replaces it. A function reached
+**only** through a dynamic callable — a runtime string name passed to `call_user_func`,
+`array_map`, an `ob_start` handler — has no such site, so every untyped parameter keeps the
+fallback, and a return inferred from one records `Int` for a value that is really whatever the
+caller passed.
+
+So a function **no call site ever passed arguments to**, whose un-hinted body hands one of its
+untyped by-value parameters straight back, records `mixed` instead
+(`src/types/dynamic_params.rs`, applied by `widen_dynamic_only_passthrough_returns` once every
+signature exists and every direct call has been seen):
+
+```php
+function h($b, $p) { return $b; }
+$fn = 'h';
+var_dump(call_user_func($fn, "probe", 9));   // string(5) "probe"; was int(0)
+```
+
+It is recorded in the **checker**, not during lowering, because the declaration and its call
+sites have to reach the same answer: EIR already boxes such a parameter, and widening only the
+callee left the caller reading the boxed cell back as a raw integer. `ir_lower` applies the same
+predicate to methods when it normalizes their ABIs, through the same module, so the two cannot
+drift apart.
+
+The rule is narrow on purpose, in two ways.
+
+Only a `return` that yields the parameter itself counts — through the pass-through shapes
+(`?:`, `??`, `match`, `@`, assignment) — so a body that computes its own result keeps the type
+it inferred (`function add($a, $b) { return $a + $b; }` still returns `int`), and a declared
+return type is authoritative and never overridden.
+
+And it applies only where no call site ever passed arguments. That is tracked explicitly in
+`functions_called_directly` rather than inferred from whether a signature exists, because the
+two differ for the shape that matters: `array_map(h(...), […])` *resolves* `h` while checking
+the callable expression — inserting a placeholder-based signature — without ever calling it, so
+`h`'s parameters still hold the placeholder and its return still needs widening.
+
+Applying the widening to every pass-through body instead feeds back on itself:
+
+```php
+function grow($arr) { … ; return $arr; }
+$arr = grow($arr);        // recording mixed makes the LOCAL mixed…
+                          // …which re-specializes the parameter to mixed…
+                          // …and array_push($arr, …) inside the body stops checking
+```
+
+A function with a direct call site already learns its real parameter types from it and needs
+nothing here (issue #576).
+
+### Hint-less return inference
+
+A function with no return hint gets its signature from folding the types of its `return`
+statements pairwise through `Checker::wider_type`
+(`src/types/checker/functions/returns.rs`). The rule that matters there is **what may absorb
+what**, and it is ordered deliberately:
+
+| pair | result | why |
+|---|---|---|
+| `T`, `never` | `T` | a diverging path contributes nothing |
+| `T`, `null` | `T\|null` | `null` is a value, not a width |
+| `T`, `false` / `bool` | `T\|false` / `T\|bool` | same — a sentinel is not a width |
+| anything with `mixed` | `mixed` | `mixed` admits everything |
+| a union with anything | the normalized union | a union already carries its members |
+| `string`, other scalar | `string` | PHP's coercion order |
+| `float`, other scalar | `float` | PHP's coercion order |
+| otherwise | `mixed` | no honest narrower answer |
+
+**Sentinels are never absorbed by a width.** `string` swallowing `false` inferred plain
+`string`, so a function returning `false` on failure lowered that arm as a string and the
+caller saw `""` — `$r === false` was simply wrong. `float` did the same with `0.0` and `bool`
+was stringified to `"1"`. `int|false` escaped only because it fell through to `mixed`, which
+carries the value distinctly; that accident is why the defect first looked specific to the
+image builtins that reported it (issue #398).
+
+**A union is never absorbed either**, which is what makes the fold survive a *third* return.
+The fold is pairwise, so `false`, `"." . $ext`, `$ext` builds `string|false` from the first
+pair and then has to keep it against the third — before this, `string` ate it and the union
+held only for exactly two returns. The same flaw was live on the `null` arm.
+
+Unions are built through `normalize_union_members`
+(`src/types/checker/type_compat/unions.rs`), the same normalizer declared types use: it
+flattens nesting, lets `mixed` absorb, dedupes, and applies PHP's `bool`/`false` subtype rule
+so the two never coexist as separate members. Sharing it matters beyond tidiness —
+`PhpType` and `FunctionSig` compare structurally, and callable-return metadata is keyed on
+that equality, so a hand-rolled `string|false|bool` would stop matching the `string|bool` a
+declared spelling produces.
+
+The result is that a hint-less union return is byte-identical to writing the hint out, and
+`codegen_repr()` maps it to the boxed representation that carries the sentinel rather than
+coercing it into the other arm's zero value.
+
+### Return-to-argument alias summaries
+
+After checking, a lightweight AST pass (`src/types/return_alias.rs`) records, for every
+source-declared function and method, whether its result can be storage the CALLER still owns.
+The answer is one of three things: `None` (every return path is independent of the arguments),
+`Parameters({i, ...})` (a return path can hand parameter `i`'s storage back), or `Unknown`.
+
+EIR lowering reads it at the call site. A result proven to alias an argument is BORROWED, so
+the caller must not release it; anything else is owned, and the caller releases it once it is
+consumed. Getting that backwards costs one leaked block per call in one direction and a
+use-after-free in the other, so the pass is deliberately conservative: it merges provenance
+across branches, runs loop bodies to a fixed point, and answers `Unknown` for any storage path
+it cannot follow.
+
+The rule that is easy to get wrong is the cast. A cast is only alias-transparent when EIR
+lowering ELIDES it, and `lower_cast` elides exactly one shape: `(string)` over a value whose IR
+type is already `Str`, which compiles to nothing at all. Every other cast emits `Op::Cast`,
+whose backend helpers write into storage independent of the source — `(string)` over a boxed
+`mixed` COPIES the payload into a fresh allocation, and `(array)` allocates even when its
+operand is already an array. Treating every cast as transparent is what made
+`function f($v) { return (string)$v; }` leak a full copy of the string on every call
+(issue #700).
+
+So the pass has to answer a question the declarations alone cannot: is this operand's slot a
+bare `Str` RIGHT HERE? It tracks that in `str_slot_locals`, a flow-sensitive set of names
+alongside the provenance map:
+
+- It is **seeded** with the visible parameters declared exactly `string`. Only those get a bare
+  `Str` slot in the first place.
+- It is **never gained**. A local is boxed Mixed whatever is written into it — `$x = $s` over a
+  `string` parameter still lowers through `mixed_box` — so no assignment can add a name.
+- It **shrinks** when a `string` parameter is assigned something that is not itself bare-`Str`
+  (a `mixed` parameter, or a boxed local such as `$c ? $p : $q`), and when the name is bound by
+  reference, since `&` writes are not visible as ordinary assignments. `++` and `--` also
+  remove the name because EIR stores their result in a boxed `Mixed` slot.
+- It is **intersected** at every control-flow merge: a slot counts as bare `Str` after an `if`
+  only if it was one on every path into that point.
+
+A `(string)` cast is a candidate passthrough only when its operand is still in that set. The
+lookup sees through exactly the wrappers `expr_alias` treats as transparent — `@$s`, a named
+argument, a spread, and an already-elided inner `(string)` — so `return (string)@$s` and
+`(string)(string)$s` behave like `return (string)$s`. If the two disagreed about which
+expression "the operand" is, the result would be a use-after-free rather than a leak.
+
+Assignment expressions require their result storage to be checked as well. For a variable
+target, EIR reloads the target after storing the source; `(string)($a = $b)` borrows `$b` only
+when `$a` still has a bare `Str` slot and `$b` also supplies bare `Str` storage. A boxed target
+such as a `mixed` parameter, or a `string` parameter boxed by an earlier increment, causes the
+outer cast to copy. For a simple array element or other non-local target, EIR reads the
+explicit result target after the write; when that is the original bare `Str` source, it
+remains borrowed. The provenance analysis applies any target-stabilization prelude before
+classifying that result target.
+
+Passing that gate is necessary but not sufficient, because the slot can be bare `Str` while
+holding a DIFFERENT parameter's storage:
+
+```php
+function f(string $a, string $b): string { $a = $b; return (string)$a; }  // borrowed from $b
+function g(string $a, mixed  $b): string { $a = $b; return (string)$a; }  // a fresh copy
+```
+
+In `f` the storage now in `$a` came from another bare `Str` slot, so `$a` stays in the set, the
+cast is still elided, and the summary names `$b` — the provenance, not the index the operand
+was spelled with. In `g` the assignment widened `$a`, it leaves the set, `lower_cast` emits
+`Op::Cast`, and the caller owns the copy. The second gate therefore re-checks the provenance
+itself: only one whose every parameter was declared `string` keeps the passthrough. Anything
+else answers `None`, and an `Unknown` provenance stays `Unknown`, because that is the one case
+where claiming independence would be a use-after-free rather than a leak.
 
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 
 **File:** `src/types/checker/stmt_check/narrowing.rs`
 
-Inside an `if` (or ternary) guarded by a type predicate, the checker narrows the guarded binding's type for each branch. `is_int`/`is_integer`/`is_long`, `is_float`/`is_double`/`is_real`, `is_string`, and `is_bool` narrow to the corresponding scalar; `$x instanceof Class` narrows to that class; `is_null($x)` and the strict comparisons `$x === null` and `$x === false` (in either operand order) narrow to `null` and to the literal `False` subtype respectively. `$x !== null` / `$x !== false` and single-operand `isset($x)` are the same guards with the branches swapped, so a leading `!` on them cancels out. The then-branch sees the guarded type and the else-branch sees the complement (a `Union` drops the matched members); a leading `!` swaps the two. The false-sentinel case preserves the literal `false`: after `if ($x === false) { throw ...; }`, an `int|false` value continues as plain `int`, while a full `bool` member is not stripped.
+Inside an `if` (or ternary) guarded by a type predicate, the checker narrows the guarded binding's type for each branch. `is_int`/`is_integer`/`is_long`, `is_float`/`is_double`, `is_string`, and `is_bool` narrow to the corresponding scalar; `$x instanceof Class` narrows to that class; `is_null($x)` and the strict comparisons `$x === null` and `$x === false` (in either operand order) narrow to `null` and to the literal `False` subtype respectively. `$x !== null` / `$x !== false` and single-operand `isset($x)` are the same guards with the branches swapped, so a leading `!` on them cancels out. The then-branch sees the guarded type and the else-branch sees the complement (a `Union` drops the matched members); a leading `!` swaps the two. The false-sentinel case preserves the literal `false`: after `if ($x === false) { throw ...; }`, an `int|false` value continues as plain `int`, while a full `bool` member is not stripped.
+
+`is_real` is an extension float guard only where extensions are enabled. A physical PHP
+statement under `--strict-php` does not narrow through a user function named `is_real`;
+LFC statements retain the builtin guard even under that flag. Both statement checking
+and the mixed-storage pre-scan install each statement's `source_mode`, so a function's
+guards and boxing warnings do not depend on whether its caller was written in PHP or LFC.
 
 The guarded receiver may be a variable, a simple instance property (`$var->prop`, `$this->prop`), or a simple static property (`self::$p`, `Cls::$p`). `static::$p` is never narrowed, because late static binding can select a subclass that redeclares the property. Property narrowings are stored under a synthetic environment key and are conservatively dropped after anything that could mutate the property — a property assignment, any call, or loop-body entry — and dropped per-object when the root local is rebound. Properties backed by PHP 8.4 `get` hooks or `__get` are never narrowed, because two reads may produce different values. Guard detection never raises a diagnostic of its own: a receiver whose type cannot be inferred is simply not narrowed.
 
@@ -415,6 +701,21 @@ function set($x): void {                 // $x inferred int|Foo from the call si
 ```
 
 Narrowing is purely a type-checker step: the variable keeps its boxed runtime (`Mixed`) representation, and codegen coerces it where the narrowed type is required — unboxing for scalar uses, and dispatching a method on a `Mixed`/union receiver by its runtime class id. Reassigning a narrowed variable inside a branch replaces the narrowed binding with the assigned type, and it invalidates any property narrowings rooted at that variable.
+
+#### Assigning inside a guarded region
+
+A guard publishes its view by OVERWRITING the environment entry, which is right for reads but wrong for the store in `$g = glob($dir . "/*.meta"); if ($g === false) { $g = []; }`: `merge_local_assignment_type` saw `false` on the left, `array<never>` on the right, and reported `cannot reassign $g from false to array<never>` — on the commonest fallback idiom in PHP (issue #509). The binding is `array<string>|false`, which holds an empty array, and no slot is abandoned, so there was nothing to reject.
+
+`Checker::narrowed_local_origins` carries the missing half. `control_flow` opens an entry for every name it narrows (`enter_flow_narrowing`), recording the type the binding held before the guard plus the view the guard published; a failed merge is re-measured against that origin, and if the binding holds the new value the store is accepted with the assigned type going into the environment. Three rules keep it honest:
+
+- **The origin is the outermost one.** Nested guards keep the first entry's origin, so a store inside `if (is_scalar($x)) { if (is_float($x)) { … } }` is judged against `$x`'s own type rather than against another guard's view.
+- **The complement re-opens the view.** An `if`/`elseif`/`else` chain narrows twice per guarded clause — to the target for its own body, then to the complement for the clauses after it — so `republish_flow_narrowing` records the second one and the `else` side of the idiom is recognised too.
+- **A store ends the guard's authority.** `record_store_over_flow_narrowing` clears the view as soon as the region binds the name, so the SECOND store in a region is measured against what the first left behind. Without it, `$a = 1; if (is_string($a)) { $a = "x"; $a = 2; }` would be accepted outright instead of reaching the branch-divergent `Mixed`-storage rule above and its `--strict-locals` error — comparing the view to the environment is not enough to tell the two apart, since the store in that example leaves `string` behind, which is also what the guard published.
+- **And it travels outward.** The enclosing region CONTAINS the closing one, so a store the inner one made is a store the enclosing one made: `exit_flow_narrowing` clears the restored entry's view too. That fact is `NarrowedLocalOrigin::stored_in_region` rather than `view.is_none()`, because a complement re-opens the view and the store still has to be remembered — including for a single-clause `if` with nothing after it, where the complement is published to an empty rest-of-chain. Without it, nesting was a way around the previous rule: `if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; }` was accepted while the same two stores written flat were not.
+
+Entries are per body (`enter_local_binding_scope` takes the map, so a closure checked inside a guarded branch starts empty) and are closed when the construct ends, including when its complement is kept for the statements after it: those are ordinary straight-line code, where a store that does not fit takes the depth-0 re-bind path instead.
+
+`mixed_storage_scan` already replayed a name's stores against the BINDING rather than against each guard's view (`guard_region_is_transparent`), so this brings the checker into line with the pre-scan rather than teaching it something new.
 
 ## Diagnostics and warnings
 
@@ -552,12 +853,14 @@ pub struct ClassInfo {
     pub final_methods: HashSet<String>,
     pub method_declaring_classes: HashMap<String, String>,
     pub method_impl_classes: HashMap<String, String>,
+    pub abstract_methods: HashSet<String>,        // declared abstract; codegen trims method_impl_classes to EMITTED bodies, so absence there does not mean abstract
     pub vtable_methods: Vec<String>,
     pub vtable_slots: HashMap<String, usize>,
     pub static_method_visibilities: HashMap<String, Visibility>,
     pub final_static_methods: HashSet<String>,
     pub static_method_declaring_classes: HashMap<String, String>,
     pub static_method_impl_classes: HashMap<String, String>,
+    pub abstract_static_methods: HashSet<String>,
     pub static_vtable_methods: Vec<String>,
     pub static_vtable_slots: HashMap<String, usize>,
     pub interfaces: Vec<String>,
@@ -567,9 +870,84 @@ pub struct ClassInfo {
 
 `vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property.
 
+### Declaring and implementing classes
+
+Two maps answer "whose method is this?", and they answer different questions:
+
+- `method_declaring_classes` (and `static_method_declaring_classes`) names the class PHP
+  REPORTS as declaring the method: `ReflectionMethod::getDeclaringClass()` and the class in
+  `Cannot override final method X::m`. An inherited method keeps its ancestor, and a trait
+  method names the class that uses the trait.
+- `method_impl_classes` (and `static_method_impl_classes`) names the class whose BODY a call
+  runs, which is the method symbol dispatch tables and runtime hook tables point at. Codegen
+  trims it to the bodies it actually emitted, so a missing entry does not mean the method is
+  abstract (see `abstract_methods`).
+
+The two agree almost everywhere. They differ where a compiler-injected body keeps an inherited
+final method's declarer: the PDO prelude gives `PDOException` its own `getCode()` body, which
+returns the SQLSTATE string, while PHP reports that method as the final `Exception::getCode()`.
+`injected_exception_final_override` (`schema/classes/methods.rs`) accepts that one dummy-span
+override and records `PDOException` as the implementing class but `Exception` as the declaring
+class; a source class, even one named `PDOException`, never takes that path.
+
+Each consumer reads the map that matches its question:
+
+| Consumer | Map | Why |
+|---|---|---|
+| `schema::classes::interfaces::validate_interface_method` | declaring, implementing, and the class itself | the SQLSTATE `getCode(): string\|int` contract is accepted wherever the inherited body comes from, so a subclass of `PDOException` is not re-validated against `Throwable::getCode(): int` |
+| AOT reflection (`reflection_method_declaring_class_name`) | declaring | what PHP prints |
+| eval reflection rows (`eval_reflection_instance_method_declaring_class`, `eval_reflection_static_method_declaring_class`) and eval attribute registration (`eval_native_method_declaring_class`) | declaring first, implementing as a fallback | eval must report the same owner as AOT, and attributes are keyed by that owner |
+| dispatch tables, `_class_*_ptrs` hook tables | implementing | the body that runs |
+
+### Constructor ownership
+
+A PRIVATE method is not inherited, so `ClassInfo::methods` deliberately carries no
+`__construct` entry on a descendant of a class that declares one. PHP still instantiates
+that descendant through the ancestor's constructor, and still NAMES the ancestor wherever a
+constructor is reported. `types::constructor_owner(classes, class_name)` models both halves:
+it walks the parent chain to the nearest class whose own `methods` map has the entry, and
+returns the instantiated class itself whenever that map already has one — so an inherited
+public or protected constructor (which IS copied into the descendant's map) resolves exactly
+as it did before.
+
+**Every consumer that asks "does this class have a constructor, and whose?" must go through
+it**, never `class_info.methods.get("__construct")` directly. Reading the map is right only
+when the question is about the class's own MEMBER LIST, which is a different question: PHP
+reports `method_exists('Child', '__construct')` as `false` and `get_class_methods('Child')`
+as empty for exactly this shape, while `ReflectionClass::getConstructor()` still finds the
+ancestor's. The two must not be conflated in either direction.
+
+The consumers are spread across the pipeline, and each one that read the map directly was a
+distinct user-visible defect:
+
+| Consumer | Question it asks |
+|---|---|
+| `checker::inference::objects::constructors` | visibility, arity, and the class NAMED in both diagnostics |
+| `ir_lower::expr::reflection_constructors` | which class's `__construct` a `ReflectionMethod` on the descendant resolves to |
+| `codegen::lower_inst::objects::fixed_new` / `dynamic_factory` | the constructor the allocation calls |
+| `codegen::lower_inst::objects::reflection::names_constants` | the synthetic member `getConstructor()` returns when the descendant's own map has none |
+| `codegen::lower_inst::objects::reflection::class_metadata` | `getConstructor()`'s member and `isInstantiable()` |
+| `codegen_support::runtime::data::user` | the eval ReflectionMethod lookup row, keyed by the descendant and carrying the OWNER as its declaring class |
+
+`ir_lower::expr::object_construction` and `ir_lower::expr::reflection_new_instance` ask the
+same question for a different purpose — the signature whose defaults pad a `new Child()` or
+`ReflectionClass::newInstance()` call — and both still read `class_info.methods` directly.
+That is the defect issue #868 tracks; they join the table when it lands.
+
+A descendant that declares its OWN constructor hides the ancestor's, private or not: the walk
+stops at the descendant, which is what makes `new static()` from the ancestor's scope report
+the DESCENDANT's visibility.
+
 ### Typed class constants (PHP 8.3)
 
 `src/types/checker/schema/class_constants.rs` validates typed constant declarations on classes, interfaces, enums, and traits. Validation is deferred until all class-like schemas exist, so object and interface relationships named in constant types resolve. Declared types are recorded in `constant_types`; initializer values are checked strictly against the declared type apart from PHP's allowed int-to-float widening, with a conservative `Mixed` inference accepted when an initializer cannot be narrowed statically. Inherited redeclarations must satisfy covariant type contracts, and constants declared `final` (PHP 8.1+) cannot be redeclared.
+
+`constants` on `ClassInfo` and `InterfaceInfo` is a map and carries no order, so each schema also records `constant_order`, the names in PHP's declaration order:
+- a class lists its own constants as declared, then those its traits bring in (`src/types/traits/merge.rs` sorts a compatible redeclaration back to its own position);
+- an enum interleaves cases and constants by their source spans, since the parser keeps them in two lists;
+- an interface lists its own constants, then each parent interface's.
+
+`ReflectionClass::getConstants()` / `getReflectionConstants()` build PHP's full order from these per-class lists. That order is the class's own names, then the parent chain, then the implemented interfaces, deepest ancestor first. The compiled path does this in `src/codegen/lower_inst/objects/reflection/class_members.rs`, and the eval bridge in `src/codegen/eval_class_constant_helpers.rs`, so compiled and `eval()` Reflection agree. A name missing from a recorded order still appears, after the ordered ones, sorted.
 
 For abstract methods, the checker keeps the inherited signature but intentionally leaves the implementation-class entry unset until a concrete subclass provides a body. Concrete classes are rejected if any abstract or interface requirement remains unresolved after inheritance + trait flattening + interface conformance checks.
 
@@ -604,6 +982,17 @@ When checking `new ClassName(...)`, it also rejects interfaces and abstract clas
 
 `Iterator`, `IteratorAggregate`, and the final built-in `Generator` class are injected by `src/types/checker/builtin_iterators.rs`. `Generator` implements `Iterator` and carries placeholder method bodies for `current`, `key`, `next`, `valid`, `rewind`, `send`, `throw`, and `getReturn`; codegen intercepts those methods and routes them to `__rt_gen_*` helpers. `yield_validation` marks any function or closure body containing `yield` as returning `Object("Generator")`, while still allowing declared return types compatible with `Generator`, `Iterator`, `Traversable`, or `iterable`.
 
+That coercion is one-way, and reading it backwards is a bug. A checked return type of `Object("Generator")` means *either* that the body holds a `yield` *or* that the author declared `: Generator` — and the second is not a generator at all:
+
+```php
+function inner(): Generator { yield 1; yield 2; }
+function factory(): Generator { return inner(); }   // an ordinary function
+```
+
+`factory` holds no token, so PHP runs its body to completion and hands back the object `inner()` produced. Lowering used the checked return type as its generator-ness signal and compiled `factory` as a coroutine, which made `return inner()` the value `getReturn()` reports rather than the function's result: iterating it never terminated (issue #1086). The checker records the syntactic fact on `FunctionSig::is_generator` from the source body, and `ir_lower::function` reads that bit. A later body scan can still add generator-ness; a declared `: Generator` return cannot.
+
+The token stays in the body because `optimize::generator_bodies::rewrite_preserving_yield` refuses a rewrite that would delete a body's last `yield`, including pre-check target folding. Before that guard existed, the declared type was the fallback that recovered generator-ness after a fold had removed the token — which is how the two questions came to be conflated.
+
 ## Output: CheckResult
 
 The type checker produces a `CheckResult` (defined in `src/types/result.rs`):
@@ -630,6 +1019,61 @@ pub struct CheckResult {
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>, // access violations lowered to runtime Error throws
 }
 ```
+
+### Two maps of builtin call results, and why they are two
+
+A builtin whose result depends on its arguments cannot be typed from its declaration.
+`array_slice()` returns an associative array for an associative source and an indexed one
+otherwise; the registry declares `array` for both. Only the contract knows, so lowering asks the
+checker what it decided for that call — by SPAN.
+
+`builtin_call_types` is that map, keyed by the span of whatever call the checker was inferring.
+For a builtin written out at its own call site, the span is the call and the entry is its result.
+
+That is not true of every span. `call_user_func($f, …)` with a VARIABLE callee records
+`call_user_func`'s own result — `Mixed`, because the checker cannot resolve `$f` — while lowering
+DOES resolve it statically and calls the builtin directly. Reading the shared map there labels a
+`bool`-returning builtin's raw result as `Mixed`, and the consumer dereferences it as a pointer.
+That is a segfault, and it is why the per-span lookup is absent from the static-callable path.
+
+`first_class_builtin_call_types` is the second map, written only where the checker resolved the
+SAME callee lowering will. The static-callable lowering reads that one and nothing else. Keeping
+them apart is what lets a callable-dispatched builtin keep its checked result without reopening
+the collision (issues #1042, #1092).
+
+The line between the two maps is *resolved by the checker from the same syntax lowering reads*,
+not *spelled a particular way*:
+
+| callback | recorded | why |
+|---|---|---|
+| `$fn($assoc, 1, 2)` where `$fn = array_slice(...)` | yes | the target is in `first_class_callable_targets`, which lowering mirrors in `static_callable_locals` |
+| `array_slice(...)($assoc, 1, 2)` | yes | the callee is the syntax itself |
+| `call_user_func("array_slice", …)` | yes | a literal name, resolved extern → builtin → user on both sides |
+| `call_user_func(array_slice(...), …)`, `call_user_func($fn, …)` | yes | the same two resolutions, reached through `call_user_func` |
+| `call_user_func_array(…, [<literal>])`, all three callback forms | yes | same lowering entry point; a literal argument array is the only shape whose elements lowering can hand to the builtin |
+| `call_user_func($f, …)` where `$f` is runtime-opaque | **no** | the checker cannot resolve `$f`; lowering may |
+| `call_user_func_array(…, $dynamic)` | **no** | the arguments are not known, so the contract cannot be asked with them |
+| a name that is also an EXTERN function | **no** | lowering resolves the extern first and never reads this map for it |
+| `$fn = "array_slice"; $fn($assoc, …)` | **no** | lowering resolves that string statically; the checker does not track string-literal callable locals at all |
+
+A call with no entry takes `RuntimeFnId::fallback_result_type` in lowering. For `array_slice()`
+that answer is built from the operand types alone: an associative source keeps its layout and a
+boxed `mixed`/`array` source gets the boxed PHP array type, so the string-literal spelling above
+slices a hash instead of refusing it (issue #1347).
+
+A `call_user_func_array(…, $dynamic)` call reaches the builtin's callable wrapper, whose ABI
+comes from `RuntimeFnId::refine_runtime_callable_wrapper_sig`. The `array_slice()` and
+`array_reverse()` wrappers keep their `$preserve_keys` parameter: they take a boxed source, whose
+result is the boxed PHP array whatever the flag says, so the boxed lowering reads the flag at run
+time instead of the wrapper silently renumbering the keys.
+
+When the contract REJECTS the arguments at a recorded site, the checker reports the rejection only
+if it is a compile-time literal requirement (`CompileErrorKind::AotLiteralRequired`: a
+`preserve_keys` flag, a constant or class name, a `str_word_count()` format). Every lowering of the
+callee needs that argument at compile time, so the direct call's diagnostic is the right one
+(issue #1346). Any other rejection is the direct call's view of its argument types, which can be
+narrower than the callable ABI: `$f = array_reverse(...); $f($mixed)` compiles and runs although
+`array_reverse($mixed)` is refused, so such a rejection falls back to the generic signature path.
 
 This is passed to the [code generator](the-codegen.md), which uses it to:
 - Allocate the right amount of stack space per variable

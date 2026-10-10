@@ -1,8 +1,8 @@
 ---
 title: "mysqli_get_proto_info()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the MySQL protocol version in use."
 sidebar:
-  order: 132
+  order: 133
 ---
 
 ## mysqli_get_proto_info()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_get_proto_info(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the MySQL protocol version in use.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -1,8 +1,8 @@
 ---
 title: "cairo_set_line_width()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Sets the stroke width in user-space units."
 sidebar:
-  order: 436
+  order: 437
 ---
 
 ## cairo_set_line_width()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_line_width(mixed $context, float $width): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Sets the stroke width in user-space units.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

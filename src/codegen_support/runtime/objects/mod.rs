@@ -9,9 +9,11 @@
 //! - Helper names are consumed directly by codegen paths for `stdClass` and JSON-decoded `Mixed` values.
 
 mod call_destructor;
+mod dump_dynamic_props;
 mod enum_debug;
 mod export_props;
 mod handles;
+mod magic_set_guard;
 mod mixed_array_append;
 mod mixed_array_fetch_for_write;
 mod mixed_array_get;
@@ -24,6 +26,9 @@ mod print_r_object;
 mod stdclass;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
+pub(crate) use dump_dynamic_props::{
+    emit_load_dump_dyn_hash, emit_obj_dump_dyn_props, emit_obj_dyn_prop_at,
+};
 pub(crate) use enum_debug::{
     emit_obj_enum_case_name, emit_obj_enum_kind, emit_obj_enum_name_offset,
     emit_var_dump_emit_enum_line,
@@ -35,9 +40,12 @@ pub(crate) use handles::{
     object_handle_index_slots,
 };
 pub(crate) use mixed_array_append::emit_mixed_array_append;
+pub(crate) use magic_set_guard::emit_magic_set_guard;
 pub(crate) use mixed_array_fetch_for_write::emit_mixed_array_fetch_for_write;
 pub(crate) use mixed_array_get::emit_mixed_array_get;
-pub(crate) use object_not_array::emit_throw_object_not_array;
+pub(crate) use object_not_array::{
+    emit_throw_object_not_array, emit_throw_serialization_denied, emit_throw_unserialization_denied,
+};
 pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;

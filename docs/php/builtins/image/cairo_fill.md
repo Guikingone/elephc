@@ -1,8 +1,8 @@
 ---
 title: "cairo_fill()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Fills the current path with the current source and clears the path."
 sidebar:
-  order: 403
+  order: 404
 ---
 
 ## cairo_fill()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_fill(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Fills the current path with the current source and clears the path.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -22,66 +22,100 @@ pub(crate) fn lower_call_user_func_builtin_escape(
     )))
 }
 
-/// Lowers `array_sum()` over indexed arrays and associative PHP-array storage.
+/// Lowers sum through the storage-neutral numeric aggregate helper.
 pub(crate) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_sum", 1)?;
-    let array = expect_operand(inst, 0)?;
-    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::AssocArray { .. }) {
-        ctx.load_value_to_result(array)?;
-        if ctx.emitter.target.arch == Arch::X86_64 {
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the associative-array pointer as the runtime helper argument
-        }
-        abi::emit_call_label(ctx.emitter, "__rt_hash_sum_mixed");
-        return store_if_result(ctx, inst);
-    }
-
-    lower_indexed_array_aggregate(
-        ctx,
-        inst,
-        "array_sum",
-        "__rt_array_sum",
-        Some("__rt_array_sum_mixed"),
-    )
+    super::boxed_aggregate::lower_aggregate(ctx, inst, false)
 }
 
-/// Lowers `array_product()` over supported indexed-array payloads.
+/// Lowers product through the storage-neutral numeric aggregate helper.
 pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_aggregate(
-        ctx,
-        inst,
-        "array_product",
-        "__rt_array_product",
-        None,
-    )
+    super::boxed_aggregate::lower_aggregate(ctx, inst, true)
 }
 
-/// Lowers `array_push()` by appending one value and publishing the mutated array.
+/// Lowers `array_push()` by appending every value and publishing the mutated array.
+///
+/// The operand list is `[array, value…]` with any number of trailing values, matching PHP's
+/// `array_push(array &$array, mixed ...$values)`. `array_push($a)` with no values is legal PHP
+/// too and just reads the current length back.
+///
+/// Values are appended one at a time in source order. Each append can reach `__rt_array_grow`
+/// and relocate the array, so the per-value helper republishes the receiver between steps rather
+/// than once at the end.
 pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_push", 2)?;
+    if inst.operands.is_empty() {
+        return Err(CodegenIrError::invalid_module(
+            "array_push expected at least 1 arg, got 0".to_string(),
+        ));
+    }
     let array = expect_operand(inst, 0)?;
+    let boxed_receiver = matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    );
+    if boxed_receiver && inst.operands.len() > 1 {
+        super::boxed_mutation::prepare_boxed_array_receiver(ctx, array, "array_push")?;
+    }
+    for index in 1..inst.operands.len() {
+        let value = expect_operand(inst, index)?;
+        if boxed_receiver {
+            super::super::super::arrays::lower_mixed_array_append_value(ctx, array, value)?;
+        } else {
+            super::super::super::arrays::lower_array_push_value(ctx, inst, array, value)?;
+        }
+    }
+    load_array_push_length_to_result(ctx, array)?;
+    store_if_result(ctx, inst)
+}
+
+/// Materializes the receiver's post-append element count into the int result register.
+///
+/// PHP's `array_push()` returns the new number of elements. Reading it back from the array
+/// rather than from the last append's return register covers the value-less form, which never
+/// calls a helper at all, and survives the write-backs each append performs.
+///
+/// A boxed `Mixed` receiver holds the container behind a cell, so the count comes from the
+/// generic length helper; a typed indexed array keeps its logical length in the first payload
+/// word and is read directly.
+fn load_array_push_length_to_result(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        super::super::super::arrays::lower_mixed_array_append(ctx, inst)?;
-    } else {
-        super::super::super::arrays::lower_array_push(ctx, inst)?;
+        // -- a boxed receiver keeps its container behind a cell, so ask the generic counter --
+        // `__rt_mixed_count` is on the single-argument INT-RESULT ABI (`x0` / `rax` in and
+        // out), not the C argument ABI. Handing it `rdi` left `rax` holding whatever the last
+        // append had put there, so `array_push()` on a boxed receiver returned 0 instead of
+        // the new element count (issue #1191).
+        ctx.load_value_to_result(array)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+        return Ok(());
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- a typed indexed array keeps its logical length in the first payload word --
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("ldr x0, [x0]");                            // read the post-append element count as the int result
+        }
+        Arch::X86_64 => {
+            // -- a typed indexed array keeps its logical length in the first payload word --
+            ctx.load_value_to_reg(array, "rax")?;
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // read the post-append element count as the int result
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
 ///
-/// PHP's `bool $preserve_keys = false` keeps each chunk's source integer keys instead of
-/// renumbering it from zero. A dense indexed array cannot hold a window that does not start at
-/// key 0, so the key-preserving form lowers to `__rt_array_chunk_to_hash`, which builds one owned
-/// hash per chunk. The checker guarantees the flag is a literal (it decides the result's static
-/// shape), so a non-literal operand can only mean the checker and the backend disagree.
+/// PHP's `bool $preserve_keys = false` renumbers each chunk from zero; a literal `true` keeps the
+/// chunk's source integer keys instead. A dense indexed array cannot hold a window that does not
+/// start at key 0, so the key-preserving form lowers to `__rt_array_chunk_to_hash`, which builds
+/// one owned hash per chunk. The checker guarantees the flag is a literal (it decides the
+/// result's static shape), so a non-literal operand can only mean the checker and the backend
+/// disagree.
 pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_chunk", 2, 3)?;
     let array = expect_operand(inst, 0)?;
@@ -94,9 +128,23 @@ pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
             )
         })?,
     };
-    let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
     let result_elem_ty =
         result_array_element_type("array_chunk", &inst.result_php_type.codegen_repr())?;
+    // An associative receiver walks its own entries rather than indexing a dense payload, so it
+    // takes the hash helper for BOTH modes; the flag only picks which key each entry lands under.
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        lower_hash_chunk_call(ctx, array, length, preserve_keys)?;
+        crate::codegen::emit_array_value_type_stamp(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &result_elem_ty,
+        );
+        return store_if_result(ctx, inst);
+    }
+    let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
     let result_inner_elem_ty = if preserve_keys {
         array_chunk_result_inner_hash_value_type(&result_elem_ty)?
     } else {
@@ -205,6 +253,23 @@ pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
 pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        if inst.result_php_type.codegen_repr() != PhpType::Mixed {
+            return Err(CodegenIrError::unsupported(
+                "boxed array_flip requires a boxed array result".to_string(),
+            ));
+        }
+        ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+        abi::emit_call_label(ctx.emitter, "__rt_array_flip_boxed");
+        let valid = ctx.next_label("array_flip_boxed_valid");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
+        crate::codegen::lower_inst::exceptions::emit_type_error(
+            ctx, "array_flip(): Argument #1 ($array) must be of type array",
+        );
+        ctx.emitter.label(&valid);
+        box_hash_result_for_mixed_builtin(ctx, inst, &PhpType::Mixed);
+        return store_if_result(ctx, inst);
+    }
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::AssocArray { .. }
@@ -294,17 +359,20 @@ pub(super) fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType
     }
 }
 
-/// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
-/// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
+/// Lowers boxed PHP arrays or concrete indexed arrays through their representation-safe reverse helper.
 ///
-/// PHP's `bool $preserve_keys = false` keeps the source integer keys while reversing the
-/// iteration order. A dense indexed array cannot hold keys in descending order, so the
-/// key-preserving form lowers to `__rt_array_to_hash_reverse`, which builds an owned hash. The
-/// checker guarantees the flag is a literal (it decides the result's static shape), so a
-/// non-literal operand can only mean the checker and the backend disagree about this call.
+/// PHP's `bool $preserve_keys = false` renumbers the reversed array from zero; a literal `true`
+/// keeps the source integer keys while reversing the iteration order. A dense indexed array
+/// cannot hold keys in descending order, so the key-preserving form lowers to
+/// `__rt_array_to_hash_reverse`, which builds an owned hash. The checker guarantees the flag is a
+/// literal (it decides the result's static shape), so a non-literal operand can only mean the
+/// checker and the backend disagree about this call.
 pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_reverse", 1, 2)?;
     let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        return super::boxed_reverse::lower_boxed_array_reverse(ctx, inst, array);
+    }
     let preserve_keys = match inst.operands.get(1).copied() {
         None => false,
         Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {

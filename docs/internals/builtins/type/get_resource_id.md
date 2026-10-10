@@ -1,16 +1,16 @@
 ---
-title: "get_resource_id() — internals"
+title: "get_resource_id() - internals"
 description: "Compiler internals for get_resource_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 859
+  order: 953
 ---
 
-## `get_resource_id()` — internals
+## `get_resource_id()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/get_resource_id.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/get_resource_id.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

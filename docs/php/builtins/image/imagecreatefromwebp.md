@@ -1,8 +1,8 @@
 ---
 title: "imagecreatefromwebp()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image from a WebP file."
 sidebar:
-  order: 492
+  order: 493
 ---
 
 ## imagecreatefromwebp()
@@ -11,7 +11,7 @@ sidebar:
 function imagecreatefromwebp(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image from a WebP file.
 
 **Parameters**:
 - `$filename` (`string`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

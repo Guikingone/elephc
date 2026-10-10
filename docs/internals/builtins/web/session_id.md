@@ -1,16 +1,16 @@
 ---
-title: "session_id() — internals"
+title: "session_id() - internals"
 description: "Compiler internals for session_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 896
+  order: 991
 ---
 
-## `session_id()` — internals
+## `session_id()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:2950](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L2950) (`session_id`)
+- **Lowering**: [`src/web_prelude/build.rs`:2992](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L2992) (`session_id`)
 - **Function symbol**: `session_id()`
 
 
@@ -38,7 +38,7 @@ function session_id(?string $id = null): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

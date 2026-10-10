@@ -1,8 +1,8 @@
 ---
 title: "mysqli_multi_query()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Runs several semicolon-separated statements in one call."
 sidebar:
-  order: 139
+  order: 140
 ---
 
 ## mysqli_multi_query()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_multi_query(mixed $mysql, string $query): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Runs several semicolon-separated statements in one call.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

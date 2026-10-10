@@ -15,6 +15,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, RuntimeCallTarget, UnaryStringRuntime};
 use crate::types::PhpType;
 
+use super::receiver_place::ReceiverPlace;
 use super::{expect_operand, store_if_result};
 
 /// Lowers one typed runtime operation through its target-specific helper ABI.
@@ -24,14 +25,26 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
+        RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
-        RuntimeCallTarget::MixedCellPromoteToHash(sort)
-        | RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort) => {
-            lower_mixed_cell_promote_to_hash(ctx, inst, sort)
+        RuntimeCallTarget::MixedCellPromoteToHash(sort) => {
+            lower_mixed_cell_promote_to_hash(ctx, inst, sort, false)
+        }
+        RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort) => {
+            lower_mixed_cell_promote_to_hash(ctx, inst, sort, true)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
+        RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
+        RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),
+        RuntimeCallTarget::ExceptionUnguardOwned => super::exception_instructions::lower_unguard_owned(ctx, inst),
+        RuntimeCallTarget::ExceptionUpdateArrayGuard | RuntimeCallTarget::ExceptionUpdateHashGuard =>
+            super::exception_instructions::lower_update_array_guard(ctx, inst),
+        RuntimeCallTarget::CallArgumentValidateUnpack
+        | RuntimeCallTarget::CallArgumentCollectPositionals
+        | RuntimeCallTarget::CallArgumentCollectNamed => super::call_argument_unpack::lower(ctx, inst, target),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
@@ -41,6 +54,68 @@ pub(super) fn lower(
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Promotes an independent cell copy and transfers one hash owner to a literal unpack operation.
+fn lower_array_unpack_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let source = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(source)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
+    // The promotion lends its payload. Acquire a result owner before retiring the clone,
+    // including the invalid-value path where the returned null pointer needs no retain.
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    let valid = ctx.next_label("array_unpack_hash_valid");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
+    super::exceptions::emit_error(ctx, "Only arrays and Traversables can be unpacked");
+    ctx.emitter.label(&valid);
+    store_if_result(ctx, inst)
+}
+
+/// Appends the pending exception (operand 1, consumed) to the new one's chain (operand 0).
+///
+/// `__rt_exception_chain` takes the new exception in the integer result register and the owned
+/// pending one beside it — `x0`/`x1` on AArch64, `rax`/`rdi` on x86_64 — which is not the
+/// ordinary argument order on x86_64, so the pair is staged by hand.
+fn lower_exception_chain(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 2 {
+        return Err(CodegenIrError::invalid_module("exception chaining requires two operands"));
+    }
+    let new = expect_operand(inst, 0)?;
+    let pending = expect_operand(inst, 1)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(pending)?;
+    abi::emit_push_reg(ctx.emitter, result);
+    ctx.load_value_to_result(new)?;
+    let pending_reg = match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "x1",
+        crate::codegen::platform::Arch::X86_64 => "rdi",
+    };
+    abi::emit_pop_reg(ctx.emitter, pending_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_exception_chain");
+    Ok(())
+}
+
+/// Materializes normalized constructor parameters through the shared target-aware call ABI.
+fn lower_throwable_initialize(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 4 {
+        return Err(CodegenIrError::invalid_module("Throwable initialization requires four operands"));
+    }
+    let types = [PhpType::Object("Throwable".into()), PhpType::Str, PhpType::Int, PhpType::Mixed];
+    let overflow = super::materialize_direct_call_args(ctx, &inst.operands, &types)?;
+    let padding = super::direct_call_stack_pad_bytes(ctx, overflow);
+    abi::emit_reserve_temporary_stack(ctx.emitter, padding);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_initialize");
+    abi::emit_release_temporary_stack(ctx.emitter, padding + overflow);
+    Ok(())
 }
 
 /// Clones a stored Mixed cell before a nested mutation publishes a new payload.
@@ -95,6 +170,7 @@ fn lower_mixed_cell_promote_to_hash(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     sort: crate::ir::ArrayKeySort,
+    attached: bool,
 ) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -109,6 +185,10 @@ fn lower_mixed_cell_promote_to_hash(
             "typed runtime array.mixed_cell_promote_to_hash expected Mixed, got {:?}",
             actual,
         )));
+    }
+    if attached {
+        separate_shared_attached_cell(ctx, cell)?;
+        ctx.load_value_to_result(cell)?;
     }
     if ctx.emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the boxed Mixed cell in the SysV first-argument register
@@ -135,6 +215,63 @@ fn lower_mixed_cell_promote_to_hash(
     store_if_result(ctx, inst)
 }
 
+/// Copy-on-write separates an attached Mixed cell that another variable still shares.
+///
+/// The promotion mutates its cell in place: it republishes the unique, key-sorted hash into the
+/// cell's payload word. `$copy = $array;` shares the boxed zval itself, so an in-place promotion
+/// reordered the copy too — `k($m)` with `function k(array &$a) { ksort($a); }` sorted `$ma` as
+/// well. A sole owner keeps mutating in place, so an unshared sort still costs nothing.
+///
+/// Only a receiver resolvable to a writable slot can be separated; anything else keeps the
+/// existing in-place behaviour.
+fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir::ValueId) -> Result<()> {
+    let receiver = ReceiverPlace::resolve(ctx, cell)?;
+    // A raw local slot publishes without retiring what it held, so this has to release the
+    // replaced cell itself; the ref-cell write-back already retires its previous occupant.
+    let retires_replaced_cell = match receiver {
+        // A global-backed receiver's write-back retires the symbol's previous cell itself.
+        ReceiverPlace::RefCell(_) | ReceiverPlace::Global { .. } => true,
+        ReceiverPlace::Local(_) => false,
+        ReceiverPlace::Opaque | ReceiverPlace::Property { .. } => return Ok(()),
+    };
+    let done = ctx.next_label("mixed_cell_attached_separate_done");
+    ctx.load_value_to_result(cell)?;
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {done}"));                // an absent cell has nothing to separate
+            ctx.emitter.instruction("ldr w9, [x0, #-12]");                      // read the cell refcount from the uniform heap header
+            ctx.emitter.instruction("cmp w9, #1");                              // is this zval shared with another variable?
+            ctx.emitter.instruction(&format!("b.ls {done}"));                   // a sole owner may be promoted in place
+            abi::emit_push_reg(ctx.emitter, "x0");                              // keep the replaced cell addressable for its release
+            ctx.emitter.instruction("ldr x2, [x0, #16]");                       // copy the shared cell high payload word
+            ctx.emitter.instruction("ldr x1, [x0, #8]");                        // copy the shared cell low payload word
+            ctx.emitter.instruction("ldr x0, [x0]");                            // copy the shared cell runtime value tag
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // an absent cell has nothing to separate
+            ctx.emitter.instruction(&format!("jz {done}"));                     // keep the promotion on its ordinary path
+            ctx.emitter.instruction("mov r10d, DWORD PTR [rax - 12]");          // read the cell refcount from the uniform heap header
+            ctx.emitter.instruction("cmp r10d, 1");                             // is this zval shared with another variable?
+            ctx.emitter.instruction(&format!("jbe {done}"));                    // a sole owner may be promoted in place
+            abi::emit_push_reg(ctx.emitter, "rax");                             // keep the replaced cell addressable for its release
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rax + 16]");           // copy the shared cell high payload word
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // copy the shared cell low payload word
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // copy the shared cell runtime value tag
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    ctx.store_result_value(cell)?;
+    receiver.store_back_value(ctx, cell)?;
+    if !retires_replaced_cell {
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    } else {
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
 /// Lowers a typed `Str -> Str` transform using the internal string result register pair.
 fn lower_unary_string(
     ctx: &mut FunctionContext<'_>,
@@ -158,6 +295,22 @@ fn lower_unary_string(
         )));
     }
     abi::emit_call_label(ctx.emitter, unary_string_symbol(runtime));
+    if runtime == UnaryStringRuntime::BinToHex {
+        let owned = ctx.next_label("bin2hex_heap_result_owned");
+        let ready = ctx.next_label("bin2hex_result_ready");
+        let (pointer, length) = abi::string_result_regs(ctx.emitter);
+        abi::emit_push_reg_pair(ctx.emitter, pointer, length);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.emitter.instruction(&format!("cmp {result}, 1"));                   // reserve returns a fresh owned string only after leaving scratch storage
+        ctx.emitter.instruction(&format!("{} {owned}", if ctx.emitter.target.arch == crate::codegen::platform::Arch::AArch64 { "b.eq" } else { "je" })); // preserve an already-owned heap result
+        abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
+        abi::emit_call_label(ctx.emitter, "__rt_str_persist");                 // copy the scratch result before later string operations reuse it
+        abi::emit_jump(ctx.emitter, &ready);
+        ctx.emitter.label(&owned);
+        abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
+        ctx.emitter.label(&ready);
+    }
     store_if_result(ctx, inst)
 }
 

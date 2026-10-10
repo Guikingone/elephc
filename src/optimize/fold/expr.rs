@@ -66,6 +66,8 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
     );
     ClassMethod {
         name: method.name,
+        // A REBUILD. Folding rewrites a body, never a declaration's type parameters.
+        type_params: method.type_params,
         visibility: method.visibility,
         is_static: method.is_static,
         is_abstract: method.is_abstract,
@@ -241,6 +243,12 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .map(|(key, value)| (fold_expr(key), fold_expr(value)))
                 .collect(),
         ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries
+                .into_iter()
+                .map(|entry| entry.map_exprs(fold_expr))
+                .collect(),
+        ),
         ExprKind::Match {
             subject,
             arms,
@@ -360,6 +368,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             class_name,
             args: args.into_iter().map(fold_expr).collect(),
         },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type,
+            args: args.into_iter().map(fold_expr).collect(),
+        },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
             name_expr: Box::new(fold_expr(*name_expr)),
             args: args.into_iter().map(fold_expr).collect(),
@@ -444,6 +456,11 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             element_type,
             len: Box::new(fold_expr(*len)),
         },
+        // Namespace resolution has already fixed a named receiver's spelling. Lexical
+        // and late-static class names still depend on their declaration or runtime scope.
+        ExprKind::ClassConstant { receiver: crate::parser::ast::StaticReceiver::Named(name) } => {
+            ExprKind::StringLiteral(name.as_str().trim_start_matches('\\').to_string())
+        }
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
             object: Box::new(fold_expr(*object)),
@@ -471,6 +488,8 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
 fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        // Folding runs BEFORE instantiation, so the arguments have to survive it untouched.
+        InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(class_type),
         InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(fold_expr(*expr))),
     }
 }

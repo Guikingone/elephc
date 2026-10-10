@@ -22,7 +22,7 @@ pub(crate) fn lower_async_fd(
     ctx.load_value_to_result(operation)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0");                                // pass the descriptor ownership operation
+            ctx.emitter.instruction("mov x1, x0");                              // pass the descriptor ownership operation
             abi::emit_pop_reg(ctx.emitter, "x0");                               // pass the boxed source array
         }
         Arch::X86_64 => {

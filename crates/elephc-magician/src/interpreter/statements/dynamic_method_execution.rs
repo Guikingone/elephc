@@ -74,7 +74,8 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.push_class_scope(class_name.to_string());
     context.push_called_class_scope(called_class_name.to_string());
     context.push_method_magic_scope(class_name, method);
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    let binding = match bind_evaluated_function_args_with_ref_mode(
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -94,17 +95,31 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = binding;
     let mut method_scope = ElephcEvalScope::new();
     method_scope.set("this", object, ScopeCellOwnership::Borrowed);
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
-    bind_method_scope_args(
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
+    let binding_result = bind_method_scope_args(
         &mut method_scope,
-        method.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    frame.bind_scope(&method_scope);
+    context.push_function_args_with_backtrace(
+        frame,
+        Some(class_name.trim_start_matches('\\').to_string()),
+        Some(object),
+        false,
+    );
+    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,
@@ -130,9 +145,17 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             values,
         ),
     };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &method_scope,
+        values,
+    );
+    let return_result = release_function_args(return_result, context, values);
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
+    let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
     context.pop_function();
     return_result
 }
@@ -197,7 +220,8 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.push_class_scope(class_name.to_string());
     context.push_called_class_scope(called_class_name.to_string());
     context.push_method_magic_scope(class_name, method);
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    let binding = match bind_evaluated_function_args_with_ref_mode(
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -217,16 +241,30 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = binding;
     let mut method_scope = ElephcEvalScope::new();
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
-    bind_method_scope_args(
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
+    let binding_result = bind_method_scope_args(
         &mut method_scope,
-        method.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    frame.bind_scope(&method_scope);
+    context.push_function_args_with_backtrace(
+        frame,
+        Some(class_name.trim_start_matches('\\').to_string()),
+        None,
+        true,
+    );
+    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,
@@ -252,9 +290,17 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
             values,
         ),
     };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &method_scope,
+        values,
+    );
+    let return_result = release_function_args(return_result, context, values);
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
+    let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
     context.pop_function();
     return_result
 }

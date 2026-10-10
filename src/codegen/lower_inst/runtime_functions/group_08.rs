@@ -40,6 +40,9 @@ pub(super) fn lower(
         RuntimeFnId::Tanh => Some({
             crate::codegen::lower_inst::builtins::math::lower_unary_libm(ctx, inst, "tanh")
         }),
+        RuntimeFnId::ElephcCloneOverrideReferenceGuard => Some({
+            crate::codegen::lower_inst::builtins::clone_with::overrides::lower_reference_override_guard(ctx, inst)
+        }),
         RuntimeFnId::ElephcObjectIsEnum => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_is_enum(ctx, inst)
         }),
@@ -51,6 +54,55 @@ pub(super) fn lower(
         }),
         RuntimeFnId::ElephcObjectPropValue => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_prop_value(ctx, inst)
+        }),
+        RuntimeFnId::ElephcOpcacheRtBlacklistEntry => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_blacklist_entry(
+                ctx, inst,
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtScriptField => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_script_field(
+                ctx, inst,
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtScriptPath => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_script_path(
+                ctx, inst,
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtIsCached => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_is_cached",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtDiscard => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_discard",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtSoftInvalidate => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_soft_invalidate",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtInFileCache => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_in_file_cache",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtCompile => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_compile",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtReset => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_reset(ctx, inst)
+        }),
+        RuntimeFnId::ElephcOpcacheRtStat => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_stat(ctx, inst)
+        }),
+        RuntimeFnId::ElephcOpcacheRtSwap => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_swap(ctx, inst)
         }),
         RuntimeFnId::ElephcPtrIsNull => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_is_null(ctx, inst)

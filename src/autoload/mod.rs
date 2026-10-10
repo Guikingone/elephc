@@ -79,6 +79,18 @@ pub fn run_collecting_included(
 
 /// Runs autoload expansion while applying conditional symbols to every physical file loaded.
 pub fn run_collecting_included_with_defines(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        run_collecting_included_on_compiler_stack(program, base_dir, registry, defines)
+    })
+}
+
+/// Expands autoloads after the public entry point has established the recursive stack budget.
+fn run_collecting_included_on_compiler_stack(
     mut program: Program,
     base_dir: &Path,
     registry: &Registry,
@@ -148,8 +160,10 @@ pub fn run_collecting_included_with_defines(
 
 /// Lower any top-level literal `class_alias()` calls left after another
 /// expansion pass, such as resolver includes or autoloaded files.
-pub fn collect_aliases(program: Program) -> Program {
-    alias::collect_aliases(program)
+/// Rejects explicitly disabled autoload on eligible source forms before constant folding.
+pub fn collect_aliases(program: Program) -> Result<Program, CompileError> {
+    alias::validate_alias_autoload(&program)?;
+    Ok(alias::collect_aliases(program))
 }
 
 /// Inserts PHP's built-in class-like names into `declared` so that references
@@ -201,13 +215,13 @@ fn load_autoloaded_file(
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed =
-        crate::source::finalize_physical_program(parsed, path, source_mode, defines)?;
+        crate::source::finalize_physical_program(parsed, &content, path, source_mode, defines)?;
     let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_with_defines(
         parsed,
         path.parent().unwrap_or(base_dir),
         defines,
     )?;
-    let resolved = alias::collect_aliases(resolved);
+    let resolved = collect_aliases(resolved).map_err(|e| e.with_file(file_label.clone()))?;
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level

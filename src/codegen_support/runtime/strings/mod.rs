@@ -9,6 +9,7 @@
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
 
 mod itoa;
+mod offset_warning;
 mod concat;
 mod concat_scratch;
 mod ftoa;
@@ -16,6 +17,7 @@ mod php_num_scan;
 mod str_eq;
 mod str_loose_eq;
 mod str_to_number;
+mod numeric_value;
 mod str_to_int;
 mod str_to_int_base;
 mod number_format;
@@ -25,6 +27,7 @@ mod strcopy;
 mod str_inc_dec;
 mod str_persist;
 mod strtolower;
+mod ascii_case;
 mod strtoupper;
 mod trim;
 mod ltrim;
@@ -38,6 +41,7 @@ mod strrev;
 mod chr;
 mod strcmp;
 mod strcasecmp;
+mod strnatcmp;
 mod strncmp;
 mod strncasecmp;
 mod str_starts_with;
@@ -45,7 +49,9 @@ mod str_ends_with;
 mod str_replace;
 mod explode;
 mod implode;
+mod implode_cast;
 mod implode_bool;
+mod implode_float;
 mod implode_int;
 mod ucwords;
 mod str_ireplace;
@@ -88,7 +94,7 @@ mod md5;
 mod sha1;
 mod crc32;
 mod iconv;
-mod mb_strlen;
+mod mbstring;
 mod hash;
 pub(crate) mod hash_algos;
 mod hash_context;
@@ -106,7 +112,8 @@ mod resource_type_name;
 mod resource_write_stdout;
 mod parse_url;
 
-pub use itoa::emit_itoa;
+pub use itoa::{emit_itoa, emit_itoa_into};
+pub use offset_warning::emit_string_offset_warning;
 /// Emit integer-to-string conversion helper.
 pub use concat::emit_concat;
 /// Emit string concatenation helper.
@@ -118,6 +125,7 @@ pub use str_eq::emit_str_eq;
 pub use str_loose_eq::emit_str_loose_eq;
 /// Emit case-insensitive string equality check.
 pub use str_to_number::emit_str_to_number;
+pub use numeric_value::emit_str_numeric_value;
 /// Emit string-to-int parameter coercion validation helper.
 pub use str_to_number::emit_str_looks_like_int_for_coercion;
 /// Emit string-to-number conversion helper.
@@ -164,6 +172,8 @@ pub use chr::emit_chr;
 pub use strcmp::emit_strcmp;
 /// Emit case-sensitive string comparison.
 pub use strcasecmp::emit_strcasecmp;
+/// Emit PHP natural-order string comparison.
+pub use strnatcmp::emit_strnatcmp;
 /// Emit length-limited case-sensitive string comparison.
 pub use strncmp::emit_strncmp;
 /// Emit length-limited case-insensitive string comparison.
@@ -183,6 +193,8 @@ pub use implode_int::emit_implode_int;
 /// Emit integer-optimized implode helper.
 pub use implode_bool::emit_implode_bool;
 /// Emit bool-element implode helper (`true` → `"1"`, `false` → `""`).
+pub use implode_float::emit_implode_float;
+/// Emit float-element implode helper (each element in PHP's `precision = 14` text).
 pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.
 pub use str_ireplace::emit_str_ireplace;
@@ -260,9 +272,9 @@ pub use md5::emit_md5;
 pub use sha1::emit_sha1;
 /// Emit CRC-32 checksum helper.
 pub use crc32::emit_crc32;
-/// Emit mb_strlen UTF-8 code-point-count helper.
+/// Emits the optional shared mbstring bridge result adapters.
 pub use iconv::emit_iconv;
-pub use mb_strlen::emit_mb_strlen;
+pub use mbstring::emit_mbstring;
 /// Emit SHA1 hash helper.
 pub use hash::emit_hash;
 /// Emit generic hash helper.

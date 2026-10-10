@@ -703,3 +703,220 @@ echo count($r), " ", count($d), "\n";
 "#
     );
 }
+
+
+/// Regression for #675: `array_slice()` accepts an indexed `array<string>`.
+///
+/// An indexed string array stores 16-byte `{pointer, length}` slots. `__rt_array_slice` and
+/// `__rt_array_slice_refcounted` copy 8 bytes per element, so neither can carry a pair — the
+/// lowering refused a string receiver outright:
+///
+/// ```text
+/// unsupported EIR backend feature: array_slice indexed-array element PHP type Str
+/// ```
+///
+/// `__rt_array_slice_str` copies the pair, and the whole `$offset`/`$length` matrix runs through
+/// the SAME `slice_bounds` prologue as every other variant — so these rows assert that the new
+/// helper inherited the semantics rather than re-deriving them: negative offsets counting back
+/// from the end, a negative `$length` stopping before the end, clamping at both ends, and an
+/// omitted or `null` length slicing to the end.
+///
+/// The last four rows are about OWNERSHIP, which is where a 16-byte copy goes wrong quietly.
+/// `array_slice()` leaves its argument alone and a string array owns its bytes exclusively, so
+/// the copy duplicates through `__rt_array_push_str`. Writing into the result must not disturb
+/// the source, a slice must outlive the local it came from, and a slice of a slice must be
+/// independent again. The long-string row forces real heap buffers rather than anything that
+/// might be inline.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_slice_on_indexed_string_array() {
+    let out = compile_and_run(
+        r#"<?php
+$s = ["alpha", "bravo", "charlie", "delta", "echo"];
+
+function row(string $label, array $a): void {
+    echo $label, "=[", implode(",", $a), "] n=", count($a), "\n";
+}
+
+row("mid", array_slice($s, 1, 2));
+row("from", array_slice($s, 2));
+row("all", array_slice($s, 0));
+row("neg-off", array_slice($s, -2));
+row("neg-off-len", array_slice($s, -3, 2));
+row("neg-len", array_slice($s, 1, -1));
+row("neg-both", array_slice($s, -4, -2));
+row("zero-len", array_slice($s, 1, 0));
+row("past-end", array_slice($s, 99));
+row("too-long", array_slice($s, 3, 99));
+row("too-far-back", array_slice($s, -99, 2));
+row("empty-src", array_slice([], 0, 3));
+row("null-len", array_slice($s, 1, null));
+
+$copy = array_slice($s, 1, 2);
+$copy[0] = "MUTATED";
+row("after-mutate-copy", $copy);
+row("source-intact", $s);
+
+function detached(): array {
+    $local = ["x", "y", "z"];
+    return array_slice($local, 1);
+}
+row("detached", detached());
+row("nested", array_slice(array_slice($s, 1, 3), 1));
+
+$long = [str_repeat("q", 100), str_repeat("w", 200), str_repeat("e", 300)];
+$cut = array_slice($long, 1, 2);
+echo "long=", strlen($cut[0]), ",", strlen($cut[1]), " first=", $cut[0][0], " second=", $cut[1][0], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "mid=[bravo,charlie] n=2\n",
+            "from=[charlie,delta,echo] n=3\n",
+            "all=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "neg-off=[delta,echo] n=2\n",
+            "neg-off-len=[charlie,delta] n=2\n",
+            "neg-len=[bravo,charlie,delta] n=3\n",
+            "neg-both=[bravo,charlie] n=2\n",
+            "zero-len=[] n=0\n",
+            "past-end=[] n=0\n",
+            "too-long=[delta,echo] n=2\n",
+            "too-far-back=[alpha,bravo] n=2\n",
+            "empty-src=[] n=0\n",
+            "null-len=[bravo,charlie,delta,echo] n=4\n",
+            "after-mutate-copy=[MUTATED,charlie] n=2\n",
+            "source-intact=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "detached=[y,z] n=2\n",
+            "nested=[charlie,delta] n=2\n",
+            "long=200,300 first=w second=e\n",
+        )
+    );
+}
+
+/// Follow-up for #1035: `preserve_keys` on the same indexed `array<string>` source.
+///
+/// The key-preserving form does NOT go through `__rt_array_slice_str`. A dense indexed array
+/// cannot hold a window that does not start at key 0, so the literal `true` lowers to
+/// `__rt_array_slice_to_hash`, which walks the header's `elem_size` and persists the 16-byte
+/// `{pointer, length}` slot into an owned hash. The rows above only ever exercised the
+/// renumbering form, so nothing pinned that the hash path reads a string array's slot width
+/// rather than the 8 bytes every other element type has.
+///
+/// The literal `false` and the named-argument spelling ride along, and the last two rows are
+/// ownership again: writing into the key-preserving result must not disturb the source.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_slice_preserve_keys_on_indexed_string_array() {
+    let out = compile_and_run(
+        r#"<?php
+$s = ["alpha", "bravo", "charlie", "delta", "echo"];
+
+function row(string $label, array $a): void {
+    $parts = [];
+    foreach ($a as $k => $v) { $parts[] = $k . "=>" . $v; }
+    echo $label, "=[", implode(",", $parts), "] n=", count($a), "\n";
+}
+
+row("keep-mid", array_slice($s, 1, 2, true));
+row("drop-mid", array_slice($s, 1, 2, false));
+row("keep-neg", array_slice($s, -2, null, true));
+row("keep-named", array_slice($s, 2, 2, preserve_keys: true));
+row("keep-empty", array_slice($s, 99, 2, true));
+
+$k = array_slice($s, 1, 2, true);
+$k[1] = "MUTATED";
+row("after-mutate", $k);
+row("source-intact", $s);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "keep-mid=[1=>bravo,2=>charlie] n=2\n",
+            "drop-mid=[0=>bravo,1=>charlie] n=2\n",
+            "keep-neg=[3=>delta,4=>echo] n=2\n",
+            "keep-named=[2=>charlie,3=>delta] n=2\n",
+            "keep-empty=[] n=0\n",
+            "after-mutate=[1=>MUTATED,2=>charlie] n=2\n",
+            "source-intact=[0=>alpha,1=>bravo,2=>charlie,3=>delta,4=>echo] n=5\n",
+        )
+    );
+}
+
+/// The two `preserve_keys` spellings call two different helpers, and each calls only its own.
+///
+/// Values alone cannot tell the paths apart: a key-preserving slice of a window starting at 0
+/// prints exactly like a renumbering one. This reads the emitted assembly instead, so a future
+/// change that routed the string array's key-preserving form back through
+/// `__rt_array_slice_str` — losing the keys — cannot pass the fixture above by accident.
+#[test]
+fn test_array_slice_on_a_string_array_picks_the_helper_from_preserve_keys() {
+    let dir = make_cli_test_dir("elephc_slice_str_preserve_keys");
+    let (renumbering, _runtime, _libs) = compile_source_to_asm_with_options(
+        r#"<?php $s = ["a", "b", "c"]; $r = array_slice($s, 1, 2, false); echo count($r);"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let (key_preserving, _runtime, _libs) = compile_source_to_asm_with_options(
+        r#"<?php $s = ["a", "b", "c"]; $r = array_slice($s, 1, 2, true); echo count($r);"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        renumbering.contains("__rt_array_slice_str"),
+        "the renumbering form must keep the string-slot helper: {renumbering}"
+    );
+    assert!(
+        !renumbering.contains("__rt_array_slice_to_hash"),
+        "the renumbering form must not build a hash: {renumbering}"
+    );
+    assert!(
+        key_preserving.contains("__rt_array_slice_to_hash"),
+        "the key-preserving form must build a hash: {key_preserving}"
+    );
+    assert!(
+        !key_preserving.contains("__rt_array_slice_str"),
+        "the key-preserving form must not reach the string-slot helper: {key_preserving}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Slicing an indexed string array in a loop must not leak or double-free.
+///
+/// The copy persists each `{pointer, length}` pair through `__rt_array_push_str`, so the result
+/// owns bytes the source also owns a copy of. Getting that wrong in either direction is silent
+/// at the value level — the strings still print — and only shows up as an allocation imbalance,
+/// which is what this asserts: 200 iterations, every block released.
+#[test]
+fn test_array_slice_on_string_array_balances_allocations() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+for ($i = 0; $i < 200; $i++) {
+    $src = [str_repeat("a", 40), str_repeat("b", 40), str_repeat("c", 40)];
+    $cut = array_slice($src, 1, 2);
+    if (count($cut) !== 2) { echo "BAD\n"; }
+}
+echo "ok\n";
+"#,
+    );
+    assert!(out.stdout.contains("ok"), "program output: {:?}", out.stdout);
+    let stats = out
+        .stderr
+        .lines()
+        .find(|line| line.starts_with("GC: allocs="))
+        .unwrap_or_else(|| panic!("no GC stats line in: {}", out.stderr));
+    let (allocs, frees) = stats
+        .trim_start_matches("GC: allocs=")
+        .split_once(" frees=")
+        .unwrap_or_else(|| panic!("unexpected GC stats shape: {stats}"));
+    assert_eq!(allocs, frees, "array_slice on a string array leaked: {stats}");
+}

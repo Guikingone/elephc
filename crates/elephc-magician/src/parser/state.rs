@@ -13,7 +13,7 @@
 
 use super::cursor::split_first_name_segment;
 use crate::errors::EvalParseError;
-use crate::eval_ir::EvalProgram;
+use crate::eval_ir::{EvalProgram, EVAL_CLI_POPULATED_SUPERGLOBALS};
 use crate::lexer::{Token, TokenKind};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -127,6 +127,22 @@ impl Parser {
         while !matches!(self.current(), TokenKind::Eof) {
             statements.extend(self.parse_stmt()?);
         }
-        Ok(EvalProgram::new(self.source_len, statements))
+        let cli_superglobals = self.named_cli_superglobals();
+        Ok(EvalProgram::new(self.source_len, statements).with_cli_superglobals(cli_superglobals))
+    }
+
+    /// Returns the CLI-populated superglobals any `$name` token of the fragment spells.
+    ///
+    /// String interpolation is lexed into ordinary variable tokens, so `"$_SERVER[argv]"`
+    /// counts too; a dynamic `${'_ENV'}` name does not, since no token spells it.
+    fn named_cli_superglobals(&self) -> Vec<&'static str> {
+        EVAL_CLI_POPULATED_SUPERGLOBALS
+            .into_iter()
+            .filter(|superglobal| {
+                self.tokens.iter().any(|token| {
+                    matches!(token, TokenKind::DollarIdent(name) if name == superglobal)
+                })
+            })
+            .collect()
     }
 }

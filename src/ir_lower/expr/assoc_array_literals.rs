@@ -11,6 +11,13 @@ use super::*;
 
 /// Lowers an associative array literal.
 pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr) -> LoweredValue {
+    lower_assoc_array_literal_with_guard(ctx, pairs, expr, false)
+}
+
+/// Protects a callback's partially built argument hash until invocation consumes its ownership.
+pub(super) fn lower_assoc_array_literal_with_guard(
+    ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr, guarded: bool,
+) -> LoweredValue {
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
@@ -19,10 +26,12 @@ pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    if guarded { guard_descriptor_container(ctx, hash, expr.span); }
     for (key, value) in pairs {
         let key = lower_expr(ctx, key);
         let value = lower_expr(ctx, value);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
+        if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
     }
     hash
 }
@@ -38,7 +47,7 @@ pub(super) fn assoc_array_literal_type_from_spreads(
     let mut value_ty = PhpType::Never;
     for item in items {
         let next = match &item.kind {
-            ExprKind::Spread(inner) => match infer_expr_type_syntactic(inner).codegen_repr() {
+            ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
                 PhpType::Array(elem) => elem.codegen_repr(),
                 PhpType::AssocArray { value, .. } => value.codegen_repr(),
                 _ => PhpType::Mixed,
@@ -65,21 +74,26 @@ pub(super) fn assoc_array_literal_type_for_ir(
     if pairs.is_empty() {
         return fallback_expr_type(expr);
     }
-    let mut key_ty = normalized_array_key_type(
-        &pairs[0].0,
-        infer_expr_type_syntactic(&pairs[0].0),
-    );
-    let mut value_ty = assoc_array_literal_value_type_for_ir(ctx, &pairs[0].1);
-    for (key, value) in pairs.iter().skip(1) {
-        key_ty = merge_array_key_types(
-            key_ty,
-            normalized_array_key_type(key, infer_expr_type_syntactic(key)),
-        );
-        value_ty = merge_ir_assoc_value_type(
-            value_ty,
-            assoc_array_literal_value_type_for_ir(ctx, value),
-        );
+    // Seeded from the FIRST entry rather than from a neutral element: `merge_array_key_types`
+    // answers Mixed for any two different types, so folding a placeholder into it would widen
+    // every literal's key type.
+    let mut key_ty: Option<PhpType> = None;
+    let mut value_ty: Option<PhpType> = None;
+    for (key, value) in pairs {
+        let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key));
+        let next_value = assoc_array_literal_value_type_for_ir(ctx, value);
+        key_ty = Some(match key_ty {
+            Some(current) => merge_array_key_types(current, next_key),
+            None => next_key,
+        });
+        value_ty = Some(match value_ty {
+            Some(current) => merge_ir_assoc_value_type(current, next_value),
+            None => next_value,
+        });
     }
+    let (Some(key_ty), Some(value_ty)) = (key_ty, value_ty) else {
+        return fallback_expr_type(expr);
+    };
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(value_ty),
@@ -91,8 +105,15 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     value: &Expr,
 ) -> PhpType {
+    if let Some(storage) = nullsafe_chain::result_storage_type(value) {
+        return storage;
+    }
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
+        ExprKind::Ternary { .. } => {
+            // Use the actual branch-merge representation before choosing hash storage.
+            ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
+        }
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
@@ -103,6 +124,20 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         ExprKind::ScopedConstantAccess { receiver, name } => {
             scoped_constant_value_type_for_ir(ctx, receiver, name, value)
         }
+        // A nested literal must be typed by the same context-aware function that will lower
+        // it, not by the syntactic fallback: `infer_expr_type_syntactic` cannot see a local's
+        // type, so it types every `$v` element `Int`. The outer hash then stamped its value
+        // type `array<string, int>` over an inner hash really holding `array<string>`, and a
+        // read through both levels returned the inner array pointer as an integer (issue
+        // #984). These are the two arms `array_literal_element_type_for_ir` already carries
+        // for an INDEXED outer literal, which is why `[["k" => $v]]` was always correct and
+        // only `["j" => ["k" => $v]]` was wrong.
+        ExprKind::ArrayLiteral(items) => {
+            array_literal_type_for_ir(ctx, items, value).codegen_repr()
+        }
+        ExprKind::ArrayLiteralAssoc(inner_pairs) => {
+            assoc_array_literal_type_for_ir(ctx, inner_pairs, value)
+        }
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types
                 .get(name)
@@ -112,20 +147,22 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
-                return ir_array_storage_type(sig.return_type.clone());
+                return ir_array_storage_type(eir_user_function_return_type(sig));
             }
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
+            }
+            // A builtin is in neither map, and the syntactic fallback below answers `Int` for
+            // every name outside its hand-written allowlist -- which stamps the literal
+            // `array<int>` and makes lowering cast the element to match (#1096). The checker
+            // already asked the registry contract about this very call.
+            if let Some(resolved) = builtin_call_result_type_for_ir(ctx, value.span) {
+                return resolved;
             }
             ir_array_storage_type(infer_expr_type_syntactic(value))
         }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
-                .and_then(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
-        }
-        ExprKind::NullsafeMethodCall { object, method, .. } => {
-            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
@@ -169,7 +206,20 @@ pub(super) fn scoped_constant_value_type_for_ir(
         return PhpType::Mixed;
     }
     if let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) {
-        return ir_array_storage_type(infer_expr_type_syntactic(&const_expr));
+        // Keep the existing scalar classification, but resolve containers through the same
+        // literal helpers that lower them. Syntactic inference reports Void for null and can
+        // mistake nested scoped constants for strings inside an array initializer.
+        return match &const_expr.kind {
+            ExprKind::Null => PhpType::Mixed,
+            ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, &const_expr),
+            ExprKind::ArrayLiteralAssoc(pairs) => {
+                assoc_array_literal_type_for_ir(ctx, pairs, &const_expr)
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                assoc_array_literal_type_from_entries(ctx, entries, &const_expr)
+            }
+            _ => ir_array_storage_type(infer_expr_type_syntactic(&const_expr)),
+        };
     }
     ir_array_storage_type(infer_expr_type_syntactic(value))
 }
@@ -270,4 +320,3 @@ pub(super) fn nullsafe_method_call_expr_type_for_ir(
 pub(crate) fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
-

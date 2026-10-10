@@ -218,6 +218,7 @@ fn callback_sig_for_binding(
                 declared_params: vec![true; sig.params.len()],
                 variadic: None,
                 deprecation: None,
+                is_generator: false,
             })
         }
         StaticCallableBinding::Builtin(_) => None,
@@ -257,7 +258,16 @@ fn static_method_sig(
     receiver: &StaticReceiver,
     method: &str,
 ) -> Option<FunctionSig> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     let class_name = match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone()?,
         StaticReceiver::Parent => {
@@ -340,6 +350,7 @@ fn callback_sig_from_closure_params(
         declared_params: params.iter().map(|(_, ty, _, _)| ty.is_some()).collect(),
         variadic: variadic.map(str::to_string),
         deprecation: None,
+        is_generator: false,
     };
     if let Some(variadic_name) = variadic {
         if !sig.params.iter().any(|(name, _)| name == variadic_name) {
@@ -375,5 +386,6 @@ fn start_sig_from_callback_sig(sig: &FunctionSig) -> Option<FunctionSig> {
         declared_params: vec![false; sig.params.len()],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     })
 }

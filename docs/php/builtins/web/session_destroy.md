@@ -1,8 +1,8 @@
 ---
 title: "session_destroy()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Destroys the data stored for the current session."
 sidebar:
-  order: 892
+  order: 987
 ---
 
 ## session_destroy()
@@ -11,7 +11,7 @@ sidebar:
 function session_destroy(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Destroys the data stored for the current session.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

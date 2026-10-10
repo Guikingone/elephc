@@ -1,8 +1,8 @@
 ---
 title: "cairo_scale()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Scales the context's transformation by the given x and y factors."
 sidebar:
-  order: 432
+  order: 433
 ---
 
 ## cairo_scale()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_scale(mixed $context, float $sx, float $sy): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Scales the context's transformation by the given x and y factors.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

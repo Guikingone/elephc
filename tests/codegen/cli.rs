@@ -142,6 +142,7 @@ fn the_ctx_register_role_rule_separates_access_from_borrowing() {
     }
 }
 
+/// Allows x86_64 context-address reads but rejects user code that borrows the reserved r14 role.
 #[test]
 fn test_cli_rt_ctx_user_codegen_never_scratches_the_ctx_register() {
     let dir = make_cli_test_dir("elephc_cli_rt_ctx_user_codegen");
@@ -1463,6 +1464,7 @@ fn test_cli_emit_asm_does_not_require_target_assembler() {
         .arg("--target")
         .arg(target)
         .arg("--emit-asm")
+        .arg("--timings")
         .arg(&php_path)
         .output()
         .expect("failed to run cross-target elephc CLI with --emit-asm");
@@ -1472,10 +1474,32 @@ fn test_cli_emit_asm_does_not_require_target_assembler() {
         "cross-target elephc --emit-asm failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Writing assembly"),
+        "emit-asm should report its final output phase: {stderr}"
+    );
+    for skipped_phase in [
+        "Preparing runtime object",
+        "Assembling object file",
+        "Linking native output",
+        "Runtime cache:",
+    ] {
+        assert!(
+            !stderr.contains(skipped_phase),
+            "emit-asm unexpectedly reported `{skipped_phase}`: {stderr}"
+        );
+    }
     assert!(dir.join("main.s").exists(), "expected target assembly output");
     assert!(
         !dir.join("main.o").exists() && !dir.join("main").exists(),
         "cross-target --emit-asm must not assemble or link"
+    );
+    let runtime_cache = dir.join("cache-root").join("elephc");
+    assert!(
+        !runtime_cache.exists(),
+        "cross-target --emit-asm must not prepare a runtime object cache at {}",
+        runtime_cache.display()
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -2162,6 +2186,107 @@ echo 1 + 2;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the LINKED binary's debug info resolves through `addr2line`, not just the assembly.
+///
+/// Follow-up for #943. The two fixtures around this one assert assembler DIRECTIVES — a
+/// `.file` header, a `.loc`, an escaped `DW_AT_name`. What they cannot say is whether the
+/// assembler and linker turned those into debug info a debugger can actually use: a compile
+/// unit whose `DW_TAG_subprogram` anchors carry `DW_AT_low_pc`, and a line program covering
+/// those addresses. The author measured that separately; CI did not.
+///
+/// The probe is `addr2line -f` over the bytes of a known function. The exact prologue length
+/// is not part of the contract, so the fixture sweeps the first 256 bytes of `greet` rather
+/// than naming one offset, and requires at least one of them to answer both the function name
+/// and the PHP file and line it came from.
+///
+/// Linux only, and skipped when binutils is absent: this is about the ELF toolchain's own
+/// consumption of what elephc emitted.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_cli_debug_info_resolves_compile_unit_anchors_with_addr2line() {
+    /// Reports whether an external tool cannot be invoked for its version probe.
+    fn tool_missing(tool: &str) -> bool {
+        std::process::Command::new(tool)
+            .arg("--version")
+            .output()
+            .is_err()
+    }
+    if tool_missing("addr2line") || tool_missing("nm") {
+        eprintln!("skipping: binutils addr2line/nm not available");
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_debug_info_addr2line");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function greet(): void {
+    echo "hi\n";
+}
+greet();
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--debug-info")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with --debug-info");
+    assert!(
+        output.status.success(),
+        "elephc --debug-info failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("main");
+
+    // The symbol prefix differs by target, so both spellings are accepted.
+    let symbols = std::process::Command::new("nm")
+        .arg(&binary)
+        .output()
+        .expect("failed to run nm");
+    let listing = String::from_utf8_lossy(&symbols.stdout);
+    let greet_address = listing
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split_whitespace();
+            let address = fields.next()?;
+            let _kind = fields.next()?;
+            let name = fields.next()?;
+            (name == "_fn_greet" || name == "fn_greet")
+                .then(|| u64::from_str_radix(address, 16).ok())
+                .flatten()
+        })
+        .unwrap_or_else(|| panic!("no greet symbol in the linked binary:\n{listing}"));
+
+    let probes: Vec<String> = (0..64)
+        .map(|step| format!("0x{:x}", greet_address + step * 4))
+        .collect();
+    let resolved = std::process::Command::new("addr2line")
+        .arg("-f")
+        .arg("-e")
+        .arg(&binary)
+        .args(&probes)
+        .output()
+        .expect("failed to run addr2line");
+    let answers = String::from_utf8_lossy(&resolved.stdout);
+
+    // `addr2line -f` prints the function name and then the source location, per address.
+    let expected_location = format!("{}:3", php_path.display());
+    let anchored = answers
+        .lines()
+        .collect::<Vec<_>>()
+        .chunks(2)
+        .any(|pair| pair.len() == 2 && pair[0] == "greet" && pair[1] == expected_location);
+    assert!(
+        anchored,
+        "no address inside greet resolved to {expected_location}; addr2line said:\n{answers}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--debug-info` survives a source path that carries assembler string
 /// metacharacters. A `\` used to be spliced into `.file`/`.asciz` unescaped, so
 /// the assembler rejected the module outright; combined with `"` it terminated
@@ -2217,6 +2342,52 @@ greet();
     assert!(run.status.success(), "compiled binary did not run");
     assert_eq!(String::from_utf8_lossy(&run.stdout), "escaped\n");
 
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Debug builds assemble and run methods and generator bodies with separate exceptional cleanup entries.
+#[test]
+fn test_cli_debug_info_delimits_method_and_generator_cleanup_sections() {
+    let dir = make_cli_test_dir("elephc_debug_cleanup_ranges");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, r#"<?php
+function debugItems(int $value): Generator { yield $value; }
+class DebugCleanupRange {
+    public function read(int $value): int { return $value + 1; }
+    public function items(int $value): Generator { yield $value + 2; }
+}
+$object = new DebugCleanupRange();
+echo $object->read($argc), ":";
+foreach (debugItems($argc) as $value) { echo $value, ":"; }
+foreach ($object->items($argc) as $value) { echo $value; }
+"#).unwrap();
+    let output = elephc_cli_command(&dir).arg("--debug-info").arg(&php_path).output().unwrap();
+    assert!(output.status.success(), "debug compilation failed: {}", String::from_utf8_lossy(&output.stderr));
+    let run = Command::new(dir.join("main")).output().unwrap();
+    assert!(run.status.success(), "debug binary failed: {}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2:1:3");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Opaque eval registers native invokers without moving the enclosing PHP debug range to another section.
+#[test]
+fn test_cli_debug_info_preserves_sections_around_eval_invokers() {
+    let dir = make_cli_test_dir("elephc_debug_eval_invoker_ranges");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, r#"<?php
+function debugEvalValue(int $value): int { return $value + 1; }
+function debugEvalDispatch(string $source): void { eval($source); }
+class DebugEvalConsumer {
+    public function apply(callable $callback): int { return $callback(4); }
+}
+$source = 'echo debugEvalValue(2), ":", (new DebugEvalConsumer())->apply("debugEvalValue"); // ' . $argc;
+debugEvalDispatch($source);
+"#).unwrap();
+    let output = elephc_cli_command(&dir).arg("--debug-info").arg(&php_path).output().unwrap();
+    assert!(output.status.success(), "debug eval compilation failed: {}", String::from_utf8_lossy(&output.stderr));
+    let run = Command::new(dir.join("main")).output().unwrap();
+    assert!(run.status.success(), "debug eval binary failed: {}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "3:5");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -2740,4 +2911,156 @@ fn test_cli_rt_ctx_heap_debug_validator_passes_clean_workload() {
     assert!(!ctx_out.trim().is_empty(), "heap-debug program printed nothing");
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a bridge-archive override that points somewhere without the archive is reported as
+/// an override, through the real `archive_path` routing rather than the validator alone.
+///
+/// `ELEPHC_<NAME>_LIB_DIR` REPLACES the search instead of joining it: resolution returns on a
+/// non-empty override before a single fallback is read. The failure used to render the generic
+/// message anyway, which listed four directories it had not consulted and then recommended
+/// keeping the archives next to the elephc binary — a location this run will not look at while
+/// the variable stays set, so someone who has already done that follows the advice and stays
+/// broken (issue #517).
+///
+/// This goes through the CLI on purpose. A unit test that calls the validator directly would
+/// still pass if `archive_path` went back to the generic error, because the routing is the part
+/// that decides which message a user sees. The override reaches the compiler as a CHILD process
+/// environment variable, so it cannot race other tests in the same process.
+#[test]
+fn test_cli_bridge_override_miss_reports_the_override_not_the_fallbacks() {
+    let dir = make_cli_test_dir("elephc_cli_bridge_override");
+    let empty = dir.join("no-archives-here");
+    fs::create_dir_all(&empty).expect("create the empty override directory");
+    fs::write(dir.join("main.php"), "<?php\necho \"hi\\n\";\n")
+        .expect("write the web fixture");
+
+    let output = elephc_cli_command(&dir)
+        .env("ELEPHC_WEB_LIB_DIR", &empty)
+        .args(["-q", "--web", "main.php"])
+        .output()
+        .expect("failed to run elephc --web");
+
+    assert!(
+        !output.status.success(),
+        "an override without the archive must fail the link"
+    );
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let override_dir = empty.display().to_string();
+
+    assert!(
+        report.contains("needs: libelephc_web.a"),
+        "the message must name the archive:\n{report}"
+    );
+    assert!(
+        report.contains(&override_dir),
+        "the message must name the directory it actually read:\n{report}"
+    );
+    assert!(
+        report.contains("takes priority over every other location"),
+        "the message must say the override is what stopped the search:\n{report}"
+    );
+    assert!(
+        report.contains("unset ELEPHC_WEB_LIB_DIR"),
+        "the message must offer unsetting the override as a way out:\n{report}"
+    );
+    assert!(
+        !report.contains("keep the bridge archives next to the elephc binary"),
+        "advice the override would ignore must not be offered:\n{report}"
+    );
+    assert!(
+        !report.contains("target/debug"),
+        "a fallback that was never consulted must not be reported as searched:\n{report}"
+    );
+
+    // The same build links once the override is gone, which is what makes that last sentence
+    // actionable rather than decorative.
+    let recovered = elephc_cli_command(&dir)
+        .args(["-q", "--web", "main.php"])
+        .output()
+        .expect("failed to re-run elephc --web");
+    assert!(
+        recovered.status.success(),
+        "the same build must succeed without the override:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&recovered.stdout),
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A line past column 65,535 in an INCLUDED file compiles, and `--source-map` gives its tokens the
+/// same exact positions as the same line in the root file.
+///
+/// The included file's end columns are packed into 16 bits: past that the compile aborted
+/// ("included-source column exceeds packed span range", #1292), and a saturated end made every
+/// token starting past column 65535 lose its end in the map (`php_end_col: null`, #1306).
+#[test]
+fn test_cli_source_map_keeps_long_included_line_ends() {
+    // `strlen($x)` sits after column 70,000 on line 2.
+    let body = format!("<?php\n$x = '{}'; echo strlen($x), \"\\n\";\n", "a".repeat(70_000));
+    let map_of = |label: &str, files: &[(&str, &str)]| -> Vec<serde_json::Value> {
+        let dir = make_cli_test_dir(label);
+        for (name, source) in files {
+            fs::write(dir.join(name), source).unwrap();
+        }
+        let output = elephc_cli_command(&dir)
+            .arg("--emit-asm")
+            .arg("--source-map")
+            .arg(dir.join("main.php"))
+            .output()
+            .expect("failed to run elephc CLI with --source-map");
+        assert!(
+            output.status.success(),
+            "{label}: elephc --source-map failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let raw = fs::read_to_string(dir.join("main.map")).expect("failed to read source map");
+        let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+        let mut wide: Vec<serde_json::Value> = Vec::new();
+        let mut collect = |value: &serde_json::Value| {
+            if value.get("php_line").and_then(|v| v.as_u64()) == Some(2)
+                && value.get("php_col").and_then(|v| v.as_u64()).is_some_and(|col| col > 65_535)
+            {
+                let mut entry = value.clone();
+                if let Some(object) = entry.as_object_mut() {
+                    object.remove("asm_line");
+                }
+                wide.push(entry);
+            }
+        };
+        /// Visits `value`, then every array item and object field nested inside it, depth first.
+        fn walk(value: &serde_json::Value, visit: &mut dyn FnMut(&serde_json::Value)) {
+            visit(value);
+            match value {
+                serde_json::Value::Array(items) => items.iter().for_each(|item| walk(item, visit)),
+                serde_json::Value::Object(fields) => fields.values().for_each(|item| walk(item, visit)),
+                _ => {}
+            }
+        }
+        walk(&doc, &mut collect);
+        let _ = fs::remove_dir_all(&dir);
+        wide
+    };
+
+    let included = map_of(
+        "elephc_cli_source_map_long_include",
+        &[("long.php", body.as_str()), ("main.php", "<?php\ninclude __DIR__ . '/long.php';\n")],
+    );
+    let root = map_of("elephc_cli_source_map_long_root", &[("main.php", body.as_str())]);
+
+    assert!(!root.is_empty(), "the root map has no entry past column 65,535");
+    // `strlen($x)` starts at column 70,015: with a saturated end it mapped as a point span.
+    // (The `"\n"` literal maps as a point span in BOTH files, so it is not the oracle.)
+    let strlen = included
+        .iter()
+        .find(|entry| entry["op"] == "str_len")
+        .unwrap_or_else(|| panic!("no str_len entry past column 65,535: {included:#?}"));
+    assert_eq!(strlen["php_col"], 70_015);
+    assert_eq!(strlen["php_end_col"], 70_025, "the included strlen() lost its end: {strlen}");
+    assert_eq!(included, root, "the included line maps differently from the same root line");
 }

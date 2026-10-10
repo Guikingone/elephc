@@ -187,3 +187,37 @@ foreach ($property->getAttributes() as $attr) {
     echo $attr->getName();
 }
 echo "\n";
+
+// getAttributes() takes PHP's optional filter, getAttributes(?string $name,
+// int $flags = 0). A class name keeps only the attributes of exactly that
+// class; a name nothing matches gives an empty array. Only the default
+// $flags = 0 filter is implemented: ReflectionAttribute::IS_INSTANCEOF would
+// need a subclass test on a runtime class name, which AOT mode cannot answer,
+// so a call that provably asks for it is a compile error (and one that asks
+// at run time throws) rather than a quiet subset.
+$greeter = new ReflectionClass('Greeter');
+echo "Greeter all attrs: ", count($greeter->getAttributes()), "\n";
+echo "Greeter Author attrs: ", count($greeter->getAttributes('Author')), "\n";
+echo "Greeter Version attrs: ", count($greeter->getAttributes('Version')), "\n";
+echo "Greeter missing attrs: ", count($greeter->getAttributes('Nope')), "\n";
+echo "Greeter filtered name: ", $greeter->getAttributes('Author')[0]->getName(), "\n";
+
+$greet = new ReflectionMethod('Greeter', 'greet');
+echo "greet() Pure attrs: ", count($greet->getAttributes('Pure')), "\n";
+
+$who = new ReflectionProperty(Greeter::class, 'who');
+echo "who Slot attrs: ", count($who->getAttributes('Slot')), "\n";
+
+// Any other $flags value is rejected the way PHP rejects it, with a
+// ValueError naming the class that declares getAttributes().
+try {
+    $greeter->getAttributes('Author', 3);
+} catch (ValueError $e) {
+    echo "Invalid flags: ", $e->getMessage(), "\n";
+}
+
+// An enum's own attributes are reflected like a class's.
+#[Author("Grace")]
+enum Mood { case Happy; }
+$mood = new ReflectionEnum(Mood::class);
+echo "Mood Author attrs: ", count($mood->getAttributes('Author')), "\n";

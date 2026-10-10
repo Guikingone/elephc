@@ -117,6 +117,7 @@ Some optional features are implemented as Rust *bridge crates* (`staticlib`
 archives) that elephc links into the program: `pdo` (database access), `tls`
 (`https://`/`ftps://` streams), `crypto` (the `hash()`/`md5()`/`sha1()` family),
 `bcmath` (exact arbitrary-precision decimal arithmetic),
+`mbstring` (the shared multibyte string engine),
 `iconv` (character-set conversion and the character-oriented `iconv_*` functions),
 `phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
 processing), `pcntl` (Unix process control and signals), `xml` (the `ext/xml`
@@ -127,11 +128,16 @@ dynamic `eval()`), `web` (the `--web` server), and `curl` (the libcurl-backed
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
 calling a `bc*` function pulls in `bcmath`, calling an `iconv*` function pulls in
-`iconv`, referencing `PDO` pulls in `pdo`, creating an `XMLWriter` or calling an
-`xml_*` function pulls in `xml`, and so on. An `eval()` call pulls in Magician
+`iconv`, calling `mb_strlen()` pulls in `mbstring`, referencing `PDO` pulls in
+`pdo`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
+An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
 that do not need a feature never link its crate, so binaries stay small.
+
+When building from a source checkout, elephc refreshes bridge archives after changes
+to their local Cargo dependencies, including shared contracts. Workspace manifests,
+the lockfile, and Cargo configuration also participate in this freshness check.
 
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
@@ -149,6 +155,7 @@ dynamic Parallel entry point.
 elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls
 elephc app.php --with-bcmath
+elephc app.php --with-mbstring
 elephc app.php --with-iconv
 elephc app.php --with-pcntl
 elephc app.php --with-eval
@@ -221,11 +228,135 @@ since the whole archive is included.
 
 Bridge crates are Elephc's optional Rust workspace components. They are not
 installed or versioned by `elephc native`. A bridge or runtime-capability flag
-may require a separately declared managed package — `--with-regex` requires
+may require a separately declared managed package: `--with-regex` requires
 `pcre2`, `--with-curl` requires `curl` (which in turn declares `openssl` and
-`zlib`), `--with-xml` requires `libxml2` — but the flag itself does not install
-it. Composer dependencies are
+`zlib`), `--with-mbstring` requires `oniguruma` and `pcre2`, and `--with-xml`
+requires `libxml2`. Ordinary mbstring and opaque eval use the contract-owned
+default MIME matcher without PCRE2. Custom MIME expressions in opaque eval need
+the complete `--with-mbstring` capability. These flags do not
+install the packages. Composer dependencies are
 PHP source handled by the compile-time autoload pipeline and remain separate.
+
+### Where bridge archives are found
+
+**The archives have to travel with the compiler.** Copying just the `elephc`
+binary out of its build tree — into a project's `tools/bin`, say — makes every
+build that needs a bridge fail at link time, because the archives are separate
+files and not embedded in the binary. Either of the two supported layouts works:
+
+```
+tools/bin/elephc            # archives beside the binary
+tools/bin/libelephc_web.a
+
+tools/bin/elephc            # or in a sibling lib/, the usual install layout
+tools/lib/libelephc_web.a
+```
+
+`elephc` resolves each archive in this order, taking the first that exists:
+
+1. `ELEPHC_<NAME>_LIB_DIR`, if set and non-empty — `ELEPHC_WEB_LIB_DIR`,
+   `ELEPHC_PDO_LIB_DIR`, and so on, one per bridge. This wins over everything
+   below, and names a **directory**, not the archive itself.
+2. The directory the running `elephc` binary is in.
+3. Its sibling `lib/` (`<bin>/../lib`).
+4. `$CARGO_TARGET_DIR/debug` and `$CARGO_TARGET_DIR/release`, when that variable
+   is set.
+5. `target/debug` and `target/release`, relative to the **current directory**.
+
+Run from an elephc source checkout, a missing archive is built on demand, which
+is why this never comes up during development. A relocated binary has no
+checkout to build from, so it reports what it wanted and where it looked:
+
+```
+Linker error: required Elephc bridge `elephc_web` could not be found
+  needs: libelephc_web.a
+  looked in:
+    /opt/tools/bin
+    /opt/tools/lib
+    target/debug
+    target/release
+
+Set ELEPHC_WEB_LIB_DIR to a directory containing libelephc_web.a, or keep the
+bridge archives next to the elephc binary (or in a sibling lib/).
+`elephc --print-capabilities` lists every archive this binary can need.
+```
+
+`ELEPHC_<NAME>_LIB_DIR` **replaces** the search rather than joining it: when it
+is set and non-empty, resolution stops there and steps 2–5 are never consulted.
+So an override pointing somewhere without the archive fails even when a perfectly
+good copy sits beside the binary, and the message says so rather than listing
+directories it did not read:
+
+```
+Linker error: required Elephc bridge `elephc_web` could not be found
+  needs: libelephc_web.a
+  looked in:
+    /opt/stage/lib
+
+ELEPHC_WEB_LIB_DIR is set to /opt/stage/lib, which takes priority over every
+other location — the elephc binary's own directory, a sibling lib/ and the build
+tree were NOT consulted. Put libelephc_web.a in /opt/stage/lib, point
+ELEPHC_WEB_LIB_DIR somewhere that has it, or unset ELEPHC_WEB_LIB_DIR to search
+those locations again. `elephc --print-capabilities` lists every archive this
+binary can need.
+```
+
+When the override directory does hold an entry by that name but it is not a
+usable archive (an empty file, a directory, or a symbolic link, dangling or not),
+the error names that entry in `needs:` and says to replace it rather than to put
+the archive there:
+
+```
+Linker error: required Elephc bridge `elephc_web` could not be found
+  needs: /opt/stage/lib/libelephc_web.a
+  looked in:
+    /opt/stage/lib
+
+ELEPHC_WEB_LIB_DIR is set to /opt/stage/lib, which takes priority over every
+other location, so no other directory was consulted. Replace invalid archive
+/opt/stage/lib/libelephc_web.a with a non-empty regular file, point
+ELEPHC_WEB_LIB_DIR to a directory containing a valid libelephc_web.a, or unset
+ELEPHC_WEB_LIB_DIR to search the other locations again. `elephc
+--print-capabilities` lists every archive this binary can need.
+```
+
+When an exact archive path in the link plan is missing, empty, a directory, or
+a symbolic link, the error names that path in `needs:` and omits `looked in:`.
+The exact-path plan does not run the fallback search.
+An invalid archive found by fallback discovery also names its path, and retains
+the locations reached before it was found. The error tells you to replace the
+invalid file or point the directory override at a valid archive. Discovery
+checks each candidate without following symbolic links, so a dangling link where
+an archive belongs stops the search and is reported this way instead of being
+skipped.
+
+#### The `eval()` bridge has two archive names
+
+`elephc_magician` is the one bridge whose archive filename depends on the
+program being compiled. A program that calls `eval()` links
+`libelephc_magician.a`. A program that calls `eval()` **and** uses the curl
+surface links `libelephc_magician_curl.a` instead — a separate file, not the
+same slot rebuilt, because `cargo build --features curl` would otherwise
+overwrite the curl-free archive an earlier build left behind and a later
+curl-free program still expects.
+
+Both names go through the search order above and through the same
+`ELEPHC_MAGICIAN_LIB_DIR` override, so an install directory has to carry
+whichever of the two the programs built against it need; the release tarball and
+the Homebrew formula ship both. A missing curl-aware archive is reported under
+its own name:
+
+```
+Linker error: required Elephc bridge `elephc_magician` could not be found
+  needs: libelephc_magician_curl.a
+```
+
+[`--print-capabilities`](cli-reference.md) is the
+authoritative list for the binary you are holding — one line per capability with
+the archives it needs — so a packaging script can check a tarball carries
+everything the compiler inside it advertises rather than guessing from this page.
+It reports the `eval` bridge under the plain `libelephc_magician.a`; the
+curl-aware variant above is the one name it does not print.
 
 ## Heap size
 
@@ -271,10 +402,11 @@ Dead stripping removes unreachable *code*. Stripping removes the *names* of the
 code that stays. The two are independent: the first changes what runs, the
 second changes only what the file says about itself.
 
-A linked **executable** is stripped of its symbol table. Nothing in a compiled
-program reads those names — `Throwable::getTrace()` and `getTraceAsString()` are
-not implemented, and the uncaught-exception report prints no stack trace — so
-they are dead weight at run time, and they are roughly a quarter of the file:
+A linked **executable** is stripped of its symbol table. Runtime introspection
+uses compiler-emitted descriptors rather than linker symbol names.
+`Throwable::getTrace()` and `getTraceAsString()` currently return an empty array
+and string, and the uncaught-exception report prints no stack trace. The linker
+names are unnecessary at run time and are roughly a quarter of the file:
 
 | program | linked | stripped |
 |---|--:|--:|

@@ -1,8 +1,8 @@
 ---
 title: "error_log()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Sends an error message to the log, a file, or an email address."
 sidebar:
-  order: 882
+  order: 977
 ---
 
 ## error_log()
@@ -11,7 +11,7 @@ sidebar:
 function error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Sends an error message to the log, a file, or an email address.
 
 **Parameters**:
 - `$message` (`string`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

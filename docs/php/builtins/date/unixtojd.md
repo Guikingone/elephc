@@ -1,8 +1,8 @@
 ---
 title: "unixtojd()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Unix timestamp into a Julian Day count."
 sidebar:
-  order: 252
+  order: 253
 ---
 
 ## unixtojd()
@@ -11,7 +11,7 @@ sidebar:
 function unixtojd(?int $timestamp = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Unix timestamp into a Julian Day count.
 
 **Parameters**:
 - `$timestamp` (`?int`), default `null`, optional
@@ -23,7 +23,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

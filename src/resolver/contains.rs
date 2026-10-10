@@ -174,6 +174,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_has_includes),
         ExprKind::NewDynamic { name_expr, args } => {
             expr_has_includes(name_expr) || args.iter().any(expr_has_includes)
@@ -185,6 +186,10 @@ fn expr_has_includes(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(entries) => entries
             .iter()
             .any(|(key, value)| expr_has_includes(key) || expr_has_includes(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_has_includes),
         ExprKind::Match {
             subject,
             arms,
@@ -265,6 +270,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
 fn instanceof_target_has_includes(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_has_includes(expr),
     }
 }

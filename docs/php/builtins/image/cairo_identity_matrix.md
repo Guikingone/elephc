@@ -1,8 +1,8 @@
 ---
 title: "cairo_identity_matrix()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Resets the context's transformation to the identity matrix."
 sidebar:
-  order: 406
+  order: 407
 ---
 
 ## cairo_identity_matrix()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_identity_matrix(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Resets the context's transformation to the identity matrix.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -47,6 +47,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};
 
+    /// Pins nullable callback, capture-window and context-identity routing on executable targets.
     #[test]
     fn scheduler_monitoring_is_nullable_dormant_gated_and_context_aware() {
         for (platform, arch, context_move, indirect) in [

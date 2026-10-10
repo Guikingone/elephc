@@ -82,7 +82,7 @@ fn test_error_closure_ref_param_requires_variable() {
 fn test_error_function_typed_param_rejects_wrong_argument() {
     expect_error(
         "<?php function foo(int $x) { echo $x; } foo(\"hello\");",
-        "Function 'foo' parameter $x expects Int, got Str",
+        "Function 'foo' parameter $x expects int, got string — PHP throws `TypeError` for the non-numeric string \"hello\" at an `int` parameter",
     );
 }
 
@@ -91,7 +91,7 @@ fn test_error_function_typed_param_rejects_wrong_argument() {
 fn test_error_generic_object_parameter_rejects_int() {
     expect_error(
         "<?php function require_object(object $value): void {} require_object(1);",
-        "expects Object(\"\"), got Int",
+        "Function 'require_object' parameter $value expects object, got int",
     );
 }
 
@@ -100,7 +100,7 @@ fn test_error_generic_object_parameter_rejects_int() {
 fn test_error_generic_object_parameter_rejects_string() {
     expect_error(
         "<?php function require_object(object $value): void {} require_object(\"no\");",
-        "expects Object(\"\"), got Str",
+        "Function 'require_object' parameter $value expects object, got string",
     );
 }
 
@@ -109,7 +109,7 @@ fn test_error_generic_object_parameter_rejects_string() {
 fn test_error_generic_object_parameter_rejects_array() {
     expect_error(
         "<?php function require_object(object $value): void {} require_object([]);",
-        "expects Object(\"\"), got Array",
+        "Function 'require_object' parameter $value expects object, got array<never>",
     );
 }
 
@@ -169,7 +169,7 @@ fn test_error_user_constants_are_case_sensitive() {
 fn test_error_typed_default_parameter_rejects_mismatched_default() {
     expect_error(
         "<?php function foo(int $x = \"hello\") { echo $x; }",
-        "Function 'foo' parameter $x expects Int, got Str",
+        "Function 'foo' parameter $x expects int, got string",
     );
 }
 
@@ -209,6 +209,15 @@ fn test_error_named_arguments_reject_duplicate_assignment() {
     expect_error(
         "<?php function greet($name) { echo $name; } greet(\"Alice\", name: \"Bob\");",
         "Function 'greet' parameter $name is already assigned",
+    );
+}
+
+/// CUF forwards target names but still rejects assigning its callback parameter twice.
+#[test]
+fn test_error_named_arguments_cuf_rejects_duplicate_callback() {
+    expect_error(
+        "<?php call_user_func('strlen', callback: 'strlen', string: 'value');",
+        "Builtin 'call_user_func' parameter $callback is already assigned",
     );
 }
 
@@ -260,6 +269,26 @@ fn test_error_named_arguments_reject_positional_after_spread() {
     expect_error(
         "<?php function greet($name, $age) { echo $name; } $args = [\"Alice\"]; greet(...$args, 30);",
         "Function 'greet' cannot use positional arguments after spread arguments",
+    );
+}
+
+/// Verifies a property with PHP's unrestricted `array` declaration remains a valid spread
+/// source after the checker preserves its indexed-or-associative storage contract.
+#[test]
+fn test_declared_array_property_is_valid_spread_source() {
+    expect_no_error(
+        r#"<?php
+function collect_args(...$args): void {}
+class SpreadTarget { public function __construct(...$args) {} }
+class SpreadHolder {
+    public array $args = [];
+    public function run(): void {
+        collect_args(...$this->args);
+        $class = SpreadTarget::class;
+        new $class(...$this->args);
+    }
+}
+"#,
     );
 }
 
@@ -393,7 +422,7 @@ fn test_error_named_arguments_reject_unknown_extern_parameter() {
 fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
     expect_error(
         "<?php function foo(): string { return 1; }",
-        "Function 'foo' return type expects Str, got Int",
+        "Function 'foo' return type expects string, got int",
     );
 }
 
@@ -403,7 +432,7 @@ fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
 fn test_error_function_declared_return_type_rejects_mismatch_via_first_class_callable() {
     expect_error(
         "<?php function foo(): string { return 1; } $f = foo(...);",
-        "Function 'foo' return type expects Str, got Int",
+        "Function 'foo' return type expects string, got int",
     );
 }
 
@@ -463,7 +492,7 @@ fn test_error_method_declared_return_type_requires_return_value() {
 fn test_error_typed_closure_param_rejects_wrong_argument() {
     expect_error(
         "<?php $f = function (int $x) { echo $x; }; $f(\"hello\");",
-        "callable $f parameter $x expects Int, got Str",
+        "callable $f parameter $x expects int, got string",
     );
 }
 
@@ -473,7 +502,7 @@ fn test_error_typed_closure_param_rejects_wrong_argument() {
 fn test_error_typed_first_class_callable_rejects_wrong_argument() {
     expect_error(
         "<?php function foo(int $x) { echo $x; } $f = foo(...); $f(\"hello\");",
-        "callable $f parameter $x expects Int, got Str",
+        "callable $f parameter $x expects int, got string",
     );
 }
 
@@ -499,7 +528,7 @@ fn test_typed_variadic_parameter_is_accepted() {
 fn test_error_typed_variadic_rejects_wrong_argument_type() {
     expect_error(
         "<?php function sum(int ...$nums): int { return array_sum($nums); } sum(\"a\", \"b\");",
-        "variadic parameter $nums expects Int, got Str",
+        "Function 'sum' variadic parameter $nums expects int, got string",
     );
 }
 
@@ -508,7 +537,7 @@ fn test_error_typed_variadic_rejects_wrong_argument_type() {
 fn test_error_typed_variadic_method_rejects_wrong_argument_type() {
     expect_error(
         "<?php class C { public function add(int ...$n): int { return count($n); } } $c = new C(); $c->add(\"x\");",
-        "variadic parameter $n expects Int, got Str",
+        "Method C::add variadic parameter $n expects int, got string",
     );
 }
 
@@ -540,6 +569,52 @@ fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
         "<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);",
         "requires a variable with mixed/union/nullable storage when passed by reference",
     );
+}
+
+/// Mixed-local widening does not relabel an existing concrete reference set.
+#[test]
+fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
+    for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
+        expect_error(
+            &format!("<?php function replaceScalar(mixed &$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
+/// An untyped reference parameter also uses canonical Mixed storage and cannot relabel aliases.
+#[test]
+fn test_error_untyped_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
+    for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
+        expect_error(
+            &format!("<?php function replaceScalar(&$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
+/// Rebinding a managed-entry alias to a concrete scalar cell clears the old boxed provenance.
+#[test]
+fn test_error_mixed_by_ref_rebound_scalar_alias_still_requires_boxed_storage() {
+    expect_error(
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; $scalar = 1; $alias =& $scalar; replaceScalar($alias);",
+        "requires a variable with mixed/union/nullable storage when passed by reference",
+    );
+}
+
+/// Managed provenance created on only one control-flow path cannot authorize the join binding.
+#[test]
+fn test_error_conditional_managed_alias_does_not_relabel_scalar_reference_cell() {
+    for source in [
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $scalar = 1; $alias =& $scalar; if ($argc > 1) { $items = ['k' => new stdClass()]; $alias =& $items['k']; } replaceScalar($alias);",
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; if ($argc > 1) { $scalar = 1; $alias =& $scalar; } replaceScalar($alias);",
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; for ($i = 0; $i < 2; $i++) { replaceScalar($alias); $scalar = 1; $alias =& $scalar; }",
+    ] {
+        expect_error(
+            source,
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
 }
 
 // -- Include/require path expression errors --
@@ -592,4 +667,60 @@ fn test_error_by_ref_capture_not_assignment_target_still_undefined() {
         "<?php $g = function() use(&$h) { return $h; };",
         "Undefined variable in use()",
     );
+}
+
+/// Issue #892: the MIRROR of the test above — a NON-nullable by-reference parameter handed
+/// a variable that holds `null`.
+///
+/// This one had no diagnostic at all. `types_compatible` accepts `Void` for `Int`, `Float`
+/// and `Bool`, which is right for a by-VALUE parameter (PHP coerces null to `0`/`0.0`/
+/// `false` there) and wrong for a by-reference one: nothing coerces the caller's slot, so
+/// the call was admitted with the local still typed `Void`, the callee wrote an int through
+/// the reference, and the first thing the caller did with the local reached EIR lowering as
+/// an operation on a null. The reported shape produced a positionless
+/// `unsupported EIR backend feature: icmp for PHP type Void`.
+///
+/// php-src agrees with the rejection: measured on 8.5.10,
+/// `function out(int &$s) {} $x = null; out($x);` throws
+/// `TypeError: out(): Argument #1 ($s) must be of type int, null given`.
+#[test]
+fn test_error_non_nullable_by_ref_parameter_rejects_a_null_variable() {
+    // `string` is in the list even though `types_compatible` never accepted `Void` for it:
+    // it used to reach the generic "expects Str, got Void" mismatch further down, and this
+    // pins that the by-reference position now answers with the recovery instead.
+    for declared in ["int", "float", "bool", "string"] {
+        expect_error(
+            &format!(
+                "<?php function out({declared} &$slot) {{ }} $value = null; out($value); \
+                 echo $value;"
+            ),
+            "a by-reference parameter writes back through the caller's variable",
+        );
+    }
+}
+
+/// The recovery the diagnostic above prints has to work, on both of its branches: seeding
+/// the variable with a value of the declared type, or declaring the parameter nullable and
+/// giving the variable boxed storage.
+#[test]
+fn test_by_ref_null_recovery_compiles() {
+    // Recovery 1: initialize the variable with a value of the declared type.
+    assert!(check_source(
+        "<?php function out(int &$slot) { $slot = 7; } $value = 0; out($value); echo $value;"
+    )
+    .is_ok());
+
+    // Recovery 2: make BOTH the parameter and the variable nullable. The parameter alone is
+    // not enough -- `?int &$slot` needs boxed storage on the caller's side, so a bare
+    // `$value = null` still fails the mixed/union/nullable-storage rule. That is why the
+    // diagnostic names the variable in this branch too; the first version of the message
+    // said "declare the parameter nullable" and that advice did not compile.
+    assert!(check_source(
+        "<?php function out(?int &$slot) { $slot = 7; } ?int $value = null; out($value); echo $value;"
+    )
+    .is_ok());
+    assert!(check_source(
+        "<?php function out(?int &$slot) { $slot = 7; } $value = null; out($value);"
+    )
+    .is_err());
 }

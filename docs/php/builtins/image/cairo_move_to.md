@@ -1,8 +1,8 @@
 ---
 title: "cairo_move_to()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Begins a new subpath at the given point."
 sidebar:
-  order: 418
+  order: 419
 ---
 
 ## cairo_move_to()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_move_to(mixed $context, float $x, float $y): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Begins a new subpath at the given point.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

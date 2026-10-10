@@ -162,7 +162,6 @@ pub(super) fn lower_late_static_scoped_constant(ctx: &mut LoweringContext<'_, '_
         return lower_scoped_constant_fallback(ctx, "static", name, expr);
     };
     let fallback_value = ctx.scoped_constant_value(&base_class, name);
-    let result_type = fallback_expr_type(expr);
     let candidates = late_static_constant_candidates(ctx, &base_class, name);
     if candidates.is_empty() {
         if let Some(value) = fallback_value {
@@ -170,6 +169,8 @@ pub(super) fn lower_late_static_scoped_constant(ctx: &mut LoweringContext<'_, '_
         }
         return lower_scoped_constant_fallback(ctx, "static", name, expr);
     }
+    // Descendants can override a constant with a different PHP type.
+    let result_type = PhpType::Mixed;
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let merge = ctx.builder.create_named_block("static_const.merge", Vec::new());
@@ -228,6 +229,151 @@ pub(super) fn lower_late_static_scoped_constant(ctx: &mut LoweringContext<'_, '_
     ctx.builder.position_at_end(merge);
     let _ = split_initialized;
     take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Lowers `defined('static::CONST')` against the runtime called class.
+///
+/// The lexical class supplies PHP visibility scope. Descendants whose answer
+/// differs from the lexical fallback receive called-class-id dispatch arms;
+/// identical answers keep the compile-time fallback.
+pub(super) fn lower_late_static_defined(
+    ctx: &mut LoweringContext<'_, '_>,
+    constant_name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let base_class = ctx
+        .current_class
+        .clone()
+        .expect("invalid static:: scope is lowered before late-static defined()");
+    let fallback = class_constant_defined_for_receiver(
+        ctx,
+        &base_class,
+        constant_name,
+        &base_class,
+    );
+    let candidates = late_static_defined_candidates(
+        ctx,
+        &base_class,
+        constant_name,
+        fallback,
+    );
+    if candidates.is_empty() {
+        return lower_expr(
+            ctx,
+            &Expr::new(ExprKind::BoolLiteral(fallback), expr.span),
+        );
+    }
+
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let merge = ctx
+        .builder
+        .create_named_block("static_defined.merge", Vec::new());
+    let called_class_id = ctx.emit_value(
+        Op::LoadCalledClassId,
+        Vec::new(),
+        None,
+        PhpType::Int,
+        Op::LoadCalledClassId.default_effects(),
+        Some(expr.span),
+    );
+    let mut branch_labels = Vec::new();
+    for (class_name, class_id, answer) in &candidates {
+        let block = ctx
+            .builder
+            .create_named_block("static_defined.branch", Vec::new());
+        branch_labels.push((block, class_name.clone(), *answer));
+        let class_id_value = ctx.emit_value(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(*class_id as i64)),
+            PhpType::Int,
+            Op::ConstI64.default_effects(),
+            Some(expr.span),
+        );
+        let is_called_class = ctx.emit_value(
+            Op::ICmp,
+            vec![called_class_id.value, class_id_value.value],
+            Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+            PhpType::Bool,
+            Op::ICmp.default_effects(),
+            Some(expr.span),
+        );
+        let skip = ctx
+            .builder
+            .create_named_block("static_defined.skip", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_called_class.value,
+            then_target: block,
+            then_args: Vec::new(),
+            else_target: skip,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(skip);
+    }
+
+    store_expr_into_temp(
+        ctx,
+        &temp_name,
+        PhpType::Bool,
+        &Expr::new(ExprKind::BoolLiteral(fallback), expr.span),
+        expr.span,
+    );
+    branch_to(ctx, merge);
+    for (block, _class_name, answer) in branch_labels {
+        ctx.builder.position_at_end(block);
+        ctx.restore_initialized_slots(split_initialized.clone());
+        store_expr_into_temp(
+            ctx,
+            &temp_name,
+            PhpType::Bool,
+            &Expr::new(ExprKind::BoolLiteral(answer), expr.span),
+            expr.span,
+        );
+        branch_to(ctx, merge);
+    }
+    ctx.builder.position_at_end(merge);
+    ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Returns descendants whose late-static `defined()` answer differs from the lexical class.
+fn late_static_defined_candidates(
+    ctx: &LoweringContext<'_, '_>,
+    base_class: &str,
+    constant_name: &str,
+    fallback: bool,
+) -> Vec<(String, u64, bool)> {
+    let mut candidates = Vec::new();
+    for (class_name, class_info) in ctx.classes {
+        if class_name == base_class
+            || !is_same_or_descendant_class(ctx, class_name, base_class)
+        {
+            continue;
+        }
+        let answer =
+            class_constant_defined_for_receiver(ctx, class_name, constant_name, base_class);
+        if answer != fallback {
+            candidates.push((class_name.clone(), class_info.class_id, answer));
+        }
+    }
+    candidates.sort_by_key(|(_, class_id, _)| *class_id);
+    candidates
+}
+
+/// Evaluates one concrete called-class arm using the lexical class as visibility scope.
+fn class_constant_defined_for_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    receiver_class: &str,
+    constant_name: &str,
+    lexical_class: &str,
+) -> bool {
+    crate::types::class_like_constant_is_defined(
+        ctx.classes,
+        ctx.interfaces,
+        ctx.enums,
+        &format!("{}::{}", receiver_class, constant_name),
+        Some(lexical_class),
+    )
 }
 
 /// Collects descendant classes that redefine a class constant, returning (class_name, class_id)
@@ -308,6 +454,40 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
     if matches!(receiver, StaticReceiver::Static) {
         let fallback_class = ctx.current_class.clone().unwrap_or_else(|| receiver_name(receiver));
         let class_name = lower_class_constant(ctx, receiver, expr);
+        for (arg_index, arg) in args.iter().enumerate() {
+            let place = match &arg.kind {
+                ExprKind::NamedArg { value, .. } => value.as_ref(),
+                _ => arg,
+            };
+            let ExprKind::Variable(local_name) = &place.kind else {
+                continue;
+            };
+            if !matches!(ctx.local_type(local_name).codegen_repr(), PhpType::Object(_)) {
+                continue;
+            }
+            let needs_boxed_reference = ctx.classes.keys().any(|candidate| {
+                if !class_extends_class(ctx, candidate, &fallback_class) {
+                    return false;
+                }
+                let name = Name::from(candidate.clone());
+                let Some(signature) = constructor_signature(ctx, &name) else {
+                    return false;
+                };
+                let param_index = match &arg.kind {
+                    ExprKind::NamedArg { name, .. } =>
+                        signature.params.iter().position(|(param, _)| param == name),
+                    _ => Some(arg_index),
+                };
+                param_index.is_some_and(|index| {
+                    signature.ref_params.get(index).copied().unwrap_or(false)
+                        && signature.params.get(index)
+                            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+                })
+            });
+            if needs_boxed_reference {
+                ctx.promote_local_mixed_ref_cell(local_name, Some(place.span));
+            }
+        }
         let mut operands = vec![class_name.value];
         operands.extend(lower_args(ctx, args));
         let metadata = format!("{}|{}", fallback_class, fallback_class);
@@ -322,15 +502,7 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
         );
     }
     let name = static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
-    let sig = constructor_signature(ctx, &Name::from(name.clone())).cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
-    emit_fixed_object_new(
-        ctx,
-        &name,
-        operands,
-        PhpType::Object(name.clone()),
-        expr.span,
-    )
+    lower_new_object(ctx, &Name::from(name), args, expr)
 }
 
 /// Lowers a residual magic constant.

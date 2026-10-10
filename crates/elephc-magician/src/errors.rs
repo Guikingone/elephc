@@ -18,6 +18,7 @@ pub enum EvalStatus {
     UnsupportedConstruct,
     AbiMismatch,
     EscapingPcntlCallable,
+    UserFatal,
 }
 
 impl EvalStatus {
@@ -31,12 +32,17 @@ impl EvalStatus {
             Self::UnsupportedConstruct => 4,
             Self::AbiMismatch => 5,
             Self::EscapingPcntlCallable => 6,
+            Self::UserFatal => 7,
         }
     }
 }
 
 /// Parse failures detected before lowering a runtime eval fragment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable because a STORED parse failure is part of a cached script: the segment
+/// that failed to parse is replayed from the file cache exactly as it would be from memory,
+/// raising at its own position rather than at load time.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum EvalParseError {
     PhpOpenTag,
     InvalidUtf8,
@@ -89,5 +95,12 @@ mod tests {
     #[test]
     fn escaping_pcntl_callable_status_code_is_stable() {
         assert_eq!(EvalStatus::EscapingPcntlCallable.code(), 6);
+    }
+
+    /// User errors must not collide with the previously published PCNTL escape status.
+    #[test]
+    fn user_fatal_status_is_distinct_from_pcntl_escape() {
+        assert_eq!(EvalStatus::UserFatal.code(), 7);
+        assert_ne!(EvalStatus::UserFatal.code(), EvalStatus::EscapingPcntlCallable.code());
     }
 }

@@ -1,8 +1,8 @@
 ---
 title: "cairo_set_source_rgb()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Uses an opaque color as the source for subsequent drawing."
 sidebar:
-  order: 439
+  order: 440
 ---
 
 ## cairo_set_source_rgb()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_source_rgb(mixed $context, float $red, float $green, float $blue): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Uses an opaque color as the source for subsequent drawing.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

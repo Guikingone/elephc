@@ -9,6 +9,12 @@
 
 use super::*;
 
+/// The interface an `iterable` property admits objects through.
+///
+/// PHP spells `iterable` as `array|Traversable`, so the object half of that contract is exactly
+/// "is a `Traversable`" and is resolved with the ordinary class/interface assignability rules.
+pub(super) const TRAVERSABLE_INTERFACE: &str = "Traversable";
+
 /// Verifies that this slice knows how to represent the property type in an object slot.
 pub(super) fn ensure_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
     match php_type.codegen_repr() {
@@ -40,6 +46,17 @@ pub(super) fn ensure_property_value_supported(
     if value_ty == &slot.php_type {
         return Ok(());
     }
+    if can_store_assoc_array_with_same_value_type(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    // A runtime-shaped value carries no compile-time type to compare against the declared
+    // slot, so the weak-mode guard decides it at run time. Rejecting it here instead is what
+    // made the runtime-class dispatch drop a whole class and silently lose the write.
+    if matches!(value_ty.codegen_repr(), PhpType::Mixed)
+        && property_type_accepts_runtime_shaped_value(ctx, slot)?
+    {
+        return Ok(());
+    }
     if can_store_object_for_object_property(ctx, value_ty, &slot.php_type) {
         return Ok(());
     }
@@ -55,6 +72,9 @@ pub(super) fn ensure_property_value_supported(
         return Ok(());
     }
     if can_store_assoc_array_as_mixed_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    if can_store_value_as_iterable_property(ctx, value_ty, &slot.php_type) {
         return Ok(());
     }
     if can_store_value_as_tagged_scalar_property(value_ty, &slot.php_type) {
@@ -215,6 +235,27 @@ pub(super) fn can_coerce_mixed_to_scalar_property(value_ty: &PhpType, slot_ty: &
         )
 }
 
+/// Returns true when a concrete value satisfies a declared `iterable` property.
+///
+/// The slot is one pointer-sized word holding the same raw heap pointer an `array` or object slot
+/// holds, and `__rt_heap_kind` tells the readers apart, so both array representations and every
+/// `Traversable` object store as they are with no conversion. An ordinary object is refused here
+/// exactly as PHP refuses it, which keeps the declared type from widening to bare `object`.
+pub(super) fn can_store_value_as_iterable_property(
+    ctx: &FunctionContext<'_>,
+    value_ty: &PhpType,
+    slot_ty: &PhpType,
+) -> bool {
+    if slot_ty.codegen_repr() != PhpType::Iterable {
+        return false;
+    }
+    match value_ty.codegen_repr() {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => true,
+        PhpType::Object(class_name) => object_type_is_a(ctx, &class_name, TRAVERSABLE_INTERFACE),
+        _ => false,
+    }
+}
+
 /// Returns true when a value can materialize nullable-int tagged-scalar property storage.
 pub(super) fn can_store_value_as_tagged_scalar_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     if slot_ty.codegen_repr() != PhpType::TaggedScalar {
@@ -282,6 +323,18 @@ pub(super) fn can_store_assoc_array_as_mixed_property(value_ty: &PhpType, slot_t
         PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
         _ => false,
     }
+}
+
+/// Hash keys carry their own runtime tags, so differing inferred key types need no conversion
+/// when the value payload representation is identical.
+fn can_store_assoc_array_with_same_value_type(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(
+        (value_ty.codegen_repr(), slot_ty.codegen_repr()),
+        (
+            PhpType::AssocArray { value: source, .. },
+            PhpType::AssocArray { value: target, .. }
+        ) if source.codegen_repr() == target.codegen_repr()
+    )
 }
 
 /// Returns true when a value can initialize a pointer-sized slot as null.

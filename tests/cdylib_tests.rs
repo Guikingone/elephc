@@ -23,6 +23,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
+#[path = "cdylib/mbstring.rs"]
+mod mbstring;
+
 /// Creates an isolated temporary directory for one cdylib test, unique across
 /// parallel test threads and processes.
 fn make_test_dir(prefix: &str) -> PathBuf {
@@ -1053,6 +1056,7 @@ fn test_ios_targets_reject_executable_output_with_library_guidance() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// Both iOS targets diagnose unsupported Async execution while preserving analysis-only mode.
 #[test]
 fn test_ios_targets_reject_async_library_execution_but_allow_analysis() {
     let dir = make_test_dir("elephc_ios_async_refuse");
@@ -1090,6 +1094,7 @@ fn test_ios_targets_reject_async_library_execution_but_allow_analysis() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// Both iOS targets diagnose unsupported worker execution while preserving analysis-only mode.
 #[test]
 fn test_ios_targets_reject_parallel_library_execution_but_allow_analysis() {
     let dir = make_test_dir("elephc_ios_parallel_refuse");
@@ -1204,6 +1209,79 @@ function dispatch(string $action, int $count, float $ratio, bool $enabled): stri
         );
     }
     assert!(asm[lifecycle_start..].contains("mov w0, #3"));
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Keeps a backtrace-triggered frame collector internal to the exported PHP invocation.
+#[test]
+fn test_unrelated_backtrace_keeps_export_header_and_trampoline_fixed() {
+    let dir = make_test_dir("elephc_cdylib_hidden_collector");
+    fs::write(
+        dir.join("collector.php"),
+        r#"<?php
+#[Export]
+function roundtrip(string $input): string {
+    return $input;
+}
+
+function unrelated_trace(): array {
+    return debug_backtrace();
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "staticlib", "collector.php"])
+        .output()
+        .expect("failed to compile the collector-bearing static library");
+    assert!(
+        output.status.success(),
+        "collector-bearing library compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let header = fs::read_to_string(dir.join("libcollector.h"))
+        .expect("missing generated collector header");
+    assert!(header.contains(
+        "int32_t roundtrip(const char *input_ptr, size_t input_len, char **output_ptr, size_t *output_len);"
+    ));
+    assert!(!header.contains("__elephc_func_args"));
+
+    let asm = fs::read_to_string(dir.join("collector.s"))
+        .expect("missing collector-bearing library assembly");
+    let public_label = if cfg!(target_os = "macos") {
+        "\n_roundtrip:"
+    } else {
+        "\nroundtrip:"
+    };
+    let lifecycle_label = if cfg!(target_os = "macos") {
+        "\n_elephc_abi_version:"
+    } else {
+        "\nelephc_abi_version:"
+    };
+    let start = asm.find(public_label).expect("missing public roundtrip wrapper");
+    let end = asm[start..]
+        .find(lifecycle_label)
+        .map(|offset| start + offset)
+        .expect("missing lifecycle boundary after roundtrip");
+    let wrapper = &asm[start..end];
+    let setjmp = wrapper.find("setjmp").expect("missing recoverable boundary");
+    let allocate = wrapper
+        .find("__rt_array_new")
+        .expect("missing empty internal collector allocation");
+    let publish = wrapper
+        .find("__rt_cleanup_call_operand_owner")
+        .expect("missing collector unwind owner");
+    let invoke = wrapper
+        .find("_fn_roundtrip")
+        .expect("missing internal PHP invocation");
+    let release = wrapper[invoke..]
+        .find("__rt_decref_any")
+        .map(|offset| invoke + offset)
+        .expect("missing normal collector release");
+    assert!(setjmp < allocate && allocate < publish && publish < invoke && invoke < release);
 
     fs::remove_dir_all(&dir).ok();
 }
@@ -2544,6 +2622,9 @@ void *__rt_ctx_acquire(void *arena_base, uint64_t arena_size, void *object_index
     __asm__("__rt_ctx_acquire");
 int64_t __rt_ctx_release(void *ctx) __asm__("__rt_ctx_release");
 int64_t __rt_stream_owner_mark(void) __asm__("__rt_stream_owner_mark");
+void *__rt_resource_inventory_register(int64_t id, int64_t payload, int64_t kind)
+    __asm__("__rt_resource_inventory_register");
+extern uint64_t resource_id_cursor __asm__("_resource_id_next");
 void __rt_exit_or_parallel_fatal(int64_t status)
     __asm__("__rt_exit_or_parallel_fatal") __attribute__((noreturn));
 void __rt_cstr_to_str(void) __asm__("__rt_cstr_to_str");
@@ -2552,9 +2633,22 @@ void (*bz2_close_hook)(int fd) __asm__("_bz2_close_fn");
 void (*iconv_close_hook)(int fd) __asm__("_iconv_close_fn");
 void (*tls_close_hook)(void *handle) __asm__("_elephc_tls_close_fn");
 typedef int64_t (*worker_callback)(void *job);
-int64_t __rt_parallel_worker_entry(void *ctx, worker_callback callback, void *job,
-                                   uint64_t stack_size)
+int64_t native_parallel_worker_entry(void *ctx, worker_callback callback, void *job,
+                                   uint64_t stack_size, int64_t *released)
     __asm__("__rt_parallel_worker_entry");
+
+/* The bridge needs both callback status and clean-release status before freeing
+   its backing arrays. Preserve that composed ABI in every native pool probe. */
+static int64_t run_worker_entry(void *ctx, worker_callback callback,
+                                        void *job, uint64_t stack_size) {
+    int64_t released = -1;
+    int64_t status = native_parallel_worker_entry(ctx, callback, job, stack_size, &released);
+    if (released != 1) {
+        printf("WORKER-CONTEXT-NOT-CLEANLY-RELEASED-%lld\n", (long long)released);
+        return -98;
+    }
+    return status;
+}
 
 #define SLOTS 8
 #define ARENA 4096
@@ -2566,21 +2660,24 @@ int64_t __rt_parallel_worker_entry(void *ctx, worker_callback callback, void *jo
 #define SERIALIZE_OBJECT_TABLE_WORDS 65536
 #define UNSERIALIZE_VALUE_TABLE_WORDS 65536
 /* Pinned by ctx_layout_offsets_are_ordered_and_size_is_aligned. */
-#define USER_WRAPPER_HANDLES_OFFSET 20616
-#define EOF_FLAGS_OFFSET 5512
-#define POPEN_FILES_OFFSET 5768
-#define DIR_HANDLES_OFFSET 7816
-#define GLOB_HANDLES_OFFSET 9864
-#define BZSTREAM_HANDLES_OFFSET 11912
-#define STREAM_READ_FILTERS_OFFSET 13960
-#define STREAM_WRITE_FILTERS_OFFSET 14216
-#define ZSTREAM_HANDLES_OFFSET 14472
-#define ICONV_HANDLES_OFFSET 16520
-#define TLS_SESSIONS_OFFSET 18568
-#define USER_FILTER_INSTANCES_OFFSET 22664
-#define STREAM_CHUNK_SIZE_OFFSET 26760
-#define STREAM_CONNECT_HOST_OFFSET 28808
-#define STREAM_OWNED_FDS_OFFSET 32904
+#define REQUEST_STATE_BASE 280
+#define REQUEST_STATE_WORDS 45
+#define REQUEST_STATE_BYTES (REQUEST_STATE_WORDS * 8)
+#define USER_WRAPPER_HANDLES_OFFSET (20616 + REQUEST_STATE_BYTES)
+#define EOF_FLAGS_OFFSET (5512 + REQUEST_STATE_BYTES)
+#define POPEN_FILES_OFFSET (5768 + REQUEST_STATE_BYTES)
+#define DIR_HANDLES_OFFSET (7816 + REQUEST_STATE_BYTES)
+#define GLOB_HANDLES_OFFSET (9864 + REQUEST_STATE_BYTES)
+#define BZSTREAM_HANDLES_OFFSET (11912 + REQUEST_STATE_BYTES)
+#define STREAM_READ_FILTERS_OFFSET (13960 + REQUEST_STATE_BYTES)
+#define STREAM_WRITE_FILTERS_OFFSET (14216 + REQUEST_STATE_BYTES)
+#define ZSTREAM_HANDLES_OFFSET (14472 + REQUEST_STATE_BYTES)
+#define ICONV_HANDLES_OFFSET (16520 + REQUEST_STATE_BYTES)
+#define TLS_SESSIONS_OFFSET (18568 + REQUEST_STATE_BYTES)
+#define USER_FILTER_INSTANCES_OFFSET (22664 + REQUEST_STATE_BYTES)
+#define STREAM_CHUNK_SIZE_OFFSET (26760 + REQUEST_STATE_BYTES)
+#define STREAM_CONNECT_HOST_OFFSET (28808 + REQUEST_STATE_BYTES)
+#define STREAM_OWNED_FDS_OFFSET (32904 + REQUEST_STATE_BYTES)
 /* Non-resource scalar fields pinned by ctx_layout_offsets_are_ordered_and_size_is_aligned. */
 #define HEAP_OFF_OFFSET 8
 #define HEAP_BASE_OFFSET 56
@@ -2659,6 +2756,9 @@ static const size_t ISOLATION_SCALAR_OFFSETS[] = {
 
 static void write_context_marker(void *ctx, uint64_t marker) {
     unsigned char *bytes = ctx;
+    for (size_t index = 0; index < REQUEST_STATE_WORDS; index++) {
+        *(uint64_t *)(bytes + REQUEST_STATE_BASE + index * 8) = marker;
+    }
     for (size_t index = 0; index < sizeof(ISOLATION_SCALAR_OFFSETS) / sizeof(ISOLATION_SCALAR_OFFSETS[0]); index++) {
         *(uint64_t *)(bytes + ISOLATION_SCALAR_OFFSETS[index]) = marker;
     }
@@ -2679,6 +2779,9 @@ static void write_context_marker(void *ctx, uint64_t marker) {
 
 static int context_marker_matches(void *ctx, uint64_t marker) {
     unsigned char *bytes = ctx;
+    for (size_t index = 0; index < REQUEST_STATE_WORDS; index++) {
+        if (*(uint64_t *)(bytes + REQUEST_STATE_BASE + index * 8) != marker) return 0;
+    }
     for (size_t index = 0; index < sizeof(ISOLATION_SCALAR_OFFSETS) / sizeof(ISOLATION_SCALAR_OFFSETS[0]); index++) {
         if (*(uint64_t *)(bytes + ISOLATION_SCALAR_OFFSETS[index]) != marker) return 0;
     }
@@ -2786,8 +2889,20 @@ static void host_iconv_close(int fd) {
     native_handle_table_for(active_worker_context(), ICONV_HANDLES_OFFSET)[fd] = 0;
 }
 
+static uint64_t *inventory_node_seen;
+static int inventory_retired_before_native_close;
+static uint64_t inventory_node_snapshot[6];
+static uint64_t inventory_registered_snapshot[6];
+static int tls_close_calls;
+
 static void host_tls_close(void *handle) {
+    tls_close_calls++;
     tls_closed_handle = handle;
+    if (inventory_node_seen != NULL) {
+        for (size_t index = 0; index < 6; index++) inventory_node_snapshot[index] = inventory_node_seen[index];
+    }
+    inventory_retired_before_native_close = inventory_node_seen != NULL &&
+        inventory_node_seen[2] == (uint64_t)-99 && inventory_node_seen[4] == 1;
 }
 
 struct worker_stream_owner_job {
@@ -2808,6 +2923,9 @@ static int64_t worker_stream_owner_fatal_probe(void *opaque) {
         return -13;
     }
     if (job->attach_native_handles) {
+        inventory_node_seen = __rt_resource_inventory_register(99, job->fd, 1);
+        if (inventory_node_seen == NULL) return -14;
+        for (size_t index = 0; index < 6; index++) inventory_registered_snapshot[index] = inventory_node_seen[index];
         void *ctx = active_worker_context();
         ((unsigned char *)ctx)[EOF_FLAGS_OFFSET + job->fd] = 1;
         ((unsigned char *)ctx)[STREAM_READ_FILTERS_OFFSET + job->fd] = 1;
@@ -2927,7 +3045,7 @@ struct worker_probe_job {
 
 static void *run_worker_probe(void *opaque) {
     struct worker_probe_job *job = opaque;
-    job->status = __rt_parallel_worker_entry(
+    job->status = run_worker_entry(
         job->ctx, worker_probe, job->ctx, 8 * 1024 * 1024
     );
     return NULL;
@@ -2942,6 +3060,11 @@ struct isolation_job {
 static int64_t worker_context_isolation_probe(void *opaque) {
     struct isolation_job *job = opaque;
     if (active_worker_context() != job->ctx) return -71;
+    uint64_t request_state_snapshot[REQUEST_STATE_WORDS];
+    for (size_t index = 0; index < REQUEST_STATE_WORDS; index++) {
+        request_state_snapshot[index] = *(uint64_t *)((unsigned char *)job->ctx + REQUEST_STATE_BASE + index * 8);
+    }
+    uint64_t arena_base = *(uint64_t *)((unsigned char *)job->ctx + HEAP_BASE_OFFSET);
     write_context_marker(job->ctx, job->marker);
     pthread_mutex_lock(&isolation_lock);
     isolation_ready++;
@@ -2952,12 +3075,16 @@ static int64_t worker_context_isolation_probe(void *opaque) {
     pthread_mutex_unlock(&isolation_lock);
     int ok = context_marker_matches(job->ctx, job->marker);
     clear_context_marker(job->ctx);
+    for (size_t index = 0; index < REQUEST_STATE_WORDS; index++) {
+        *(uint64_t *)((unsigned char *)job->ctx + REQUEST_STATE_BASE + index * 8) = request_state_snapshot[index];
+    }
+    *(uint64_t *)((unsigned char *)job->ctx + HEAP_BASE_OFFSET) = arena_base;
     return ok ? 73 : -72;
 }
 
 static void *run_context_isolation_probe(void *opaque) {
     struct isolation_job *job = opaque;
-    job->status = __rt_parallel_worker_entry(
+    job->status = run_worker_entry(
         job->ctx, worker_context_isolation_probe, job, 8 * 1024 * 1024
     );
     return NULL;
@@ -2994,6 +3121,13 @@ int main(void) {
     if (worker_job.status != 37) {
         printf("WORKER-CONTEXT-NOT-INSTALLED\n"); return 1;
     }
+    /* The entry consumed this lease. Reject reuse before acquiring a new one. */
+    int64_t stale_release = 92;
+    if (native_parallel_worker_entry(again, worker_probe, again, 8 * 1024 * 1024, &stale_release) != -1 || stale_release != 92) {
+        printf("RELEASED-WORKER-CONTEXT-ACCEPTED\n"); return 1;
+    }
+    again = acquire_context(2);
+    if (again != first) { printf("WORKER-SLOT-NOT-REACQUIRED\n"); return 1; }
 
     /* Mark a real descriptor from inside an installed worker context, then
        enter the production fatal trampoline. It must close the descriptor,
@@ -3006,11 +3140,27 @@ int main(void) {
     bz2_closed_fd = -1;
     iconv_closed_fd = -1;
     tls_closed_handle = NULL;
+    inventory_node_seen = NULL;
+    inventory_retired_before_native_close = 0;
+    resource_id_cursor = 77;
     struct worker_stream_owner_job stream_owner_job = { -1, 1 };
-    int64_t fatal_status = __rt_parallel_worker_entry(
+    int64_t fatal_status = run_worker_entry(
         again, worker_stream_owner_fatal_probe, &stream_owner_job, 8 * 1024 * 1024
     );
     if (fatal_status != -5) { printf("STREAM-OWNER-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
+    if (!inventory_retired_before_native_close) {
+        printf("INVENTORY-INCARNATION-NOT-RETIRED\n");
+        fprintf(stderr, "inventory id=%lld payload=%lld kind=%llu closed=%llu weak=%llu fd=%d\n",
+            (long long)inventory_node_snapshot[1], (long long)inventory_node_snapshot[2],
+            (unsigned long long)inventory_node_snapshot[3], (unsigned long long)inventory_node_snapshot[4],
+            (unsigned long long)inventory_node_snapshot[5], stream_owner_job.fd);
+        fprintf(stderr, "registered id=%lld payload=%lld kind=%llu closed=%llu tls-calls=%d zlib=%d bz2=%d iconv=%d\n",
+            (long long)inventory_registered_snapshot[1], (long long)inventory_registered_snapshot[2],
+            (unsigned long long)inventory_registered_snapshot[3], (unsigned long long)inventory_registered_snapshot[4],
+            tls_close_calls, zlib_closed_fd, bz2_closed_fd, iconv_closed_fd);
+        return 1;
+    }
+    if (resource_id_cursor != 77) { printf("WORKER-RESET-GLOBAL-RESOURCE-CURSOR\n"); return 1; }
     if (stream_owner_job.fd < 0) { printf("STREAM-OWNER-OPEN-FAILED\n"); return 1; }
     if (zlib_closed_fd != stream_owner_job.fd) { printf("ZLIB-CLOSE-HOOK-MISSED\n"); return 1; }
     if (bz2_closed_fd != stream_owner_job.fd) { printf("BZ2-CLOSE-HOOK-MISSED\n"); return 1; }
@@ -3038,7 +3188,7 @@ int main(void) {
     if (again != first) { printf("STREAM-OWNER-SLOT-NOT-REUSED\n"); return 1; }
 
     struct worker_popen_job popen_job = { -1 };
-    fatal_status = __rt_parallel_worker_entry(
+    fatal_status = run_worker_entry(
         again, worker_popen_fatal_probe, &popen_job, 8 * 1024 * 1024
     );
     if (fatal_status != -5) { printf("POPEN-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
@@ -3051,7 +3201,7 @@ int main(void) {
     if (again != first) { printf("POPEN-SLOT-NOT-REUSED\n"); return 1; }
 
     struct worker_directory_job directory_job = { -1 };
-    fatal_status = __rt_parallel_worker_entry(
+    fatal_status = run_worker_entry(
         again, worker_directory_fatal_probe, &directory_job, 8 * 1024 * 1024
     );
     if (fatal_status != -5) { printf("DIR-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
@@ -3064,7 +3214,7 @@ int main(void) {
     if (again != first) { printf("DIR-SLOT-NOT-REUSED\n"); return 1; }
 
     struct worker_glob_job glob_job = { -1 };
-    fatal_status = __rt_parallel_worker_entry(
+    fatal_status = run_worker_entry(
         again, worker_glob_fatal_probe, &glob_job, 8 * 1024 * 1024
     );
     if (fatal_status != -5) { printf("GLOB-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
@@ -3077,7 +3227,7 @@ int main(void) {
     if (again != first) { printf("GLOB-SLOT-NOT-REUSED\n"); return 1; }
 
     struct worker_wrapper_job wrapper_job = { NULL };
-    fatal_status = __rt_parallel_worker_entry(
+    fatal_status = run_worker_entry(
         again, worker_wrapper_fatal_probe, &wrapper_job, 8 * 1024 * 1024
     );
     if (fatal_status != -5) { printf("WRAPPER-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
@@ -3088,7 +3238,7 @@ int main(void) {
     if (again != first) { printf("WRAPPER-SLOT-NOT-REUSED\n"); return 1; }
 
     struct worker_filter_job filter_job = { -1, NULL };
-    fatal_status = __rt_parallel_worker_entry(
+    fatal_status = run_worker_entry(
         again, worker_filter_fatal_probe, &filter_job, 8 * 1024 * 1024
     );
     if (fatal_status != -5) { printf("FILTER-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
@@ -3127,7 +3277,8 @@ int main(void) {
     again = acquire_context(2);
     second = acquire_context(1);
     if (again != first || second == NULL || again == second) { printf("ISOLATION-SLOT-REUSE-FAILED\n"); return 1; }
-    if (__rt_parallel_worker_entry(NULL, worker_probe, again, 8 * 1024 * 1024) != -1) {
+    int64_t invalid_release = 91;
+    if (native_parallel_worker_entry(NULL, worker_probe, again, 8 * 1024 * 1024, &invalid_release) != -1 || invalid_release != 91) {
         printf("NULL-WORKER-CONTEXT-ACCEPTED\n"); return 1;
     }
 
@@ -3219,6 +3370,33 @@ fn test_rt_ctx_pool_hands_out_distinct_slots_and_reuses_released_ones() {
     );
 
     fs::remove_dir_all(&dir).ok();
+}
+
+/// Produces current Linux assembly and the same native pool fixture without a Docker Cargo rebuild.
+/// Run explicitly, then assemble/link/execute each bundle in its matching Linux image.
+#[test]
+#[ignore = "manual cross-target fixture emission; requires subsequent native Linux execution"]
+fn emit_linux_context_pool_probe_bundles() {
+    use elephc::codegen_support::{generate_runtime_with_features_mode, platform::Target, RuntimeFeatures};
+    let root = make_test_dir("elephc_linux_context_pool_probes");
+    for name in ["linux-aarch64", "linux-x86_64"] {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        // A scalar export requires no optional bridge; the pool/runtime helpers are real,
+        // not substitutes for the PHP/eval descriptor or Rust Parallel bridge gates.
+        fs::write(dir.join("auth.php"), "<?php\n#[Export]\nfunction add_i64(int $a, int $b): int { return $a + $b; }\n").unwrap();
+        let output = elephc_command(&dir)
+            .args(["--target", name, "--emit", "staticlib", "--emit-asm", "auth.php"])
+            .output().expect("cross-target assembly emission");
+        assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
+        let runtime = generate_runtime_with_features_mode(
+            8 * 1024 * 1024, Target::parse(name).unwrap(), RuntimeFeatures::none(), false, true,
+        );
+        assert!(runtime.contains("__rt_resource_inventory_abandon_fd") && runtime.contains("__rt_parallel_worker_entry"), "{name}: missing real runtime controls");
+        fs::write(dir.join("runtime.s"), runtime).unwrap();
+        fs::write(dir.join("pool-host.c"), CTX_POOL_HOST_C).unwrap();
+        println!("Linux context-pool bundle: {}", dir.display());
+    }
 }
 
 /// THE STATICLIB ARM CARRIES THE SAME ABI CONTRACT, AND WAS NEVER PROBED.

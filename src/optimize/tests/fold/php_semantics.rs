@@ -14,6 +14,28 @@
 
 use super::*;
 
+/// Named class strings fold with their span, while lexical and late-static receivers stay intact.
+#[test]
+fn test_fold_named_class_constant_preserves_scope_and_span() {
+    let span = Span::new_in_source(3, 7, 4);
+    let expr = Expr::new(ExprKind::ClassConstant {
+        receiver: StaticReceiver::Named(Name::from_parts(
+            crate::names::NameKind::FullyQualified, vec!["App".to_string(), "Payload".to_string()],
+        )),
+    }, span);
+    let result = fold_constants(vec![Stmt::echo(expr)]);
+    let StmtKind::Echo(expr) = &result[0].kind else { panic!("expected echo"); };
+    assert_eq!(expr.kind, ExprKind::StringLiteral("App\\Payload".to_string()));
+    assert_eq!(expr.span, span);
+    for receiver in [StaticReceiver::Self_, StaticReceiver::Parent, StaticReceiver::Static] {
+        let result = fold_constants(vec![Stmt::echo(Expr::new(
+            ExprKind::ClassConstant { receiver: receiver.clone() }, span,
+        ))]);
+        let StmtKind::Echo(expr) = &result[0].kind else { panic!("expected echo"); };
+        assert_eq!(expr.kind, ExprKind::ClassConstant { receiver });
+    }
+}
+
 /// Builds the literal expression named by the comparison table's operand keys.
 ///
 /// The names mirror the PHP fixture that generated the expected results, so a row can be read
@@ -725,4 +747,62 @@ fn test_identical_float_ternary_arms_still_merge() {
         panic!("expected echo statement");
     };
     assert_eq!(expr.kind, ExprKind::FloatLiteral(2.5));
+}
+
+/// Verifies an associative literal access does not fold through a spread entry.
+///
+/// PHP merges the spread source in source order, so `['a' => 1, ...$extra]['a']` is whatever
+/// `$extra` last wrote for key `a`, not the literal `1` the entry carries. The literal is an
+/// `ExprKind::ArrayLiteralMixed`, which the fold must not answer from.
+#[test]
+fn test_fold_declines_assoc_array_access_through_spread() {
+    let spread = Expr::new(
+        ExprKind::Spread(Box::new(Expr::var("extra"))),
+        Span::dummy(),
+    );
+    let program = vec![Stmt::echo(Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(
+                ExprKind::ArrayLiteralMixed(vec![
+                    crate::parser::ast::ArrayEntry::Keyed(Expr::string_lit("a"), Expr::int_lit(1)),
+                    crate::parser::ast::ArrayEntry::Spread(spread),
+                ]),
+                Span::dummy(),
+            )),
+            index: Box::new(Expr::string_lit("a")),
+        },
+        Span::dummy(),
+    ))];
+
+    let folded = fold_constants(program);
+
+    let StmtKind::Echo(expr) = &folded[0].kind else {
+        panic!("expected echo statement");
+    };
+    assert!(
+        matches!(expr.kind, ExprKind::ArrayAccess { .. }),
+        "{expr:?}",
+    );
+}
+
+/// Verifies the same access without a spread still folds, so the guard is not over-broad.
+#[test]
+fn test_fold_assoc_array_access_without_spread_still_folds() {
+    let program = vec![Stmt::echo(Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(
+                ExprKind::ArrayLiteralAssoc(vec![(Expr::string_lit("a"), Expr::int_lit(1))]),
+                Span::dummy(),
+            )),
+            index: Box::new(Expr::string_lit("a")),
+        },
+        Span::dummy(),
+    ))];
+
+    let folded = fold_constants(program);
+
+    let StmtKind::Echo(expr) = &folded[0].kind else {
+        panic!("expected echo statement");
+    };
+    assert_eq!(expr.kind, ExprKind::IntLiteral(1));
 }

@@ -50,9 +50,47 @@ pub(super) fn lower_new_object(
         );
     }
     let sig = constructor_signature(ctx, class_name).cloned();
-    let operands = lower_args_with_eir_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
-    emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
+    let result_staging = prepublish_user_call_result(
+        ctx,
+        sig.as_ref(),
+        &ReturnArgAlias::None,
+        &php_type,
+        expr.span,
+    );
+    begin_call_argument_evaluation(ctx);
+    let mut operands = lower_args_with_eir_signature(ctx, sig.as_ref(), args);
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    let roots = root_user_call_operands(
+        ctx,
+        &mut operands,
+        sig.as_ref(),
+        &ReturnArgAlias::None,
+        &php_type,
+        expr.span,
+    );
+    ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
+    let data = ctx.intern_class_name(class_name.as_str());
+    let object = ctx.emit_value(
+        Op::ObjectNew,
+        operands.clone(),
+        Some(Immediate::Data(data)),
+        php_type,
+        Op::ObjectNew.default_effects(),
+        Some(expr.span),
+    );
+    stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
+    release_owned_call_arg_temporaries_with_roots(
+        ctx,
+        &operands,
+        None,
+        &ReturnArgAlias::None,
+        sig.as_ref(),
+        &roots,
+        expr.span,
+    );
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    take_prepublished_call_result(ctx, result_staging, object, expr.span)
 }
 
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.
@@ -131,24 +169,31 @@ pub(super) fn lower_reflection_method_constructor_operands(
 pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
-    let Some((class_name, false)) = singular_object_class(&object_ty) else {
-        unreachable!("clone expressions must be type-checked as non-null objects before lowering");
+    let result_ty = match object_ty.codegen_repr() {
+        PhpType::Object(class_name) => PhpType::Object(class_name),
+        PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
+        other => unreachable!("clone expression reached EIR lowering with {other:?}"),
     };
-    let class_name = class_name.to_string();
-    let data = ctx.intern_class_name(&class_name);
-    let result_ty = PhpType::Object(class_name.clone());
-    let cloned = ctx.emit_value(
-        Op::ObjectCloneShallow,
+    // The result record is outside the source root. A temporary source object's destructor can
+    // throw while its post-clone owner is retired, and the already-created clone must remain
+    // reachable from that same-frame catch.
+    let result_staging = prepublish_call_result(ctx, &result_ty, expr.span);
+    let (object, object_owner) = root_owned_call_operand(ctx, object, expr.span);
+    let cloned = ctx.emit_owned_value(
+        Op::RuntimeCall,
         vec![object.value],
-        Some(Immediate::Data(data)),
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::CloneWith,
+        ))),
         result_ty,
-        Op::ObjectCloneShallow.default_effects(),
+        crate::ir::RuntimeFnId::CloneWith.effects(),
         Some(expr.span),
     );
-    if class_method_signature(ctx, &class_name, &php_symbol_key("__clone")).is_some() {
-        lower_method_call_with_receiver(ctx, cloned, "__clone", &[], Op::MethodCall, expr);
+    stage_call_result(ctx, result_staging.as_ref(), cloned, expr.span);
+    if let Some(owner) = object_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
     }
-    cloned
+    take_prepublished_call_result(ctx, result_staging, cloned, expr.span)
 }
 
 /// Metadata operand source for direct `ReflectionParameter` constructor lowering.
@@ -372,21 +417,38 @@ fn lower_new_dynamic_generic(
     let mut operands = vec![name_value.value];
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
-    if uses_runtime_arg_container {
-        let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-            .expect("dynamic constructor arguments always have a runtime container form");
+    let arg_container = if uses_runtime_arg_container {
+        let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
         operands.push(arg_container.value);
+        let owns_arguments = ctx.value_is_owning_temporary(arg_container);
+        if owns_arguments && !ctx.has_call_argument_guard(arg_container.value) {
+            guard_descriptor_container(ctx, arg_container, expr.span);
+        }
+        Some((arg_container, owns_arguments))
     } else {
         operands.extend(lower_args(ctx, args));
-    }
-    ctx.emit_value(
+        None
+    };
+    let result = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
         uses_runtime_arg_container.then_some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
-    )
+    );
+    if let Some((arg_container, true)) = arg_container {
+        let guard_result = ctx.value_is_owning_temporary(result);
+        if guard_result {
+            guard_descriptor_container(ctx, result, expr.span);
+        }
+        ctx.unguard_call_argument(arg_container.value, expr.span);
+        crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(expr.span));
+        if guard_result {
+            ctx.unguard_call_argument(result.value, expr.span);
+        }
+    }
+    result
 }
 
 /// Lowers dynamic object construction.
@@ -413,12 +475,22 @@ pub(super) fn lower_new_dynamic_object(
 }
 
 /// Returns constructor signature metadata when available for a fixed class.
+///
+/// Resolved through [`crate::types::constructor_owner`] rather than off the instantiated
+/// class's own `methods` map: a private constructor is not inherited, so a descendant of a
+/// class with one carries no `__construct` entry even though PHP instantiates it through the
+/// ancestor's constructor. Reading `methods` directly made that descendant look like it had
+/// NO constructor, so omitted defaults were never padded and `fixed_new` then rejected the
+/// arity — `new Child()` on `private function __construct(int $n = 1)` failed with
+/// `constructor call to Child::__construct with 0 args for 1 params` (issue #868).
+///
+/// An inherited public or protected constructor is unaffected: the owner walk stops at the
+/// instantiated class itself whenever its own map has the entry.
 pub(super) fn constructor_signature<'a>(
     ctx: &'a LoweringContext<'_, '_>,
     class_name: &Name,
 ) -> Option<&'a FunctionSig> {
     let key = php_symbol_key("__construct");
-    ctx.classes
-        .get(class_name.as_str().trim_start_matches('\\'))
-        .and_then(|class_info| class_info.methods.get(&key))
+    crate::types::constructor_owner(ctx.classes, class_name.as_str().trim_start_matches('\\'))
+        .and_then(|(_, class_info)| class_info.methods.get(&key))
 }

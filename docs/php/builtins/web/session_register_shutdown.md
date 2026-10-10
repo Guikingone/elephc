@@ -1,8 +1,8 @@
 ---
 title: "session_register_shutdown()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Registers session_write_close() as a shutdown function."
 sidebar:
-  order: 900
+  order: 995
 ---
 
 ## session_register_shutdown()
@@ -11,7 +11,7 @@ sidebar:
 function session_register_shutdown(): void
 ```
 
-Implemented by the compiler-injected web prelude.
+Registers session_write_close() as a shutdown function.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

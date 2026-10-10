@@ -10,29 +10,74 @@
 use super::*;
 
 /// Lowers `instanceof`.
+///
+/// Native and eval predicates borrow their operands. Retire independent owners,
+/// including class-name strings detached from widened Mixed locals, after use.
+/// Root an owning value operand before evaluating a dynamic target that may throw;
+/// a local read can also own a detached payload independently of its source slot.
+/// Borrowed objects and the scalar result keep their existing lifetimes.
 pub(super) fn lower_instanceof(
     ctx: &mut LoweringContext<'_, '_>,
     value: &Expr,
     target: &InstanceOfTarget,
     expr: &Expr,
 ) -> LoweredValue {
-    let mut operands = vec![lower_expr(ctx, value).value];
+    let mut value_operand = lower_expr(ctx, value);
+    let mut operands = vec![value_operand.value];
+    // Set to the frame slot when the value operand is rooted across a dynamic
+    // target evaluation that can unwind.
+    let mut value_root: Option<crate::ir::LocalSlotId> = None;
+    // Set to the lowered dynamic-target operand, which this predicate owns and
+    // must retire after the op has read it.
+    let mut dynamic_target: Option<LoweredValue> = None;
     let immediate = match target {
+        // Lowering only ever sees the instantiated class, which is an ordinary `Name`.
+        InstanceOfTarget::Generic(_) => unreachable!(
+            "InstanceOfTarget::Generic must be instantiated by generics::classes"
+        ),
         InstanceOfTarget::Name(name) => {
             if name.as_str().trim_start_matches('\\') == "static" && ctx.local_slots.contains_key("this") {
-                operands.push(ctx.load_local("this", Some(expr.span)).value);
+                // Apply the same storage-aware retirement to the implicit target
+                // as to an explicit local read. Finalization preserves true borrows.
+                let target_operand = ctx.load_local("this", Some(expr.span));
+                operands.push(target_operand.value);
+                dynamic_target = Some(target_operand);
                 None
             } else {
                 Some(Immediate::Data(ctx.intern_class_name(&instanceof_target_name(ctx, name.as_str()))))
             }
         }
-        InstanceOfTarget::Expr(expr) => {
-            operands.push(lower_expr(ctx, expr).value);
+        InstanceOfTarget::Expr(target_expr) => {
+            let (rooted, slot) = root_owned_call_operand(ctx, value_operand, expr.span);
+            value_operand = rooted;
+            operands[0] = rooted.value;
+            value_root = slot;
+            let target_operand = lower_expr(ctx, target_expr);
+            operands.push(target_operand.value);
+            dynamic_target = Some(target_operand);
             None
         }
     };
     let op = if immediate.is_some() { Op::InstanceOf } else { Op::InstanceOfDynamic };
-    ctx.emit_value(op, operands, immediate, PhpType::Bool, op.default_effects(), Some(expr.span))
+    let result = ctx.emit_value(op, operands, immediate, PhpType::Bool, op.default_effects(), Some(expr.span));
+    // Retire the dynamic target operand first, then the value operand, so an
+    // independently owned temporary on either side is released exactly once.
+    if let Some(target_operand) = dynamic_target {
+        if target_operand.value != value_operand.value
+            && ctx.value_needs_release_after_use(target_operand)
+        {
+            crate::ir_lower::ownership::release_if_owned(ctx, target_operand, Some(expr.span));
+        }
+    }
+    match value_root {
+        Some(slot) => retire_owned_call_operand(ctx, slot, expr.span),
+        None => {
+            if ctx.value_needs_release_after_use(value_operand) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value_operand, Some(expr.span));
+            }
+        }
+    }
+    result
 }
 
 /// Resolves lexical `instanceof` target keywords to concrete class names when possible.
@@ -81,6 +126,27 @@ pub(crate) fn coerce_to_int_at_span(
             release_coerced_source_if_owned(ctx, value, span);
             result
         }
+    }
+}
+
+/// Converts a packed-array float key with PHP diagnostics unless its read already did so.
+pub(crate) fn coerce_array_key_to_int_at_span(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+    already_diagnosed: bool,
+) -> LoweredValue {
+    if value.ir_type == IrType::F64 && !already_diagnosed {
+        ctx.emit_value(
+            Op::FToI,
+            vec![value.value],
+            Some(Immediate::FloatKeyDiagnostic),
+            PhpType::Int,
+            Op::FToI.default_effects() | Effects::MAY_WARN,
+            span,
+        )
+    } else {
+        coerce_to_int_at_span(ctx, value, span)
     }
 }
 

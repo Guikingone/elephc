@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_error_list()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns every error of the last call on a statement."
 sidebar:
-  order: 164
+  order: 165
 ---
 
 ## mysqli_stmt_error_list()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_error_list(mixed $statement): array
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns every error of the last call on a statement.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

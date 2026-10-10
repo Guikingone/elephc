@@ -67,15 +67,14 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             contract.name
         );
     }
-    // Five language constructs, one dedicated-syntax surface, three eval-only reflection
-    // functions, the 347 prelude-provided functions outside `ext/curl` (four `hash_*`, the
-    // 54 xml/xmlwriter declarations, plus the mysqli, PDO, web, image, OPcache, tz,
-    // var_export and version preludes), and the 54 date/calendar functions the name
-    // resolver rewrites.
-    assert_eq!(exceptional.len(), 410);
+    // Five language constructs, one dedicated-syntax surface, three compiler transforms,
+    // the 346 prelude-provided functions outside `ext/curl` (including XML), and the
+    // 54 date/calendar functions the name resolver rewrites.
+    assert_eq!(exceptional.len(), 409);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
+    let mut compiler_transforms = BTreeSet::new();
     let mut preludes = BTreeSet::new();
     let mut rewrites = 0;
     let mut unsupported = 0;
@@ -86,6 +85,9 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             }
             BackendSupport::Implemented(BackendImplementation::DedicatedSyntax) => {
                 dedicated_syntax += 1;
+            }
+            BackendSupport::Implemented(BackendImplementation::CompilerTransform) => {
+                compiler_transforms.insert(contract.name);
             }
             BackendSupport::Implemented(BackendImplementation::Prelude) => {
                 preludes.insert(contract.name);
@@ -104,10 +106,20 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     }
     assert_eq!(language_constructs, 5);
     assert_eq!(dedicated_syntax, 1);
-    assert_eq!(unsupported, 3);
+    assert_eq!(unsupported, 0);
+    assert_eq!(
+        compiler_transforms,
+        BTreeSet::from(["func_get_arg", "func_get_args", "func_num_args"])
+    );
     assert_eq!(rewrites, 54);
-    assert_eq!(preludes.len(), 347);
-    for name in ["hash_copy", "hash_final", "hash_init", "hash_update"] {
+    assert_eq!(preludes.len(), 346);
+    for name in [
+        "hash_copy",
+        "hash_final",
+        "hash_init",
+        "hash_update",
+        "zend_version",
+    ] {
         assert!(preludes.contains(name), "{name} must keep its prelude route");
     }
 
@@ -227,6 +239,7 @@ fn curl_php_surface_is_a_full_parity_citizen() {
         assert_signature_shape(
             name,
             eval_signature(contract),
+            contract.variadic_by_ref,
             &actual.params,
             actual.required_param_count,
             actual.default_param_count,
@@ -276,6 +289,7 @@ fn backend_public_name_sets_derive_from_shared_support() {
                     BackendImplementation::Registry
                         | BackendImplementation::LanguageConstruct
                         | BackendImplementation::DedicatedSyntax
+                        | BackendImplementation::CompilerTransform
                 )
             )
         })
@@ -370,6 +384,7 @@ fn backend_signature_shapes_derive_from_shared_contracts() {
             assert_signature_shape(
                 contract.name,
                 contract.signature(),
+                contract.variadic_by_ref,
                 &actual.params,
                 actual.required_param_count,
                 actual.default_param_count,
@@ -388,6 +403,7 @@ fn backend_signature_shapes_derive_from_shared_contracts() {
             assert_signature_shape(
                 contract.name,
                 eval_signature(contract),
+                contract.variadic_by_ref,
                 &actual.params,
                 actual.required_param_count,
                 actual.default_param_count,
@@ -458,6 +474,7 @@ fn eval_registry_coverage_matches_shared_support_records() {
 fn assert_signature_shape(
     name: &str,
     expected: BuiltinSignature,
+    variadic_by_ref: bool,
     actual_params: &[String],
     actual_required: usize,
     actual_defaults: usize,
@@ -476,12 +493,15 @@ fn assert_signature_shape(
         .filter(|param| param.default.is_some())
         .count()
         + usize::from(expected.variadic.is_some());
-    let expected_by_ref = expected
+    let mut expected_by_ref = expected
         .params
         .iter()
         .filter(|param| param.by_ref)
         .map(|param| param.name)
         .collect::<Vec<_>>();
+    if variadic_by_ref {
+        expected_by_ref.extend(expected.variadic);
+    }
 
     assert_eq!(actual_params, expected_params, "{name} parameter names");
     assert_eq!(

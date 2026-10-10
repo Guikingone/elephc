@@ -6,8 +6,10 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Borrowed boxed-walk entry cells are rejected before descriptor allocation.
 
 use super::*;
+use crate::codegen::emit::Emitter;
 
 /// Materializes an EIR closure literal as a callable descriptor pointer.
 pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -29,24 +31,8 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let visible_param_count = closure.params.len() - inst.operands.len();
     let signature = function_signature_from_eir_with_param_count(closure, visible_param_count);
     let captures = closure_capture_params_from_eir(closure, inst.operands.len());
-    let return_is_owned = closure.blocks.iter().filter_map(|block| block.terminator.as_ref()).fold(
-        None,
-        |state, terminator| match terminator {
-            crate::ir::Terminator::Return { value: Some(value) } => {
-                let owned = closure
-                    .value(*value)
-                    .is_some_and(|metadata| metadata.ownership == crate::ir::Ownership::Owned);
-                Some(state.unwrap_or(true) && owned)
-            }
-            _ => state,
-        },
-    ).unwrap_or(false);
-    let invoker_label = emit_runtime_callable_invoker_inline_with_return_ownership(
-        ctx,
-        &signature,
-        &captures,
-        return_is_owned,
-    );
+    let owns_string_return = crate::codegen::runtime_callable_invoker::function_returns_owned_string(closure);
+    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &signature, &captures, owns_string_return, true);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&closure.name),
@@ -103,6 +89,7 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
     captures: &[(String, PhpType, bool)],
     operands: &[ValueId],
 ) -> Result<()> {
+    reject_unmanaged_reference_capture(ctx, captures, operands)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let total_bytes =
@@ -141,6 +128,12 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
                 idx,
                 &PhpType::Int,
             );
+            abi::emit_load_from_address(
+                ctx.emitter, result_reg, descriptor_reg,
+                callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + idx * 16,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
             continue;
         }
         ctx.load_value_to_result(*operand)?;
@@ -165,6 +158,86 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
     Ok(())
 }
 
+/// Rejects a boxed-walk element reference before allocating a closure descriptor around it.
+fn reject_unmanaged_reference_capture(
+    ctx: &mut FunctionContext<'_>,
+    captures: &[(String, PhpType, bool)],
+    operands: &[ValueId],
+) -> Result<()> {
+    for ((_, capture_ty, by_ref), operand) in captures.iter().zip(operands.iter()) {
+        if !*by_ref {
+            continue;
+        }
+        let slot = local_slot_for_loaded_value(ctx, *operand)?;
+        let release_replaced_value = promoted_ref_capture_replaces_owned_value(ctx, *operand)?;
+        promote_local_slot_for_ref_capture(
+            ctx,
+            slot,
+            None,
+            capture_ty,
+            release_replaced_value,
+        )?;
+        materialize_local_ref_arg_address(ctx, *operand)?;
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
+        let safe = ctx.next_label("closure_capture_managed_reference");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &safe);
+        emit_unmanaged_capture_error(ctx, captures, operands)?;
+        ctx.emitter.label(&safe);
+    }
+    Ok(())
+}
+
+/// Builds the pending Error, retires transferred capture operands, and starts unwinding.
+fn emit_unmanaged_capture_error(
+    ctx: &mut FunctionContext<'_>,
+    captures: &[(String, PhpType, bool)],
+    operands: &[ValueId],
+) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_unmanaged_reference_escape_error_new");
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        "_exc_value",
+        0,
+    );
+    for ((_, _, by_ref), operand) in captures.iter().zip(operands.iter()) {
+        if *by_ref || !capture_operand_needs_guard_cleanup(ctx, *operand)? {
+            continue;
+        }
+        let operand_ty = ctx.load_value_to_result(*operand)?.codegen_repr();
+        emit_capture_operand_cleanup_preserving_exception(ctx.emitter, &operand_ty);
+    }
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+    Ok(())
+}
+
+/// Retires one loaded by-value capture without disturbing the pending escape error.
+fn emit_capture_operand_cleanup_preserving_exception(emitter: &mut Emitter, operand_ty: &PhpType) {
+    if *operand_ty == PhpType::Str {
+        let (pointer, _) = abi::string_result_regs(emitter);
+        abi::emit_unary_cleanup_preserving_exception(
+            emitter,
+            "__rt_heap_free_safe",
+            pointer,
+        );
+    } else {
+        abi::emit_decref_preserving_exception(emitter, operand_ty);
+    }
+}
+
+/// Returns whether normal closure construction consumes or later releases this operand owner.
+fn capture_operand_needs_guard_cleanup(
+    ctx: &FunctionContext<'_>,
+    operand: ValueId,
+) -> Result<bool> {
+    if ctx.value_can_transfer_ownership_to_consumer(operand)? {
+        return Ok(true);
+    }
+    Ok(ctx.function.instructions.iter().any(|inst| {
+        inst.op == Op::Release && inst.operands.first().copied() == Some(operand)
+    }))
+}
+
 /// Returns whether a by-reference closure capture replaces a caller-owned local value.
 pub(super) fn promoted_ref_capture_replaces_owned_value(
     ctx: &FunctionContext<'_>,
@@ -184,10 +257,21 @@ pub(super) fn promote_local_slot_for_ref_capture(
     capture_ty: &PhpType,
     release_replaced_value: bool,
 ) -> Result<()> {
-    if local_slot_stores_ref_cell_pointer(ctx, slot) {
-        let Some(state_offset) = ctx.ref_cell_state_offset(slot) else {
-            return Ok(());
-        };
+    // A by-reference parameter or another definitely aliased local already stores the caller's
+    // cell pointer. It may now have a bookkeeping word for hash-entry provenance, but a zero in
+    // that word does not make the local raw. Wrapping the pointer in a second cell makes escaping
+    // closures read and write the pointer value instead of the caller's payload (PDO bind output
+    // parameters exposed this as silently unchanged destinations).
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        return Ok(());
+    }
+    if ctx.local_ref_cell_representation_is_dynamic(slot) {
+        let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "dynamic ref-cell slot {} has no representation flag",
+                slot.as_raw()
+            ))
+        })?;
         let promote = ctx.next_label("promote_local_ref_cell");
         let done = ctx.next_label("promote_local_ref_cell_done");
         let state_reg = abi::int_result_reg(ctx.emitter);
@@ -242,8 +326,12 @@ pub(super) fn promote_local_slot_for_ref_capture_unchecked(
     abi::emit_load(ctx.emitter, &local_ty, offset);
     retain_promoted_ref_cell_value(ctx, &local_ty);
     abi::emit_push_result_value(ctx.emitter, &local_ty);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        crate::codegen_support::runtime::reference_cells::payload_tag(&local_ty),
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
     let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
     let keep_cell = format!("mov {}, {}", cell_reg, abi::int_result_reg(ctx.emitter));
     ctx.emitter.instruction(&keep_cell);                                        // keep the promoted closure capture cell while restoring its value
@@ -433,7 +521,10 @@ pub(super) fn function_signature_from_eir_with_param_count(
             .collect(),
         return_type: function.return_php_type.clone(),
         declared_return: !matches!(function.return_php_type, PhpType::Mixed),
-        by_ref_return: false,
+        by_ref_return: function
+            .signature
+            .as_ref()
+            .map_or(function.flags.by_ref_return, |signature| signature.by_ref_return),
         ref_params: function
             .params
             .iter()
@@ -453,6 +544,7 @@ pub(super) fn function_signature_from_eir_with_param_count(
             .find(|param| param.variadic)
             .map(|param| param.name.clone()),
         deprecation: None,
+        is_generator: false,
     }
 }
 
@@ -487,4 +579,58 @@ pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     signature.ref_params.push(variadic_ref);
     signature.declared_params.push(variadic_declared);
     signature.param_type_exprs.push(variadic_type_expr);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// EIR-only callable metadata retains the declaration's reference-return flag.
+    #[test]
+    fn callable_signature_fallback_preserves_eir_reference_return() {
+        for by_ref_return in [false, true] {
+            let mut function = crate::ir::Function::new("ref_result".into(), IrType::I64, PhpType::Int);
+            function.flags.by_ref_return = by_ref_return;
+
+            assert_eq!(function_signature_from_eir(&function).by_ref_return, by_ref_return);
+        }
+    }
+
+    /// A parameter-count mismatch must not discard stored declaration metadata.
+    #[test]
+    fn callable_signature_fallback_preserves_stored_reference_return() {
+        for by_ref_return in [false, true] {
+            let mut function = crate::ir::Function::new("ref_result".into(), IrType::I64, PhpType::Int);
+            let mut signature = function_signature_from_eir(&function);
+            signature.by_ref_return = by_ref_return;
+            function.signature = Some(signature);
+            function.params.push(crate::ir::FunctionParam {
+                name: "capture".into(),
+                ir_type: IrType::I64,
+                php_type: PhpType::Int,
+                by_ref: false,
+                variadic: false,
+            });
+
+            assert_eq!(function_signature_from_eir(&function).by_ref_return, by_ref_return);
+            assert_eq!(
+                function_signature_from_eir_with_param_count(&function, 0).by_ref_return,
+                by_ref_return,
+            );
+        }
+    }
+
+    /// ARM64 string capture cleanup forwards the string pointer from x1, not the scalar result x0.
+    #[test]
+    fn unmanaged_capture_error_cleans_arm64_string_result_pointer() {
+        let mut emitter = Emitter::new(Target::parse("linux-aarch64").unwrap());
+
+        emit_capture_operand_cleanup_preserving_exception(&mut emitter, &PhpType::Str);
+
+        let assembly = emitter.output();
+        assert!(assembly.contains("__rt_heap_free_safe"));
+        assert!(assembly.contains("__rt_cleanup_preserve_exception"));
+        assert!(!assembly.contains("mov x1, x0"));
+    }
 }

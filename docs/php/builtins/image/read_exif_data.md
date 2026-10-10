@@ -1,8 +1,8 @@
 ---
 title: "read_exif_data()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Alias of exif_read_data()."
 sidebar:
-  order: 539
+  order: 540
 ---
 
 ## read_exif_data()
@@ -11,7 +11,7 @@ sidebar:
 function read_exif_data(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Alias of exif_read_data().
 
 **Parameters**:
 - `$filename` (`string`)
@@ -25,9 +25,9 @@ Implemented by the compiler-injected image prelude.
 
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
-- **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
+- **Strict PHP mode**: hidden - this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

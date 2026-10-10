@@ -1,8 +1,8 @@
 ---
 title: "date_time_set()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Sets a DateTime's hour, minute, second, and microsecond."
 sidebar:
-  order: 211
+  order: 212
 ---
 
 ## date_time_set()
@@ -11,7 +11,7 @@ sidebar:
 function date_time_set(mixed $object, int $hour, int $minute, int $second = 0, int $microsecond = 0): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Sets a DateTime's hour, minute, second, and microsecond.
 
 **Parameters**:
 - `$object` (`mixed`)
@@ -27,7 +27,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

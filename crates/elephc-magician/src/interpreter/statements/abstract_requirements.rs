@@ -269,7 +269,8 @@ pub(super) fn collect_native_aot_abstract_property_requirements(
         let requirement = EvalClassProperty::with_visibility(property.name(), visibility, None)
             .with_type(property.property_type().cloned())
             .with_set_visibility(set_visibility)
-            .with_abstract_hook_contract(property.requires_get(), property.requires_set());
+            .with_abstract_hook_contract(property.requires_get(), property.requires_set())
+            .with_get_contract_returns_by_ref(property.get_returns_by_ref());
         requirements.insert(
             property.name().to_string(),
             EvalAotAbstractPropertyRequirement {

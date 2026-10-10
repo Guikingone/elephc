@@ -32,6 +32,7 @@ fn noisy_function(name: &str) -> Stmt {
     Stmt::new(
         StmtKind::FunctionDecl {
             name: name.to_string(),
+            type_params: Vec::new(),
             params: vec![("p".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -65,9 +66,9 @@ fn test_output_only_user_call_keeps_unrelated_facts() {
     );
 }
 
-/// `sort($a)` invalidates `$a` but keeps unrelated scalar facts.
+/// A warning handler reached through `sort($a)` may change any top-level scalar.
 #[test]
-fn test_by_ref_builtin_keeps_unrelated_facts() {
+fn test_warning_builtin_invalidates_top_level_facts() {
     let program = vec![
         Stmt::assign("x", Expr::int_lit(5)),
         call_stmt("sort", vec![Expr::var("a")]),
@@ -78,8 +79,8 @@ fn test_by_ref_builtin_keeps_unrelated_facts() {
 
     assert_eq!(
         propagated[2],
-        Stmt::echo(Expr::int_lit(6)),
-        "sort($a) can only write $a"
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+        "sort warnings may invoke a handler that writes top-level $x"
     );
 }
 
@@ -103,10 +104,9 @@ fn test_by_ref_builtin_invalidates_its_argument() {
     );
 }
 
-/// An unfolded array read (`$a[0]`) may warn at runtime but writes no locals:
-/// scalar facts survive it.
+/// An unfolded array read can invoke a warning handler that writes globals.
 #[test]
-fn test_array_read_keeps_facts() {
+fn test_array_read_invalidates_top_level_facts() {
     let program = vec![
         Stmt::assign("x", Expr::int_lit(5)),
         Stmt::assign(
@@ -126,8 +126,8 @@ fn test_array_read_keeps_facts() {
 
     assert_eq!(
         propagated[2],
-        Stmt::echo(Expr::int_lit(6)),
-        "an array read cannot write locals"
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+        "a warning handler can change top-level locals"
     );
 }
 

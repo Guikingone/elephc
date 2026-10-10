@@ -797,6 +797,7 @@ pub fn emit_user_filter_abandon_fd(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return after both direction slots are empty
 }
 
+/// Detaches both filter directions, releasing a shared x86_64 instance only once.
 fn emit_user_filter_abandon_fd_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: user_filter_abandon_fd ---");

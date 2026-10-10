@@ -112,6 +112,7 @@ fn packed_field_refs_tz(_field: &PackedField) -> bool {
 fn instanceof_target_refs_tz(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_refs_tz(expr),
     }
 }
@@ -198,6 +199,10 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_tz(key) || expr_refs_tz(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_tz),
         ExprKind::Match {
             subject,
             arms,
@@ -223,7 +228,9 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         ExprKind::ExprCall { callee, args } => {
             expr_refs_tz(callee) || args.iter().any(expr_refs_tz)
         }
-        ExprKind::NewObject { args, .. } => args.iter().any(expr_refs_tz),
+        ExprKind::NewObject { args, .. } | ExprKind::NewGeneric { args, .. } => {
+            args.iter().any(expr_refs_tz)
+        }
         ExprKind::NewDynamic { name_expr, args } => {
             expr_refs_tz(name_expr) || args.iter().any(expr_refs_tz)
         }

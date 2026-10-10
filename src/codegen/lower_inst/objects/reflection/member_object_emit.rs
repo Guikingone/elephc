@@ -87,6 +87,12 @@ pub(super) fn emit_reflection_member_object(
             "__is_generator",
             member.is_generator,
         )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__returns_reference",
+            member.returns_reference,
+        )?;
         emit_reflection_owner_int_property(
             ctx,
             member_class_name,

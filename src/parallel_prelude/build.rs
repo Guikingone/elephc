@@ -17,18 +17,21 @@ fn decl_extern_elephc_parallel_worker_active() -> Stmt {
         .build()
 }
 
+/// Declares the native operation entering a parent Parallel root scope.
 fn decl_extern_elephc_parallel_parent_scope_enter() -> Stmt {
     extern_fn("elephc_parallel_parent_scope_enter", "elephc_parallel")
         .returns(CType::Int)
         .build()
 }
 
+/// Declares the native operation leaving a parent Parallel root scope.
 fn decl_extern_elephc_parallel_parent_scope_leave() -> Stmt {
     extern_fn("elephc_parallel_parent_scope_leave", "elephc_parallel")
         .returns(CType::Int)
         .build()
 }
 
+/// Declares the native probe used to detect an already-active parent Parallel scope.
 fn decl_extern_elephc_parallel_parent_scope_active() -> Stmt {
     extern_fn("elephc_parallel_parent_scope_active", "elephc_parallel")
         .returns(CType::Int)
@@ -197,7 +200,7 @@ fn decl_extern_elephc_parallel_completion_wait() -> Stmt {
         .build()
 }
 
-/// `bootstrap 1` — transcribed from the PHP form.
+/// Builds case-insensitive detection of Fiber::suspend callable pairs for worker guards.
 fn method_is_fiber_suspend_callable_array() -> MethodBuilder {
     let is_fiber_class_name = e_binop(
         e_binop(
@@ -270,6 +273,7 @@ fn method_is_fiber_suspend_callable_array() -> MethodBuilder {
         .body(vec![s_return(is_callable_pair)])
 }
 
+/// Builds the fail-closed placeholder that Parallel callable-guard lowering must replace.
 fn method_assert_fiber_suspend_callable_guard() -> MethodBuilder {
     method("__assertFiberSuspendCallableGuard")
         .private()
@@ -285,6 +289,7 @@ fn method_assert_fiber_suspend_callable_guard() -> MethodBuilder {
         ])
 }
 
+/// Builds a serialization refusal for runtime-owned Parallel scope, outcome or failure handles.
 fn method_reject_serialization(class_name: &str) -> MethodBuilder {
     method("__serialize")
         .returns(t_array())
@@ -294,6 +299,7 @@ fn method_reject_serialization(class_name: &str) -> MethodBuilder {
         ))])
 }
 
+/// Builds an unserialization refusal rather than reconstructing a detached runtime handle.
 fn method_reject_unserialization(class_name: &str) -> MethodBuilder {
     method("__unserialize")
         .param("data", t_array())
@@ -307,6 +313,7 @@ fn method_reject_unserialization(class_name: &str) -> MethodBuilder {
         ])
 }
 
+/// Builds the Parallel namespace containing failures, futures, groups and the structured run root.
 fn decl_stmt_bootstrap_1() -> Stmt {
     s_namespace("Elephc\\Parallel", vec![
         enum_decl("TaskFailureKind")

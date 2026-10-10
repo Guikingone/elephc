@@ -1368,6 +1368,7 @@ impl State {
     }
 }
 
+/// Renders known Async/Parallel domain tags while retaining an explicit unknown fallback.
 fn scheduler_domain_name(domain: u8) -> &'static str {
     match domain {
         value if value == SchedulerDomain::Async as u8 => "async",
@@ -1376,6 +1377,7 @@ fn scheduler_domain_name(domain: u8) -> &'static str {
     }
 }
 
+/// Maps optional scheduler states to the stable dump spellings consumed by monitor rendering.
 fn scheduler_state_name(state: Option<SchedulerState>) -> &'static str {
     match state {
         Some(SchedulerState::Created) => "created",
@@ -1392,6 +1394,7 @@ fn scheduler_state_name(state: Option<SchedulerState>) -> &'static str {
     }
 }
 
+/// Classifies completed, failed and cancelled tasks as terminal for scope accounting.
 fn scheduler_state_is_terminal(state: Option<SchedulerState>) -> bool {
     matches!(
         state,
@@ -1605,10 +1608,12 @@ thread_local! {
     static SCHEDULER_WORKER_MARKER: u8 = const { 0 };
 }
 
+/// Uses the thread-local marker address as an OS-independent process-local worker identity.
 fn scheduler_worker_identity() -> u64 {
     SCHEDULER_WORKER_MARKER.with(|marker| marker as *const u8 as usize as u64)
 }
 
+/// Copies active trace/span correlation or returns absent markers when no trace is available.
 fn active_scheduler_trace() -> (String, String) {
     TRACE_CTX
         .lock()
@@ -3137,6 +3142,7 @@ mod tests {
         unsafe { std::ptr::addr_of!(crate::elephc_monitor_active).read() }
     }
 
+    /// Pins state-duration partitioning, wake counts and context/worker identity for one task.
     #[test]
     fn scheduler_accounting_partitions_runnable_running_and_blocked_time() {
         let mut state = State::default();
@@ -3174,6 +3180,7 @@ mod tests {
         assert_eq!(task.worker_id, 7);
     }
 
+    /// Keeps sequential root scopes distinct even when their task identifiers are reused.
     #[test]
     fn sequential_scheduler_roots_with_reused_task_ids_keep_distinct_scopes() {
         let mut state = State::default();
@@ -3222,6 +3229,7 @@ mod tests {
         }
     }
 
+    /// Ensures dormant scheduler instrumentation creates no task records outside capture windows.
     #[test]
     fn dormant_scheduler_callback_records_nothing() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|error| error.into_inner());
@@ -4501,6 +4509,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies an oversized capture publishes no length beyond the shared buffer capacity.
     fn a_profile_too_large_to_carry_does_not_publish_a_length_it_cannot_back() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         reset_capture();
@@ -5091,6 +5100,7 @@ mod tests {
         }
     }
 
+    /// Sets a one-nanosecond profiler tick rate while holding the shared test-state lock.
     fn ticks_are_nanoseconds() -> std::sync::MutexGuard<'static, ()> {
         // The guard comes back with it: the rate is one global, every test that
         // switches the profiler on replaces it with the hardware's, and these run

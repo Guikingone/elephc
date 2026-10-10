@@ -491,3 +491,200 @@ fn test_parse_anonymous_class_with_ctor_extends_implements() {
     assert_eq!(anon.0.as_deref(), Some("P"));
     assert_eq!(anon.1.len(), 1);
 }
+
+
+/// Verifies a comma-separated PROPERTY list produces one `ClassProperty` per name, all sharing
+/// the declaration's type and modifiers while keeping independent defaults (issue #684).
+///
+/// The mixed-default row is the one the codegen fixtures cannot show: `$b` has no initializer
+/// between two that do, so a loop that carried the previous declarator's default forward, or that
+/// attached the type to only the first name, fails here and nowhere else.
+#[test]
+fn test_parse_property_declarator_list_shares_modifiers_and_type() {
+    let stmts = parse_source(
+        "<?php class C { private static ?int $a = 1, $b, $c = 3; }",
+    );
+    let StmtKind::ClassDecl { properties, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(properties.len(), 3);
+    for property in properties {
+        assert_eq!(property.visibility, Visibility::Private, "{}", property.name);
+        assert!(property.is_static, "{}", property.name);
+        assert_eq!(
+            property.type_expr,
+            Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
+            "{} did not receive the declaration head's exact type",
+            property.name
+        );
+        assert!(!property.readonly, "{}", property.name);
+        assert!(!property.by_ref, "{}", property.name);
+        assert!(!property.is_promoted, "{}", property.name);
+    }
+    assert_eq!(properties[0].name, "a");
+    assert!(properties[0].default.is_some());
+    assert_eq!(properties[1].name, "b");
+    assert!(
+        properties[1].default.is_none(),
+        "an uninitialized declarator must not inherit its neighbour's default"
+    );
+    assert_eq!(properties[2].name, "c");
+    assert!(properties[2].default.is_some());
+}
+
+/// Verifies a comma-separated CONSTANT list produces one `ClassConst` per name, sharing the
+/// declared type and visibility while each keeps its own value.
+#[test]
+fn test_parse_class_constant_declarator_list_shares_type_and_visibility() {
+    let stmts = parse_source("<?php class C { protected const int A = 1, B = 2; }");
+    let StmtKind::ClassDecl { constants, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(constants.len(), 2);
+    for constant in constants {
+        assert_eq!(constant.visibility, Visibility::Protected, "{}", constant.name);
+        assert_eq!(
+            constant.type_expr,
+            Some(TypeExpr::Int),
+            "{} did not receive the declaration head's exact type",
+            constant.name
+        );
+        assert!(!constant.is_final, "{}", constant.name);
+    }
+    assert_eq!(constants[0].name, "A");
+    assert_eq!(constants[1].name, "B");
+}
+
+/// Verifies the plain `public int $w = 40, $h = 22` list types BOTH names `int`.
+///
+/// The two lists above carry a nullable type and a `static` modifier, which makes them the
+/// interesting parses but also means neither pins the ordinary spelling. A loop that attached
+/// the head's type to the first declarator only would leave `$h` untyped here, and the checker
+/// would then infer it from the default instead of enforcing the declaration.
+#[test]
+fn test_parse_property_declarator_list_types_every_plain_member() {
+    let stmts = parse_source("<?php class Box { public int $w = 40, $h = 22; }");
+    let StmtKind::ClassDecl { properties, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(properties.len(), 2);
+    for property in properties {
+        assert_eq!(property.visibility, Visibility::Public, "{}", property.name);
+        assert_eq!(property.type_expr, Some(TypeExpr::Int), "{}", property.name);
+        assert!(!property.is_static, "{}", property.name);
+        assert!(property.default.is_some(), "{}", property.name);
+    }
+    assert_eq!(properties[0].name, "w");
+    assert_eq!(properties[1].name, "h");
+}
+
+/// Verifies an INTERFACE constant list parses the same way as a class one.
+///
+/// The interface body has its own parser, and it kept a copy of the single-declarator constant
+/// rule after the class parser learned the list — so `interface Limits { const MIN = 1, MAX = 10; }`
+/// still reported `Expected ';'`. Both now share one helper; this pins that they stay shared.
+#[test]
+fn test_parse_interface_constant_declarator_list() {
+    let stmts = parse_source("<?php interface Limits { const MIN = 1, MAX = 10; }");
+    let StmtKind::InterfaceDecl { constants, .. } = &stmts[0].kind else {
+        panic!("Expected InterfaceDecl");
+    };
+    assert_eq!(constants.len(), 2);
+    assert_eq!(constants[0].name, "MIN");
+    assert_eq!(constants[1].name, "MAX");
+}
+
+/// Verifies an ATTRIBUTE on a declaration list reaches every member of it.
+///
+/// The attributes are parsed once for the member and then cloned per declarator, so a list that
+/// dropped them after the first name would still compile and still run — reflection would simply
+/// stop seeing them.
+#[test]
+fn test_parse_declarator_list_attributes_reach_every_member() {
+    let stmts = parse_source(
+        "<?php class C { #[Marker] public int $a = 1, $b = 2; #[Marker] const X = 1, Y = 2; }",
+    );
+    let StmtKind::ClassDecl {
+        properties,
+        constants,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(properties.len(), 2);
+    assert_eq!(constants.len(), 2);
+    for property in properties {
+        assert!(
+            !property.attributes.is_empty(),
+            "property ${} lost its attribute",
+            property.name
+        );
+    }
+    for constant in constants {
+        assert!(
+            !constant.attributes.is_empty(),
+            "constant {} lost its attribute",
+            constant.name
+        );
+    }
+}
+
+/// Returns `(line, col, end_line, end_col)` for a span, for compact span assertions.
+fn span_coordinates(span: elephc::span::Span) -> (u32, u32, u32, u32) {
+    (span.line, span.col, span.end_line, span.end_column())
+}
+
+/// Verifies each member of a PROPERTY declarator list carries the span of its own declarator
+/// (issue #1140).
+///
+/// Every member used to carry the span of the declaration's first token, so a diagnostic about
+/// `$h` pointed at `public`. Each span now runs from the member's name through its initializer,
+/// or covers the bare name when it has none; the end column is exclusive.
+#[test]
+fn test_parse_property_declarator_list_gives_each_member_its_own_span() {
+    let stmts = parse_source("<?php class C {\n    public int $w = 40, $h = 22, $d;\n}");
+    let StmtKind::ClassDecl { properties, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    let spans: Vec<_> = properties
+        .iter()
+        .map(|property| (property.name.as_str(), span_coordinates(property.span)))
+        .collect();
+    assert_eq!(
+        spans,
+        vec![
+            ("w", (2, 16, 2, 23)),
+            ("h", (2, 25, 2, 32)),
+            ("d", (2, 34, 2, 36)),
+        ]
+    );
+}
+
+/// Verifies each member of a CONSTANT declarator list carries the span of its own declarator, in
+/// a class body and in an interface body alike (issue #1140).
+#[test]
+fn test_parse_constant_declarator_list_gives_each_member_its_own_span() {
+    for source in [
+        "<?php class C {\n    const A = 1, BB = 22;\n}",
+        "<?php interface C {\n    const A = 1, BB = 22;\n}",
+    ] {
+        let stmts = parse_source(source);
+        let constants = match &stmts[0].kind {
+            StmtKind::ClassDecl { constants, .. } | StmtKind::InterfaceDecl { constants, .. } => {
+                constants
+            }
+            other => panic!("Expected a class-like declaration, got {:?}", other),
+        };
+        let spans: Vec<_> = constants
+            .iter()
+            .map(|constant| (constant.name.as_str(), span_coordinates(constant.span)))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![("A", (2, 11, 2, 16)), ("BB", (2, 18, 2, 25))],
+            "{}",
+            source
+        );
+    }
+}

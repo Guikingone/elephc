@@ -1,8 +1,8 @@
 ---
 title: "opcache_is_script_cached()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Reports whether a script is in the opcode cache."
 sidebar:
-  order: 617
+  order: 642
 ---
 
 ## opcache_is_script_cached()
@@ -11,7 +11,7 @@ sidebar:
 function opcache_is_script_cached(mixed $filename): bool
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Reports whether a script is in the opcode cache.
 
 **Parameters**:
 - `$filename` (`mixed`)
@@ -21,9 +21,9 @@ Implemented by the compiler-injected OPcache prelude.
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported through native OPcache prelude declarations or dedicated interpreter handlers; see [OPcache](../../opcache.md).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

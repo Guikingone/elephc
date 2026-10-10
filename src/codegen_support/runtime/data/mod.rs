@@ -14,6 +14,7 @@ mod fixed;
 /// escape quoted directive operands the same way.
 pub(crate) mod instanceof;
 mod user;
+mod throwable_previous;
 
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
@@ -111,6 +112,9 @@ pub(crate) const STACK_OVERFLOW_MSG: &str =
 /// per-call-site context inside `__rt_array_new`, so it reports the shared cause.
 pub(crate) const ARRAY_ALLOC_SIZE_MSG: &str =
     "Fatal error: requested array size exceeds the maximum allowed array size\n";
+/// Catchable Error message when PHP_INT_MAX is already occupied during array append.
+pub(crate) const HASH_APPEND_ERROR_MSG: &str =
+    "Cannot add element to the array as the next element is already occupied";
 /// Fatal error emitted when `sort()` or `rsort()` receives a runtime-typed array
 /// containing values whose PHP ordering is not implemented by the Mixed sorter.
 pub(crate) const MIXED_SORT_NON_SCALAR_MSG: &str =
@@ -137,6 +141,13 @@ pub(crate) const ALLOC_OVERFLOW_MSG: &str =
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
+/// Catchable TypeError for a magic serializer that returns a non-array value.
+pub(crate) const SERIALIZE_RETURN_ARRAY_MSG: &str = "__serialize() must return an array";
+/// Runtime warning prefix for legacy serializer return validation.
+pub(crate) const SLEEP_WARNING_PREFIX: &str = "Warning: serialize(): ";
+/// Class-qualified warning suffix for invalid legacy serializer property names.
+pub(crate) const SLEEP_WARNING_SUFFIX: &str =
+    "::__sleep() should return an array only containing the names of instance-variables to serialize\n";
 /// Prefix for a catchable TypeError naming a non-array `unserialize()` options argument.
 pub(crate) const UNSER_OPTIONS_TYPE_PREFIX: &str =
     "unserialize(): Argument #2 ($options) must be of type array, ";
@@ -155,6 +166,100 @@ pub(crate) const UNSER_ALLOWED_CLASSES_ENTRY_PREFIX: &str =
 pub(crate) const OBJECT_NOT_ARRAY_PREFIX: &str = "Cannot use object of type ";
 /// Suffix for PHP's catchable Error when an object is indexed like an array.
 pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
+/// Prefix for PHP's catchable Exception when an object's class forbids serialization.
+///
+/// `serialize()` on a Reflection object throws `Serialization of 'ReflectionMethod' is not
+/// allowed` (php-src's `ZEND_ACC_NOT_SERIALIZABLE`), wherever the object sits: nested in an array
+/// or behind `mixed` too, so the class name is only known at run time.
+pub(crate) const SERIALIZATION_DENIED_PREFIX: &str = "Serialization of '";
+/// Suffix for PHP's catchable Exception when an object's class forbids serialization, shared by
+/// the `unserialize()` direction.
+pub(crate) const SERIALIZATION_DENIED_SUFFIX: &str = "' is not allowed";
+/// Prefix for PHP's catchable Exception when `unserialize()` meets a class that forbids it.
+///
+/// php-src refuses a `ZEND_ACC_NOT_SERIALIZABLE` class right after looking it up, before it
+/// creates the object or decodes its body, and names the class as declared rather than as the
+/// wire spells it: `Unserialization of 'ReflectionClass' is not allowed`.
+pub(crate) const UNSERIALIZATION_DENIED_PREFIX: &str = "Unserialization of '";
+/// PHP spelling of the class a Closure value reports when `serialize()` refuses it.
+pub(crate) const CLOSURE_CLASS_NAME: &str = "Closure";
+/// The builtin classes elephc registers (natively or through a prelude) that PHP refuses to
+/// serialize or unserialize, spelled as PHP declares them.
+///
+/// These are the classes php-src flags `ZEND_ACC_NOT_SERIALIZABLE`, directly or through a parent,
+/// intersected with the builtin class catalog; measured on PHP 8.5.10 by unserializing every
+/// declared class, plus the `PDO` driver subclasses of extensions that build did not load. A PHP
+/// internal elephc does not register (`WeakMap`, `ReflectionType`, ...) is absent on purpose: a
+/// user class may carry that name and must serialize like any other user class. A listed name
+/// refuses a declared class only when elephc itself declares it (`ClassInfo::is_internal`), since
+/// a program that does not load the curl or PDO prelude may declare a `CurlHandle` of its own.
+/// Every entry is listed, subclasses included, because the `unserialize()` refusal must also
+/// recognize a class the program never declares, and so cannot walk its ancestry.
+pub(crate) const NOT_SERIALIZABLE_BUILTIN_CLASSES: &[&str] = &[
+    "CURLFile",
+    "Closure",
+    "CurlHandle",
+    "CurlMultiHandle",
+    "CurlShareHandle",
+    "CurlSharePersistentHandle",
+    "DirectoryIterator",
+    "Fiber",
+    "FilesystemIterator",
+    "GdImage",
+    "Generator",
+    "GlobIterator",
+    "InternalIterator",
+    "PDO",
+    "PDORow",
+    "PDOStatement",
+    "Pdo\\Dblib",
+    "Pdo\\Firebird",
+    "Pdo\\Ibm",
+    "Pdo\\Mysql",
+    "Pdo\\Odbc",
+    "Pdo\\Pgsql",
+    "Pdo\\Sqlite",
+    "Phar",
+    "PharData",
+    "PharFileInfo",
+    "RecursiveDirectoryIterator",
+    "ReflectionAttribute",
+    "ReflectionClass",
+    "ReflectionClassConstant",
+    "ReflectionEnum",
+    "ReflectionEnumBackedCase",
+    "ReflectionEnumUnitCase",
+    "ReflectionFunction",
+    "ReflectionIntersectionType",
+    "ReflectionMethod",
+    "ReflectionNamedType",
+    "ReflectionObject",
+    "ReflectionParameter",
+    "ReflectionProperty",
+    "ReflectionUnionType",
+    "SplFileInfo",
+    "SplFileObject",
+    "SplTempFileObject",
+    "XMLParser",
+];
+/// Prefix for PHP's catchable Error when a name and its positional alias both arrive.
+///
+/// A descriptor argument container can carry BOTH the positional key `0` and the name of the
+/// parameter that position binds. PHP rejects that combination outright rather than letting one
+/// silently win, so the message names the parameter: `Named parameter $a overwrites previous
+/// argument`.
+pub(crate) const NAMED_PARAMETER_OVERWRITE_PREFIX: &str = "Named parameter $";
+/// Suffix for PHP's catchable name/position collision Error.
+pub(crate) const NAMED_PARAMETER_OVERWRITE_SUFFIX: &str = " overwrites previous argument";
+/// Prefix for PHP's catchable Error naming an argument no parameter can accept.
+///
+/// Only a non-variadic callee raises it: a variadic one collects every unmatched name instead.
+pub(crate) const UNKNOWN_NAMED_PARAMETER_PREFIX: &str = "Unknown named parameter $";
+/// PHP's catchable Error when a positional entry follows a named one in a container.
+///
+/// Nothing runtime-dependent appears in it, so the Throwable points straight at these bytes.
+pub(crate) const POSITIONAL_AFTER_NAMED_MSG: &str =
+    "Cannot use positional argument after named argument";
 /// Prefix for PHP's catchable object-to-string conversion Error in an allowed-class list.
 pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = "Object of class ";
 /// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list.
@@ -220,6 +325,3 @@ pub(crate) const HASH_FINAL_FINALIZED_CTX_MSG: &str =
 /// Catchable `\TypeError` message for `hash_copy()` of an already-finalized context.
 pub(crate) const HASH_COPY_FINALIZED_CTX_MSG: &str =
     "hash_copy(): Argument #1 ($context) must be a valid, non-finalized HashContext";
-/// Catchable `\ValueError` message when `mb_strlen()` receives an unknown encoding name.
-pub(crate) const MB_STRLEN_UNKNOWN_ENCODING_MSG: &str =
-    "mb_strlen(): Argument #2 ($encoding) must be a valid encoding";

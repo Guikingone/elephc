@@ -15,7 +15,28 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::null_probe;
 use super::super::super::Checker;
-use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
+use super::merge_match_arm_result_type;
+use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+
+/// Returns what a local holds after `++`/`--`, or `None` when the update cannot retype it.
+///
+/// An `int` becomes `int|float`, because PHP promotes at the boundary — `PHP_INT_MAX++` is
+/// `float(9.223372036854776E+18)` in php-src and in elephc — and NOT `mixed`, which is what this
+/// used to say. The difference is not cosmetic: `mixed` is the top type, so every value derived
+/// from a counter became `mixed` too, and `for ($i = 0; …) { $out[] = $i; }` could not even be
+/// DESCRIBED as a list of numbers. `int|float` keeps the same boxed storage (`codegen_repr` maps
+/// both to `Mixed`) while saying something true, which is what a diagnostic and a downstream
+/// inference can both use.
+///
+/// A `string` stays `mixed`: `"9"++` is `int(10)`, `"a"++` is `"b"` and `""++` is `"1"`, so the
+/// result genuinely spans three types and none of them is knowable here.
+fn incremented_local_type(current: Option<&PhpType>) -> Option<PhpType> {
+    match current {
+        Some(PhpType::Int) => Some(PhpType::Union(vec![PhpType::Int, PhpType::Float])),
+        Some(PhpType::Str) => Some(PhpType::Mixed),
+        _ => None,
+    }
+}
 
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
@@ -46,7 +67,7 @@ impl Checker {
         expr: &Expr,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        match &expr.kind {
+        let result = match &expr.kind {
             ExprKind::Variable(name) if self.eval_barrier_active && !env.contains_key(name) => {
                 env.insert(name.clone(), PhpType::Mixed);
                 Ok(PhpType::Mixed)
@@ -82,10 +103,8 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                // `int` can overflow to float and `string` can become int/float
-                // (`"9"++` is `int(10)`), so the local is dynamically typed afterwards.
-                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
-                    env.insert(name.clone(), PhpType::Mixed);
+                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                    env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
             }
@@ -94,8 +113,8 @@ impl Checker {
                 let result_ty = self.infer_type(expr, env)?;
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.
-                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
-                    env.insert(name.clone(), PhpType::Mixed);
+                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                    env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
             }
@@ -118,6 +137,7 @@ impl Checker {
                 let value_ty = self.infer_null_probe_operand_with_effects(value, env);
                 null_probe::end_null_probe_root(probe, env);
                 let value_ty = value_ty?;
+                let value_is_never_null = operand_is_never_null(self, value, &value_ty, env);
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
@@ -127,13 +147,10 @@ impl Checker {
                     merge_array_storage_effects(env, &default_env);
                     default_ty
                 };
-                let non_null_value = if Self::union_contains_void(&value_ty) {
-                    self.strip_void_from_union(&value_ty)
-                } else {
-                    value_ty
-                };
-                Ok(merge_null_coalesce_result_type(
-                    non_null_value,
+                Ok(null_coalesce_result_type(
+                    self,
+                    value_is_never_null,
+                    value_ty,
                     default_ty,
                 ))
             }
@@ -182,6 +199,14 @@ impl Checker {
                 for (key, value) in pairs {
                     self.infer_type_with_assignment_effects(key, env)?;
                     self.infer_type_with_assignment_effects(value, env)?;
+                }
+                self.infer_type(expr, env)
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                for entry in entries {
+                    for inner in entry.exprs() {
+                        self.infer_type_with_assignment_effects(inner, env)?;
+                    }
                 }
                 self.infer_type(expr, env)
             }
@@ -285,6 +310,14 @@ impl Checker {
                         if contextual_callbacks.contains(&param_idx) {
                             continue;
                         }
+                        if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
+                            // Forming the output reference requires dynamic storage before later
+                            // source arguments can pass that same variable to a mutating call.
+                            if let Some(name) = output_variable(arg) {
+                                env.insert(name.clone(), PhpType::Mixed);
+                            }
+                            continue;
+                        }
                         if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
                             || pcntl_output_type(builtin_name, arg, idx).is_some()
                             || xml_struct_output_type(builtin_name, arg, idx).is_some()
@@ -300,7 +333,14 @@ impl Checker {
                             effects?;
                             continue;
                         }
-                        self.infer_type_with_assignment_effects(arg, env)?;
+                        if php_symbol_key(builtin_name) == "call_user_func"
+                            && idx > 0
+                            && matches!(arg.kind, ExprKind::Spread(_))
+                        {
+                            self.infer_spread_source_assignment_effects(arg, env)?;
+                        } else {
+                            self.infer_type_with_assignment_effects(arg, env)?;
+                        }
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
@@ -315,6 +355,11 @@ impl Checker {
                     }
                 }
                 for (idx, arg) in expanded_args.iter().enumerate() {
+                    if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Mixed);
+                        }
+                    }
                     if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), output_ty);
@@ -360,6 +405,28 @@ impl Checker {
                             let ExprKind::Variable(var) = &arg.kind else {
                                 continue;
                             };
+                            // `unset($var)` ends this binding even when escaped-reference
+                            // conservatism keeps the name in `ref_aliased_locals`. A later `=&`
+                            // assignment must establish fresh cell provenance for the new binding.
+                            self.invalidate_boxed_ref_alias_binding(var);
+                            // Detaching a promoted reference is separate from killing its type
+                            // binding: escaped aliases still prohibit incompatible reassignments.
+                            if arg.span.identifies_a_node() {
+                                if env.contains_key(var) && self.local_reference_is_detachable(var) {
+                                    self.local_ref_detach_sites.entry(arg.span).or_default()
+                                        .insert(var.clone());
+                                    self.active_ref_params.remove(var);
+                                    self.active_external_ref_bindings.remove(var);
+                                    self.ref_aliased_locals.remove(var);
+                                } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
+                                    if names.remove(var.as_str()) {
+                                        self.retired_ref_detach_sites.insert((arg.span, var.clone()));
+                                    }
+                                    if names.is_empty() {
+                                        self.local_ref_detach_sites.remove(&arg.span);
+                                    }
+                                }
+                            }
                             // A top-level name some other body declares `global` is NOT killable
                             // however eligible it otherwise looks: `global $a;` in a function binds
                             // the very cell this slot holds, so dropping the name here leaves the
@@ -436,11 +503,17 @@ impl Checker {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let skip_contextual_callback =
                     self.variable_targets_preg_replace_callback(var.as_str());
+                let descriptor_args = self.callable_param_names.contains(var)
+                    || self.callable_array_targets.contains_key(var);
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if skip_contextual_callback && idx == 1 {
                         continue;
                     }
-                    self.infer_type_with_assignment_effects(arg, env)?;
+                    if descriptor_args && matches!(arg.kind, ExprKind::Spread(_)) {
+                        self.infer_spread_source_assignment_effects(arg, env)?;
+                    } else {
+                        self.infer_type_with_assignment_effects(arg, env)?;
+                    }
                 }
                 let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
@@ -455,7 +528,11 @@ impl Checker {
                     if skip_contextual_callback && idx == 1 {
                         continue;
                     }
-                    self.infer_type_with_assignment_effects(arg, env)?;
+                    if matches!(arg.kind, ExprKind::Spread(_)) {
+                        self.infer_spread_source_assignment_effects(arg, env)?;
+                    } else {
+                        self.infer_type_with_assignment_effects(arg, env)?;
+                    }
                 }
                 let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
@@ -523,7 +600,29 @@ impl Checker {
                 Ok(ty)
             }
             _ => self.infer_type(expr, env),
+        };
+        if result.is_ok() {
+            self.apply_boxed_reference_outputs(expr.span, env);
         }
+        result
+    }
+
+    /// Visits a call-unpack source for assignment effects without choosing its container policy.
+    ///
+    /// The enclosing call checker decides whether this spread is an array-only direct call or a
+    /// descriptor invocation that may walk Traversable. This preliminary effects walk must still
+    /// observe assignments inside the source, but must not reject a source before that decision.
+    fn infer_spread_source_assignment_effects(
+        &mut self,
+        arg: &Expr,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        let ExprKind::Spread(source) = &arg.kind else {
+            self.infer_type_with_assignment_effects(arg, env)?;
+            return Ok(());
+        };
+        self.infer_type_with_assignment_effects(source, env)?;
+        Ok(())
     }
 
     /// Infers effects for a language-construct operand without treating properties as reads.

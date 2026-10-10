@@ -1,16 +1,16 @@
 ---
-title: "date_interval_format() — internals"
+title: "date_interval_format() - internals"
 description: "Compiler internals for date_interval_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 201
+  order: 202
 ---
 
-## `date_interval_format()` — internals
+## `date_interval_format()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:837](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L837) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:909](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L909) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

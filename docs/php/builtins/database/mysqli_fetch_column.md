@@ -1,8 +1,8 @@
 ---
 title: "mysqli_fetch_column()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns one column of the next row."
 sidebar:
-  order: 117
+  order: 118
 ---
 
 ## mysqli_fetch_column()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_column(mixed $result, int $column = 0): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns one column of the next row.
 
 **Parameters**:
 - `$result` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

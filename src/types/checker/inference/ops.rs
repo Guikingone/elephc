@@ -8,7 +8,7 @@
 //! Key details:
 //! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
 
-use crate::errors::CompileError;
+use crate::errors::{CompileError, CompileErrorKind};
 use crate::names::{php_symbol_key, Name};
 use crate::numeric_string::scan_numeric_prefix;
 use crate::parser::ast::{
@@ -349,6 +349,21 @@ impl Checker {
             InstanceOfTarget::Name(name) => {
                 self.resolve_instanceof_target_name(name, expr.span)?;
             }
+            // Instantiation rewrites a generic target to the class it names before this
+            // checker runs; one arriving here means no template answered it.
+            InstanceOfTarget::Generic(class_type) => {
+                return Err(CompileError::new(
+                    expr.span,
+                    &format!(
+                        "'{}' is written with type arguments but declares no type parameters",
+                        match class_type {
+                            crate::parser::ast::TypeExpr::GenericClass { name, .. } =>
+                                name.as_str().to_string(),
+                            other => crate::generics::describe_type(other),
+                        }
+                    ),
+                ));
+            }
             InstanceOfTarget::Expr(target_expr) => {
                 self.infer_type(target_expr, env)?;
             }
@@ -402,6 +417,7 @@ impl Checker {
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -413,6 +429,7 @@ impl Checker {
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             captures,
@@ -436,6 +453,7 @@ impl Checker {
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -448,6 +466,7 @@ impl Checker {
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             captures,
             expr.span,
             env,
@@ -479,21 +498,6 @@ impl Checker {
             .iter()
             .map(|(name, _, _, _)| name.clone())
             .chain(variadic.iter().map(|name| (*name).clone()))
-            .collect();
-        // A closure parameter with a declared type hint is a contract inside the body.
-        let typed_variadic = match &expr.kind {
-            ExprKind::Closure {
-                variadic: Some(variadic_name),
-                variadic_type: Some(_),
-                ..
-            } => Some(variadic_name.clone()),
-            _ => None,
-        };
-        let closure_typed_params: Vec<String> = params
-            .iter()
-            .filter(|(_, type_ann, _, _)| type_ann.is_some())
-            .map(|(name, _, _, _)| name.clone())
-            .chain(typed_variadic)
             .collect();
         // Inside a closure body, `$this` is permitted even with no enclosing
         // class method: the closure may be bound to an object later. Track the
@@ -528,7 +532,6 @@ impl Checker {
         let body_result = self.with_local_storage_context(
             closure_ref_params,
             closure_param_names,
-            closure_typed_params,
             pre_bound_own_storage,
             body,
             |checker| {
@@ -564,14 +567,22 @@ impl Checker {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
         if var_ty != PhpType::Callable {
-            if matches!(var_ty.codegen_repr(), PhpType::Str) {
-                // The callee name is only known at runtime, but PHP rejects
+            if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
+                // A boxed array read can carry any runtime callable shape.
+                // The callee is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
                 self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
                 self.record_unresolved_callee_argument_aliases(args);
                 for arg in args {
-                    self.infer_type(arg, env)?;
+                    self.infer_descriptor_call_arg_type(arg, env)?;
                 }
+                // The callee is resolved at runtime, so `clone` is reachable through this
+                // variable and the destination object is not knowable here. An override that
+                // this call can carry has to find runtime-shaped property storage waiting
+                // for it, exactly like a `clone($object, [...])` whose object type is boxed.
+                crate::types::checker::clone_override_storage::record_runtime_callable_clone_override_destination(
+                    self, args,
+                );
                 return Ok(PhpType::Mixed);
             }
             if let Some(target) = self.callable_array_targets.get(var).cloned() {
@@ -597,7 +608,7 @@ impl Checker {
             }
             return Err(CompileError::new(
                 expr.span,
-                &format!("Cannot call ${} — not a callable (got {:?})", var, var_ty),
+                &format!("Cannot call ${} — not a callable (got {})", var, var_ty),
             ));
         }
         if let Some(sig) = self.callable_sigs.get(var).cloned() {
@@ -607,13 +618,20 @@ impl Checker {
                 {
                     return Ok(ret_ty);
                 }
-                let specialized_sig =
-                    self.specialize_first_class_callable_target(&target, args, expr.span, env)?;
+                let descriptor_args = self.callable_param_names.contains(var)
+                    || self.first_class_callable_args_need_descriptor_binder(&target, args, env)?;
+                let specialized_sig = if descriptor_args {
+                    self.specialize_first_class_callable_target_for_descriptor_call(
+                        &target, args, expr.span, env,
+                    )?
+                } else {
+                    self.specialize_first_class_callable_target(&target, args, expr.span, env)?
+                };
                 self.callable_sigs
                     .insert(var.to_string(), specialized_sig.clone());
                 self.closure_return_types
                     .insert(var.to_string(), specialized_sig.return_type.clone());
-                if self.callable_param_names.contains(var) {
+                if descriptor_args {
                     return self.check_known_callable_call_allowing_by_ref_spread(
                         &specialized_sig,
                         args,
@@ -638,7 +656,9 @@ impl Checker {
                 env,
                 &format!("callable ${}", var),
             )?;
-            if self.callable_param_names.contains(var) {
+            if self.callable_param_names.contains(var)
+                || self.callable_local_requires_descriptor_binder(var)
+            {
                 return self.check_known_callable_call_allowing_by_ref_spread(
                     &specialized_sig,
                     args,
@@ -660,13 +680,70 @@ impl Checker {
         self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
-            self.infer_type(arg, env)?;
+            self.infer_descriptor_call_arg_type(arg, env)?;
         }
         Ok(self
             .closure_return_types
             .get(var)
             .cloned()
             .unwrap_or(PhpType::Mixed))
+    }
+
+    /// Mirrors closure-call lowering when an instance FCC spread needs descriptor binding.
+    fn first_class_callable_args_need_descriptor_binder(
+        &mut self,
+        target: &CallableTarget,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if !matches!(target, CallableTarget::Method { .. }) {
+            return Ok(false);
+        }
+        for arg in args {
+            let ExprKind::Spread(source) = &arg.kind else {
+                continue;
+            };
+            if matches!(source.kind, ExprKind::ArrayLiteralAssoc(_)) {
+                continue;
+            }
+            if !matches!(self.infer_type(source, env)?.codegen_repr(), PhpType::Array(_)) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Mirrors closure lowering when captured storage cannot be rematerialized directly.
+    fn callable_local_requires_descriptor_binder(&self, var: &str) -> bool {
+        let Some(captures) = self.callable_captures.get(var) else {
+            return true;
+        };
+        captures.iter().any(|(_, _, captured_from_cell)| *captured_from_cell)
+    }
+
+    /// Mirrors the lowerer's direct-call classification for callable expressions with a known
+    /// signature. Assignment expressions lower their RHS target directly; closure captures use
+    /// the storage kind observed when the closure value itself is created.
+    fn expr_callable_requires_descriptor_binder(&self, callee: &Expr) -> bool {
+        match &callee.kind {
+            ExprKind::Closure {
+                captures,
+                capture_refs,
+                ..
+            } => {
+                !capture_refs.is_empty()
+                    || captures
+                        .iter()
+                        .any(|name| self.ref_aliased_locals.contains(name))
+            }
+            ExprKind::FirstClassCallable(target) => {
+                matches!(target, CallableTarget::Method { .. })
+            }
+            ExprKind::Assignment { value, .. } => {
+                self.expr_callable_requires_descriptor_binder(value)
+            }
+            _ => true,
+        }
     }
 
     /// Infers the return type of an arbitrary expression callable call: `expr(...)`.
@@ -686,8 +763,8 @@ impl Checker {
             return Ok(ret_ty);
         }
         let callee_ty = self.infer_type(callee, env)?;
-        if matches!(callee_ty.codegen_repr(), PhpType::Str) {
-            // String callables resolve at runtime; PHP still rejects unpacking
+        if matches!(callee_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
+            // String and boxed callables resolve at runtime; PHP still rejects unpacking
             // after named arguments while compiling the call expression.
             let callee_desc = match &callee.kind {
                 ExprKind::Variable(var_name) => format!("callable ${}", var_name),
@@ -696,7 +773,7 @@ impl Checker {
             self.require_no_spread_after_named_args(args, &callee_desc)?;
             self.record_unresolved_callee_argument_aliases(args);
             for arg in args {
-                self.infer_type(arg, env)?;
+                self.infer_descriptor_call_arg_type(arg, env)?;
             }
             return Ok(PhpType::Mixed);
         }
@@ -734,7 +811,7 @@ impl Checker {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
-                    "Cannot call expression — not a callable (got {:?})",
+                    "Cannot call expression — not a callable (got {})",
                     callee_ty
                 ),
             ));
@@ -748,14 +825,24 @@ impl Checker {
                         )? {
                             return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                         }
-                        let specialized_sig = self.specialize_first_class_callable_target(
-                            &target, args, expr.span, env,
-                        )?;
+                        let descriptor_args = self.callable_param_names.contains(var_name)
+                            || self.first_class_callable_args_need_descriptor_binder(
+                                &target, args, env,
+                            )?;
+                        let specialized_sig = if descriptor_args {
+                            self.specialize_first_class_callable_target_for_descriptor_call(
+                                &target, args, expr.span, env,
+                            )?
+                        } else {
+                            self.specialize_first_class_callable_target(
+                                &target, args, expr.span, env,
+                            )?
+                        };
                         self.callable_sigs
                             .insert(var_name.clone(), specialized_sig.clone());
                         self.closure_return_types
                             .insert(var_name.clone(), specialized_sig.return_type.clone());
-                        let ret_ty = if self.callable_param_names.contains(var_name) {
+                        let ret_ty = if descriptor_args {
                             self.check_known_callable_call_allowing_by_ref_spread(
                                 &specialized_sig,
                                 args,
@@ -782,7 +869,9 @@ impl Checker {
                         env,
                         &format!("callable ${}", var_name),
                     )?;
-                    let ret_ty = if self.callable_param_names.contains(var_name) {
+                    let ret_ty = if self.callable_param_names.contains(var_name)
+                        || self.callable_local_requires_descriptor_binder(var_name)
+                    {
                         self.check_known_callable_call_allowing_by_ref_spread(
                             &specialized_sig,
                             args,
@@ -808,34 +897,61 @@ impl Checker {
                 {
                     return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                 }
-                let sig =
-                    self.specialize_first_class_callable_target(target, args, expr.span, env)?;
-                let ret_ty = self.check_known_callable_call(
-                    &sig,
-                    args,
-                    expr.span,
-                    env,
-                    "first-class callable",
-                )?;
+                let descriptor_dispatch = matches!(target, CallableTarget::Method { .. });
+                let sig = if descriptor_dispatch {
+                    self.specialize_first_class_callable_target_for_descriptor_call(
+                        target, args, expr.span, env,
+                    )?
+                } else {
+                    self.specialize_first_class_callable_target(target, args, expr.span, env)?
+                };
+                let ret_ty = if descriptor_dispatch {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &sig,
+                        args,
+                        expr.span,
+                        env,
+                        "first-class callable",
+                    )?
+                } else {
+                    self.check_known_callable_call(
+                        &sig,
+                        args,
+                        expr.span,
+                        env,
+                        "first-class callable",
+                    )?
+                };
                 return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
             }
             _ => {}
         }
         if let Some(sig) = self.resolve_expr_callable_sig(callee, env)? {
-            let ret_ty = self.check_known_callable_call(
-                &sig,
-                args,
-                expr.span,
-                env,
-                "callable expression",
-            )?;
+            let descriptor_dispatch = self.expr_callable_requires_descriptor_binder(callee);
+            let ret_ty = if descriptor_dispatch {
+                self.check_known_callable_call_allowing_by_ref_spread(
+                    &sig,
+                    args,
+                    expr.span,
+                    env,
+                    "callable expression",
+                )?
+            } else {
+                self.check_known_callable_call(
+                    &sig,
+                    args,
+                    expr.span,
+                    env,
+                    "callable expression",
+                )?
+            };
             return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
         }
         // Everything below this point failed to produce a signature: the return type may still be
         // recoverable from a recorded closure shape, but the PARAMETER binding modes are not.
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
-            self.infer_type(arg, env)?;
+            self.infer_descriptor_call_arg_type(arg, env)?;
         }
         // Try to determine return type from closure signature
         match &callee.kind {
@@ -871,7 +987,7 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
-            self.infer_type(arg, env)?;
+            self.infer_descriptor_call_arg_type(arg, env)?;
         }
         Ok(PhpType::Mixed)
     }
@@ -933,6 +1049,11 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // Calling THROUGH a callable-array value is a descriptor invocation, so the callee's
+        // variadic collector has to be on the descriptor container before any signature below is
+        // read: this call site may deliver named arguments, which the invoker's tail collector
+        // hands over as hash entries.
+        self.promote_descriptor_variadic_container_for_callable_target(target, env)?;
         match target {
             CallableTarget::Method { object, method } => {
                 let receiver_ty = self.infer_type(object, env)?;
@@ -966,26 +1087,62 @@ impl Checker {
     }
 
     /// Type-checks first-class builtin invocations that need builtin-specific argument context.
-    fn infer_contextual_first_class_builtin_call(
+    pub(crate) fn infer_contextual_first_class_builtin_call(
         &mut self,
         target: &CallableTarget,
         args: &[Expr],
         span: Span,
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
-        if let CallableTarget::Function(name) = target {
-            if php_symbol_key(name.as_str()) == "preg_replace_callback" {
-                return crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
-                    self, args, span, env,
-                )
-                .map(Some);
-            }
+        let CallableTarget::Function(name) = target else {
+            return Ok(None);
+        };
+        let builtin = php_symbol_key(name.as_str());
+        if crate::name_resolver::is_builtin_function(name.as_str()) && builtin == "clone" {
+            // Clone's callable signature owns normal argument validation, while this side channel
+            // records the property destination its dedicated lowering needs.
+            crate::types::checker::clone_override_storage::record_callable_clone_override_destination(
+                self, args, env,
+            )?;
+            return Ok(None);
         }
-        Ok(None)
+        if builtin == "preg_replace_callback" {
+            return crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
+                self, args, span, env,
+            )
+            .map(Some);
+        }
+        // An EXTERN function shadowing a builtin name is resolved as an extern call by lowering,
+        // which never reads this map; answering from the registry would only make the checker
+        // disagree with the call that is actually emitted.
+        if self.canonical_extern_function_name_folded(name.as_str()).is_some()
+            || crate::builtins::registry::lookup(name.as_str()).is_none()
+        {
+            return Ok(None);
+        }
+        // Ask the builtin contract at this first-class call site so argument-dependent results
+        // such as array_slice preserve their checked storage layout.
+        let result = match self.check_builtin(name.as_str(), args, span, env) {
+            Ok(Some(result)) => result,
+            Ok(None) => return Ok(None),
+            // An argument the backend needs as a compile-time literal (a `preserve_keys` flag,
+            // a constant name) is needed by every lowering of this callee: the direct call
+            // refuses it in codegen and the callable wrapper drops or misreads it. Report it
+            // here, with the diagnostic the direct call already gives.
+            Err(error) if error.kind == CompileErrorKind::AotLiteralRequired => {
+                return Err(error);
+            }
+            // Any other rejection is the direct call's own view of its arguments, which can be
+            // narrower than the callable ABI: `$f = array_reverse(...); $f($mixed)` compiles and
+            // runs although `array_reverse($mixed)` is refused. The generic path decides.
+            Err(_) => return Ok(None),
+        };
+        self.first_class_builtin_call_types.insert(span, result.clone());
+        Ok(Some(result))
     }
 
     /// Resolves a callable-array receiver expression to a static class receiver.
-    fn static_callable_array_receiver(
+    pub(crate) fn static_callable_array_receiver(
         &self,
         receiver: &Expr,
         span: Span,
@@ -1008,7 +1165,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: Span,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => self
                 .resolve_callable_array_class_name(name.as_str())
                 .map(str::to_string)
@@ -1178,7 +1344,7 @@ impl Checker {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
-                    "Pipe operator right-hand side must be a callable, got {:?}",
+                    "Pipe operator right-hand side must be a callable, got {}",
                     callable_ty
                 ),
             ));
@@ -1300,6 +1466,17 @@ impl Checker {
     /// types and updating `sig.params` entries that are `PhpType::Mixed` with
     /// the inferred type. Stores the updated signature and return type in
     /// `closure_return_types` and `callable_sigs` if anything changed.
+    ///
+    /// A `null` argument is deliberately NOT one of those types. Unlike a function's
+    /// parameters, a closure's specialization is final — it never widens to a union — so the
+    /// type the first call picks is the only one every later call may use. `Void` is the one
+    /// candidate no later call can ever satisfy: `$f(null); $f(5);` became
+    /// *"parameter $v expects Void, got Int"* where PHP prints `nx` (issue #567).
+    ///
+    /// Skipping it also removes an asymmetry between two spellings of the same call. For
+    /// `function ($v = null)`, `$f()` and `$f(null)` pass the same value, and the omitted form
+    /// already left the parameter open for the next call to specialize. This makes the
+    /// explicit form behave identically instead of closing it to null alone.
     fn specialize_callable_var_sig_from_args(
         &mut self,
         var: &str,
@@ -1309,12 +1486,22 @@ impl Checker {
         env: &TypeEnv,
         callee_desc: &str,
     ) -> Result<FunctionSig, CompileError> {
-        let normalized_args = self.normalize_named_call_args(&sig, args, span, callee_desc, env)?;
+        let descriptor_args = self.callable_param_names.contains(var);
+        let plan = if descriptor_args {
+            self.plan_descriptor_call_args(&sig, args, span, callee_desc)?
+        } else {
+            self.plan_named_call_args(&sig, args, span, callee_desc, env)?
+        };
+        let normalized_args = plan.normalized_args();
         let regular_param_count = crate::types::call_args::regular_param_count(&sig);
         let mut changed = false;
         let mut param_idx = 0usize;
         for arg in &normalized_args {
-            let actual_ty = self.infer_type(arg, env)?;
+            let actual_ty = if descriptor_args {
+                self.infer_descriptor_call_arg_type(arg, env)?
+            } else {
+                self.infer_type(arg, env)?
+            };
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
@@ -1327,6 +1514,8 @@ impl Checker {
                 && !sig.ref_params.get(param_idx).copied().unwrap_or(false)
                 && sig.params[param_idx].1 == PhpType::Mixed
                 && actual_ty != PhpType::Never
+                // `Void` would close the parameter to null alone; see the doc comment.
+                && actual_ty != PhpType::Void
             {
                 sig.params[param_idx].1 = actual_ty;
                 changed = true;
@@ -1470,7 +1659,14 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
         PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Mixed
-    ) || checker.is_union_with_mixed_int_dispatch(ty)
+    )
+        // `int|float` is what an incremented integer local carries, and `$i & $mask` on one is
+        // ordinary PHP: the float side converts to int, exactly as it does for a `mixed` operand,
+        // which this already accepts. `type_supports_mixed_int_dispatch` deliberately excludes
+        // `Float` — integer-only dispatch is narrower — so the arithmetic union has to be named
+        // here rather than admitted there, where it would widen ordering too.
+        || ty.is_int_float_union()
+        || checker.is_union_with_mixed_int_dispatch(ty)
 }
 
 /// Returns `true` if `ty` uses mixed numeric dispatch — i.e., the result type

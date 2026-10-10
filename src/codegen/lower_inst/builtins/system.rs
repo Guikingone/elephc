@@ -230,7 +230,11 @@ pub(crate) fn lower_getdate(
 /// caller still holds. These helpers return a freshly allocated hash and then drop
 /// the raw pointer, so the caller's ref has to be released after boxing or the
 /// hash, its keys, and its values stay live after the Mixed cell is freed.
-fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
+///
+/// Shared rather than copied: `ob_get_status` had its own version of this without the
+/// release, and leaked nine blocks per call as a result (issue #938). Every builtin that
+/// returns a freshly built hash by raw pointer belongs on this one.
+pub(super) fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
     let result = abi::int_result_reg(ctx.emitter);
     emit_scratch_reserve(ctx, 16);
     emit_store_result_to_scratch(ctx, 0);
@@ -532,9 +536,9 @@ pub(crate) fn lower_sleep(
 
 /// Lowers `strtotime(datetime[, baseTimestamp])` through the shared parser runtime helper.
 ///
-/// Returns PHP's `int|false`: the `__rt_strtotime` `i64::MIN` parse-failure sentinel is boxed as
-/// `Mixed` `false`, and every other value (including a real `-1` pre-epoch timestamp) is boxed as
-/// a `Mixed` integer, so `=== false`, `=== -1`, and `echo` all observe the distinct results.
+/// Returns PHP's `int|false`: a parse failure (the `__rt_strtotime` success flag is clear) is boxed
+/// as `Mixed` `false`, and every parsed timestamp (including a real `-1` and a real `i64::MIN`) is
+/// boxed as a `Mixed` integer, so `=== false`, `=== -1`, and `echo` all observe distinct results.
 /// Supports PHP's optional `$baseTimestamp`. (The `__elephc_strtotime_raw` alias keeps the plain
 /// `-1` integer shape for the synthetic `DateTime` internals.)
 pub(crate) fn lower_strtotime(
@@ -546,17 +550,16 @@ pub(crate) fn lower_strtotime(
     store_if_result(ctx, inst)
 }
 
-/// Boxes the `__rt_strtotime` integer result into a `Mixed` `int|false` cell: the `i64::MIN`
-/// parse-failure sentinel becomes boxed `false` (runtime tag 3), and any other value becomes a
-/// boxed integer (runtime tag 0), preserving a genuine `-1` timestamp as a distinct integer.
+/// Boxes the `__rt_strtotime` integer result into a `Mixed` `int|false` cell: a cleared success
+/// flag (`x1`/`rdx`) becomes boxed `false` (runtime tag 3), and a parsed timestamp becomes a boxed
+/// integer (runtime tag 0). Deciding on the flag rather than on the value keeps every timestamp an
+/// integer, a genuine `-1` and a genuine `i64::MIN` (`@-9223372036854775808`) included.
 fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
     let false_label = ctx.next_label("strtotime_box_false");
     let done_label = ctx.next_label("strtotime_box_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("movz x13, #0x8000, lsl #48");              // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp x0, x13");                             // did the parse fail?
-            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // failure → box PHP false instead of an integer
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // success flag clear → box PHP false instead of an integer
             ctx.emitter.instruction("mov x1, x0");                              // Mixed payload low word = the parsed timestamp
             ctx.emitter.instruction("mov x2, #0");                              // integer payloads do not use the high word
             ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = int
@@ -570,9 +573,8 @@ fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("movabs r10, -9223372036854775808");        // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp rax, r10");                            // did the parse fail?
-            ctx.emitter.instruction(&format!("je {}", false_label));            // failure → box PHP false instead of an integer
+            ctx.emitter.instruction("test rdx, rdx");                           // did the parse succeed?
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // success flag clear → box PHP false instead of an integer
             ctx.emitter.instruction("mov rdi, rax");                            // Mixed payload low word = the parsed timestamp
             ctx.emitter.instruction("xor esi, esi");                            // integer payloads do not use the high word
             ctx.emitter.instruction("mov rax, 0");                              // runtime tag 0 = int
@@ -591,14 +593,14 @@ fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
 /// Lowers the internal `__elephc_strtotime_raw(datetime[, baseTimestamp])` alias.
 ///
 /// Backs the synthetic `DateTime` constructor and `modify()`. Marshals the same runtime ABI
-/// as `strtotime`, but maps the `i64::MIN` parse-failure sentinel to `-1` so callers store the
-/// timestamp directly as the legacy `-1` in-object failure value.
+/// as `strtotime`, but maps a parse failure to `-1` so callers store the timestamp directly as
+/// the legacy `-1` in-object failure value.
 pub(crate) fn lower_elephc_strtotime_raw(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     emit_strtotime_marshal(ctx, inst, "__elephc_strtotime_raw")?;
-    emit_strtotime_sentinel_to_minus_one(ctx);
+    emit_strtotime_failure_to_minus_one(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -687,24 +689,22 @@ fn emit_strtotime_marshal(
     Ok(())
 }
 
-/// Maps the `__rt_strtotime` `i64::MIN` parse-failure sentinel to `-1` in the integer result.
+/// Maps a failed `__rt_strtotime` parse (success flag clear) to `-1` in the integer result.
 ///
-/// Keeps `-1` itself usable as a real pre-epoch timestamp: only the sentinel is rewritten, so
-/// the synthetic `DateTime` callers that store the raw integer observe PHP's `false`-on-failure
-/// contract as the legacy `-1` in-object value.
-fn emit_strtotime_sentinel_to_minus_one(ctx: &mut FunctionContext<'_>) {
+/// Keeps `-1` itself usable as a real pre-epoch timestamp: only a failure is rewritten, so the
+/// synthetic `DateTime` callers that store the raw integer observe PHP's `false`-on-failure
+/// contract as the legacy `-1` in-object value, and a parsed `i64::MIN` stays a timestamp.
+fn emit_strtotime_failure_to_minus_one(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("movz x13, #0x8000, lsl #48");              // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp x0, x13");                             // did the parse fail?
             ctx.emitter.instruction("mov x13, #-1");                            // legacy in-object failure value
-            ctx.emitter.instruction("csel x0, x13, x0, eq");                    // sentinel → -1, otherwise keep the timestamp
+            ctx.emitter.instruction("cmp x1, #0");                              // did the parse fail (success flag clear)?
+            ctx.emitter.instruction("csel x0, x13, x0, eq");                    // failure → -1, otherwise keep the timestamp
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("movabs r10, -9223372036854775808");        // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp rax, r10");                            // did the parse fail?
             ctx.emitter.instruction("mov r10, -1");                             // legacy in-object failure value
-            ctx.emitter.instruction("cmove rax, r10");                          // sentinel → -1, otherwise keep the timestamp
+            ctx.emitter.instruction("test rdx, rdx");                           // did the parse fail (success flag clear)?
+            ctx.emitter.instruction("cmovz rax, r10");                          // failure → -1, otherwise keep the timestamp
         }
     }
 }
@@ -716,6 +716,29 @@ pub(crate) fn lower_time(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "time", 0)?;
     abi::emit_call_label(ctx.emitter, "__rt_time");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `getmypid()` through the target's C library `getpid()`.
+///
+/// `getpid()` returns a 32-bit `pid_t`, and neither ABI defines the upper half of the 64-bit
+/// result register for an `int` return, so the id is sign-extended before it is stored as a
+/// PHP integer. The call is made on every evaluation rather than cached, so a `pcntl_fork()`
+/// child reports its own id.
+pub(crate) fn lower_getmypid(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "getmypid", 0)?;
+    ctx.emitter.bl_c("getpid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sxtw x0, w0");                             // widen the 32-bit pid_t into a 64-bit PHP integer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movsxd rax, eax");                         // widen the 32-bit pid_t into a 64-bit PHP integer
+        }
+    }
     store_if_result(ctx, inst)
 }
 
@@ -829,7 +852,7 @@ fn emit_getenv_all_result(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `putenv(assignment)`, dispatching bare names to `unsetenv` and assignments to `putenv`.
+/// Lowers `putenv(assignment)`, rejecting invalid syntax before dispatching to libc.
 pub(crate) fn lower_putenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -837,6 +860,7 @@ pub(crate) fn lower_putenv(
     super::ensure_arg_count(inst, "putenv", 1)?;
     let assignment = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(assignment)?.codegen_repr(), "putenv assignment")?;
+    emit_putenv_syntax_guard(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_putenv_aarch64(ctx),
         Arch::X86_64 => lower_putenv_x86_64(ctx),
@@ -948,6 +972,34 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("call __rt_exit_or_parallel_fatal");        // escape a worker or terminate the process; never returns
         }
     }
+}
+
+/// Raises PHP 8's catchable `ValueError` for an empty assignment or one beginning with `=`.
+fn emit_putenv_syntax_guard(ctx: &mut FunctionContext<'_>) {
+    let invalid = ctx.next_label("putenv_invalid");
+    let valid = ctx.next_label("putenv_valid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- reject invalid environment assignment syntax before libc --
+            ctx.emitter.instruction(&format!("cbz x2, {}", invalid));           // reject an empty assignment before reading its first byte
+            ctx.emitter.instruction("ldrb w3, [x1]");                           // inspect the first assignment byte before any libc call
+            ctx.emitter.instruction("cmp w3, #61");                             // PHP rejects environment names beginning with '='
+            ctx.emitter.instruction(&format!("b.ne {}", valid));                // a nonempty name may proceed to set or unset dispatch
+        }
+        Arch::X86_64 => {
+            // -- reject invalid environment assignment syntax before libc --
+            ctx.emitter.instruction("test rdx, rdx");                           // reject an empty assignment before reading its first byte
+            ctx.emitter.instruction(&format!("jz {}", invalid));                // an empty assignment has no valid environment name
+            ctx.emitter.instruction("cmp BYTE PTR [rax], 61");                  // PHP rejects environment names beginning with '='
+            ctx.emitter.instruction(&format!("jne {}", valid));                 // a nonempty name may proceed to set or unset dispatch
+        }
+    }
+    ctx.emitter.label(&invalid);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "putenv(): Argument #1 ($assignment) must have a valid syntax",
+    );
+    ctx.emitter.label(&valid);
 }
 
 /// Unsets a bare environment name using an allocated C string, frees the copy,

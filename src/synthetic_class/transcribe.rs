@@ -136,6 +136,7 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
     match &stmt.kind {
         StmtKind::FunctionDecl {
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -146,6 +147,10 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             body,
         } => {
             assert!(!by_ref_return, "a by-ref return is not modelled: {name}");
+            assert!(
+                type_params.is_empty(),
+                "a synthetic declaration is already monomorphic: {name}"
+            );
             let mut out = format!("{}function({})", pad(depth), lit(name));
             out.push_str(&params_calls(params, param_attributes, depth + 1));
             if let Some(tail) = variadic {
@@ -165,6 +170,7 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
         }
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -172,6 +178,7 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             methods,
             constants,
         } => {
+            assert!(generics.is_none(), "generic enums are not modelled by this prelude transcriber");
             assert!(trait_uses.is_empty(), "enum trait uses are not modelled");
             assert!(methods.is_empty(), "enum methods are not modelled");
             assert!(constants.is_empty(), "enum constants are not modelled");
@@ -210,6 +217,7 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             out
         }
         StmtKind::ClassDecl {
+            generics: _,
             name,
             extends,
             implements,
@@ -436,6 +444,7 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             out
         }
         StmtKind::InterfaceDecl {
+            generics: _,
             name,
             extends,
             properties,
@@ -975,6 +984,16 @@ fn expr(value: &Expr, depth: usize) -> String {
             format!("e_index({}, {})", expr(array, depth), expr(index, depth))
         }
         ExprKind::ArrayLiteral(items) => format!("e_array({})", expr_vec(items, depth)),
+        ExprKind::Match { subject, arms, default } => {
+            let rendered = arms.iter().map(|(labels, value)| {
+                format!("({}, {})", expr_vec(labels, depth), expr(value, depth))
+            }).collect::<Vec<_>>();
+            let default = default.as_ref().map_or_else(
+                || "None".to_string(),
+                |value| format!("Some({})", expr(value, depth)),
+            );
+            format!("e_match({}, vec![{}], {})", expr(subject, depth), rendered.join(", "), default)
+        }
         ExprKind::ArrayLiteralAssoc(entries) => {
             let rendered: Vec<String> = entries
                 .iter()
@@ -1223,6 +1242,7 @@ fn cast_type(target: &CastType) -> &'static str {
         CastType::String => "String",
         CastType::Bool => "Bool",
         CastType::Array => "Array",
+        CastType::Object => "Object",
     }
 }
 
@@ -1410,6 +1430,9 @@ enum DemoKind: int {
 function demo_make(int $h) {
     return new Demo($h);
 }
+function demo_match($value) {
+    return match ($value) { 1, 2 => "one", default => match ($value) {} };
+}
 "#;
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         let parsed = crate::parser::parse_internal(&tokens).expect("fixture must parse");
@@ -1428,6 +1451,7 @@ function demo_make(int $h) {
             "s_for(",
             "s_foreach(",
             "e_ternary(",
+            "e_match(e_var(\"value\"), vec![(vec![e_int(1), e_int(2)], e_str(\"one\"))], Some(e_match(e_var(\"value\"), vec![], None)))",
             "t_union(vec![TypeExpr::Str, TypeExpr::Bool])",
             "t_nullable(TypeExpr::Str)",
             ".param_untyped_default(\"flag\"",

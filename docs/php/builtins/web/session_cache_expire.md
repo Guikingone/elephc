@@ -1,8 +1,8 @@
 ---
 title: "session_cache_expire()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reads or sets the cache expiry, in minutes, of the session cache limiter."
 sidebar:
-  order: 887
+  order: 982
 ---
 
 ## session_cache_expire()
@@ -11,7 +11,7 @@ sidebar:
 function session_cache_expire(?int $value = null): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Reads or sets the cache expiry, in minutes, of the session cache limiter.
 
 **Parameters**:
 - `$value` (`?int`), default `null`, optional
@@ -23,7 +23,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

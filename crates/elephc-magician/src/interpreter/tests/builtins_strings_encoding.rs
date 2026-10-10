@@ -10,6 +10,17 @@
 use super::super::*;
 use super::support::*;
 
+/// Keeps invalid UTF-8 literal bytes intact through ASCII case conversion and retained function defaults.
+#[test]
+fn string_literal_bytes_survive_case_conversion_and_defaults() {
+    let program = parse_fragment(br#"function bytes_default(string $value = "\xFFAZ") { return $value; }
+return strtolower(bytes_default());"#).unwrap();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).unwrap();
+    assert_eq!(values.get(result), FakeValue::Bytes(vec![0xff, b'a', b'z']));
+}
+
 /// Verifies eval `mb_strlen()` matches encoding, malformed-byte, callable, and error behavior.
 #[test]
 fn execute_program_dispatches_mb_strlen_builtin() {
@@ -38,6 +49,24 @@ fn execute_program_dispatches_mb_strlen_builtin() {
 
     assert_eq!(values.output, "3:6:0:3:5:1:2:caught:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies shared text dispatch uses the real engine with integer arguments and owned strings.
+#[test]
+fn execute_program_dispatches_mbstring_text_builtins() {
+    let program = parse_fragment(r#"
+echo mb_strtoupper("Straße"), ":", mb_strtolower("ΟΔΟΣ"), ":";
+echo mb_convert_case("Straße", MB_CASE_FOLD), ":";
+echo mb_strwidth("漢字abc"), ":";
+echo mb_ucfirst("ßeta"), ":", mb_lcfirst("Éloïse"), ":";
+echo mb_strimwidth("漢字abc", 1, 4, "!"), ":";
+try { mb_convert_case("a", 9); }
+catch (ValueError) { echo "caught"; }
+"#.as_bytes()).expect("parse mbstring fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute mbstring fragment");
+    assert_eq!(values.output, "STRASSE:οδος:strasse:7:Sseta:éloïse:字a!:caught");
 }
 
 /// Verifies eval `explode()` and `implode()` bridge byte strings and arrays.
@@ -207,30 +236,6 @@ return function_exists("preg_match") && function_exists("preg_match_all") && fun
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies `mb_ereg_match()` anchors at the subject start and honors the `i` option.
-#[test]
-fn execute_program_dispatches_mb_ereg_match() {
-    let program = parse_fragment(
-        br#"echo (mb_ereg_match('ab', 'abc') ? "y" : "n") . ":";
-echo (mb_ereg_match('bc', 'abc') ? "y" : "n") . ":";
-echo (mb_ereg_match('^[A-Z][A-Za-z0-9]*$', 'Foo') ? "y" : "n") . ":";
-echo (mb_ereg_match('[a-z]+\z', 'abc123') ? "y" : "n") . ":";
-echo (mb_ereg_match('ab', 'AB') ? "y" : "n") . ":";
-echo (mb_ereg_match('ab', 'AB', 'i') ? "y" : "n") . ":";
-echo (mb_ereg_match('ab', 'AB', null) ? "y" : "n") . ":";
-echo (call_user_func("mb_ereg_match", "ab", "abx") ? "y" : "n") . ":";
-return function_exists("mb_ereg_match");"#,
-    )
-    .expect("parse eval fragment");
-    let mut scope = ElephcEvalScope::new();
-    let mut values = FakeOps::default();
-
-    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-
-    assert_eq!(values.output, "y:n:y:n:n:y:n:y:");
-    assert_eq!(values.get(result), FakeValue::Bool(true));
-}
-
 /// Verifies `preg_replace_callback()` accepts the same callable forms as other callback builtins.
 #[test]
 fn execute_program_preg_replace_callback_accepts_general_callables() {
@@ -329,6 +334,47 @@ return function_exists("html_entity_decode");"#,
             "&lt;b&gt;&quot;Hi&quot; &amp; &#039;bye&#039;&lt;/b&gt;:&lt;a&gt;:<b>hi</b>:&lt;x&gt;:\"q\":11"
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `htmlspecialchars()` and `htmlentities()` honour `$flags` like the compiled
+/// helper: `"` only under `ENT_COMPAT`, `'` only under `ENT_HTML_QUOTE_SINGLE` (1), and the
+/// single quote as `&apos;` under the XML1, XHTML and HTML5 doctypes.
+///
+/// Eval ignored `$flags` and always escaped both quotes as under `ENT_QUOTES`, so it disagreed
+/// with the compiled program (#1464). `$encoding` stays accepted and unused, as it is there.
+/// Expectations are PHP 8.5.
+#[test]
+fn execute_program_html_entity_encoders_honour_flags() {
+    let program = parse_fragment(
+        br#"$s = "<a href=\"x\">O'Neil & co</a>";
+echo htmlspecialchars($s, ENT_NOQUOTES); echo "|";
+echo htmlspecialchars($s, ENT_COMPAT); echo "|";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_HTML5); echo "|";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_XML1); echo "|";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_XHTML); echo "|";
+echo htmlspecialchars("'\"", 1); echo "|";
+echo htmlentities("'\"<", ENT_NOQUOTES); echo "|";
+echo htmlentities(string: "'\"", flags: ENT_COMPAT | ENT_HTML5); echo "|";
+echo call_user_func("htmlspecialchars", "'\"", ENT_NOQUOTES); echo "|";
+echo call_user_func_array("htmlentities", ["'", ENT_QUOTES | ENT_XML1, "UTF-8"]); echo "|";
+return htmlspecialchars("'\"", ENT_QUOTES, "UTF-8");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "&lt;a href=\"x\"&gt;O'Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O'Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O&apos;Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O&apos;Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O&apos;Neil &amp; co&lt;/a&gt;\
+         |&#039;\"|'\"&lt;|'&quot;|'\"|&apos;|"
+    );
+    assert_eq!(values.get(result), FakeValue::String("&#039;&quot;".to_string()));
 }
 /// Verifies eval URL codec builtins dispatch through direct, named, and callable paths.
 #[test]
@@ -633,5 +679,99 @@ return function_exists("hash_hmac");"#,
             "1111"
         )
     );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies scalar bridge defaults, nullable lengths, booleans, and request-setting mutations.
+#[test]
+fn execute_program_dispatches_mbstring_scalar_builtins() {
+    elephc_mbstring::abi::elephc_mbstring_reset_v1();
+    let program = parse_fragment(r#"
+echo mb_substr("a猫b", 1, null), ":", mb_strcut("a猫b", 2, 3), ":";
+echo mb_strstr("a猫b", "猫", true), ":", mb_convert_kana("ﾊﾟ"), ":";
+echo mb_ord(chr(255)) === false ? "invalid:" : "bad:";
+echo mb_chr(29483), ":", mb_str_pad("猫", 2), ":";
+echo mb_internal_encoding("ISO-8859-1") ? "set:" : "bad:";
+echo mb_strlen("é"), ":", mb_internal_encoding(null), ":";
+mb_internal_encoding("UTF-8");
+return mb_strpos("a猫b", "missing") === false;
+"#.as_bytes()).expect("parse mbstring scalar fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute mbstring scalar fragment");
+    assert_eq!(values.output, "猫b:猫:a:パ:invalid:猫:猫 :set:2:ISO-8859-1:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies the fake adapter materializes the real engine's binary array results and metadata.
+#[test]
+fn execute_program_dispatches_mbstring_array_builtins() {
+    let program = parse_fragment(r#"
+$parts = mb_str_split(chr(0) . chr(255) . chr(128), 2, "8bit");
+echo count($parts), ":", bin2hex($parts[0]), ":", bin2hex($parts[1]), ":";
+$copy = $parts; $copy[0] = "changed";
+echo bin2hex($parts[0]), ":";
+$aliases = mb_encoding_aliases("ASCII");
+echo count($aliases), ":", $aliases[0], ":", mb_preferred_mime_name("ASCII");
+return mb_str_split("");
+"#.as_bytes()).expect("parse mbstring array fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute mbstring array fragment");
+    assert_eq!(values.output, "2:00ff:80:00ff:11:ANSI_X3.4-1968:US-ASCII");
+    assert_eq!(values.get(result), FakeValue::Array(Vec::new()));
+}
+
+/// Verifies eval array inputs reach the real engine without conversion into the string Array.
+#[test]
+fn execute_program_dispatches_mbstring_check_encoding() {
+    let program = parse_fragment(r#"
+$valid = ["names" => ["猫", "é"]];
+$invalid = [chr(255) => "ok"];
+echo (int)mb_check_encoding($valid), ":", (int)mb_check_encoding($invalid), ":";
+echo (int)mb_check_encoding([true, null, 42]), ":";
+return mb_check_encoding([chr(255)], "8bit");
+"#.as_bytes()).expect("parse mbstring array-check fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute mbstring array-check fragment");
+    assert_eq!(values.output, "1:0:1:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Preserves invalid UTF-8 keys across fake array updates, regular sorting, and iteration.
+#[test]
+fn execute_program_preserves_binary_array_keys() {
+    let program = parse_fragment(r#"
+$items = [chr(255) => 1, chr(254) => 2];
+$items[chr(255)] = 3;
+ksort($items);
+echo count($items), ":";
+foreach ($items as $key => $value) { echo bin2hex($key), "=", $value, ":"; }
+return mb_check_encoding($items);
+"#.as_bytes()).expect("parse binary array-key fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute binary array-key fragment");
+    assert_eq!(values.output, "2:fe=2:ff=3:");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// Sends real integer and string union arguments through the shared substitution C dispatch.
+#[test]
+fn execute_program_dispatches_mbstring_substitution() {
+    let program = parse_fragment(r#"
+mb_substitute_character(33);
+echo mb_substitute_character(), ":", bin2hex(mb_scrub(chr(255))), ":";
+mb_substitute_character("none");
+echo mb_substitute_character(), ":", bin2hex(mb_scrub(chr(255))), ":";
+mb_substitute_character("long");
+echo bin2hex(mb_scrub(chr(255)));
+return mb_substitute_character(63);
+"#.as_bytes()).expect("parse substitution-setting fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute substitution-setting fragment");
+    assert_eq!(values.output, "33:21:none::21");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

@@ -11,8 +11,8 @@
 //!   helpers because generated SPL methods can call them.
 //! - Compiler-injected Async descriptor waits enable the libc poll adapter;
 //!   programs that never use the Async prelude retain no reactor symbol.
-//! - Lowered `mb_strlen()` calls enable its iconv-backed runtime helper without
-//!   imposing that native dependency on programs that never use the builtin.
+//! - Lowered mbstring calls enable the shared encoding bridge. Dynamic eval uses
+//!   the same archive, so settings and caches have a single owner.
 //! - Emitted stream/archive classes enable PHAR bridge libraries because their
 //!   generated methods route dynamic paths through `__rt_*_maybe_phar` helpers.
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
@@ -50,8 +50,12 @@ pub struct RuntimeFeatures {
     pub async_reactor: bool,
     /// True when lowered code submits isolated Parallel worker jobs.
     pub parallel_execution: bool,
-    /// True when lowered code can call the optional iconv-backed `mb_strlen()` helper.
-    pub mb_strlen: bool,
+    /// True when lowered code can call the optional mbstring bridge.
+    pub mbstring: bool,
+    /// True when matching operations require the managed Oniguruma provider.
+    pub mbregex: bool,
+    /// True when output conversion or startup validation requires the managed PCRE2 MIME provider.
+    pub mbstring_mime: bool,
     pub phar_archive: bool,
     /// True when codegen can emit the runtime callable dispatcher (descriptor
     /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
@@ -113,6 +117,12 @@ pub struct RuntimeFeatures {
     /// mutable state relative to the ctx register, so a future per-thread
     /// context only swaps the register contents.
     pub ctx_register: bool,
+    /// True when native code can push, pop, inspect, or restore a PHP error or exception
+    /// handler registration. The linked-stack helpers are otherwise omitted from the runtime.
+    pub handler_state: bool,
+    /// True when lowered native code can clone an object. The boxed clone adapter is also
+    /// required by the full eval bridge, which exposes the same operation to Magician.
+    pub object_clone: bool,
 }
 
 impl RuntimeFeatures {
@@ -133,7 +143,7 @@ impl RuntimeFeatures {
     /// them or reusing a retired bit is not, and would serve one feature set's object for another.
     pub const fn cache_key_bits(&self) -> u64 {
         (self.regex as u64)
-            | ((self.mb_strlen as u64) << 1)
+            | ((self.mbstring as u64) << 1)
             | ((self.phar_archive as u64) << 2)
             | ((self.descriptor_invoker as u64) << 3)
             | ((self.eval_bridge as u64) << 4)
@@ -144,9 +154,13 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
-            | ((self.ctx_register as u64) << 12)
-            | ((self.async_reactor as u64) << 13)
-            | ((self.parallel_execution as u64) << 14)
+            | ((self.handler_state as u64) << 12)
+            | ((self.object_clone as u64) << 13)
+            | ((self.mbregex as u64) << 14)
+            | ((self.mbstring_mime as u64) << 15)
+            | ((self.ctx_register as u64) << 16)
+            | ((self.async_reactor as u64) << 17)
+            | ((self.parallel_execution as u64) << 18)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -155,7 +169,9 @@ impl RuntimeFeatures {
             regex: false,
             async_reactor: false,
             parallel_execution: false,
-            mb_strlen: false,
+            mbstring: false,
+            mbregex: false,
+            mbstring_mime: false,
             phar_archive: false,
             descriptor_invoker: false,
             eval_bridge: false,
@@ -171,6 +187,8 @@ impl RuntimeFeatures {
             // caller that builds a minimal runtime produce one the user object cannot
             // link against.
             ctx_register: true,
+            handler_state: false,
+            object_clone: false,
         }
     }
 
@@ -181,7 +199,9 @@ impl RuntimeFeatures {
             regex: true,
             async_reactor: true,
             parallel_execution: true,
-            mb_strlen: true,
+            mbstring: true,
+            mbregex: true,
+            mbstring_mime: true,
             phar_archive: true,
             descriptor_invoker: true,
             eval_bridge: true,
@@ -193,6 +213,8 @@ impl RuntimeFeatures {
             popen_resource: true,
             directory_resource: true,
             ctx_register: true,
+            handler_state: true,
+            object_clone: true,
         }
     }
 }
@@ -214,9 +236,10 @@ pub fn runtime_features_for_program_and_classes(
 /// Returns typed final-link requirements for the selected optional runtime features.
 pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<LinkRequirement> {
     let mut requirements = Vec::new();
-    if features.regex {
+    if features.regex || features.mbstring_mime {
         requirements.push(LinkRequirement::NativePackage("pcre2"));
     }
+    if features.mbregex { requirements.push(LinkRequirement::NativePackage("oniguruma")); }
     if features.phar_archive {
         requirements.push(LinkRequirement::Bridge("elephc_phar"));
         requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
@@ -237,6 +260,9 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         // Regex is a separate optional capability registered only when enabled.
         requirements.push(LinkRequirement::Bridge("elephc_magician"));
         requirements.push(LinkRequirement::Bridge("elephc_bcmath"));
+    }
+    if features.mbstring || features.mbregex || features.eval_bridge {
+        requirements.push(LinkRequirement::Bridge("elephc_mbstring"));
     }
     requirements
 }
@@ -473,6 +499,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             expr_has_regex_call(value)
                 || match target {
                     InstanceOfTarget::Name(_) => false,
+                    InstanceOfTarget::Generic(_) => false,
                     // Dynamic class targets make codegen include the builtin class universe.
                     // That universe contains RegexIterator methods that call preg runtime helpers.
                     InstanceOfTarget::Expr(_) => true,
@@ -511,6 +538,10 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items
             .iter()
             .any(|(key, value)| expr_has_regex_call(key) || expr_has_regex_call(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_has_regex_call),
         ExprKind::Match {
             subject,
             arms,
@@ -539,6 +570,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_has_regex_call),
         ExprKind::NewDynamicObject {
             class_name,
@@ -632,7 +664,16 @@ fn expr_is_regex_callback_string(expr: &Expr) -> bool {
 
 /// Returns true when a static receiver expression can contain a regex call.
 fn static_receiver_has_regex_call(receiver: &StaticReceiver) -> bool {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(_)
         | StaticReceiver::Self_
         | StaticReceiver::Static
@@ -645,7 +686,6 @@ fn is_regex_builtin_name(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
         "preg_match" | "preg_match_all" | "preg_replace" | "preg_replace_callback" | "preg_split"
-        | "mb_ereg_match"
     )
 }
 
@@ -846,6 +886,10 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
             expr_needs_descriptor_invoker(key) || expr_needs_descriptor_invoker(value)
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_needs_descriptor_invoker),
         ExprKind::Match {
             subject,
             arms,
@@ -877,6 +921,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_needs_descriptor_invoker),
         ExprKind::NewDynamicObject {
             class_name, args, ..
@@ -943,7 +988,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
 /// - `call_user_func`/`call_user_func_array` whose callback is not a statically resolved
 ///   form (closure / first-class callable / array literal);
 /// - `iterator_apply` whose callback is not a statically resolved form;
-/// - `preg_replace_callback` whose callback is a runtime (non-literal) string candidate;
+/// - `preg_replace_callback`, whose raw match array always crosses a descriptor adapter;
 /// - `new Fiber($cb)` whose callback is not a statically resolved form.
 fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
     match &expr.kind {
@@ -994,9 +1039,12 @@ fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
 /// take it second (after the source array, pattern, or iterator).
 fn function_call_needs_descriptor_invoker(name: &str, args: &[Expr]) -> bool {
     let callback = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        // Literal function names also need argument adaptation: a declared PHP `array`
+        // parameter is boxed and cannot receive the regex runtime's raw match array.
+        "preg_replace_callback" => return true,
         "call_user_func" | "call_user_func_array" | "array_map" => args.first(),
         "array_filter" | "array_walk" | "array_walk_recursive" | "array_reduce" | "usort"
-        | "uasort" | "uksort" | "iterator_apply" | "preg_replace_callback" | "array_find"
+        | "uasort" | "uksort" | "iterator_apply" | "array_find"
         | "array_any" | "array_all" => args.get(1),
         "array_udiff" | "array_uintersect" => args.get(2),
         _ => return false,
@@ -1019,6 +1067,7 @@ fn callback_arg_may_be_runtime_dispatch(arg: &Expr) -> bool {
         | ExprKind::FirstClassCallable(_)
         | ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_)
         | ExprKind::StringLiteral(_) => false,
         _ => true,
     }
@@ -1107,7 +1156,7 @@ mod tests {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
-    /// Verifies eval requests Magician followed by its standalone BCMath ABI provider.
+    /// Verifies eval requests Magician and shared scalar bridges without an unused MIME provider.
     #[test]
     fn test_eval_runtime_features_require_magician_and_bcmath_bridges() {
         assert_eq!(
@@ -1117,7 +1166,8 @@ mod tests {
             }),
             vec![
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
     }
@@ -1134,7 +1184,8 @@ mod tests {
             vec![
                 LinkRequirement::NativePackage("pcre2"),
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
     }
@@ -1273,6 +1324,14 @@ mod tests {
         );
     }
 
+    /// Literal regex callbacks still need the dispatcher that adapts their declared array parameter.
+    #[test]
+    fn test_runtime_features_include_descriptor_invoker_for_preg_replace_callback_literal() {
+        assert!(features_for(
+            "<?php function replace_match(array $matches): string { return 'x'; } echo preg_replace_callback('/a/', 'replace_match', 'a');"
+        ).descriptor_invoker);
+    }
+
     /// Verifies every static reference form for the custom session-handler API keeps
     /// the runtime callable dispatcher needed by its callback methods.
     #[test]
@@ -1294,21 +1353,8 @@ mod tests {
     #[test]
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_bridge() {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures {
-            regex: false,
-            async_reactor: false,
-            parallel_execution: false,
-            mb_strlen: false,
-            phar_archive: false,
             descriptor_invoker: true,
-            eval_bridge: false,
-            eval_scope: false,
-            web: false,
-            pdo_udf: false,
-            fiber: false,
-            generator: false,
-            popen_resource: false,
-            directory_resource: false,
-            ctx_register: false,
+            ..RuntimeFeatures::none()
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));
@@ -1328,8 +1374,26 @@ mod tests {
             }),
             vec![
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
+    }
+
+    /// Keeps ordinary mbstring independent while MIME output requests its dedicated provider.
+    #[test]
+    fn test_mbstring_runtime_features_require_mime_provider() {
+        let features = RuntimeFeatures { mbstring: true, ..RuntimeFeatures::none() };
+        assert_eq!(link_requirements_for_runtime_features(features), vec![
+            LinkRequirement::Bridge("elephc_mbstring"),
+        ]);
+        assert!(!features.regex);
+        assert_eq!(link_requirements_for_runtime_features(RuntimeFeatures {
+            mbstring: true,
+            mbstring_mime: true,
+            ..RuntimeFeatures::none()
+        }), vec![
+            LinkRequirement::NativePackage("pcre2"), LinkRequirement::Bridge("elephc_mbstring"),
+        ]);
     }
 }

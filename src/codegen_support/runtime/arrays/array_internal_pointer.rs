@@ -28,6 +28,7 @@
 //!   `3` prev. `crate::builtins::semantics::ArrayPointerOp::seek_mode` is the single source
 //!   of truth for that mapping and must stay in step with the dispatch below.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -120,9 +121,7 @@ fn emit_hash_walk_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.instruction("cmn x9, #1");                                          // has the insertion-order chain run out?
     emitter.instruction(&format!("b.eq {}", invalid));                          // an exhausted chain has no entry at this ordinal
     emitter.instruction("mov x10, #64");                                        // x10 = hash entry stride in bytes
-    emitter.instruction("mul x10, x9, x10");                                    // byte offset of the current slot
-    emitter.instruction("add x10, x0, x10");                                    // advance from the hash base to the slot
-    emitter.instruction("add x10, x10, #40");                                   // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x10", "x0", "x9");
     emitter.instruction(&format!("cbz x1, {}_walk_done", prefix));              // ordinal 0 selects the current entry
     emitter.instruction("sub x1, x1, #1");                                      // consume one step of the requested ordinal
     emitter.instruction("ldr x9, [x10, #56]");                                  // x9 = next slot index from the insertion-order chain
@@ -140,10 +139,7 @@ fn emit_hash_walk_x86_64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.label(&format!("{}_walk", prefix));
     emitter.instruction("cmp rax, -1");                                         // has the insertion-order chain run out?
     emitter.instruction(&format!("je {}", invalid));                            // an exhausted chain has no entry at this ordinal
-    emitter.instruction("mov r10, rax");                                        // copy the slot index before scaling it
-    emitter.instruction("shl r10, 6");                                          // convert the slot index into a 64-byte entry offset
-    emitter.instruction("add r10, rdi");                                        // advance from the hash base to the slot
-    emitter.instruction("add r10, 40");                                         // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "r10", "rdi", "rax");
     emitter.instruction("test rsi, rsi");                                       // is the requested ordinal exhausted?
     emitter.instruction(&format!("je {}_walk_done", prefix));                   // ordinal 0 selects the current entry
     emitter.instruction("sub rsi, 1");                                          // consume one step of the requested ordinal
@@ -364,10 +360,16 @@ pub fn emit_array_ptr_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x10, #24]");                                  // x9 = value_lo from the hash entry
     emitter.instruction("ldr x13, [x10, #32]");                                 // x13 = value_hi from the hash entry
     emitter.instruction("ldr x14, [x10, #40]");                                 // x14 = value_tag from the hash entry
+    emitter.instruction("cmp x14, #7");                                         // is the payload already a boxed Mixed cell?
+    emitter.instruction("b.eq __rt_aptr_val_hash_boxed");                       // then it IS the value; boxing it again nests a Mixed in a Mixed
     emitter.instruction("mov x0, x14");                                         // value_tag = the entry's runtime tag
     emitter.instruction("mov x1, x9");                                          // value_lo = the entry's low payload word
     emitter.instruction("mov x2, x13");                                         // value_hi = the entry's high payload word
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aptr_val_deref_done", "x0", "x1", "x2");
     emitter.instruction("b __rt_mixed_from_value");                             // retain/persist the payload and return the box
+    emitter.label("__rt_aptr_val_hash_boxed");
+    emitter.instruction("mov x0, x9");                                          // the entry payload IS the Mixed cell the caller wants
+    emitter.instruction("b __rt_incref");                                       // retain it and return it; incref preserves x0
     emitter.label("__rt_aptr_val_false");
     emitter.instruction("mov x0, #3");                                          // value_tag = 3 (bool)
     emitter.instruction("mov x1, #0");                                          // value_lo = 0 (false)
@@ -398,9 +400,15 @@ fn emit_array_ptr_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r10 + 24]");                        // r8 = value_lo from the hash entry
     emitter.instruction("mov r9, QWORD PTR [r10 + 32]");                        // r9 = value_hi from the hash entry
     emitter.instruction("mov rax, QWORD PTR [r10 + 40]");                       // rax = value_tag from the hash entry
+    emitter.instruction("cmp rax, 7");                                          // is the payload already a boxed Mixed cell?
+    emitter.instruction("je __rt_aptr_val_hash_boxed");                         // then it IS the value; boxing it again nests a Mixed in a Mixed
     emitter.instruction("mov rdi, r8");                                         // value_lo = the entry's low payload word
     emitter.instruction("mov rsi, r9");                                         // value_hi = the entry's high payload word
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aptr_val_deref_done", "rax", "rdi", "rsi");
     emitter.instruction("jmp __rt_mixed_from_value");                           // retain/persist the payload and return the box
+    emitter.label("__rt_aptr_val_hash_boxed");
+    emitter.instruction("mov rax, r8");                                         // the entry payload IS the Mixed cell the caller wants
+    emitter.instruction("jmp __rt_incref");                                     // retain it and return it; incref preserves rax
     emitter.label("__rt_aptr_val_false");
     emitter.instruction("xor edi, edi");                                        // value_lo = 0 (false)
     emitter.instruction("xor esi, esi");                                        // value_hi unused

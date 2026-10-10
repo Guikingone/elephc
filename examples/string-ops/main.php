@@ -22,7 +22,16 @@ echo "substr(0, 5): " . substr($str, 0, 5) . "\n";
 echo "strstr(@): " . strstr("user@example.com", "@") . "\n";
 echo "index[1]: " . $str[1] . "\n";
 echo "index[-1]: " . $str[-1] . "\n";
+// Reading past the end returns an empty string and warns on stderr:
+// Warning: Uninitialized string offset 99
 echo "index[99]: [" . $str[99] . "]\n";
+// isset, empty, and ?? probe that same offset quietly.
+echo "isset[99]: " . (isset($str[99]) ? "yes" : "no") . "\n";
+echo "empty[99]: " . (empty($str[99]) ? "yes" : "no") . "\n";
+echo "coalesce[99]: " . ($str[99] ?? "missing") . "\n";
+// A float offset truncates toward zero, so 1.9 selects the same byte as 1
+// and warns once on stderr: Warning: String offset cast occurred
+echo "index[1.9]: " . $str[1.9] . "\n";
 
 // Case
 echo "\n--- Case ---\n";
@@ -30,6 +39,16 @@ echo "strtolower: " . strtolower($str) . "\n";
 echo "strtoupper: " . strtoupper($str) . "\n";
 echo "ucfirst: " . ucfirst("hello") . "\n";
 echo "lcfirst: " . lcfirst("HELLO") . "\n";
+
+// Unicode product names and compact display labels
+$product = "Straße 東京";
+echo "Unicode uppercase: " . mb_strtoupper($product) . "\n";
+echo "Unicode lowercase: " . mb_strtolower("ΑΘΗΝΑ") . "\n";
+echo "Case-folded search key: " . mb_convert_case($product, MB_CASE_FOLD) . "\n";
+echo "Display width: " . mb_strwidth($product) . "\n";
+echo "Compact label: " . mb_strimwidth($product, 0, 9, "..") . "\n";
+echo "Display name: " . mb_ucfirst("éloïse") . "\n";
+echo "Lowercase initial: " . mb_lcfirst("Éloïse") . "\n";
 
 // Trimming
 echo "\n--- Trim ---\n";
@@ -102,6 +121,17 @@ $csv = "one,two,three";
 $parts = explode(",", $csv);
 echo "explode: " . count($parts) . " parts\n";
 echo "implode: " . implode(" | ", $parts) . "\n";
+// implode() takes the array through any slot, including one whose shape is only known at run
+// time -- a ?array, a mixed, a union -- and renders each element type the way echo does:
+// ints and floats as their decimal text, true as "1" and false as the empty string.
+function joined(?array $values): string { return implode(",", $values); }
+echo "implode(?array ints): " . joined([1, 2, 3]) . "\n";
+echo "implode(?array floats): " . joined([1.5, 2.5]) . "\n";
+echo "implode(?array bools): [" . joined([true, false]) . "]\n";
+// Keys are ignored, values are joined in insertion order.
+echo "implode(?array hash): " . joined(["a" => 1, "b" => "x", "c" => 2.5]) . "\n";
+// A value that is not an array is PHP's TypeError, not a crash.
+try { joined(null); } catch (TypeError $e) { echo "implode(null): " . $e->getMessage() . "\n"; }
 
 // Character functions
 echo "\n--- Char ---\n";
@@ -156,6 +186,9 @@ try {
 echo "\n--- Encoding ---\n";
 echo "mb_strlen UTF-8: " . mb_strlen("héllo", "UTF-8") . "\n";
 echo "mb_strlen bytes: " . mb_strlen("héllo", "8bit") . "\n";
+// Count Japanese text from a legacy Shift-JIS export without converting the file.
+$legacyName = "\x82\xA0\x82\xA2\x82\xA4";
+echo "mb_strlen Shift-JIS: " . mb_strlen($legacyName, "SJIS") . "\n";
 echo "htmlspecialchars: " . htmlspecialchars("<b>bold</b>") . "\n";
 echo "urlencode: " . urlencode("hello world") . "\n";
 echo "base64: " . base64_encode("Hello") . "\n";

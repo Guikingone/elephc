@@ -1,8 +1,8 @@
 ---
 title: "session_set_cookie_params()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Sets the session cookie's lifetime, path, domain, and flags."
 sidebar:
-  order: 903
+  order: 998
 ---
 
 ## session_set_cookie_params()
@@ -11,10 +11,10 @@ sidebar:
 function session_set_cookie_params(...$args): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Sets the session cookie's lifetime, path, domain, and flags.
 
 **Parameters**:
-- `...$args` — variadic: collects excess arguments into `$args`.
+- `...$args` - variadic: collects excess arguments into `$args`.
 
 **Returns**: `bool`
 
@@ -23,7 +23,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

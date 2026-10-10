@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Modifier and member parsing must preserve PHP visibility and abstract/static/final/readonly rules.
+//! - Every property and constant a declarator list emits carries the span of its own declarator
+//!   (name plus optional initializer), not the span of the whole declaration.
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
@@ -18,7 +20,9 @@ use crate::parser::ast::{
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
-use super::super::params::{looks_like_typed_param, parse_name_list, parse_type_expr};
+use super::super::params::{
+    looks_like_typed_param, parse_name_list, parse_type_expr, parse_type_param_list,
+};
 use super::super::{expect_semicolon, expect_token, parse_block, parse_unqualified_name};
 use super::method_params::parse_method_params;
 use super::traits::parse_trait_use;
@@ -40,7 +44,9 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
         "Expected interface name after 'interface'",
     )?;
 
-    let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
+    let type_params = parse_type_param_list(tokens, pos, span)?;
+
+    let (extends, interface_args) = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
         *pos += 1;
         parse_name_list(
             tokens,
@@ -49,8 +55,13 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
             "Expected parent interface name after 'extends'",
         )?
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
+
+    // An interface has no single parent, so its inherited type arguments all live in
+    // `interface_args`, aligned with `extends`.
+    let generics =
+        crate::parser::ast::GenericDecl::new(type_params, Vec::new(), interface_args);
 
     expect_token(
         tokens,
@@ -69,6 +80,7 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
     Ok(Stmt::new(
         StmtKind::InterfaceDecl {
             name,
+            generics,
             extends,
             properties,
             methods,
@@ -89,6 +101,11 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
 
     let name = parse_unqualified_name(tokens, pos, span, "Expected trait name after 'trait'")?;
 
+    // A trait has no parent and implements nothing, so its type parameters are the whole of its
+    // generic half.
+    let type_params = parse_type_param_list(tokens, pos, span)?;
+    let generics = crate::parser::ast::GenericDecl::new(type_params, Vec::new(), Vec::new());
+
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after trait name")?;
     let (trait_uses, properties, methods, constants, _cases) =
         parse_class_like_body(tokens, pos, "trait", false)?;
@@ -97,6 +114,7 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
     Ok(Stmt::new(
         StmtKind::TraitDecl {
             name,
+            generics,
             trait_uses,
             properties,
             methods,
@@ -229,62 +247,15 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                     "Class constants cannot be declared readonly or abstract",
                 ));
             }
-            *pos += 1; // consume `const`
-            let type_expr = parse_optional_class_const_type(tokens, pos, member_span);
-            // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
-            // which is reserved for the `Foo::class` name fetch.
-            let const_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Class) => {
-                    return Err(CompileError::new(
-                        member_span,
-                        "Cannot use 'class' as a class constant name",
-                    ))
-                }
-                Some(t)
-                    if crate::parser::keyword_name::bareword_name_from_token(
-                        t,
-                        &tokens[*pos].1,
-                    )
-                    .is_some() =>
-                {
-                    let n = crate::parser::keyword_name::bareword_name_from_token(
-                        t,
-                        &tokens[*pos].1,
-                    )
-                    .unwrap();
-                    *pos += 1;
-                    n
-                }
-                _ => {
-                    return Err(CompileError::new(
-                        member_span,
-                        "Expected class constant name after 'const'",
-                    ))
-                }
-            };
-            if constants.iter().any(|c: &ClassConst| c.name == const_name) {
-                return Err(CompileError::new(
-                    member_span,
-                    &format!("Cannot redeclare class constant {}", const_name),
-                ));
-            }
-            expect_token(
+            parse_constant_declarator_list(
                 tokens,
                 pos,
-                &Token::Assign,
-                "Expected '=' after class constant name",
+                member_span,
+                &modifiers,
+                &member_attributes,
+                &mut constants,
+                owner_kind,
             )?;
-            let value = parse_expr(tokens, pos)?;
-            expect_semicolon(tokens, pos)?;
-            constants.push(ClassConst {
-                name: const_name,
-                visibility: modifiers.visibility,
-                is_final: modifiers.is_final,
-                type_expr,
-                value,
-                span: member_span,
-                attributes: member_attributes,
-            });
             continue;
         }
 
@@ -312,110 +283,151 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
 
         let type_expr = parse_optional_property_type(tokens, pos, member_span)?;
 
-        if let Some(Token::Variable(prop_name)) = tokens.get(*pos).map(|(t, _)| t.clone()) {
+        if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Variable(_))) {
             if modifiers.is_static && modifiers.is_readonly {
                 return Err(CompileError::new(
                     member_span,
                     "Static properties cannot be readonly",
                 ));
             }
-            let prop_name = prop_name.clone();
-            *pos += 1;
-            if properties.iter().any(|property| property.name == prop_name) {
-                return Err(CompileError::new(
-                    member_span,
-                    &format!("Cannot redeclare property ${}", prop_name),
-                ));
-            }
-            let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+            // One declaration may introduce SEVERAL properties: `public int $w = 40, $h = 22;`.
+            // The type and every modifier are shared; each declarator carries its own optional
+            // default. (Issue #684.)
+            //
+            // A hook block belongs to ONE property, so php-src rejects it on a list at all --
+            // `public int $a = 1, $b { get => 1; }` is `unexpected token "{", expecting "," or
+            // ";"`. `saw_comma` carries that: once the declaration has more than one name, the
+            // tail must be a bare `;`.
+            let mut saw_comma = false;
+            loop {
+                let Some(Token::Variable(prop_name)) = tokens.get(*pos).map(|(t, _)| t.clone())
+                else {
+                    return Err(CompileError::new(
+                        tokens.get(*pos).map_or(member_span, |(_, meta)| meta.span),
+                        "Expected a property name after ',' in the declaration list",
+                    ));
+                };
+                let name_span = tokens[*pos].1.span;
                 *pos += 1;
-                Some(parse_expr(tokens, pos)?)
-            } else {
-                None
-            };
-            let (hooks, hook_accessors) =
-                parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?;
-            if modifiers.is_abstract && default.is_some() {
-                return Err(CompileError::new(
-                    member_span,
-                    &format!(
-                        "Abstract property ${} cannot have a default value",
-                        prop_name
-                    ),
-                ));
-            }
-            if modifiers.is_abstract && !hooks.any() {
-                return Err(CompileError::new(
-                    member_span,
-                    "Only hooked properties may be declared abstract",
-                ));
-            }
-            if modifiers.is_static && hooks.any() {
-                return Err(CompileError::new(
-                    member_span,
-                    "Cannot declare hooks for static property",
-                ));
-            }
-            if modifiers.is_readonly && hooks.any() {
-                return Err(CompileError::new(
-                    member_span,
-                    "Hooked properties cannot be readonly",
-                ));
-            }
-            if hooks.any() && default.is_some() {
-                return Err(CompileError::new(
-                    member_span,
-                    "Hooked properties cannot have a default value",
-                ));
-            }
-            if modifiers.is_abstract {
-                if owner_kind != "trait" && !enclosing_is_abstract {
+                if properties.iter().any(|property| property.name == prop_name) {
                     return Err(CompileError::new(
-                        member_span,
-                        "Abstract properties can only be declared in abstract classes",
+                        name_span,
+                        &format!("Cannot redeclare property ${}", prop_name),
                     ));
                 }
-                if modifiers.is_static {
+                let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                    *pos += 1;
+                    Some(parse_expr(tokens, pos)?)
+                } else {
+                    None
+                };
+                // This declarator's own extent: `$b = 2` in `public int $a = 1, $b = 2;`, so a
+                // diagnostic or an IDE range about `$b` points at `$b` (issue #1140).
+                let declarator_span =
+                    crate::parser::expr::span_through_prev_token(tokens, *pos, name_span);
+                let more_declarators =
+                    matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Comma));
+                let (hooks, hook_accessors) = if more_declarators {
+                    saw_comma = true;
+                    *pos += 1;
+                    (PropertyHooks::none(), Vec::new())
+                } else {
+                    if saw_comma && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LBrace))
+                    {
+                        return Err(CompileError::new(
+                            tokens[*pos].1.span,
+                            "A property hook block needs a declaration of its own: \
+                             remove the other names from this one, or drop the hooks",
+                        ));
+                    }
+                    parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?
+                };
+                let type_expr = type_expr.clone();
+                if modifiers.is_abstract && default.is_some() {
                     return Err(CompileError::new(
                         member_span,
-                        "Abstract static properties are not supported",
+                        &format!(
+                            "Abstract property ${} cannot have a default value",
+                            prop_name
+                        ),
                     ));
                 }
-                if modifiers.is_final {
+                if modifiers.is_abstract && !hooks.any() {
                     return Err(CompileError::new(
                         member_span,
-                        "Cannot use the final modifier on an abstract property",
+                        "Only hooked properties may be declared abstract",
                     ));
                 }
-                if modifiers.visibility == Visibility::Private {
+                if modifiers.is_static && hooks.any() {
                     return Err(CompileError::new(
                         member_span,
-                        "Private abstract properties are not supported",
+                        "Cannot declare hooks for static property",
                     ));
                 }
-            } else if hooks.any() && hook_accessors.is_empty() {
-                return Err(CompileError::new(
-                    member_span,
-                    "Non-abstract property hook must have a body",
-                ));
+                if modifiers.is_readonly && hooks.any() {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Hooked properties cannot be readonly",
+                    ));
+                }
+                if hooks.is_virtual() && default.is_some() {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Virtual properties cannot have a default value",
+                    ));
+                }
+                if modifiers.is_abstract {
+                    if owner_kind != "trait" && !enclosing_is_abstract {
+                        return Err(CompileError::new(
+                            member_span,
+                            "Abstract properties can only be declared in abstract classes",
+                        ));
+                    }
+                    if modifiers.is_static {
+                        return Err(CompileError::new(
+                            member_span,
+                            "Abstract static properties are not supported",
+                        ));
+                    }
+                    if modifiers.is_final {
+                        return Err(CompileError::new(
+                            member_span,
+                            "Cannot use the final modifier on an abstract property",
+                        ));
+                    }
+                    if modifiers.visibility == Visibility::Private {
+                        return Err(CompileError::new(
+                            member_span,
+                            "Private abstract properties are not supported",
+                        ));
+                    }
+                } else if hooks.any() && hook_accessors.is_empty() {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Non-abstract property hook must have a body",
+                    ));
+                }
+                methods.extend(hook_accessors);
+                properties.push(ClassProperty {
+                    name: prop_name,
+                    visibility: modifiers.visibility.clone(),
+                    set_visibility: modifiers.set_visibility.clone(),
+                    type_expr,
+                    hooks,
+                    readonly: modifiers.is_readonly,
+                    is_final: modifiers.is_final,
+                    is_static: modifiers.is_static,
+                    is_abstract: modifiers.is_abstract,
+                    by_ref: false,
+                    is_promoted: false,
+                    default,
+                    span: declarator_span,
+                    attributes: member_attributes.clone(),
+                });
+                if !more_declarators {
+                    break;
+                }
             }
-            methods.extend(hook_accessors);
-            properties.push(ClassProperty {
-                name: prop_name,
-                visibility: modifiers.visibility,
-                set_visibility: modifiers.set_visibility,
-                type_expr,
-                hooks,
-                readonly: modifiers.is_readonly,
-                is_final: modifiers.is_final,
-                is_static: modifiers.is_static,
-                is_abstract: modifiers.is_abstract,
-                by_ref: false,
-                is_promoted: false,
-                default,
-                span: member_span,
-                attributes: member_attributes,
-            });
             continue;
         }
 
@@ -569,8 +581,9 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> MemberMod
 
 /// Consumes a `(set)` marker at `*pos` (an `LParen`, the `set` identifier, and an `RParen`),
 /// returning `true` when one was present. Leaves `*pos` unchanged otherwise. `set` is matched
-/// case-insensitively, mirroring PHP's case-insensitive modifier keywords.
-fn consume_set_marker(tokens: &[SpannedToken], pos: &mut usize) -> bool {
+/// case-insensitively, mirroring PHP's case-insensitive modifier keywords. Shared with the
+/// promoted constructor parameter modifier parser so both declaration forms read `(set)` alike.
+pub(super) fn consume_set_marker(tokens: &[SpannedToken], pos: &mut usize) -> bool {
     let is_set_ident = matches!(
         tokens.get(*pos + 1).map(|(t, _)| t),
         Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("set")
@@ -620,6 +633,11 @@ fn parse_class_like_method(
         }
         None => return Err(CompileError::new(span, "Expected method name")),
     };
+
+    // A method may declare type parameters of its OWN, distinct from its class's: `map<U>` on a
+    // `Box<T>` binds `T` when the class is instantiated and `U` when the method is called. The
+    // list answers empty when there is no `<`, so an ordinary method costs one token peek.
+    let type_params = parse_type_param_list(tokens, pos, span)?;
 
     expect_token(
         tokens,
@@ -671,6 +689,7 @@ fn parse_class_like_method(
     };
     Ok((
         ClassMethod {
+            type_params,
             name: method_name,
             visibility,
             is_static,
@@ -718,62 +737,15 @@ fn parse_interface_body(
             ));
         }
         if tokens[*pos].0 == Token::Const {
-            *pos += 1; // consume `const`
-            let type_expr = parse_optional_class_const_type(tokens, pos, member_span);
-            // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
-            // which is reserved for the `Foo::class` name fetch.
-            let const_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Class) => {
-                    return Err(CompileError::new(
-                        member_span,
-                        "Cannot use 'class' as a class constant name",
-                    ))
-                }
-                Some(t)
-                    if crate::parser::keyword_name::bareword_name_from_token(
-                        t,
-                        &tokens[*pos].1,
-                    )
-                    .is_some() =>
-                {
-                    let n = crate::parser::keyword_name::bareword_name_from_token(
-                        t,
-                        &tokens[*pos].1,
-                    )
-                    .unwrap();
-                    *pos += 1;
-                    n
-                }
-                _ => {
-                    return Err(CompileError::new(
-                        member_span,
-                        "Expected class constant name after 'const'",
-                    ))
-                }
-            };
-            if constants.iter().any(|c: &ClassConst| c.name == const_name) {
-                return Err(CompileError::new(
-                    member_span,
-                    &format!("Cannot redeclare interface constant {}", const_name),
-                ));
-            }
-            expect_token(
+            parse_constant_declarator_list(
                 tokens,
                 pos,
-                &Token::Assign,
-                "Expected '=' after interface constant name",
+                member_span,
+                &modifiers,
+                &member_attributes,
+                &mut constants,
+                "interface",
             )?;
-            let value = parse_expr(tokens, pos)?;
-            expect_semicolon(tokens, pos)?;
-            constants.push(ClassConst {
-                name: const_name,
-                visibility: modifiers.visibility,
-                is_final: modifiers.is_final,
-                type_expr,
-                value,
-                span: member_span,
-                attributes: member_attributes,
-            });
             continue;
         }
         let type_expr = parse_optional_property_type(tokens, pos, member_span)?;
@@ -883,6 +855,105 @@ fn parse_interface_body(
     }
 
     Ok((properties, methods, constants))
+}
+
+/// Parses everything after `const` in a class, interface, trait or enum body.
+///
+/// One `const` may introduce SEVERAL constants: `const A = 1, B = 2;`. The optional declared type
+/// and every modifier are shared by the whole list; each declarator carries its own required
+/// value. (Issue #684.)
+///
+/// Shared by the class-like and interface parsers because they had already drifted: the interface
+/// copy still required a semicolon straight after the first value, so
+/// `interface Limits { const MIN = 1, MAX = 10; }` reported `Expected ';'` while the identical
+/// class declaration compiled. `owner_kind` (`class`, `trait`, `enum` or `interface`) only names
+/// the owner in the duplicate-name diagnostic; everything else is the same language rule.
+///
+/// Each emitted `ClassConst` carries the span of its own declarator, `B = 2` in
+/// `const A = 1, B = 2;`, rather than the span of the whole declaration (issue #1140).
+///
+/// Expects `*pos` on the `const` token and leaves it past the terminating `;`.
+#[allow(clippy::too_many_arguments)]
+fn parse_constant_declarator_list(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    member_span: Span,
+    modifiers: &MemberModifiers,
+    member_attributes: &[crate::parser::ast::AttributeGroup],
+    constants: &mut Vec<ClassConst>,
+    owner_kind: &str,
+) -> Result<(), CompileError> {
+    *pos += 1; // consume `const`
+    let type_expr = parse_optional_class_const_type(tokens, pos, member_span);
+    let initial_constant_count = constants.len();
+    loop {
+        let name_span = tokens.get(*pos).map_or(member_span, |(_, meta)| meta.span);
+        // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
+        // which is reserved for the `Foo::class` name fetch.
+        let const_name = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Class) => {
+                return Err(CompileError::new(
+                    member_span,
+                    "Cannot use 'class' as a class constant name",
+                ))
+            }
+            Some(t)
+                if crate::parser::keyword_name::bareword_name_from_token(t, &tokens[*pos].1)
+                    .is_some() =>
+            {
+                let n =
+                    crate::parser::keyword_name::bareword_name_from_token(t, &tokens[*pos].1)
+                        .unwrap();
+                *pos += 1;
+                n
+            }
+            _ if constants.len() == initial_constant_count => {
+                return Err(CompileError::new(
+                    member_span,
+                    "Expected class constant name after 'const'",
+                ))
+            }
+            _ => {
+                return Err(CompileError::new(
+                    name_span,
+                    "Expected a constant name after ',' in the declaration list",
+                ))
+            }
+        };
+        if constants.iter().any(|c: &ClassConst| c.name == const_name) {
+            return Err(CompileError::new(
+                name_span,
+                &format!("Cannot redeclare {} constant {}", owner_kind, const_name),
+            ));
+        }
+        expect_token(
+            tokens,
+            pos,
+            &Token::Assign,
+            "Expected '=' after class constant name",
+        )?;
+        let value = parse_expr(tokens, pos)?;
+        let declarator_span =
+            crate::parser::expr::span_through_prev_token(tokens, *pos, name_span);
+        let more_declarators = matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Comma));
+        if more_declarators {
+            *pos += 1;
+        } else {
+            expect_semicolon(tokens, pos)?;
+        }
+        constants.push(ClassConst {
+            name: const_name,
+            visibility: modifiers.visibility.clone(),
+            is_final: modifiers.is_final,
+            type_expr: type_expr.clone(),
+            value,
+            span: declarator_span,
+            attributes: member_attributes.to_vec(),
+        });
+        if !more_declarators {
+            return Ok(());
+        }
+    }
 }
 
 /// Parses a property hook block (`{ get; set; }`) following a class property declaration.
@@ -1007,6 +1078,7 @@ fn parse_property_hooks(
             hooks.get_by_ref = get_by_ref;
             if let Some(body) = body {
                 accessors.push(ClassMethod {
+                    type_params: Vec::new(),
                     name: property_hook_get_method(prop_name),
                     visibility: Visibility::Public,
                     is_static: false,
@@ -1038,6 +1110,7 @@ fn parse_property_hooks(
             hooks.set = true;
             if let Some(body) = body {
                 accessors.push(ClassMethod {
+                    type_params: Vec::new(),
                     name: property_hook_set_method(prop_name),
                     visibility: Visibility::Public,
                     is_static: false,
@@ -1071,5 +1144,8 @@ fn parse_property_hooks(
             "Expected property hook declaration",
         ));
     }
+    hooks.uses_backing_slot = accessors.iter().any(|method| {
+        super::property_hook_storage::body_uses_backing_slot(&method.body, prop_name)
+    });
     Ok((hooks, accessors))
 }

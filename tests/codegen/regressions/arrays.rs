@@ -760,6 +760,200 @@ echo $r["a"] . "," . $r["b"];
     assert_eq!(out, "10,20");
 }
 
+/// Regression for issue #1245: a child object uses the same inherited untyped array slot
+/// as the parent's method, even after a string-keyed write changes its storage shape.
+#[test]
+fn test_inherited_empty_array_property_accepts_associative_write() {
+    let out = compile_and_run(
+        r#"<?php
+class Container {
+    protected $instances = [];
+    public function instance(mixed $abstract, mixed $instance) {
+        $this->instances[$abstract] = $instance;
+    }
+    public function get(mixed $abstract): mixed { return $this->instances[$abstract]; }
+}
+class Application extends Container {}
+$app = new Application();
+$app->instance('service', 7);
+echo $app->get('service');
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// A child private property with the same name has its own slot; the inherited private slot
+/// still needs the parent's refined associative storage when a parent method writes through it.
+#[test]
+fn test_inherited_private_empty_array_property_with_child_shadow() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    private $instances = [];
+    public function put($key) { $this->instances[$key] = 7; }
+    public function parentValue($key) { return $this->instances[$key]; }
+}
+class ChildStore extends ParentStore {
+    private $instances = [11];
+    public function childValue() { return $this->instances[0]; }
+}
+$store = new ChildStore();
+$store->put('service');
+echo $store->parentValue('service') . ',' . $store->childValue();
+"#,
+    );
+    assert_eq!(out, "7,11");
+}
+
+/// A whole-array replacement must refine the shared inherited slot on every sibling layout.
+#[test]
+fn test_inherited_empty_array_property_replacement_reaches_siblings() {
+    let out = compile_and_run(
+        r#"<?php
+class SharedStore {
+    protected $items = [];
+    public function fill(mixed $value) { $this->items = ['key' => $value]; }
+    public function value(): mixed { return $this->items['key']; }
+}
+class FirstStore extends SharedStore {}
+class SecondStore extends SharedStore {}
+$first = new FirstStore();
+$second = new SecondStore();
+$first->fill(3);
+$second->fill(4);
+echo $first->value() . ',' . $second->value();
+"#,
+    );
+    assert_eq!(out, "3,4");
+}
+
+/// A child's protected redeclaration replaces the parent's physical slot, so an inherited
+/// method must use the child's associative storage after a string-keyed write.
+#[test]
+fn test_redeclared_protected_empty_array_property_in_parent_method() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = [];
+    public function put() { $this->items['key'] = 1; }
+    public function value() { return $this->items['key']; }
+}
+class ChildStore extends ParentStore { protected $items = []; }
+$store = new ChildStore();
+$store->put();
+echo $store->value();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// A populated protected redeclaration keeps its indexed default when an inherited method
+/// changes the shared physical slot to associative storage.
+#[test]
+fn test_redeclared_protected_populated_array_property_in_parent_method() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = [];
+    public function put() { $this->items['key'] = 1; }
+    public function values() { return $this->items[0] . ',' . $this->items['key']; }
+}
+class ChildStore extends ParentStore { protected $items = [9]; }
+$store = new ChildStore();
+$store->put();
+echo $store->values();
+"#,
+    );
+    assert_eq!(out, "9,1");
+}
+
+/// A parent's hash default also determines storage for a child list redeclaration, even when
+/// the inherited write does not change the parent's inferred property type.
+#[test]
+fn test_redeclared_protected_list_over_parent_associative_default() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = ['start' => 0];
+    public function put() { $this->items['key'] = 1; }
+    public function values() { return $this->items[0] . ',' . $this->items['key']; }
+}
+class ChildStore extends ParentStore { protected $items = [9]; }
+$store = new ChildStore();
+$store->put();
+echo $store->values();
+"#,
+    );
+    assert_eq!(out, "9,1");
+}
+
+/// Sibling redeclarations with different element types must use one hash payload type after
+/// the parent writes through the shared slot.
+#[test]
+fn test_redeclared_protected_array_property_sibling_value_types() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = [];
+    public function put() { $this->items['key'] = 1; }
+    public function values() { return $this->items[0] . ',' . $this->items['key']; }
+}
+class IntStore extends ParentStore { protected $items = [9]; }
+class StringStore extends ParentStore { protected $items = ['nine']; }
+$int = new IntStore();
+$string = new StringStore();
+$int->put();
+$string->put();
+echo $int->values() . ';' . $string->values();
+"#,
+    );
+    assert_eq!(out, "9,1;nine,1");
+}
+
+/// A write in the redeclaring child must also update the slot type seen by an inherited
+/// parent reader, since both methods access the same physical property.
+#[test]
+fn test_redeclared_protected_empty_array_property_in_child_method() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = [];
+    public function value() { return $this->items['key']; }
+}
+class ChildStore extends ParentStore {
+    protected $items = [];
+    public function put() { $this->items['key'] = 2; }
+}
+$store = new ChildStore();
+$store->put();
+echo $store->value();
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// An inherited method returning an element of a declared array must keep the inferred boxed
+/// return ABI on an otherwise empty subclass after a string-keyed write.
+#[test]
+fn test_inherited_declared_array_property_string_keyed_write() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected array $items = [];
+    public function put() { $this->items['key'] = 4; }
+    public function value() { return $this->items['key']; }
+}
+class ChildStore extends ParentStore {}
+$parent = new ParentStore();
+$parent->put();
+$child = new ChildStore();
+$child->put();
+echo $parent->value() . ',' . $child->value();
+"#,
+    );
+    assert_eq!(out, "4,4");
+}
+
 /// Verifies a positional-literal default (`[1, 2, 3]`) on a property later given string keys is
 /// stored associatively, so the whole array survives a cross-method return and string re-indexing.
 /// Regression companion: the positional default must also be rewritten to hash storage when the
@@ -1380,12 +1574,8 @@ var_dump(read_of($a, "absent"));
     );
 }
 
-/// Verifies a nullable-int key still compiles and probes correctly.
-///
-/// A `?int` funnels to the codegen-internal `TaggedScalar` repr — an inline `{payload, tag}`
-/// pair, not a boxed `Mixed` cell — which the mixed-key codegen has no arm for. Widening the
-/// `isset` key-type upgrade to unions therefore has to exclude it explicitly, or this valid
-/// PHP stops compiling.
+/// Nullable integer keys preserve their integer payload or normalize null to the empty string.
+/// TaggedScalar storage must be decoded as an inline pair, never as a Mixed cell pointer.
 #[test]
 fn test_isset_with_nullable_int_key_stays_on_the_integer_path() {
     let out = compile_and_run_capture(
@@ -1396,10 +1586,40 @@ function isset_of(array $arr, ?int $k): bool {
 $p = [10, 20, 30];
 var_dump(isset_of($p, 1));
 var_dump(isset_of($p, 7));
+var_dump(isset_of($p, null));
+$map = ['' => 9, 0 => 10, 1 => null];
+var_dump(isset_of($map, null));
+var_dump(isset_of($map, 0));
+var_dump(isset_of($map, 1));
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n");
+}
+
+/// Reads, writes and unset share nullable key normalization without conflating null with zero.
+#[test]
+fn test_nullable_int_hash_key_read_write_and_unset() {
+    let source = r#"<?php
+function useNullableKey(array $items, ?int $key): void {
+    echo $items[$key], ':';
+    $items[$key] = 'changed';
+    echo $items[$key], ':';
+    unset($items[$key]);
+    echo isset($items[$key]) ? 'bad' : 'gone';
+    echo '|';
+}
+$items = ['' => 'empty', 0 => 'zero', -2 => 'negative'];
+useNullableKey($items, null);
+useNullableKey($items, 0);
+useNullableKey($items, -2);
+echo $items[''], ':', $items[0], ':', $items[-2];
+unset($items);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "empty:changed:gone|zero:changed:gone|negative:changed:gone|empty:zero:negative");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Verifies the mixed-key probes and reads do not leak *per evaluation*.
@@ -1419,6 +1639,7 @@ var_dump(isset_of($p, 7));
 /// iterations, and nothing else can.
 #[test]
 fn test_mixed_key_probe_and_read_do_not_leak_per_evaluation() {
+    /// Compiles the requested mixed-key workload and reads its remaining live-block counter.
     fn live_blocks(iterations: usize) -> u64 {
         let source = format!(
             r#"<?php
@@ -1636,6 +1857,7 @@ echo count($groups[0]), ":", count($copy), "\n";
 /// increase for 4x the rows; linear growth stays near 4x.
 #[test]
 fn test_nested_append_into_one_bucket_is_linear_not_quadratic() {
+    /// Compiles the requested nested-append workload and reads its allocation counter.
     fn allocs(rows: usize) -> u64 {
         let source = format!(
             r#"<?php
@@ -3128,14 +3350,18 @@ echo 'done';
         );
     }
 
-    // -- IterStart: the sentinel source is folded to zero in the iterator slot --
+    // -- IterStart: the sentinel is recognized before any array header is read --
+    // A statically shaped source folds the sentinel to zero in the iterator slot. A source
+    // reached through a reference cell is a boxed Mixed value instead, and `__rt_mixed_unbox`
+    // normalizes a sentinel payload to the null tag before the shape dispatch that would touch
+    // storage — so either recognition satisfies the guarantee, and one of them must be there.
     let normalize = match target().arch {
         Arch::AArch64 => "csel x0, xzr, x0, eq",
         Arch::X86_64 => "cmove rax, r10",
     };
     assert!(
-        user_asm.contains(normalize),
-        "missing iter_start sentinel-to-zero normalization:\n{user_asm}"
+        user_asm.contains(normalize) || user_asm.contains("__rt_mixed_unbox"),
+        "missing iter_start null-container recognition:\n{user_asm}"
     );
 
     // -- IterNext: the by-reference live-length read keeps its zero-source guard --

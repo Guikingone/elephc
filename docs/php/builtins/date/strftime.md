@@ -1,8 +1,8 @@
 ---
 title: "strftime()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Formats a local timestamp with locale-aware specifiers. Deprecated since PHP 8.1."
 sidebar:
-  order: 239
+  order: 240
 ---
 
 ## strftime()
@@ -11,7 +11,7 @@ sidebar:
 function strftime(string $format, ?int $timestamp = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Formats a local timestamp with locale-aware specifiers. Deprecated since PHP 8.1.
 
 **Parameters**:
 - `$format` (`string`)
@@ -24,7 +24,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

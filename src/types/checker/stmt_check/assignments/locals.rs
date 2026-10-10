@@ -15,7 +15,7 @@ use crate::parser::ast::{
     is_compound_assignment_self_read, CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr,
 };
 use crate::span::Span;
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
@@ -215,7 +215,14 @@ pub(super) fn check_assign(
         return Err(error);
     }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
-    merge_local_assignment_type(checker, name, &ty, span, env, stmt_form)
+    let merged = merge_local_assignment_type(checker, name, &ty, span, env, stmt_form);
+    if merged.is_ok() {
+        // Whatever the environment holds for `name` from here on was put there by this store,
+        // so a guard that narrowed the name no longer speaks for it. `merge_local_assignment_type`
+        // has already consulted the guard view, which is why this runs after it and not before.
+        checker.record_store_over_flow_narrowing(name);
+    }
+    merged
 }
 
 /// Type-checks a reference alias assignment (`$target =& <source>`).
@@ -232,6 +239,15 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    let mut target_has_boxed_ref_provenance = match &source.kind {
+        ExprKind::Variable(source_name) => {
+            checker.boxed_ref_aliased_locals.contains(source_name)
+        }
+        _ => false,
+    };
+    // `=&` always replaces the target binding. Preserve provenance only when the new source is
+    // itself the same managed Mixed cell, never from a prior binding of this name.
+    checker.invalidate_boxed_ref_alias_binding(target);
     // Both sides of `$target =& <source>` share one cell from here on, so neither binding can
     // be killed or re-bound independently. Recorded before the per-shape checks so an aliasing
     // that fails a later validation is still treated as an alias.
@@ -269,17 +285,36 @@ pub(super) fn check_ref_assign(
         }
         ExprKind::ArrayAccess { array, index } => {
             let array_ty = checker.infer_type(array, env)?;
+            target_has_boxed_ref_provenance = match array_ty.codegen_repr() {
+                PhpType::AssocArray { .. } | PhpType::Mixed => true,
+                PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+                _ => false,
+            };
             let index_ty = checker.infer_type(index, env)?;
-            if !matches!(array_ty, PhpType::Array(_)) {
+            let normalized_index_ty = normalized_array_key_type(index, index_ty);
+            let valid_php_key = matches!(
+                normalized_index_ty,
+                PhpType::Int | PhpType::Str | PhpType::Mixed
+            );
+            let supported_key = match array_ty.codegen_repr() {
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
+                    valid_php_key
+                }
+                PhpType::Array(_) => normalized_index_ty == PhpType::Int,
+                PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => {
+                    valid_php_key
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Reference assignment to an array element requires an array",
+                    ));
+                }
+            };
+            if !supported_key {
                 return Err(CompileError::new(
                     span,
-                    "Reference assignment to an array element requires an indexed array",
-                ));
-            }
-            if !matches!(index_ty, PhpType::Int) {
-                return Err(CompileError::new(
-                    span,
-                    "Reference assignment to an array element requires an integer index",
+                    "Reference assignment to an array element requires an integer or string array key",
                 ));
             }
             let target_ty = checker.infer_type(source, env)?;
@@ -296,6 +331,9 @@ pub(super) fn check_ref_assign(
     if let Err(error) = result {
         poison_unbound_local(env, target);
         return Err(error);
+    }
+    if target_has_boxed_ref_provenance {
+        checker.boxed_ref_aliased_locals.insert(target.to_string());
     }
     Ok(())
 }
@@ -382,6 +420,14 @@ pub(super) fn update_callable_assignment_metadata(
     ty: &PhpType,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    if let ExprKind::StringLiteral(callback) = &callable_source.kind {
+        if let Some(function_name) = checker.canonical_function_name_folded(callback) {
+            // Lowering tracks a statically known function-name string as a descriptor target.
+            // Promote its variadic storage at the same point so a later dynamic
+            // `call_user_func_array($name, $args)` can preserve unknown string keys in the tail.
+            checker.promote_descriptor_variadic_container(&function_name)?;
+        }
+    }
     update_callable_array_assignment_metadata(checker, name, callable_source, env)?;
     let parallel_safety = checker.parallel_callable_safety_for_expr(callable_source);
     checker.parallel_transfer_safe_callable_returns.remove(name);
@@ -427,7 +473,8 @@ pub(super) fn update_callable_assignment_metadata(
                         (
                             capture.clone(),
                             env.get(capture).cloned().unwrap_or(PhpType::Mixed),
-                            capture_refs.iter().any(|ref_capture| ref_capture == capture),
+                            capture_refs.iter().any(|ref_capture| ref_capture == capture)
+                                || checker.ref_aliased_locals.contains(capture),
                         )
                     })
                     .collect();
@@ -690,7 +737,21 @@ fn update_callable_array_assignment_metadata(
     callable_source: &Expr,
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
+    let copied_target_version = match &callable_source.kind {
+        ExprKind::Variable(source_name) => checker
+            .callable_array_target_versions
+            .get(source_name)
+            .copied(),
+        _ => None,
+    };
+    checker.mark_callable_array_target_write(name);
     if let Some(target) = resolve_callable_array_target(checker, callable_source, env)? {
+        // Recording the target is the MATERIALIZATION of a callable descriptor: from here the
+        // pair can be invoked with named arguments, and it can also leave this frame through a
+        // `callable` parameter and be invoked where no target record survives. So the callee's
+        // variadic collector moves onto the descriptor container now, not at the call, which is
+        // the only point that is guaranteed to be reached.
+        checker.promote_descriptor_variadic_container_for_callable_target(&target, env)?;
         checker
             .callable_array_targets
             .insert(name.to_string(), target);
@@ -699,6 +760,11 @@ fn update_callable_array_assignment_metadata(
             checker
                 .callable_array_targets
                 .insert(name.to_string(), target);
+            if let Some(version) = copied_target_version {
+                checker
+                    .callable_array_target_versions
+                    .insert(name.to_string(), version);
+            }
         } else {
             checker.callable_array_targets.remove(name);
         }
@@ -782,7 +848,16 @@ fn resolve_static_receiver_class(
     receiver: &StaticReceiver,
     span: Span,
 ) -> Result<String, CompileError> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => resolve_class_name(checker, name.as_str())
             .map(str::to_string)
             .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),
@@ -887,7 +962,9 @@ fn merge_local_assignment_type(
     // Everything above still runs (the retype-site re-decision, and the callable/reflection
     // metadata updates `check_assign` performed before calling in), so only the type merge is
     // short-circuited.
-    if checker.mixed_storage_locals.contains(name) {
+    if checker.mixed_storage_locals.contains(name)
+        || checker.boxed_ref_aliased_locals.contains(name)
+    {
         // A marked name still needs its binding depth on its FIRST store, for the same reason the
         // fresh-insert branch below records one: it is the name's single authority on whether a
         // later decision is judged against a binding this body definitely created.
@@ -899,8 +976,61 @@ fn merge_local_assignment_type(
         return Ok(());
     }
     if let Some(existing) = env.get(name) {
-        let merged_ty = checker.merged_assignment_type(existing, ty);
+        let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
+            checker.guarded_union_types.get(name)
+                .and_then(|original| checker.merged_assignment_type(original, ty))
+        });
         if merged_ty.is_none() {
+            // `existing` may be a FLOW FACT rather than the binding: inside a guarded region the
+            // environment holds the guard's view, and `$g = glob(…); if ($g === false) { $g =
+            // []; }` reached here with `false` on the left and `array<never>` on the right. That
+            // store is not a retype at all — the binding is `array<string>|false` and an empty
+            // array is one of the things it holds — so the failed merge is re-measured against
+            // the type the binding had before the guard narrowed it (issue #509).
+            //
+            // Only while the environment still holds the GUARD'S OWN view, which is what makes
+            // this a fact about the narrowing rather than about the binding. A region that has
+            // already stored something of its own put that entry there itself, and the shapes the
+            // branch-divergent `Mixed`-storage marking exists for are exactly those —
+            // `$a = 1; if (is_string($a)) { $a = "x"; $a = 2; }` must keep reaching
+            // `mixed_storage_scan` and its `--strict-locals` error, not be waved through here on
+            // the strength of `$a`'s original `int`.
+            //
+            // The ENVIRONMENT takes the assigned type, not the origin: the store is the newest
+            // fact about the value and the rest of the guarded region should read it as such
+            // (`if (is_int($x)) { $x = "s"; strlen($x); }`). The enclosing construct restores the
+            // pre-guard view when the region ends, as it always did.
+            //
+            // Nothing is recorded in `local_retype_sites`: no slot is abandoned, because the one
+            // the binding already owns is wide enough. That is also why this arm does not need
+            // `local_binding_is_killable` — the depth-0 requirement exists to make abandoning a
+            // slot safe, and there is no abandonment here.
+            if let Some(narrowing) = checker.narrowed_local_origins.get(name) {
+                if narrowing.view.as_ref() == Some(existing)
+                    && checker
+                        .merged_assignment_type(&narrowing.origin, ty)
+                        .is_some()
+                {
+                    env.insert(name.to_string(), ty.clone());
+                    return Ok(());
+                }
+            }
+            // A DECLARED local's contract is its declaration, not whatever a guard narrowed it
+            // to. `?Node $c = $head; while ($c !== null) { $c = $c->next; }` arrives here with
+            // `$c` bound `Node` — the guard's narrowing, inserted into the shared environment
+            // for the loop body — and the merge rejects the `?Node` the declaration always
+            // allowed. That rejected the cursor idiom every linked structure is written with.
+            //
+            // Same shape as the `mixed_storage_locals` re-assertion above, and for the same
+            // reason: flow narrowing falsified an invariant the declaration owns. Consulted only
+            // once the merge has FAILED, so no program that compiles today changes type here —
+            // this branch can only accept what was previously an error.
+            if let Some(declared) = checker.typed_local_names.get(name).cloned() {
+                if checker.type_accepts(&declared, ty) {
+                    env.insert(name.to_string(), ty.clone());
+                    return Ok(());
+                }
+            }
             if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) {
                 let message = format!(
                     "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
@@ -944,6 +1074,7 @@ fn merge_local_assignment_type(
                 // The fresh binding is created here, at depth 0 — pin that explicitly so a
                 // later kill or retype of the same name is judged against THIS binding.
                 checker.local_binding_depth.insert(name.to_string(), 0);
+                checker.guarded_union_types.remove(name);
                 // Unlike the `unset` kill, the per-name callable/reflection tables are NOT
                 // cleared here. The old binding's metadata is already gone: `check_assign`
                 // ran `update_callable_assignment_metadata`,
@@ -1046,7 +1177,9 @@ pub(super) fn check_typed_assign(
     }
     // A declared type is a programmer contract: the local is never kill/retype eligible, in
     // either mode. The binding depth is still recorded so the name has one authority.
-    checker.typed_local_names.insert(name.to_string());
+    checker
+        .typed_local_names
+        .insert(name.to_string(), declared_ty.clone());
     checker
         .local_binding_depth
         .entry(name.to_string())
@@ -1075,9 +1208,9 @@ pub(super) fn check_const_decl(
 
 /// Type-checks a list unpacking assignment (`[$a, $b, ...] = $arr`).
 ///
-/// Infers the right-hand side and accepts homogeneous indexed arrays or associative arrays.
-/// Indexed arrays propagate their element type, while associative values bind adaptively as
-/// `Mixed`. Returns an error for non-array types, including unresolved nullable unions.
+/// Infers the right-hand side and accepts concrete arrays or boxed PHP array values.
+/// Indexed arrays propagate their element type; keyed and dynamically boxed values bind as
+/// `Mixed`. Statically non-array types and unresolved nullable unions remain errors.
 pub(super) fn check_list_unpack(
     checker: &mut Checker,
     vars: &[String],
@@ -1085,7 +1218,7 @@ pub(super) fn check_list_unpack(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = match checker.infer_type(value, env) {
+    let arr_ty = match checker.infer_type_with_assignment_effects(value, env) {
         Ok(arr_ty) => arr_ty,
         Err(error) => {
             for var in vars {
@@ -1095,10 +1228,11 @@ pub(super) fn check_list_unpack(
         }
     };
     let unpack_ty = match &arr_ty {
+        ty if ty.is_php_array() => PhpType::Mixed,
         PhpType::Array(elem_ty) => *elem_ty.clone(),
         // Associative arrays can contain integer keys used by positional destructuring. Their
         // element type stays adaptive because hash values may be heterogeneous or absent.
-        PhpType::AssocArray { .. } => PhpType::Mixed,
+        PhpType::AssocArray { .. } | PhpType::Mixed => PhpType::Mixed,
         _ => {
             for var in vars {
                 poison_unbound_local(env, var);
@@ -1147,6 +1281,8 @@ fn update_list_unpack_callable_metadata(
 /// variable name so later element reads can be treated as callable variables with
 /// a known signature. This helper mirrors that metadata onto a list-unpack target.
 fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
+    let copied_target_version = checker.callable_array_target_versions.get(src).copied();
+    checker.mark_callable_array_target_write(dest);
     if let Some(return_ty) = checker.closure_return_types.get(src).cloned() {
         checker
             .closure_return_types
@@ -1182,6 +1318,11 @@ fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
         checker
             .callable_array_targets
             .insert(dest.to_string(), target);
+        if let Some(version) = copied_target_version {
+            checker
+                .callable_array_target_versions
+                .insert(dest.to_string(), version);
+        }
     } else {
         checker.callable_array_targets.remove(dest);
     }
@@ -1196,6 +1337,7 @@ fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
 
 /// Clears all callable metadata for a list-unpack destination.
 fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
+    checker.mark_callable_array_target_write(dest);
     checker.closure_return_types.remove(dest);
     checker.callable_sigs.remove(dest);
     checker.callable_captures.remove(dest);
@@ -1209,7 +1351,7 @@ fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
 ///
 /// For each variable name, marks it as a global in `checker.active_globals` and
 /// populates the local type environment with the variable's type from
-/// `checker.top_level_env` if available, otherwise defaults to `Int`.
+/// `checker.top_level_env` if available, otherwise uses `Mixed`.
 pub(super) fn check_global(
     checker: &mut Checker,
     vars: &[String],
@@ -1221,7 +1363,12 @@ pub(super) fn check_global(
             if let Some(global_ty) = checker.top_level_env.get(var) {
                 env.insert(var.clone(), global_ty.clone());
             } else {
-                env.insert(var.clone(), PhpType::Int);
+                // Function-like bodies are checked before the top-level statement walk has
+                // necessarily reached the global's first assignment. PHP globals have no
+                // implicit integer contract: a later callback, generator resume, or destructor
+                // may replace the cell with any value. Seeding an unseen alias as `Int` made a
+                // perfectly valid `$global = function () { ... };` fail before lowering.
+                env.insert(var.clone(), PhpType::Mixed);
             }
         }
     }

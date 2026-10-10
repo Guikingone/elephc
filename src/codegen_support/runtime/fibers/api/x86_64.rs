@@ -12,7 +12,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
 use super::common::emit_box_null_mixed;
-use super::super::switch::{fiber_initial_entry_offset, fiber_initial_stack_frame_bytes};
+use super::super::switch::{fiber_initial_context_offset, fiber_initial_entry_offset, fiber_initial_stack_frame_bytes};
 use super::super::{
     FIBER_CALLABLE_OFFSET, FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET,
     FIBER_DEFAULT_STACK_SIZE, FIBER_OBJECT_SIZE, FIBER_PENDING_THROW_OFFSET,
@@ -117,6 +117,8 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 8");                                          // advance to the next fake-frame qword
     emitter.instruction("sub rcx, 1");                                          // consume one fake-frame qword
     emitter.instruction("jne __rt_fiber_construct_zero_frame_loop");            // continue until the fake frame is zeroed
+    // The first switch restores the creator's context just like every subsequent resume.
+    abi::emit_store_to_address(emitter, "r14", "r10", fiber_initial_context_offset(emitter.target.arch));
     abi::emit_symbol_address(emitter, "r11", "__rt_fiber_entry");               // r11 = absolute address of the entry trampoline
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", initial_entry_offset)); // saved return address = entry trampoline
 

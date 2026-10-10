@@ -81,18 +81,12 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(slot) = target.dynamic_slot {
-        emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&target.impl_class, &target.method_key),
-        );
-    }
+    emit_resolved_method_call(ctx, &target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // User callees return an owner independent of the caller's materialized Mixed arguments.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -231,17 +225,12 @@ pub(super) fn lower_mixed_method_candidate_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(slot) = candidate.target.dynamic_slot {
-        emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&candidate.target.impl_class, &candidate.target.method_key),
-        );
-    }
+    emit_resolved_method_call(ctx, &candidate.target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &candidate.target)?;
+    // Candidate dispatch creates the same caller-owned coercion cells as concrete dispatch.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -257,7 +246,12 @@ pub(super) fn mixed_method_candidates(
         let Some(signature) = class_info.methods.get(&method_key) else {
             continue;
         };
-        if signature.params.len() + 1 != operand_count {
+        let source_count = crate::codegen_support::source_method_adapters::source_visible_signature(
+            signature,
+        )
+        .ok()
+        .map(|source| source.params.len() + 1);
+        if signature.params.len() + 1 != operand_count && source_count != Some(operand_count) {
             continue;
         }
         let target = resolve_method_call_target(ctx, class_name, method_name, operand_count)?;

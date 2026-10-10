@@ -89,6 +89,7 @@ pub(super) fn collect_expr_reads(
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ExprCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::MethodCall { args, .. }
         | ExprKind::NullsafeMethodCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. } => {
@@ -139,6 +140,13 @@ pub(super) fn collect_expr_reads(
             for (key, value) in items {
                 collect_expr_reads(key, scope, warnings);
                 collect_expr_reads(value, scope, warnings);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    collect_expr_reads(expr, scope, warnings);
+                }
             }
         }
         ExprKind::Match {

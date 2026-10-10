@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Specialized and builtin signatures must expose the caller-visible parameter contract expected by call-argument planning.
+//! - Callable-array target provenance is local-frame state. A body check starts with empty target
+//!   maps and restores the caller's maps before call-site validation resumes.
 
 use std::collections::HashMap;
 
@@ -32,6 +34,7 @@ impl Checker {
         decl: &FnDecl,
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
+        self.completed_function_signatures.remove(name);
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -62,6 +65,14 @@ impl Checker {
             .map(|(_, (pname, _))| pname.clone())
             .collect();
         let saved_callable_param_names = self.callable_param_names.clone();
+        // Target records name storage in one physical frame. A same-named parameter or local in
+        // this function must neither inherit the caller's target nor let a loop/try join clear
+        // the caller's record while the body is re-specialized. Callable parameter signatures
+        // have their dedicated channel below; callable-array locals rebuild their records from
+        // assignments inside this body.
+        let saved_callable_array_targets = std::mem::take(&mut self.callable_array_targets);
+        let saved_callable_array_target_versions =
+            std::mem::take(&mut self.callable_array_target_versions);
         for pname in &declared_callable_param_names {
             self.callable_param_names.insert(pname.clone());
         }
@@ -84,6 +95,17 @@ impl Checker {
                 self.closure_return_types
                     .insert(pname.clone(), sig.return_type.clone());
                 self.callable_sigs.insert(pname.clone(), sig);
+            } else if let Some(sig) = param_types
+                .iter()
+                .position(|(name, _)| name == pname)
+                .and_then(|index| decl.param_types.get(index))
+                .and_then(|type_ann| type_ann.as_ref())
+                .and_then(|type_ann| self.declared_callable_signature(type_ann, decl.span))
+            {
+                // No call site told us what this callable is, but the DECLARATION did.
+                self.closure_return_types
+                    .insert(pname.clone(), sig.return_type.clone());
+                self.callable_sigs.insert(pname.clone(), sig);
             } else {
                 self.closure_return_types.remove(pname);
                 self.callable_sigs.remove(pname);
@@ -92,29 +114,7 @@ impl Checker {
             }
         }
 
-        let provisional_sig = FunctionSig {
-            params: param_types.clone(),
-            param_type_exprs: decl
-                .param_types
-                .iter()
-                .cloned()
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
-                .collect(),
-            param_attributes: decl.param_attributes.clone(),
-            defaults: decl.defaults.clone(),
-            return_type: self.provisional_return_type(decl),
-            declared_return: decl.return_type.is_some(),
-            by_ref_return: decl.by_ref_return,
-            ref_params: decl.ref_params.clone(),
-            deprecation: None,
-            declared_params: decl
-                .param_types
-                .iter()
-                .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
-                .collect(),
-            variadic: decl.variadic.clone(),
-        };
+        let provisional_sig = self.provisional_function_sig(decl, param_types.clone());
         self.functions.insert(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
@@ -138,21 +138,6 @@ impl Checker {
             .cloned()
             .chain(decl.variadic.iter().cloned())
             .collect();
-        // A parameter with a declared type hint is a contract: it never becomes kill/retype
-        // eligible inside the body, in either mode.
-        let typed_param_names: Vec<String> = decl
-            .params
-            .iter()
-            .zip(decl.param_types.iter())
-            .filter(|(_, type_ann)| type_ann.is_some())
-            .map(|(name, _)| name.clone())
-            .chain(
-                decl.variadic
-                    .iter()
-                    .filter(|_| decl.variadic_type.is_some())
-                    .cloned(),
-            )
-            .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
         self.loop_storage_types
@@ -172,7 +157,6 @@ impl Checker {
         let body_check_result = self.with_local_storage_context(
             ref_param_names,
             param_names,
-            typed_param_names,
             pre_bound_own_storage,
             &decl.body,
             |checker| {
@@ -200,6 +184,8 @@ impl Checker {
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.callable_param_names = saved_callable_param_names;
+        self.callable_array_targets = saved_callable_array_targets;
+        self.callable_array_target_versions = saved_callable_array_target_versions;
         body_check_result?;
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {
@@ -311,6 +297,10 @@ impl Checker {
             deprecation: crate::types::checker::schema::validation::extract_deprecation(
                 &decl.attributes,
             ),
+            // The syntactic fact, taken from the SOURCE body before any pass has run. `decl.body`
+            // here is the declaration as parsed, so an unreachable `yield` still counts -- which
+            // is PHP's rule, and the thing lowering must not try to re-derive later.
+            is_generator: contains_yield,
         };
         self.functions.insert(name.to_string(), sig);
         if return_type == PhpType::Callable {
@@ -334,7 +324,49 @@ impl Checker {
             self.callable_array_return_sigs.remove(name);
         }
 
+        self.completed_function_signatures.insert(name.to_string());
         Ok(return_type)
+    }
+
+    /// Builds the *provisional* signature published before a free function's body is walked.
+    ///
+    /// Shared by the two places that publish one: `resolve_function_signature` (under the
+    /// function's own name) and the variant-group path in
+    /// `crate::types::checker::driver::functions` (under the group's PHP-visible name, which is
+    /// what a recursive call inside an include-loaded variant spells). Keeping one builder keeps
+    /// one provisional policy: a variant group used to publish its own copy with a hardcoded
+    /// `Int` return, so a recursive include-loaded `: string` function was rejected with
+    /// `return type expects Str, got Int` although the same function compiled when declared in
+    /// the main file (issue #635).
+    pub(in crate::types::checker) fn provisional_function_sig(
+        &self,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> FunctionSig {
+        FunctionSig {
+            params: param_types,
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
+            defaults: decl.defaults.clone(),
+            return_type: self.provisional_return_type(decl),
+            declared_return: decl.return_type.is_some(),
+            by_ref_return: decl.by_ref_return,
+            ref_params: decl.ref_params.clone(),
+            deprecation: None,
+            is_generator: false,
+            declared_params: decl
+                .param_types
+                .iter()
+                .map(|type_ann| type_ann.is_some())
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
+                .collect(),
+            variadic: decl.variadic.clone(),
+        }
     }
 
     /// Picks the return type for the *provisional* signature published before a free
@@ -385,14 +417,26 @@ impl Checker {
 
 /// Infers a concrete array type from return info when the declared return type is a generic `array` hint.
 ///
-/// Returns `Some(PhpType)` only when every non-void, non-empty return in
-/// `return_types` is the same array type (including `array<T>` or `assocArray`
-/// shapes). An empty indexed array is neutral because it can be materialized in
-/// either concrete storage family at the return boundary. Returns `None` if
-/// non-empty returns differ, include non-array types, or are all `void`.
+/// Returns the exact packed-or-keyed union when any branch already uses that storage and every
+/// other branch is array-shaped. Otherwise returns a concrete array type only when every
+/// non-void, non-empty return has the same shape. An empty indexed array is neutral because it
+/// can be materialized in either concrete storage family at the return boundary.
 fn inferred_specific_array_type_from_infos(
     return_types: &[super::super::returns::ReturnInfo],
 ) -> Option<PhpType> {
+    let has_php_array = return_types
+        .iter()
+        .any(|return_info| return_info.ty.is_php_array());
+    let all_array_family = return_types.iter().all(|return_info| {
+        return_info.ty.is_php_array()
+            || matches!(
+                return_info.ty,
+                PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+    });
+    if has_php_array && all_array_family {
+        return Some(PhpType::php_array());
+    }
     let mut specific: Option<PhpType> = None;
     let mut empty_array: Option<PhpType> = None;
     for return_info in return_types {
@@ -400,7 +444,9 @@ fn inferred_specific_array_type_from_infos(
         if matches!(return_ty, PhpType::Void) {
             continue;
         }
-        if !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        if !return_ty.is_php_array()
+            && !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
             return None;
         }
         if matches!(return_ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::Never) {
@@ -439,6 +485,7 @@ fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
 fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
     for (idx, (_, ty)) in sig.params.iter_mut().enumerate() {
         if !sig.declared_params.get(idx).copied().unwrap_or(false)
+            && !sig.ref_params.get(idx).copied().unwrap_or(false)
             && matches!(ty, PhpType::Mixed)
         {
             *ty = PhpType::Int;

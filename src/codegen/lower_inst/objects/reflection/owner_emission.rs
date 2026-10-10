@@ -275,6 +275,12 @@ pub(super) fn emit_reflection_owner_object(
             "__is_generator",
             metadata.is_generator,
         )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__returns_reference",
+            metadata.returns_reference,
+        )?;
     }
     if matches!(
         class_name,

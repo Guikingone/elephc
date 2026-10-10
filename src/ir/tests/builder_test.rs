@@ -8,7 +8,8 @@
 //! - The builder must preserve table ID relationships that the validator later checks.
 
 use crate::ir::{
-    Builder, Function, Immediate, IrHeapKind, IrType, LocalKind, Op, Ownership, Terminator,
+    Builder, Function, Immediate, IrHeapKind, IrType, LocalKind, Op, Ownership,
+    RuntimeCallTarget, Terminator, ValueDef,
 };
 use crate::types::PhpType;
 
@@ -215,6 +216,33 @@ fn deferred_local_load_release_is_pruned_for_concrete_storage() {
     assert!(function.instructions[1].operands.is_empty());
 }
 
+/// String loads release detached Mixed payloads but never ordinary borrowed local buffers.
+#[test]
+fn deferred_string_load_release_tracks_final_storage_representation() {
+    for kind in [LocalKind::PhpLocal, LocalKind::StaticLocal] {
+        for widened in [false, true] {
+            let mut function = Function::new("string_load_release".to_string(), IrType::Void, PhpType::Void);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                let slot = builder.add_local(Some("value".to_string()), IrType::Str, PhpType::Str, kind);
+                let op = if kind == LocalKind::StaticLocal { Op::LoadStaticLocal } else { Op::LoadLocal };
+                let load = builder.emit(
+                    op, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                    IrType::Str, PhpType::Str, Ownership::MaybeOwned,
+                ).unwrap();
+                builder.emit(Op::Release, vec![load], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+                if widened { builder.widen_local_storage_type(slot, PhpType::Mixed); }
+                builder.prune_borrowed_local_load_release_ops();
+                builder.terminate(Terminator::Return { value: None });
+            }
+            assert_eq!(function.instructions[1].op, if widened { Op::Release } else { Op::Nop });
+        }
+    }
+}
+
 /// Preserves an explicit owned-slot cleanup even when its storage remains concrete.
 #[test]
 fn owned_local_load_release_is_not_pruned_for_concrete_storage() {
@@ -254,4 +282,146 @@ fn owned_local_load_release_is_not_pruned_for_concrete_storage() {
     }
 
     assert_eq!(function.instructions[1].op, Op::Release);
+}
+
+/// Prunes borrowed local guards transitively and retains a true temporary guard.
+#[test]
+fn deferred_local_guard_pruning_preserves_true_temporary_ownership() {
+    let mut function = Function::new("guard_pruning".to_string(), IrType::Void, PhpType::Void);
+    let anchor;
+    let borrowed_guard;
+    let second_borrowed_guard;
+    let owned_guard;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let array_ty = PhpType::Array(Box::new(PhpType::Int));
+        let slot = builder.add_local(
+            Some("arguments".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            array_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let borrowed = builder
+            .emit(
+                Op::LoadLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Heap(IrHeapKind::Array),
+                array_ty.clone(),
+                Ownership::MaybeOwned,
+            )
+            .expect("load_local produces a value");
+        anchor = builder.emit_const_i64(0);
+        borrowed_guard = builder
+            .emit(
+                Op::RuntimeCall,
+                vec![borrowed, anchor],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionGuardOwned)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .expect("guard produces a token");
+        let second_slot = builder.add_local(
+            Some("more_arguments".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            array_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let second_borrowed = builder
+            .emit(
+                Op::LoadLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(second_slot)),
+                IrType::Heap(IrHeapKind::Array),
+                array_ty.clone(),
+                Ownership::MaybeOwned,
+            )
+            .expect("load_local produces a value");
+        second_borrowed_guard = builder
+            .emit(
+                Op::RuntimeCall,
+                vec![second_borrowed, borrowed_guard],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionGuardOwned)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .expect("guard produces a token");
+        let owned = builder
+            .emit(
+                Op::ArrayNew,
+                Vec::new(),
+                Some(Immediate::Capacity(0)),
+                IrType::Heap(IrHeapKind::Array),
+                array_ty,
+                Ownership::Owned,
+            )
+            .expect("array_new produces a value");
+        owned_guard = builder
+            .emit(
+                Op::RuntimeCall,
+                vec![owned, second_borrowed_guard],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionGuardOwned)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .expect("guard produces a token");
+        for token in [owned_guard, second_borrowed_guard, borrowed_guard] {
+            builder.emit(
+                Op::RuntimeCall,
+                vec![token],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionUnguardOwned)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+        }
+        builder.prune_borrowed_local_load_guard_ops();
+        builder.terminate(Terminator::Return { value: None });
+    }
+
+    let ValueDef::Instruction { inst: borrowed_guard_inst, .. } =
+        function.value(borrowed_guard).unwrap().def
+    else {
+        panic!("guard token must be instruction-defined");
+    };
+    let ValueDef::Instruction { inst: owned_guard_inst, .. } =
+        function.value(owned_guard).unwrap().def
+    else {
+        panic!("guard token must be instruction-defined");
+    };
+    let ValueDef::Instruction { inst: second_borrowed_guard_inst, .. } =
+        function.value(second_borrowed_guard).unwrap().def
+    else {
+        panic!("guard token must be instruction-defined");
+    };
+    assert_eq!(function.instruction(borrowed_guard_inst).unwrap().op, Op::Nop);
+    assert_eq!(
+        function.instruction(second_borrowed_guard_inst).unwrap().op,
+        Op::Nop
+    );
+    let owned_guard = function.instruction(owned_guard_inst).unwrap();
+    assert_eq!(
+        owned_guard.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionGuardOwned))
+    );
+    assert_eq!(owned_guard.operands.get(1), Some(&anchor));
+    assert_eq!(
+        function
+            .instructions
+            .iter()
+            .filter(|inst| {
+                inst.immediate
+                    == Some(Immediate::RuntimeCall(
+                        RuntimeCallTarget::ExceptionUnguardOwned,
+                    ))
+            })
+            .count(),
+        1
+    );
 }

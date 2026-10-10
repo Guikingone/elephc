@@ -169,6 +169,9 @@ fn expr_uses_this(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => {
             pairs.iter().any(|(k, v)| expr_uses_this(k) || expr_uses_this(v))
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            entries.iter().flat_map(|entry| entry.exprs()).any(expr_uses_this)
+        }
         ExprKind::ArrayAccess { array, index } => expr_uses_this(array) || expr_uses_this(index),
         ExprKind::Ternary {
             condition,
@@ -212,6 +215,7 @@ fn callable_target_uses_this(target: &CallableTarget) -> bool {
 fn instanceof_target_uses_this(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_uses_this(expr),
     }
 }
@@ -442,6 +446,14 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
             }
             Ok(())
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    expr_must_not_use_this(expr, span)?;
+                }
+            }
+            Ok(())
+        }
         ExprKind::ArrayAccess { array, index } => {
             expr_must_not_use_this(array, span)?;
             expr_must_not_use_this(index, span)
@@ -507,6 +519,7 @@ fn instanceof_target_must_not_use_this(
 ) -> Result<(), CompileError> {
     match target {
         InstanceOfTarget::Name(_) => Ok(()),
+        InstanceOfTarget::Generic(_) => Ok(()),
         InstanceOfTarget::Expr(expr) => expr_must_not_use_this(expr, span),
     }
 }

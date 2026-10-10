@@ -47,6 +47,7 @@ pub(super) fn default_method_members(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             parameters: Vec::new(),
         })
@@ -92,6 +93,7 @@ pub(super) fn default_property_members(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             parameters: Vec::new(),
         })

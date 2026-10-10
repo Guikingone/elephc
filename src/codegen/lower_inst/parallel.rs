@@ -61,6 +61,7 @@ pub(super) fn lower_parallel_spawn(
     store_if_result(ctx, inst)
 }
 
+/// Submits the saved job id with context lifecycle callbacks and target-aware stack sizing.
 fn emit_submit(ctx: &mut FunctionContext<'_>, callback: &str) {
     let submit = ctx
         .emitter
@@ -110,6 +111,7 @@ fn emit_submit(ctx: &mut FunctionContext<'_>, callback: &str) {
     }
 }
 
+/// Returns the saved job id only for an accepted submission; every failure becomes zero.
 fn emit_keep_id_only_if_accepted(ctx: &mut FunctionContext<'_>, id_reg: &str) {
     let accepted = ctx.next_label("parallel_submit_accepted");
     let done = ctx.next_label("parallel_submit_done");

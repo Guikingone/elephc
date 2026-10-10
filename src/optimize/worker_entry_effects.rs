@@ -11,12 +11,14 @@
 
 use super::*;
 
+/// Projects transfer-validated worker entry effects while keeping full summaries for nested calls.
 pub(super) fn project(program: &[Stmt], full: &CallableEffectAnalysis) -> CallableEffectAnalysis {
     let mut result = full.clone();
     with_callable_effect_analysis(full, || collect(program, &mut result));
     result
 }
 
+/// Replaces function and concrete method entry summaries using their bodies and return boundaries.
 fn collect(stmts: &[Stmt], result: &mut CallableEffectAnalysis) {
     for stmt in stmts {
         match &stmt.kind {
@@ -46,6 +48,7 @@ fn collect(stmts: &[Stmt], result: &mut CallableEffectAnalysis) {
     }
 }
 
+/// Combines full body effects with return verification and treats never-returning bodies as effects.
 fn body_effect(params: &[(String, Option<TypeExpr>, Option<Expr>, bool)], body: &[Stmt], return_type: &Option<TypeExpr>) -> Effect {
     let effect = block_effect(body).combine(return_binding_effects::effect(params, return_type, body));
     if matches!(return_type, Some(TypeExpr::Never)) { effect.with_side_effects() } else { effect }

@@ -6,8 +6,11 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - Class-scope closures implicitly capture the runtime called-class id so
+//!   `static::` keeps late-static semantics after the enclosing method returns.
 
 use super::*;
+use crate::names::CALLED_CLASS_ID_LOCAL as CALLED_CLASS_ID_CAPTURE;
 
 /// Lowers a closure expression into a callable descriptor backed by an EIR closure function.
 pub(super) fn lower_closure(
@@ -33,6 +36,7 @@ pub(super) fn lower_closure(
         capture_refs,
         expr,
         &[],
+        None,
         None,
         is_static,
     )
@@ -72,12 +76,73 @@ pub(crate) fn lower_closure_for_assignment(
         capture_refs,
         value,
         &[],
+        None,
         Some(assigned_name),
         *is_static,
     ))
 }
 
-/// Lowers a closure expression, applying contextual types to unannotated parameters.
+/// Lowers the closure literal of the `Closure::bind` by-reference specialization.
+///
+/// The one caller is `build_bound_closure_binding`, which knows the bound receiver's property
+/// type while the closure's own `$this` is whatever the enclosing scope happened to provide.
+/// Threading that type in here, rather than re-typing the finished binding, is what keeps the
+/// compiled closure body, the runtime descriptor signature and the direct call site describing
+/// one payload. It also forces the `$this` capture to the bind's own representation, so the body
+/// is never compiled against an enclosing class the bound receiver need not be.
+///
+/// Returns `None` for a non-closure expression so callers can fall back to ordinary lowering.
+pub(super) fn lower_bound_this_closure_literal(
+    ctx: &mut LoweringContext<'_, '_>,
+    closure_expr: &Expr,
+    bound_result_type: &PhpType,
+) -> Option<LoweredValue> {
+    let ExprKind::Closure {
+        params,
+        variadic,
+        variadic_by_ref,
+        return_type,
+        body,
+        captures,
+        capture_refs,
+        is_static,
+        ..
+    } = &closure_expr.kind
+    else {
+        return None;
+    };
+    Some(lower_closure_with_context(
+        ctx,
+        params,
+        variadic.as_deref(),
+        *variadic_by_ref,
+        return_type.as_ref(),
+        body,
+        captures,
+        capture_refs,
+        closure_expr,
+        &[],
+        Some(bound_result_type),
+        None,
+        *is_static,
+    ))
+}
+
+/// Lowers a closure expression, applying contextual types to unannotated parameters and, when the
+/// literal is the `Closure::bind` specialization, the bind's own result type and `$this` shape.
+///
+/// `bound_this_context` carries the bound receiver's property type and decides two things at
+/// once, because both follow from the same fact: this closure runs against the bind's receiver
+/// rather than against the enclosing scope.
+///
+/// - The body is lowered against `return_php_type`, so a by-reference `return $this->prop` has to
+///   learn the bound property's type BEFORE it is lowered. Retyping the binding afterwards would
+///   leave the compiled closure, its descriptor signature and the caller disagreeing about the
+///   transported payload. An explicitly declared return type always wins; the context is only a
+///   default for an undeclared one.
+/// - The `$this` capture is boxed to `Mixed` even inside a method. Keeping the enclosing typed
+///   receiver would compile `$this->prop` against the enclosing class's slots, which the bound
+///   receiver's class need not share.
 pub(super) fn lower_closure_with_context(
     ctx: &mut LoweringContext<'_, '_>,
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
@@ -89,6 +154,7 @@ pub(super) fn lower_closure_with_context(
     capture_refs: &[String],
     expr: &Expr,
     contextual_arg_types: &[PhpType],
+    bound_this_context: Option<&PhpType>,
     self_ref_callable_capture: Option<&str>,
     is_static: bool,
 ) -> LoweredValue {
@@ -121,6 +187,7 @@ pub(super) fn lower_closure_with_context(
     let body_contains_eval = body_contains_eval_call(body);
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
+    let mut by_value_capture_views = Vec::with_capacity(captures.len());
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
         let ref_cell_must_be_mixed = by_ref
@@ -132,25 +199,47 @@ pub(super) fn lower_closure_with_context(
             // that `Closure::bind` overwrites; `Mixed` so members dispatch at
             // runtime against the bound object's class.
             (lower_null(ctx, expr), PhpType::Mixed)
+        } else if capture == "this" && ctx.local_type("this").codegen_repr() != PhpType::Mixed {
+            // Every method-defined closure can later reach `Closure::bind`, including after its
+            // descriptor escapes through a handler or another runtime owner. Box `$this` to the
+            // same `Mixed` representation a top-level closure uses so member access dispatches
+            // against the receiver's runtime class. Signature inference still uses the enclosing
+            // receiver type below, preserving the closure's source-level result contract.
+            // An enclosing `$this` that is ALREADY `Mixed` (a bound closure nested in another)
+            // falls through to the ordinary capture below: boxing it would emit nothing and the
+            // descriptor would then consume a reference the no-op box never took.
+            let enclosing = ctx.load_local("this", Some(expr.span));
+            (
+                ctx.box_value_as_mixed(enclosing, PhpType::Mixed, Some(expr.span)),
+                PhpType::Mixed,
+            )
         } else {
+            let widens_by_ref_capture = by_ref
+                && self_ref_callable_capture != Some(capture.as_str())
+                && (ref_cell_must_be_mixed || body_contains_eval || body_writes_local(body, capture));
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
-            } else if by_ref && (ref_cell_must_be_mixed || body_contains_eval) {
-                ctx.set_local_type(capture, PhpType::Mixed);
-                Some(PhpType::Mixed)
-            } else if by_ref && body_writes_local(body, capture) {
+            } else if widens_by_ref_capture {
                 // A PHP reference has no type: whatever the closure stores through it is what
                 // the caller reads back. The cell used to carry the type the variable happened
                 // to hold at CAPTURE time, so a write of any other type was reinterpreted
-                // through it — `$b = 5; (function () use (&$b) { $b = null; })();` left `$b`
+                // through it: `$b = 5; (function () use (&$b) { $b = null; })();` left `$b`
                 // as 9223372036854775806, the raw null sentinel read as an int, and a string
-                // capture came back as garbage bytes. The `eval` arm above is the same rule for
-                // the case where the written type cannot be seen at all.
-                ctx.set_local_type(capture, PhpType::Mixed);
+                // capture came back as garbage bytes. `eval` follows the same rule because the
+                // written type cannot be seen at all.
                 Some(PhpType::Mixed)
             } else {
                 None
             };
+            if widens_by_ref_capture {
+                // Convert the existing payload before changing the slot contract. Merely
+                // widening metadata first leaves a raw array, object, or string in storage that
+                // `PromoteLocalRefCell` then interprets as a boxed Mixed pointer.
+                ctx.promote_local_mixed_ref_cell(capture, Some(expr.span));
+            } else if by_ref && !ctx.is_ref_bound_local(capture) {
+                // Keep a local cell owner independent of the descriptor's capture lease.
+                ctx.promote_local_ref_cell(capture, Some(expr.span));
+            }
             let captured = ctx.load_local(capture, Some(expr.span));
             let php_type = php_type_override
                 .unwrap_or_else(|| ctx.builder.value_php_type(captured.value));
@@ -173,13 +262,58 @@ pub(super) fn lower_closure_with_context(
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
         if by_ref {
             ctx.mark_ref_bound_local(capture);
+        } else {
+            by_value_capture_views.push(captured);
         }
         captured_values.push(ClosureCapture {
             value: captured.value,
-            by_ref,
+            by_ref_local: by_ref.then(|| capture.clone()),
         });
         capture_params.push((capture.clone(), php_type, by_ref));
     }
+    if ctx.current_class.is_some()
+        && (ctx.local_slots.contains_key(CALLED_CLASS_ID_CAPTURE)
+            || ctx.local_slots.contains_key("this"))
+        && !capture_params
+            .iter()
+            .any(|(name, _, _)| name == CALLED_CLASS_ID_CAPTURE)
+    {
+        let called_class_id = ctx.emit_value(
+            Op::LoadCalledClassId,
+            Vec::new(),
+            None,
+            PhpType::Int,
+            Op::LoadCalledClassId.default_effects(),
+            Some(expr.span),
+        );
+        ctx.emit_void(
+            Op::ClosureCapture,
+            vec![called_class_id.value],
+            None,
+            Op::ClosureCapture.default_effects(),
+            Some(expr.span),
+        );
+        captured_values.push(ClosureCapture {
+            value: called_class_id.value,
+            by_ref_local: None,
+        });
+        capture_params.push((
+            CALLED_CLASS_ID_CAPTURE.to_string(),
+            PhpType::Int,
+            false,
+        ));
+    }
+    let signature_capture_params = capture_params
+        .iter()
+        .map(|(name, php_type, by_ref)| {
+            let signature_type = if name == "this" && ctx.local_slots.contains_key("this") {
+                ctx.local_type("this")
+            } else {
+                php_type.clone()
+            };
+            (name.clone(), signature_type, *by_ref)
+        })
+        .collect::<Vec<_>>();
     let name = ctx.next_closure_name();
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
@@ -188,7 +322,7 @@ pub(super) fn lower_closure_with_context(
         ExprKind::Closure { variadic_type, .. } => variadic_type.as_ref(),
         _ => None,
     };
-    let signature = if contextual_arg_types.is_empty() {
+    let signature = if contextual_arg_types.is_empty() && bound_this_context.is_none() {
         function::lower_closure_function(
             ctx,
             &name,
@@ -199,6 +333,7 @@ pub(super) fn lower_closure_with_context(
             return_type,
             body,
             &capture_params,
+            &signature_capture_params,
             self_ref_callable_capture,
             by_ref_return,
             loop_storage_scope,
@@ -214,13 +349,23 @@ pub(super) fn lower_closure_with_context(
             return_type,
             body,
             &capture_params,
+            &signature_capture_params,
             contextual_arg_types,
+            bound_this_context,
             self_ref_callable_capture,
             by_ref_return,
             loop_storage_scope,
         )
     };
     let data = ctx.intern_string(&name);
+    let return_alias = crate::types::summarize_callable_return_alias(
+        params
+            .iter()
+            .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
+        variadic,
+        by_ref_return,
+        body,
+    );
     let closure_operands = captured_values
         .iter()
         .map(|capture| capture.value)
@@ -229,6 +374,7 @@ pub(super) fn lower_closure_with_context(
         name,
         signature,
         captures: captured_values,
+        return_alias,
     });
     let closure = ctx.emit_value(
         Op::ClosureNew,
@@ -238,6 +384,12 @@ pub(super) fn lower_closure_with_context(
         Op::ClosureNew.default_effects(),
         Some(expr.span),
     );
+    // A later store can widen a captured local to Mixed, making its narrower load an owned
+    // unbox. Retire that view after the descriptor retains it. Ownership finalization prunes
+    // borrowed-load releases, and explicit releases prevent ClosureNew from stealing a view.
+    for view in by_value_capture_views {
+        crate::ir_lower::ownership::release_if_owned(ctx, view, Some(expr.span));
+    }
     if let Some(capture) = self_ref_callable_capture {
         ctx.set_local_logical_type(capture, PhpType::Callable);
     }
@@ -398,6 +550,7 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => call_args_write_local(None, args, name),
         ExprKind::ExprCall { callee, args } => {
             expr_writes_local(callee, name) || call_args_write_local(None, args, name)
@@ -448,6 +601,10 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::ArrayLiteralAssoc(entries) => entries
             .iter()
             .any(|(key, value)| expr_writes_local(key, name) || expr_writes_local(value, name)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(|expr| expr_writes_local(expr, name)),
         ExprKind::Match { subject, arms, default } => {
             expr_writes_local(subject, name)
                 || arms.iter().any(|(patterns, value)| {
@@ -534,6 +691,7 @@ fn expr_is_variable(expr: &Expr, name: &str) -> bool {
 fn instance_of_target_writes_local(target: &InstanceOfTarget, name: &str) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_writes_local(expr, name),
     }
 }
@@ -703,6 +861,10 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(entries) => entries
             .iter()
             .any(|(key, value)| expr_contains_eval_call(key) || expr_contains_eval_call(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_contains_eval_call),
         ExprKind::Match { subject, arms, default } => {
             expr_contains_eval_call(subject)
                 || arms.iter().any(|(patterns, value)| {
@@ -725,6 +887,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_contains_eval_call),
         ExprKind::ExprCall { callee, args } => {
             expr_contains_eval_call(callee) || args.iter().any(expr_contains_eval_call)
@@ -783,6 +946,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
 pub(super) fn instance_of_target_contains_eval_call(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_contains_eval_call(expr),
     }
 }

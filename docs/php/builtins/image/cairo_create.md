@@ -1,8 +1,8 @@
 ---
 title: "cairo_create()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a drawing context for a surface."
 sidebar:
-  order: 401
+  order: 402
 ---
 
 ## cairo_create()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_create(mixed $surface): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a drawing context for a surface.
 
 **Parameters**:
 - `$surface` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

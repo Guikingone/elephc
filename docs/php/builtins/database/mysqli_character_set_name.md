@@ -1,8 +1,8 @@
 ---
 title: "mysqli_character_set_name()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the connection's current character set."
 sidebar:
-  order: 101
+  order: 102
 ---
 
 ## mysqli_character_set_name()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_character_set_name(mixed $mysql): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the connection's current character set.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

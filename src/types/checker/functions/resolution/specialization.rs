@@ -104,8 +104,10 @@ impl Checker {
                 )
             })?;
             if sig != first_sig {
+                let conflict_span = self.fn_decls.get(variant)
+                    .map_or(crate::span::Span::dummy(), |decl| decl.span);
                 return Err(CompileError::new(
-                    crate::span::Span::dummy(),
+                    conflict_span,
                     &format!(
                         "Function variants for '{}' must have identical signatures",
                         name
@@ -148,6 +150,7 @@ impl Checker {
                         .get(seen_idx)
                         .copied()
                         .unwrap_or(false)
+                    && !stored_sig.ref_params.get(seen_idx).copied().unwrap_or(false)
                     && stored_sig.params[seen_idx].1 == PhpType::Int
                     && *actual_ty != PhpType::Int
                 {
@@ -165,7 +168,7 @@ impl Checker {
                     .collect();
                 if Self::has_unknown_named_variadic_arg(args, &regular_names) {
                     if let Some((_, variadic_ty)) = stored_sig.params.last_mut() {
-                        *variadic_ty = PhpType::Iterable;
+                        *variadic_ty = crate::types::signatures::descriptor_variadic_container();
                     }
                 } else {
                     let mut elem_ty = actual_arg_types[regular_param_count].clone();
@@ -227,6 +230,21 @@ impl Checker {
                     }
                 }
             }
+            let undeclared_ref_param = seen_idx < regular_param_count
+                && stored_sig.ref_params.get(seen_idx).copied().unwrap_or(false)
+                && !stored_sig
+                    .declared_params
+                    .get(seen_idx)
+                    .copied()
+                    .unwrap_or(false);
+            if undeclared_ref_param {
+                if param_types[seen_idx].1 != PhpType::Mixed {
+                    param_types[seen_idx].1 = PhpType::Mixed;
+                    changed = true;
+                }
+                seen_idx += 1;
+                continue;
+            }
             // A DECLARED `array` hint is generic: it resolves to `Array(Mixed)` and is then
             // specialized to the first call site's concrete element type. That narrowing has to be
             // joined over ALL call sites, or a later `Array(Mixed)` argument is passed to a body
@@ -256,13 +274,15 @@ impl Checker {
                 let seen = self.param_specialization_seen.contains(&key);
                 if Self::is_generic_array_hint(&param_types[seen_idx].1)
                     && !seen
-                    && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    && is_specializable_array_argument(&actual_ty)
                 {
                     // Discard the generic `array` hint exactly once, mirroring the `Int` fallback
                     // below: adopt the first call's concrete array type so an all-`array<int>`
                     // parameter is not immediately polluted back to `array<mixed>` by unioning with
-                    // its own declaration. The seen set marks the discard, so every LATER call
-                    // widens instead of re-adopting — which is the whole point.
+                    // its own declaration. Exact PHP `array` arguments are a packed/hash union, not
+                    // `Array(Mixed)`; adopting that union keeps by-reference `array` parameters
+                    // array-typed instead of widening to `Mixed`. The seen set marks the discard,
+                    // so every LATER call widens instead of re-adopting.
                     self.param_specialization_seen.insert(key);
                     let specialized = Self::specialize_generic_array_param_hint(
                         &param_types[seen_idx].1,
@@ -297,8 +317,40 @@ impl Checker {
             seen_idx += 1;
         }
 
+        if !variadic_param_is_by_ref(stored_sig)
+            && function_variadic_tail_needs_iterable(
+            args,
+            stored_sig,
+            regular_param_count,
+            caller_env,
+        )
+        {
+            if let Some(variadic_name) = stored_sig.variadic.as_deref() {
+                if let Some(variadic_index) = param_types
+                    .iter()
+                    .position(|(param_name, _)| param_name == variadic_name)
+                {
+                    let container = crate::types::signatures::descriptor_variadic_container();
+                    if param_types[variadic_index].1 != container {
+                        param_types[variadic_index].1 = container;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
         Ok(changed.then_some(param_types))
     }
+}
+
+/// Returns whether a call argument can specialize a generic `array` parameter.
+///
+/// Concrete packed and associative arrays are adopted as-is. Exact PHP `array` is a two-member
+/// packed/hash union whose codegen representation is Mixed; treating that union as an array
+/// shape lets `specialize_generic_array_param_hint` keep the array contract instead of
+/// `union_param_type` widening it to Mixed.
+fn is_specializable_array_argument(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || ty.is_php_array()
 }
 
 /// Returns true when a call argument is an array whose elements are callable descriptors.
@@ -321,6 +373,52 @@ fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
         .and_then(|index| sig.ref_params.get(index))
         .copied()
         .unwrap_or(false)
+}
+
+/// Returns whether a function's variadic container must preserve string keys at runtime.
+fn function_variadic_tail_needs_iterable(
+    args: &[Expr],
+    sig: &FunctionSig,
+    regular_param_count: usize,
+    env: &TypeEnv,
+) -> bool {
+    if sig.variadic.is_none() {
+        return false;
+    }
+    if args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::Spread(inner) if function_spread_source_keeps_runtime_keys(inner, env)
+        )
+    }) {
+        return true;
+    }
+    args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::NamedArg { name, .. }
+                if !sig
+                    .params
+                    .iter()
+                    .take(regular_param_count)
+                    .any(|(param_name, _)| param_name == name)
+        )
+    })
+}
+
+/// Returns whether a spread source can carry string keys into a variadic function tail.
+fn function_spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
+    let keeps_keys = |ty: &PhpType| {
+        matches!(ty, PhpType::AssocArray { .. } | PhpType::Iterable)
+            || ty.is_php_array()
+            || *ty == crate::types::signatures::descriptor_variadic_container()
+    };
+    match &expr.kind {
+        ExprKind::Variable(name) => env.get(name).is_some_and(keeps_keys),
+        ExprKind::ArrayLiteral(_) => false,
+        ExprKind::ArrayLiteralAssoc(_) => true,
+        _ => keeps_keys(&crate::types::checker::infer_expr_type_syntactic(expr)),
+    }
 }
 
 /// Extracts parameter types from a generic `param_types` list, mapping them to the

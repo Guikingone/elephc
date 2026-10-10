@@ -8,15 +8,31 @@
 //! Key details:
 //! - Exception matching and unwinding must keep handler-stack, call-frame cleanup, and class metadata invariants aligned.
 
+mod boxed_owner;
 mod cleanup_frames;
+mod call_operand_owner;
+mod cleanup_previous;
+mod previous_storage;
+mod owned_values;
+mod protected;
+pub(crate) mod deep_cleanup;
+pub(crate) mod guards;
+mod chain;
+mod cleanup_call;
+mod cleanup_preserve;
 mod class_implements;
 mod dynamic_instanceof;
+mod destructor_throw;
+mod initialize;
 mod matches;
 mod rethrow_current;
+mod ref_cell_release;
+mod previous;
 mod throw_current;
 mod uncaught_report;
 
 pub use class_implements::emit_class_implements_interface;
+pub use boxed_owner::emit_throwable_boxed_owners;
 pub use cleanup_frames::emit_exception_cleanup_frames;
 /// Keeps the per-context exception state (`_exc_value`, `_exc_handler_top`,
 /// `_exc_call_frame_top`) reachable through the `abi::` accessors only, so that making
@@ -25,11 +41,22 @@ pub use cleanup_frames::emit_exception_cleanup_frames;
 #[cfg(test)]
 mod family_audit;
 
+pub use call_operand_owner::emit_cleanup_call_operand_owner;
+pub(crate) use protected::emit as emit_protected;
+pub(crate) use protected::emit_status as emit_protected_status;
+pub use chain::emit_exception_chain;
+pub use cleanup_call::emit_cleanup_invoke;
+pub use cleanup_preserve::emit_cleanup_preserve_exception;
+pub(crate) use cleanup_call::emit_guarded_cleanup_call;
 pub use dynamic_instanceof::emit_dynamic_instanceof;
+pub use destructor_throw::emit_destructor_throw;
+pub use initialize::emit_throwable_initialize;
 pub use matches::emit_exception_matches;
 // The fixed-data emitter defines the string this helper prints; both must agree on its bytes.
 pub(crate) use matches::{ABSENT_MESSAGE, ABSENT_MESSAGE_SYMBOL};
 pub use rethrow_current::emit_rethrow_current;
+pub use ref_cell_release::emit_local_ref_cell_release;
+pub use previous::emit_throwable_previous;
 pub use throw_current::emit_throw_current;
 pub use uncaught_report::emit_report_uncaught_exception;
 pub(crate) use uncaught_report::UNCAUGHT_EXIT_STATUS;

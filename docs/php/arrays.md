@@ -77,7 +77,8 @@ foreach ($map as $k => $v) { echo "$k=$v "; } // a=1 c=3 b=9
 
 `unset()` also works on indexed arrays. PHP removes the key **without renumbering** the survivors,
 so the array becomes sparse (a hole is left). The remaining keys keep their original values, and a
-later `$arr[] = ...` append continues at `max_key + 1`.
+later `$arr[] = ...` append uses the array's next integer key. Removing a key does not move this
+counter backward, even when the removed key was the highest one.
 
 ```php
 <?php
@@ -100,8 +101,33 @@ echo count($a); // 2 — original is untouched
 echo count($b); // 1
 ```
 
-> Removing an element from an array passed **by reference** (`function f(array &$a)`) is not yet
-> supported and reports a compile error.
+Removing a key through a **by-reference parameter** or a `&$x` binding reaches the caller's array,
+like every other write through one:
+
+```php
+<?php
+function drop(array &$a) { unset($a["b"]); }
+$x = ["a" => 1, "b" => 2];
+$snapshot = $x;
+drop($x);
+echo count($x);        // 1
+echo count($snapshot); // 2 — the copy taken before the call is untouched
+```
+
+This also works for an **indexed** array passed by reference. Removing an element leaves a hole
+without renumbering the surviving keys, and the caller observes the removal. Appending afterward
+uses the preserved next integer key rather than one past the highest surviving key:
+
+```php
+<?php
+function dropIndexed(array &$a) { unset($a[1]); }
+$list = [10, 20, 30];
+dropIndexed($list);
+echo implode(",", array_keys($list)); // 0,2
+echo "|", implode(",", $list);       // |10,30
+$list[] = 40;
+echo "|", implode(",", array_keys($list)); // |0,2,3
+```
 
 ## Array union
 
@@ -199,6 +225,22 @@ $b = [0, ...$a, 4];   // [0, 1, 2, 3, 4]
 
 Spreading an associative array preserves string keys and reindexes integer-keyed entries to fresh sequential keys (continuing from the current largest integer key). Later spread operands overwrite earlier ones on string-key collision.
 
+A spread can sit beside explicit keys in the same literal, in any order, and the order is
+observable: a spread's elements take the next free integer key at the position the spread
+occupies.
+
+```php
+<?php
+$idx = [3, 4];
+$a = [...$idx, 'c' => 8];          // [0 => 3, 1 => 4, 'c' => 8]
+$b = ['c' => 8, ...$idx];          // ['c' => 8, 0 => 3, 1 => 4]
+$c = ['a' => 1, ...$idx, 'b' => 2]; // ['a' => 1, 0 => 3, 1 => 4, 'b' => 2]
+$d = [...$idx, 7 => 8];            // [0 => 3, 1 => 4, 7 => 8] — an explicit integer key is kept
+```
+
+Spreading reads the source; it never consumes it, so the source array is unchanged afterwards
+and can be spread again.
+
 ```php
 <?php
 $defaults = ['host' => '0.0.0.0', 'timeout' => 30];
@@ -250,16 +292,16 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 |---|---|---|
 | `count()` | `count($value [, $mode]): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()`. A value that is not countable — `false`, an `int`, `float`, `string`, `null`, or resource arriving through a `mixed` — raises PHP 8's `TypeError` (`count(): Argument #1 ($value) must be of type Countable\|array, X given`) instead of answering `0`. `$mode` accepts `COUNT_NORMAL` (default) and `COUNT_RECURSIVE`; anything else throws `\ValueError`. `COUNT_RECURSIVE` is currently supported only where the receiver cannot hold a nested array — a nested receiver is a compile error rather than a wrong count |
 | `array_count_values()` | `array_count_values($array): array` | Maps each distinct `int`/`string` value to its number of occurrences; other values are skipped with a warning |
-| `array_push()` | `array_push($arr, $val): void` | Add element to end |
+| `array_push()` | `array_push($arr, ...$values): int` | Append any number of elements and return the new count. `array_push($a, 3, 4)` appends both in source order, and `array_push($a)` with no values just reads the count back. |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
-| `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. |
+| `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. A `mixed` haystack (for example a `json_decode()` result) is searched at run time; a non-array payload raises a `TypeError`. |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
-| `array_values()` | `array_values($arr): array` | Returns copy of values |
+| `array_values()` | `array_values($arr): array` | Returns copy of values. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
-| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice. `$preserve_keys` keeps the source integer keys and must be a literal `true`/`false`. |
-| `array_splice()` | `array_splice($arr, $offset [, $length [, $replacement]]): array` | Remove a slice in place and return the removed elements. `$replacement` is inserted where the removed slice was: an array contributes its values, a bare scalar is treated as a one-element array, and `null` or `[]` inserts nothing. A replacement whose element type differs from the receiver's promotes the receiver to a heterogeneous array exactly as PHP does (`$a = [1,2,3]; array_splice($a, 1, 1, ["x"]);` leaves `[1, "x", 3]`). That promotion needs a receiver whose storage this call can retype, so it does not apply when the receiver is a by-reference parameter, a `&$x` binding, or an object/static property — those keep a named compile error instead of a mistyped insertion. |
-| `array_chunk()` | `array_chunk($arr, $size [, $preserve_keys]): array` | Split into chunks. A `$size` of `0` or less throws `\ValueError`. `$preserve_keys` keeps each chunk's source integer keys and must be a literal `true`/`false`. |
+| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. Indexed **string** arrays are supported: the slice copies each element's `{pointer, length}` pair and owns its own bytes, so writing into the result never disturbs the source. A `mixed` or declared `array` source is sliced by its runtime storage (a hash keeps its string keys and renumbers integer keys) and returns the boxed `array` type; a direct call then needs `$preserve_keys` to be `false`, while a callable (`array_slice(...)`, also through `call_user_func_array()` with a runtime argument array) applies the flag at run time. |
+| `array_splice()` | `array_splice($arr, $offset [, $length [, $replacement]]): array` | Remove a slice in place and return the removed elements. `$replacement` is inserted where the removed slice was: an array contributes its values, a bare scalar is treated as a one-element array, and `null` or `[]` inserts nothing. A replacement whose element type differs from the receiver's promotes the receiver to a heterogeneous array exactly as PHP does (`$a = [1,2,3]; array_splice($a, 1, 1, ["x"]);` leaves `[1, "x", 3]`). That promotion needs a receiver whose storage this call can retype, so it does not apply when the receiver is a by-reference parameter, a `&$x` binding, or an object/static property — those keep a named compile error instead of a mistyped insertion. `$replacement` may be the receiver itself: `array_splice($a, 1, 1, $a)` inserts what `$a` held on the way in, because PHP evaluates the replacement before the removal runs (`[1,2,3]` becomes `[1,1,2,3,3]`). That holds for every receiver form — a local, a property, a static property, a container element, a by-reference parameter, or a `&$x` binding naming the same array — and for every argument spelling. |
+| `array_chunk()` | `array_chunk($arr, $size [, $preserve_keys]): array` | Split arrays, including associative arrays, into chunks. A `$size` of `0` or less throws a `\ValueError`. `$preserve_keys` must be a literal `true`/`false`; when `true` each chunk keeps its source keys, and when `false` every key is dropped — **string keys included**, unlike `array_slice()` — and each chunk renumbers from `0`. |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
 | `array_merge_recursive()` | `array_merge_recursive($arr1, $arr2): array` | Recursively merge two arrays: integer keys append (renumbered), string keys that collide recurse when both values are arrays and otherwise combine into a list. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed-array values are treated as opaque. |
 | `array_replace()` | `array_replace($arr, $replacements): array` | Overwrite matching keys in `$arr` (in place, keeping position) and append new keys from `$replacements`; later values win. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
@@ -275,11 +317,11 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_intersect_key()` | `array_intersect_key($arr1, $arr2): array` | Keys in both |
 | `array_diff_assoc()` | `array_diff_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is absent from $arr2 (values compared as `(string)$a === (string)$b`). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
 | `array_intersect_assoc()` | `array_intersect_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is present in $arr2 (values compared as strings). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
-| `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Values in $arr1 not in $arr2, equality decided by the two-argument comparator (`$cmp($a, $b) === 0`). Supports string / function / non-capturing closure comparators. |
-| `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Values in both arrays, equality decided by the comparator (`$cmp($a, $b) === 0`). |
+| `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Two-array form: keeps values absent from $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. Supports closures, function names and first-class callables. |
+| `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Two-array form: keeps values also present in $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. |
 | `array_unique()` | `array_unique($arr): array` | Remove duplicates, keeping each survivor's original key — an indexed input therefore returns a sparse, hash-shaped result (keys `0, 1, 3` for `[1,2,2,3,1]`), exactly as in PHP |
-| `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array |
-| `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys |
+| `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array. A declared `array` source, and a callable such as `array_reverse(...)` called through `call_user_func_array()`, take the flag at run time. |
+| `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
 | `array_shift()` | `array_shift($arr): mixed` | Remove and return first |
 | `array_unshift()` | `array_unshift($arr, ...$values): int` | Prepend one or more elements, in source order, and return the new count |
 | `array_sum()` | `array_sum($arr): int\|float` | Sum of values |
@@ -298,18 +340,18 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `rsort()` | `rsort($arr): void` | Sort descending |
 | `asort()` | `asort($arr): void` | Sort by value, maintain keys |
 | `arsort()` | `arsort($arr): void` | Sort by value desc, maintain keys |
-| `ksort()` | `ksort($arr): bool` | Sort by key ascending with `SORT_REGULAR`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
-| `krsort()` | `krsort($arr): bool` | Sort by key descending with `SORT_REGULAR`. A non-empty indexed array is promoted to associative storage so its numeric keys can appear in descending iteration order |
+| `ksort()` | `ksort($arr, $flags = SORT_REGULAR): bool` | Sort by key ascending, comparing keys under `$flags`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
+| `krsort()` | `krsort($arr, $flags = SORT_REGULAR): bool` | Sort by key descending, comparing keys under `$flags`. A non-empty indexed array is promoted to associative storage so its numeric keys can appear in descending iteration order |
 | `natsort()` | `natsort($arr): void` | Natural order sort |
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
-| `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort `$arr1` ascending (stable) and reorder `$arr2` in tandem; both are sorted in place (by reference). **Two indexed arrays of scalar elements**; sort flags, descending order, and >2 arrays are follow-ups. |
+| `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort equal-length indexed arrays in place by ascending row order: compare `$arr1`, then `$arr2` for ties. AOT accepts two concrete integer arrays or two boxed scalar arrays (for example through declared `array` parameters), not one of each. Concrete string/float arrays, associative arrays, sort flags, and more than two arrays are unsupported. |
 | `array_rand()` | `array_rand($arr): int` | Pick one random key |
 | `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
-| `array_filter()` | `array_filter($arr, $callback, $mode = ARRAY_FILTER_USE_VALUE): array` | Filter where callback is truthy; mode selects value, key, or both callback args |
+| `array_filter()` | `array_filter($arr, $callback = null, $mode = 0): array` | Preserve keys and values accepted by the callback; omitted/null callbacks remove empty values |
 | `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |
-| `array_walk()` | `array_walk($arr, $callback): void` | Call callback on each element |
-| `array_walk_recursive()` | `array_walk_recursive($arr, $callback): void` | Apply `$callback` to each non-array leaf value, recursing into nested indexed/associative arrays. Leaf values must share a scalar type (consistent with `array_walk`: leaf passed by value, no key argument). |
+| `array_walk()` | `array_walk($arr, $callback): void` | Call a callback on each element. Boxed PHP arrays support writable value references and keys, subject to the reference-escape restrictions below. |
+| `array_walk_recursive()` | `array_walk_recursive($arr, $callback): void` | Apply a callback to non-array leaves. The concrete-array path requires homogeneous scalar leaves and passes values without keys. The boxed PHP-array path supports writable leaf references and keys, subject to the restrictions below. |
 | `array_find()` | `array_find($arr, $callback): mixed` | (PHP 8.4) Returns the first element for which `$callback($value)` is truthy, or `null` if none match. |
 | `array_any()` | `array_any($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for at least one element. |
 | `array_all()` | `array_all($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for every element. |
@@ -321,13 +363,33 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `function_exists()` | `function_exists(string $name): bool` | Check if a global or fully-qualified function name is defined. A literal name const-folds; any other string expression is matched case-insensitively at run time against the functions this binary declares |
 | `isset()` | `isset($var, ...$vars): int` | Check that every variable or offset is defined and not null. Like PHP, the probed variable does not have to exist: `isset($neverDefined)` is `false`, `empty($neverDefined)` is `true`, `$neverDefined ?? "d"` is `"d"`, and `unset($neverDefined)` is a no-op. A name that is *also* assigned elsewhere in the same scope must still be defined before it is probed |
 
-`array_filter()` accepts `ARRAY_FILTER_USE_VALUE` (`0`), `ARRAY_FILTER_USE_BOTH` (`1`), and `ARRAY_FILTER_USE_KEY` (`2`). Invalid mode values throw `ValueError`.
+`array_filter()` preserves integer and string keys, including holes, and supports declared PHP arrays with heterogeneous values. Its callback can receive values (`0`), both value and key (`ARRAY_FILTER_USE_BOTH`, `1`), or keys (`ARRAY_FILTER_USE_KEY`, `2`). PHP profiles through 8.5 treat other integer modes as value-only; PHP 8.6 rejects them with a catchable `ValueError`, including for empty arrays and null callbacks. The `ARRAY_FILTER_USE_VALUE` name is available in PHP 8.6. Callback results use PHP truthiness rather than requiring a boolean return.
 
-> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` stores mixed result elements when the selected callback return shape is only known at runtime. `array_map()` also runs over a heterogeneous (boxed `mixed`) input array: each element is passed to the callback as a `mixed` value, so a callback with a `mixed` (or untyped) parameter sees and can return each element with its original runtime type.
+`array_map()` also resolves boxed callbacks extracted from PHP arrays, including
+captured closures, function names, packed `[object, method]` pairs, and invokable
+objects available in the compiled program. Invalid boxed callbacks throw
+`TypeError`. With one source array, a `null` callback returns an independent
+array value with the original keys and copy-on-write behavior. The AOT path
+currently accepts one source array, not the multi-array zip form.
+
+> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` uses direct element storage when the resolved callback returns `int`, `bool`, or `string`, including a known callback named by a string; descriptor wrappers cast boxed callback results to that declared type. Other or unresolved return shapes use boxed `mixed` elements. The checker and EIR report the same result container type across returns, arguments, and property storage. `array_map()` also runs over a heterogeneous (boxed `mixed`) input array: each element is passed to the callback as a `mixed` value, so a callback with a `mixed` (or untyped) parameter sees and can return each element with its original runtime type.
 > When a parameter is declared only as `array`, its element type is initially unknown. Array-callback checking preserves explicit callback parameter declarations and uses them to type the closure body instead of fabricating an `int` element. Known element types are still checked normally, and this contextual rule does not make `mixed` globally compatible with object, array, or other refcounted declarations. `array_map()` currently rejects known object-element arrays because its callback runtime does not yet support that input layout.
 > `call_user_func_array()` also accepts dynamic indexed and associative argument arrays for callbacks with a known signature, including userland variadic callbacks. When a callable value has no single static signature at the call site, elephc emits an AOT runtime dispatch over user functions and closure/FCC wrappers available in that codegen context, then applies the matched target's descriptor metadata: parameter names, defaults, by-reference flags, variadic position, return shape, captures, hidden receiver arguments, and callable shape. Runtime string callback names dispatch over user functions, supported builtins, and public static-method strings by case-insensitive name matching, materialize the matched descriptor, and invoke its generated descriptor invoker. Descriptor invokers receive a temporary boxed Mixed clone of the argument container and inspect its runtime tag to handle indexed arrays and associative hashes through the same signature-level wrapper, so the source `$args` remains usable with its original static layout after the call. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic arrays passed to by-reference callback parameters use temporary reference cells, so callback writes do not mutate the source argument array.
 
 Unannotated callback parameters are typed from the array in every array builtin that takes a callback — `array_all()`, `array_any()`, `array_filter()`, `array_find()`, `array_map()`, `array_reduce()`, `array_udiff()`, `array_uintersect()`, `array_walk()`, `array_walk_recursive()`, `uasort()`, `uksort()` and `usort()`. Value parameters get the element type and key parameters get the key type, so `array_filter($words, fn($v) => strlen($v) > 3)`, `uksort($byName, fn($a, $b) => strlen($a) <=> strlen($b))` and `array_walk($byName, function ($v, $k) { echo strlen($k); })` all check without hand-written type hints. Explicit hints stay authoritative.
+
+### Walking boxed PHP arrays
+
+The AOT path for boxed PHP arrays, including declared `array` parameters, passes
+the callback a writable element reference and its key. Recursive walks do this
+for leaf values. Copies made before the walk keep their original values.
+
+This path requires a visible native function, closure, or method descriptor.
+Opaque eval/extern callbacks, first-class wrapper descriptors, and builtin adapters are
+rejected. The borrowed element reference must not escape the callback through a
+closure capture or a property reference: those operations throw a catchable
+`Error`. Ordinary compiler-managed references are unaffected. These restrictions
+are specific to the boxed walk path and are not a claim of full PHP parity.
 
 ### Sorting runtime-typed indexed arrays
 
@@ -364,11 +426,45 @@ echo implode(",", array_keys($byName));   // a,b,c
 echo implode(",", array_keys($snapshot)); // b,a,c
 ```
 
-`ksort()` and `krsort()` currently accept exactly one argument and always use PHP's default
-`SORT_REGULAR` comparison. PHP's optional `$flags` argument (`SORT_NUMERIC`, `SORT_STRING`,
-`SORT_NATURAL`, `SORT_FLAG_CASE`, and related modes) is not implemented yet; passing it is a
-compile-time arity error. Full flag parity is tracked in
-[issue #699](https://github.com/illegalstudio/elephc/issues/699).
+#### Key sort flags
+
+`ksort()` and `krsort()` take PHP's optional `$flags` argument, which chooses how two keys are
+compared. It changes the answer, not just the path:
+
+```php
+$sizes = [10 => "l", 9 => "m", 100 => "xl"];
+ksort($sizes, SORT_NUMERIC);   // keys 9, 10, 100
+ksort($sizes, SORT_STRING);    // keys 10, 100, 9 — compared as the text "10", "100", "9"
+```
+
+| Flag | Comparison |
+| --- | --- |
+| `SORT_REGULAR` (default) | PHP's standard comparison, the same one `<` and `<=>` use |
+| `SORT_NUMERIC` | Both keys as numbers; a string key contributes its leading numeric run, or `0` |
+| `SORT_STRING` | Both keys as byte strings; an integer key is compared as its decimal text |
+| `SORT_LOCALE_STRING` | As `strcoll()` in the current locale |
+| `SORT_NATURAL` | As `strnatcmp()`: digit runs compare as numbers, so `img2` sorts before `img10` |
+| `SORT_FLAG_CASE` | Combined with `SORT_STRING` or `SORT_NATURAL`, folds ASCII case |
+
+PHP selects the comparison from `$flags & ~SORT_FLAG_CASE` and silently ignores anything else,
+so `SORT_ASC`, `SORT_DESC`, a bare `SORT_FLAG_CASE` and an arbitrary number such as `999` all
+behave as `SORT_REGULAR`. Keys that compare equal keep their insertion order in both
+directions, matching PHP 8's stable sorts.
+
+Two boundaries are worth stating:
+
+- `SORT_LOCALE_STRING` observes the process locale, and elephc has no PHP-visible
+  `setlocale()`, so the locale is always `C` — where collation is byte order. The one place it
+  differs from `SORT_STRING` is a key with an embedded NUL, which a C string ends at.
+- `SORT_NATURAL | SORT_FLAG_CASE` folds ASCII `a`–`z` and nothing else. php-src folds each
+  byte through the process's `LC_CTYPE` table, so its answer above `0x7F` follows the host C
+  library. Under `LC_CTYPE=C` PHP folds ASCII only and agrees with elephc byte for byte; the
+  CLI forces `C.UTF-8` at startup, where glibc still folds ASCII only but Darwin's single-byte
+  table also maps Latin-1, so PHP on macOS sorts `"\xFF"` before `"\x80"` and PHP on Linux
+  after it. Elephc gives the `C` answer on every target rather than the answer of whichever
+  machine compiled the program. ASCII keys are unaffected either way.
+
+The sort flags are not accepted by `sort()`, `rsort()`, `asort()` or `arsort()` yet.
 
 For indexed storage, ascending `ksort()` leaves keys `0..n-1` in place. Descending `krsort()`
 promotes a non-empty indexed array to associative storage, preserving each numeric key/value pair:

@@ -7,7 +7,8 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::{body_must_not_use_this, merge_null_coalesce_result_type, Checker};
+use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::pcntl_constants::pcntl_int_constants;
@@ -88,15 +89,11 @@ impl Checker {
                 let probed =
                     crate::types::checker::null_probe::null_probe_env(self, value, env);
                 let probed_env = probed.clone();
-                let vt = self
-                    .infer_null_probe_operand(value, probed_env.as_ref().unwrap_or(env))?;
+                let operand_env = probed_env.as_ref().unwrap_or(env);
+                let vt = self.infer_null_probe_operand(value, operand_env)?;
+                let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
                 let dt = self.infer_type(default, env)?;
-                let non_null_value = if Self::union_contains_void(&vt) {
-                    self.strip_void_from_union(&vt)
-                } else {
-                    vt
-                };
-                Ok(merge_null_coalesce_result_type(non_null_value, dt))
+                Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {
                 self.infer_pipe_type(value, callable, expr, env)
@@ -142,7 +139,7 @@ impl Checker {
                 params,
                 variadic,
                 variadic_by_ref,
-                variadic_type: _,
+                variadic_type,
                 return_type,
                 body,
                 is_arrow: _,
@@ -158,6 +155,7 @@ impl Checker {
                     params,
                     variadic,
                     *variadic_by_ref,
+                    variadic_type,
                     return_type,
                     body,
                     captures,
@@ -167,15 +165,7 @@ impl Checker {
                 )
             }
             ExprKind::Spread(inner) => {
-                let ty = self.infer_type(inner, env)?;
-                match ty {
-                    PhpType::Array(elem_ty) => Ok(*elem_ty),
-                    PhpType::AssocArray { value, .. } => Ok(*value),
-                    _ => Err(CompileError::new(
-                        expr.span,
-                        "Spread operator requires an array",
-                    )),
-                }
+                self.infer_spread_element_type(inner, expr.span, env, false)
             }
             ExprKind::NamedArg { value, .. } => self.infer_type(value, env),
             ExprKind::ClosureCall { var, args } => {
@@ -193,13 +183,34 @@ impl Checker {
             ExprKind::NewObject { class_name, args } => {
                 self.infer_new_object_type(class_name.as_str(), args, expr, env)
             }
+            // `generics::classes` rewrites every generic construction to a `NewObject` naming
+            // the instantiated class, so one arriving here means no template answered it — the
+            // named class declares no type parameters. Reported rather than widened: a
+            // template has no representation, and inferring `Plain` for `new Plain<int>()`
+            // would compile a program whose type arguments meant nothing.
+            ExprKind::NewGeneric { class_type, args } => {
+                if let Some(instantiated) =
+                    self.infer_written_generic_construction(class_type, args, expr, env)?
+                {
+                    return Ok(instantiated);
+                }
+                Err(CompileError::new(
+                expr.span,
+                &format!(
+                    "'{}' is written with type arguments but declares no type parameters",
+                    match class_type {
+                        crate::parser::ast::TypeExpr::GenericClass { name, .. } =>
+                            name.as_str().to_string(),
+                        other => crate::generics::describe_type(other),
+                    }
+                ),
+                ))
+            }
             ExprKind::Clone(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                match ty {
-                    PhpType::Object(class_name) => {
-                        self.check_clone_visibility(&class_name, expr.span)?;
-                        Ok(PhpType::Object(class_name))
-                    }
+                match ty.codegen_repr() {
+                    PhpType::Object(class_name) => Ok(PhpType::Object(class_name)),
+                    PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(expr.span, "clone requires an object value")),
                 }
             }
@@ -212,6 +223,18 @@ impl Checker {
                 // The unpack-after-named shape is syntactic in
                 // PHP, so it is still rejected without a known constructor.
                 self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
+                for arg in args {
+                    let value = match &arg.kind {
+                        ExprKind::NamedArg { value, .. } => value.as_ref(),
+                        _ => arg,
+                    };
+                    if matches!(value.kind, ExprKind::ArrayAccess { .. }) {
+                        return Err(CompileError::new(
+                            value.span,
+                            "Dynamic constructor cannot bind an array element by reference because its runtime signature is unknown",
+                        ));
+                    }
+                }
                 // No constructor signature means no parameter binding modes either, so every
                 // argument is conservatively reference-aliased — see
                 // `Checker::record_unresolved_callee_argument_aliases`.
@@ -305,7 +328,16 @@ impl Checker {
                 self.infer_scoped_constant_access(receiver, name, expr)
             }
             ExprKind::NewScopedObject { receiver, args } => {
+                // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+                // it, and this pass can run on a generic function's template body — which is
+                // walked and then stripped, never instantiated.
+                let receiver = &receiver.written_class_receiver();
                 let class_name = match receiver {
+                    // A generic receiver is instantiated into an ordinary named one before type checking;
+                    // a template has no class to reach through.
+                    crate::parser::ast::StaticReceiver::Generic(_) => unreachable!(
+                        "StaticReceiver::Generic must be instantiated by generics::classes"
+                    ),
                     crate::parser::ast::StaticReceiver::Self_ => {
                         self.current_class.clone().ok_or_else(|| {
                             CompileError::new(
@@ -363,7 +395,11 @@ impl Checker {
                 // (`[5 => "x", "s" => "y"]`, `[$i * 10 => "L"]`) the same way an
                 // indexed one is accepted; PHP accepts both.
                 let supported = match &inner.kind {
-                    ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => true,
+                    // A mixed literal lowers to the same `AssocArray`, so the loop that
+                    // re-yields its pairs handles it exactly as it handles a keyed one.
+                    ExprKind::ArrayLiteral(_)
+                    | ExprKind::ArrayLiteralAssoc(_)
+                    | ExprKind::ArrayLiteralMixed(_) => true,
                     ExprKind::FunctionCall { .. } | ExprKind::Variable(_) => {
                         matches!(inner_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                             || self
@@ -375,7 +411,7 @@ impl Checker {
                     return Err(CompileError::new(
                         inner.span,
                         &format!(
-                            "yield from expects an array literal or Generator, got {:?}",
+                            "yield from expects an array literal or Generator, got {}",
                             inner_ty
                         ),
                     ));
@@ -387,5 +423,82 @@ impl Checker {
             }
             _ => unreachable!("basic expression routed to call/object inference"),
         }
+    }
+
+    /// Infers one argument on a callable-descriptor path.
+    ///
+    /// Descriptor invokers own a runtime iterator walk, so they can accept Traversable spread
+    /// sources. Generic user calls deliberately use ordinary `infer_type` and remain array-only
+    /// until their lowering gains the same walk.
+    pub(crate) fn infer_descriptor_call_arg_type(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        match &expr.kind {
+            ExprKind::Spread(inner) => {
+                self.infer_spread_element_type(inner, expr.span, env, true)
+            }
+            _ => self.infer_type(expr, env),
+        }
+    }
+
+    /// Returns the element type supplied by a spread source under the selected lowering policy.
+    fn infer_spread_element_type(
+        &mut self,
+        inner: &Expr,
+        span: crate::span::Span,
+        env: &TypeEnv,
+        allow_traversable: bool,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.infer_type(inner, env)?;
+        match ty {
+            PhpType::Array(elem_ty) => Ok(*elem_ty),
+            PhpType::AssocArray { value, .. } => Ok(*value),
+            PhpType::Mixed => Ok(PhpType::Mixed),
+            ty if ty.is_php_array() => Ok(PhpType::Mixed),
+            ty if allow_traversable && self.descriptor_spread_source_may_be_traversable(&ty) => {
+                Ok(PhpType::Mixed)
+            }
+            _ => Err(CompileError::new(span, "Spread operator requires an array")),
+        }
+    }
+
+    /// Returns whether descriptor runtime iteration can validate this non-array source type.
+    ///
+    /// Every object is a possible `Traversable` at runtime. Keeping acceptance tied to the
+    /// descriptor path is important: its iterator setup owns the runtime interface check, while
+    /// ordinary calls still only know how to unpack array storage. Known concrete classes and
+    /// interface hints therefore do not need a second, brittle nominal proof here.
+    pub(crate) fn descriptor_spread_source_may_be_traversable(&self, ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Iterable => true,
+            PhpType::Object(_) => true,
+            PhpType::Union(members) => members
+                .iter()
+                .all(|member| match member {
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
+                    other => self.descriptor_spread_source_may_be_traversable(other),
+                }),
+            _ => false,
+        }
+    }
+
+    /// Returns whether a descriptor call contains a runtime Traversable spread source.
+    pub(crate) fn descriptor_call_has_traversable_spread(
+        &mut self,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        for arg in args {
+            let ExprKind::Spread(inner) = &arg.kind else {
+                continue;
+            };
+            let ty = self.infer_type(inner, env)?;
+            if self.descriptor_spread_source_may_be_traversable(&ty) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }

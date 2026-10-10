@@ -20,7 +20,7 @@ docs/superpowers/
 /bundle.tar.bz2
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
-graft/
+/graft/
 
 # Kage repository memory: the verified packets are committed and shared, every
 # other entry (indexes, code graph, structural/observation caches, daemon and

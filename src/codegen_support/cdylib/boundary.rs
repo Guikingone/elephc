@@ -29,6 +29,7 @@ use super::{
 /// Fixed frame metadata for one recoverable scalar export wrapper.
 struct ScalarBoundaryLayout {
     param_offsets: Vec<Vec<usize>>,
+    hidden_collector_offset: Option<usize>,
     result_offset: Option<usize>,
     concat_offset: usize,
     /// Slot holding the HOST's ctx register across the call. The ctx register
@@ -46,6 +47,7 @@ pub(super) fn emit_scalar_export(
     invalid_error: (&str, usize),
     allocation_error: (&str, usize),
     runtime_error: (&str, usize),
+    startup: Option<&str>,
 ) {
     let internal = function_symbol(&export.name);
     let exported = target.extern_symbol(&export.c_name);
@@ -77,6 +79,7 @@ pub(super) fn emit_scalar_export(
             invalid_error,
             allocation_error,
             runtime_error,
+            startup,
         ),
         Arch::X86_64 => emit_scalar_export_x86_64(
             emitter,
@@ -92,6 +95,7 @@ pub(super) fn emit_scalar_export(
             invalid_error,
             allocation_error,
             runtime_error,
+            startup,
         ),
     }
 }
@@ -104,8 +108,8 @@ fn emitter_data_label(suffix: &str, purpose: &str) -> String {
 /// Computes saved-input, result, concat, handler, and footer slots for a scalar wrapper.
 fn scalar_boundary_layout(export: &ExportedFunction) -> ScalarBoundaryLayout {
     let mut offset = 0usize;
-    let mut param_offsets = Vec::with_capacity(export.sig.params.len());
-    for (_, ty) in &export.sig.params {
+    let mut param_offsets = Vec::with_capacity(export.source_sig.params.len());
+    for (_, ty) in &export.source_sig.params {
         let words = if *ty == PhpType::Str { 2 } else { 1 };
         let mut offsets = Vec::with_capacity(words);
         for _ in 0..words {
@@ -114,7 +118,13 @@ fn scalar_boundary_layout(export: &ExportedFunction) -> ScalarBoundaryLayout {
         }
         param_offsets.push(offsets);
     }
-    let result_offset = if export.sig.return_type == PhpType::Void {
+    let hidden_collector_offset = if internal_has_hidden_collector(export) {
+        offset += 8;
+        Some(offset)
+    } else {
+        None
+    };
+    let result_offset = if export.source_sig.return_type == PhpType::Void {
         None
     } else {
         offset += 8;
@@ -128,6 +138,7 @@ fn scalar_boundary_layout(export: &ExportedFunction) -> ScalarBoundaryLayout {
     let frame_size = align_16(handler_base + 16);
     ScalarBoundaryLayout {
         param_offsets,
+        hidden_collector_offset,
         result_offset,
         concat_offset,
         saved_ctx_offset,
@@ -144,7 +155,7 @@ pub(super) fn align_16(value: usize) -> usize {
 /// Flattens PHP parameters into the independent scalar words used by the public C ABI.
 pub(super) fn flattened_c_param_types(export: &ExportedFunction) -> Vec<PhpType> {
     export
-        .sig
+        .source_sig
         .params
         .iter()
         .flat_map(|(_, ty)| match ty {
@@ -203,9 +214,11 @@ pub(super) fn emit_call_body(
     emitter: &mut Emitter,
     export: &ExportedFunction,
     param_offsets: &[Vec<usize>],
+    hidden_collector_offset: Option<usize>,
     internal: &str,
 ) {
-    for ((_, ty), offsets) in export.sig.params.iter().zip(param_offsets) {
+    debug_assert_eq!(export.source_sig.params.len(), param_offsets.len());
+    for ((_, ty), offsets) in export.source_sig.params.iter().zip(param_offsets) {
         match ty {
             PhpType::Float => {
                 abi::load_at_offset(emitter, abi::float_result_reg(emitter), offsets[0]);
@@ -221,8 +234,15 @@ pub(super) fn emit_call_body(
         }
         abi::emit_push_result_value(emitter, ty);
     }
+    if let Some(offset) = hidden_collector_offset {
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
+        abi::emit_push_result_value(
+            emitter,
+            &PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+    }
     let param_types = export
-        .sig
+        .internal_sig
         .params
         .iter()
         .map(|(_, ty)| ty.clone())
@@ -240,6 +260,75 @@ pub(super) fn emit_call_body(
     abi::emit_release_temporary_stack(emitter, overflow);
 }
 
+/// Returns whether the internal PHP body expects the generated surplus-argument collector.
+pub(super) fn internal_has_hidden_collector(export: &ExportedFunction) -> bool {
+    let has_collector = crate::func_args::sig_collects_surplus_args(&export.internal_sig);
+    debug_assert!(
+        !crate::func_args::sig_has_hidden_argc_param(&export.internal_sig),
+        "fixed exports cannot carry the source-variadic hidden argc slot"
+    );
+    debug_assert_eq!(
+        export.internal_sig.params.len(),
+        export.source_sig.params.len() + usize::from(has_collector),
+        "an export internal signature may differ only by the generated collector"
+    );
+    has_collector
+}
+
+/// Initializes the optional wrapper-owned collector slot before a recoverable boundary is entered.
+pub(super) fn emit_initialize_hidden_collector_owner(
+    emitter: &mut Emitter,
+    hidden_collector_offset: Option<usize>,
+) {
+    if let Some(offset) = hidden_collector_offset {
+        abi::emit_store_zero_to_local_slot(emitter, offset);
+    }
+}
+
+/// Allocates and publishes an empty hidden collector while the boundary handler is active.
+///
+/// The temporary cleanup record makes the wrapper's owner visible to exception unwinding. The
+/// callee receives a borrow and creates its normal by-value COW shadow, so the wrapper retires
+/// exactly its original owner after a normal return.
+pub(super) fn emit_prepare_hidden_collector(
+    emitter: &mut Emitter,
+    hidden_collector_offset: Option<usize>,
+) {
+    let Some(offset) = hidden_collector_offset else {
+        return;
+    };
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
+    abi::emit_load_int_immediate(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        PhpType::Mixed.stack_size() as i64,
+    );
+    abi::emit_call_label(emitter, "__rt_array_new");
+    crate::codegen_support::emit_array_value_type_stamp(
+        emitter,
+        abi::int_result_reg(emitter),
+        &PhpType::Mixed,
+    );
+    abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
+    let owner_address = abi::tertiary_scratch_reg(emitter);
+    abi::emit_frame_slot_address(emitter, owner_address, offset);
+    abi::emit_push_call_operand_owner(emitter, owner_address, false);
+}
+
+/// Detaches and releases the wrapper's hidden collector after the PHP body returns normally.
+pub(super) fn emit_release_hidden_collector(
+    emitter: &mut Emitter,
+    hidden_collector_offset: Option<usize>,
+) {
+    let Some(offset) = hidden_collector_offset else {
+        return;
+    };
+    abi::emit_pop_call_operand_owner(emitter);
+    abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
+    abi::emit_store_zero_to_local_slot(emitter, offset);
+    abi::emit_call_label(emitter, "__rt_decref_any");
+}
+
 /// Validates every public string pair without clobbering the saved inputs.
 pub(super) fn emit_validate_string_inputs(
     emitter: &mut Emitter,
@@ -249,7 +338,7 @@ pub(super) fn emit_validate_string_inputs(
     suffix: &str,
 ) {
     for (index, ((_, ty), offsets)) in export
-        .sig
+        .source_sig
         .params
         .iter()
         .zip(param_offsets)
@@ -421,6 +510,7 @@ fn emit_scalar_export_aarch64(
     invalid_error: (&str, usize),
     allocation_error: (&str, usize),
     runtime_error: (&str, usize),
+    startup: Option<&str>,
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
     // Foreign-entry publish (spike review, B2): the host calls this export with
@@ -437,6 +527,7 @@ fn emit_scalar_export_aarch64(
         &format!("L_cdylib_{suffix}_arena_ready"),
     );
     emit_save_scalar_c_inputs(emitter, export, layout);
+    emit_initialize_hidden_collector_owner(emitter, layout.hidden_collector_offset);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
         &format!("L_cdylib_{suffix}_stack_limit_ready"),
@@ -445,13 +536,22 @@ fn emit_scalar_export_aarch64(
     emit_validate_string_inputs(emitter, export, &layout.param_offsets, invalid, suffix);
     emit_enter_boundary(emitter, layout.concat_offset, suffix);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
+    super::emit_startup_check(emitter, startup, runtime);
     emit_boundary_push_aarch64(emitter, escaped, layout.handler_base);
-    emit_call_body(emitter, export, &layout.param_offsets, internal);
-    emit_save_scalar_result(emitter, &export.sig.return_type, layout.result_offset);
+    emit_prepare_hidden_collector(emitter, layout.hidden_collector_offset);
+    emit_call_body(
+        emitter,
+        export,
+        &layout.param_offsets,
+        layout.hidden_collector_offset,
+        internal,
+    );
+    emit_save_scalar_result(emitter, &export.source_sig.return_type, layout.result_offset);
+    emit_release_hidden_collector(emitter, layout.hidden_collector_offset);
     emit_boundary_pop_aarch64(emitter, layout.handler_base);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
-    emit_load_scalar_result(emitter, &export.sig.return_type, layout.result_offset);
+    emit_load_scalar_result(emitter, &export.source_sig.return_type, layout.result_offset);
     emit_scalar_native_return(emitter, layout);
 
     emitter.label(escaped);
@@ -473,27 +573,27 @@ fn emit_scalar_export_aarch64(
     emitter.instruction("bl __rt_decref_any");                                  // release the consumed escaping Throwable object
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_PHP_EXCEPTION as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
-    emit_zero_scalar_result(emitter, &export.sig.return_type);
+    emit_zero_scalar_result(emitter, &export.source_sig.return_type);
     emit_scalar_native_return(emitter, layout);
 
     emitter.label(allocation);
     emit_set_static_error_aarch64(emitter, allocation_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_ALLOCATION_FAILURE as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
-    emit_zero_scalar_result(emitter, &export.sig.return_type);
+    emit_zero_scalar_result(emitter, &export.source_sig.return_type);
     emit_scalar_native_return(emitter, layout);
 
     emitter.label(runtime);
     emit_set_static_error_aarch64(emitter, runtime_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_RUNTIME_FAILURE as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
-    emit_zero_scalar_result(emitter, &export.sig.return_type);
+    emit_zero_scalar_result(emitter, &export.source_sig.return_type);
     emit_scalar_native_return(emitter, layout);
 
     emitter.label(invalid);
     emit_set_static_error_aarch64(emitter, invalid_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_INVALID_ARGUMENT as i64);
-    emit_zero_scalar_result(emitter, &export.sig.return_type);
+    emit_zero_scalar_result(emitter, &export.source_sig.return_type);
     emit_scalar_native_return(emitter, layout);
 }
 
@@ -513,6 +613,7 @@ fn emit_scalar_export_x86_64(
     invalid_error: (&str, usize),
     allocation_error: (&str, usize),
     runtime_error: (&str, usize),
+    startup: Option<&str>,
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
     // Foreign-entry publish (spike review, B2): re-establish the per-context
@@ -528,6 +629,7 @@ fn emit_scalar_export_x86_64(
         &format!("L_cdylib_{suffix}_arena_ready"),
     );
     emit_save_scalar_c_inputs(emitter, export, layout);
+    emit_initialize_hidden_collector_owner(emitter, layout.hidden_collector_offset);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
         &format!("L_cdylib_{suffix}_stack_limit_ready"),
@@ -536,13 +638,22 @@ fn emit_scalar_export_x86_64(
     emit_validate_string_inputs(emitter, export, &layout.param_offsets, invalid, suffix);
     emit_enter_boundary(emitter, layout.concat_offset, suffix);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
+    super::emit_startup_check(emitter, startup, runtime);
     emit_boundary_push_x86_64(emitter, escaped, layout.handler_base);
-    emit_call_body(emitter, export, &layout.param_offsets, internal);
-    emit_save_scalar_result(emitter, &export.sig.return_type, layout.result_offset);
+    emit_prepare_hidden_collector(emitter, layout.hidden_collector_offset);
+    emit_call_body(
+        emitter,
+        export,
+        &layout.param_offsets,
+        layout.hidden_collector_offset,
+        internal,
+    );
+    emit_save_scalar_result(emitter, &export.source_sig.return_type, layout.result_offset);
+    emit_release_hidden_collector(emitter, layout.hidden_collector_offset);
     emit_boundary_pop_x86_64(emitter, layout.handler_base);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
-    emit_load_scalar_result(emitter, &export.sig.return_type, layout.result_offset);
+    emit_load_scalar_result(emitter, &export.source_sig.return_type, layout.result_offset);
     emit_scalar_native_return(emitter, layout);
 
     emitter.label(escaped);
@@ -566,26 +677,26 @@ fn emit_scalar_export_x86_64(
     emitter.instruction("call __rt_decref_any");                                // release the consumed escaping Throwable object
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_PHP_EXCEPTION as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
-    emit_zero_scalar_result(emitter, &export.sig.return_type);
+    emit_zero_scalar_result(emitter, &export.source_sig.return_type);
     emit_scalar_native_return(emitter, layout);
 
     emitter.label(allocation);
     emit_set_static_error_x86_64(emitter, allocation_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_ALLOCATION_FAILURE as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
-    emit_zero_scalar_result(emitter, &export.sig.return_type);
+    emit_zero_scalar_result(emitter, &export.source_sig.return_type);
     emit_scalar_native_return(emitter, layout);
 
     emitter.label(runtime);
     emit_set_static_error_x86_64(emitter, runtime_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_RUNTIME_FAILURE as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
-    emit_zero_scalar_result(emitter, &export.sig.return_type);
+    emit_zero_scalar_result(emitter, &export.source_sig.return_type);
     emit_scalar_native_return(emitter, layout);
 
     emitter.label(invalid);
     emit_set_static_error_x86_64(emitter, invalid_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_INVALID_ARGUMENT as i64);
-    emit_zero_scalar_result(emitter, &export.sig.return_type);
+    emit_zero_scalar_result(emitter, &export.source_sig.return_type);
     emit_scalar_native_return(emitter, layout);
 }

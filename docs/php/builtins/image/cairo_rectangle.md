@@ -1,8 +1,8 @@
 ---
 title: "cairo_rectangle()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Adds a closed rectangular subpath to the current path."
 sidebar:
-  order: 428
+  order: 429
 ---
 
 ## cairo_rectangle()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_rectangle(mixed $context, float $x, float $y, float $width, float $height): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Adds a closed rectangular subpath to the current path.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -27,7 +27,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

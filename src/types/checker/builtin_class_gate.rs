@@ -37,6 +37,7 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
     "Throwable",
     "Error",
     "TypeError",
+    "ArgumentCountError",
     "ValueError",
     "ArithmeticError",
     "DivisionByZeroError",
@@ -46,14 +47,11 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
 
 /// Throwables `inject_builtin_throwables` registers that nothing in elephc can raise.
 ///
-/// Each has NO `_*_class_id` symbol, and `seed_runtime_throwable_class_names` records why:
-/// elephc rejects a bad builtin arity at COMPILE time where reference PHP raises
-/// `ArgumentCountError` at runtime; `assert()` is not implemented, so `AssertionError` has no
+/// Neither has a `_*_class_id` symbol: `assert()` is not implemented, so `AssertionError` has no
 /// producer; and an unmatched `match` ends in `Terminator::Fatal` rather than throwing
 /// `UnhandledMatchError` — a real gap against reference PHP, and closing it will give the class
 /// the EIR reference that makes it survive this gate on its own.
 const UNRAISED_THROWABLES: &[&str] = &[
-    "ArgumentCountError",
     "AssertionError",
     "UnhandledMatchError",
 ];
@@ -188,8 +186,10 @@ fn program_names(usage: &Usage, class_name: &str) -> bool {
 /// and `Generator` is absent from `dynamic_new::supported_dynamic_new_builtin_class_names`, so
 /// `new $c` cannot conjure one either.
 ///
-/// A declared `Generator` RETURN TYPE also makes a function a generator in elephc
-/// (`ir_lower::function::is_generator_return_type`); that spells the class, so it is covered.
+/// A declared `Generator` return type does NOT make a function a generator — the `yield` token
+/// is the whole rule, and a function that merely forwards someone else's generator declares that
+/// type while holding none (issue #1086). It is still covered here, because declaring the type
+/// spells the class and the name scan sees it.
 ///
 /// When absent, `_generator_class_id` is emitted as `u64::MAX`, a value no object header carries,
 /// so the runtime comparisons simply never match.
@@ -243,11 +243,13 @@ fn insert_with_ancestors(name: &str, wanted: &mut HashSet<String>) {
 mod tests {
     use super::*;
 
+    /// Parses one focused class-registration fixture without running later compiler passes.
     fn parse(source: &str) -> Vec<Stmt> {
         let tokens = crate::lexer::tokenize(source).expect("tokenize");
         crate::parser::parse(&tokens).expect("parse")
     }
 
+    /// Computes required throwable names without enabling optional SPL or reflection surfaces.
     fn registered(source: &str) -> HashSet<String> {
         throwables_to_register(&parse(source), false, false)
     }
@@ -376,6 +378,7 @@ mod tests {
             "Throwable",
             "Error",
             "TypeError",
+            "ArgumentCountError",
             "ValueError",
             "ArithmeticError",
             "DivisionByZeroError",
@@ -405,8 +408,8 @@ mod tests {
         }
     }
 
-    /// Spelling the type is the other route, and a declared `Generator` return type is what makes
-    /// a body a generator in elephc even before its `yield` is reached.
+    /// Spelling the type also registers `Generator`. A declared return type alone does not
+    /// make the function a generator; its body needs a `yield` token.
     #[test]
     fn naming_generator_registers_it() {
         assert!(program_may_reference_generator(&parse(

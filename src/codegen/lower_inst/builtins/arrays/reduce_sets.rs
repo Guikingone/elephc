@@ -1,5 +1,5 @@
 //! Purpose:
-//! Array reduce, walk, merge, set operations, slice, and splice entry points.
+//! Array walk, merge, set operations, slice, and splice entry points.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::arrays`.
@@ -10,96 +10,21 @@
 use super::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
-/// Lowers `array_reduce()` through the callback-driven runtime helper.
-pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_reduce", 3)?;
-    let array = expect_operand(inst, 0)?;
-    let callback = expect_operand(inst, 1)?;
-    let initial = expect_operand(inst, 2)?;
-    let elem_ty = array_reduce_callback_array_element_type(ctx.value_php_type(array)?)?;
-    let initial_ty =
-        eight_byte_callback_value_type(ctx.value_php_type(initial)?, "array_reduce initial")?;
-    let reduce_helper = array_reduce_runtime_label(&elem_ty);
-    match ctx.value_php_type(callback)?.codegen_repr() {
-        PhpType::Callable => {
-            lower_descriptor_callback_runtime(
-                ctx,
-                callback,
-                vec![initial_ty.clone(), elem_ty.clone()],
-                PhpType::Int,
-                |ctx, wrapper_label, env_bytes| {
-                    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-                    let initial_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-                    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
-                    ctx.load_value_to_reg(array, array_arg_reg)?;
-                    ctx.load_value_to_reg(initial, initial_arg_reg)?;
-                    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, reduce_helper);
-                    Ok(())
-                },
-            )?;
-            box_int_result_for_mixed_builtin(ctx, inst);
-            store_if_result(ctx, inst)?;
-            return Ok(());
-        }
-        PhpType::Str => {
-            lower_runtime_string_descriptor_callback(
-                ctx,
-                callback,
-                Some(&PhpType::Array(Box::new(elem_ty.clone()))),
-                vec![initial_ty.clone(), elem_ty.clone()],
-                PhpType::Int,
-                super::super::instruction_strict_php_profile(inst),
-                "array_reduce",
-                |ctx, wrapper_label, env_bytes| {
-                    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-                    let initial_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-                    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
-                    ctx.load_value_to_reg(array, array_arg_reg)?;
-                    ctx.load_value_to_reg(initial, initial_arg_reg)?;
-                    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, reduce_helper);
-                    Ok(())
-                },
-            )?;
-            box_int_result_for_mixed_builtin(ctx, inst);
-            store_if_result(ctx, inst)?;
-            return Ok(());
-        }
-        _ => {}
-    }
-    let callback_binding = static_sort_callback_binding(
-        ctx,
-        callback,
-        "array_reduce callback",
-        Some(&[initial_ty.clone(), elem_ty]),
-    )?;
-    let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
-    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let initial_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
-    ctx.load_value_to_reg(array, array_arg_reg)?;
-    ctx.load_value_to_reg(initial, initial_arg_reg)?;
-    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, reduce_helper);
-    if env_bytes != 0 {
-        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
-    }
-    box_int_result_for_mixed_builtin(ctx, inst);
-    store_if_result(ctx, inst)
-}
-
 /// Lowers `array_walk()` through the callback-driven runtime helper.
 pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_walk", 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
+    if super::boxed_walk::lower_boxed_array_walk(
+        ctx,
+        inst,
+        array,
+        callback,
+        "array_walk",
+        false,
+    )? {
+        return Ok(());
+    }
     let elem_ty = eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_walk")?;
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
@@ -163,11 +88,16 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_void_builtin_result(ctx, inst)
 }
 
-/// Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots.
+/// Merges boxed PHP arrays through layout dispatch, retaining the concrete indexed fast path.
 pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_merge", 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
+    if ctx.value_php_type(first)?.codegen_repr() == PhpType::Mixed
+        || ctx.value_php_type(second)?.codegen_repr() == PhpType::Mixed
+    {
+        return super::boxed_merge::lower_boxed_array_merge(ctx, inst, first, second);
+    }
     let elem_ty = compatible_eight_byte_indexed_array_element_type(
         ctx.value_php_type(first)?,
         ctx.value_php_type(second)?,
@@ -238,29 +168,31 @@ pub(crate) fn lower_array_intersect_key(
 
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
 ///
-/// PHP's `bool $preserve_keys = false` keeps the source integer keys of the selected window
-/// instead of renumbering it from zero. A dense indexed array cannot hold a window that does not
+/// PHP's `bool $preserve_keys = false` renumbers the selected window from zero; a literal `true`
+/// keeps the source integer keys instead. A dense indexed array cannot hold a window that does not
 /// start at key 0, so the key-preserving form lowers to `__rt_array_slice_to_hash`, which builds an
-/// owned hash. The checker guarantees the flag is a literal (it decides the result's static
-/// shape), so a non-literal operand can only mean the checker and the backend disagree.
-/// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
-///
-/// PHP's `bool $preserve_keys = false` keeps the source integer keys of the selected window
-/// instead of renumbering it from zero. A dense indexed array cannot hold a window that does not
-/// start at key 0, so the key-preserving form lowers to `__rt_array_slice_to_hash`, which builds an
-/// owned hash. The checker guarantees the flag is a literal (it decides the result's static
-/// shape), so a non-literal operand can only mean the checker and the backend disagree.
+/// owned hash. For concrete storage the checker guarantees the flag is a literal (it decides the
+/// result's static shape), so a non-literal operand can only mean the checker and the backend
+/// disagree. A boxed source is dispatched first: its result is the boxed PHP array whatever the
+/// flag says, so it reads the flag at runtime (see `lower_mixed_array_slice`).
 pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_slice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
-    if slice_like_preserve_keys(ctx, inst, "array_slice")? {
-        return lower_array_slice_preserve_keys(ctx, inst, array);
-    }
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
         return lower_mixed_array_slice(ctx, inst);
+    }
+    let preserve_keys = slice_like_preserve_keys(ctx, inst, "array_slice")?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        return lower_hash_slice(ctx, inst, array, preserve_keys);
+    }
+    if preserve_keys {
+        return lower_array_slice_preserve_keys(ctx, inst, array);
     }
     let offset = expect_operand(inst, 1)?;
     let length = slice_like_length_operand(inst)?;
@@ -273,19 +205,108 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_slice()` for an indexed array stored inside a boxed Mixed cell.
+/// Lowers `array_slice()` over an ASSOCIATIVE receiver, in either `preserve_keys` mode.
+///
+/// `$offset`/`$length` count positions in insertion order, so the window cannot be addressed by
+/// key and `__rt_hash_slice` walks the source instead. One helper serves both modes because they
+/// differ by a single per-entry decision: php-src renumbers INTEGER keys when `preserve_keys` is
+/// false and leaves string keys alone either way, so the result's key type is the source's in
+/// both modes — which is exactly what the checker records.
+///
+/// Both modes were an explicit `unsupported` diagnostic until issue #683, one from this
+/// function's key-preserving sibling and one from `array_slice_source_element_type`.
+fn lower_hash_slice(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    preserve_keys: bool,
+) -> Result<()> {
+    let PhpType::AssocArray { .. } = inst.result_php_type.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_slice of an associative array into result PHP type {:?}",
+            inst.result_php_type
+        )));
+    };
+    let offset = expect_operand(inst, 1)?;
+    let length = slice_like_length_operand(inst)?;
+    lower_slice_like_args(ctx, array, offset, length, "array_slice")?;
+    // The window arguments occupy the first four registers; the mode flag rides in the fifth.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_load_int_immediate(
+            ctx.emitter,
+            "x4",
+            i64::from(preserve_keys),
+        ),
+        Arch::X86_64 => abi::emit_load_int_immediate(
+            ctx.emitter,
+            "r8",
+            i64::from(preserve_keys),
+        ),
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_slice");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_slice()` for an indexed or hash array stored inside a boxed Mixed cell.
+///
+/// A boxed result (the PHP array type the checker, the fallback, and the callable wrapper give a
+/// boxed source) receives whichever storage the slice built, boxed by its runtime heap kind. An
+/// `array<mixed>` result only comes from a checked list type whose operand EIR still boxes, such
+/// as a call-site-specialized untyped parameter; a hash payload there stays a hash-backed array,
+/// which boxing recognizes by its heap kind.
+///
+/// `$preserve_keys` is read at runtime. The callable wrapper forwards whatever its caller passed,
+/// and `call_user_func_array($f, $args)` hides that argument from the checker, so the flag is
+/// staged on the temporary stack before the payload dispatch and both payload shapes honor it: a
+/// hash hands it to `__rt_hash_slice`, and a list keeps its keys through
+/// `__rt_array_slice_to_hash`. That hash can only be carried by a boxed result, so a flag that may
+/// be set is refused for any other result type.
 pub(super) fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
     let length = slice_like_length_operand(inst)?;
-    let result_elem_ty =
-        result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
+    let preserve_keys = inst.operands.get(3).copied();
+    let result_ty = inst.result_php_type.codegen_repr();
+    let boxed_result = matches!(result_ty, PhpType::Mixed | PhpType::Union(_));
+    let result_elem_ty = if boxed_result {
+        PhpType::Mixed
+    } else {
+        result_array_element_type("array_slice", &result_ty)?
+    };
     require_array_slice_result_type(&PhpType::Mixed, &result_elem_ty)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_mixed_array_slice_aarch64(ctx, array, offset, length)?,
-        Arch::X86_64 => lower_mixed_array_slice_x86_64(ctx, array, offset, length)?,
+    let keys_may_be_kept = slice_preserve_keys_may_be_set(ctx, preserve_keys)?;
+    if keys_may_be_kept && !boxed_result {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_slice preserve_keys of a boxed source into result PHP type {:?}",
+            inst.result_php_type
+        )));
     }
-    normalize_indexed_array_result(ctx, "array_slice", &PhpType::Mixed, &result_elem_ty)?;
+    stage_slice_preserve_keys_flag(ctx, preserve_keys)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_mixed_array_slice_aarch64(
+            ctx,
+            array,
+            offset,
+            length,
+            &result_elem_ty,
+            keys_may_be_kept,
+        )?,
+        Arch::X86_64 => lower_mixed_array_slice_x86_64(
+            ctx,
+            array,
+            offset,
+            length,
+            &result_elem_ty,
+            keys_may_be_kept,
+        )?,
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    if boxed_result {
+        emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+    }
     store_if_result(ctx, inst)
 }
 
@@ -326,6 +347,7 @@ pub(super) fn lower_mixed_array_splice(ctx: &mut FunctionContext<'_>, inst: &Ins
     let length = inst.operands.get(2).copied();
     let replacement =
         SpliceReplacement::resolve(ctx, inst.operands.get(3).copied(), &PhpType::Mixed)?;
+    super::boxed_mutation::prepare_boxed_array_receiver(ctx, array, "array_splice")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             lower_mixed_array_splice_aarch64(ctx, array, offset, length, &replacement)?

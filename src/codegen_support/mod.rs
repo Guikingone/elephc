@@ -25,6 +25,7 @@ pub(crate) mod emit;
 pub(crate) mod hash_crypto;
 pub(crate) mod iconv_bridge;
 pub(crate) mod interface_wrappers;
+pub(crate) mod mbstring_query;
 pub(crate) mod phar_stream;
 /// Platform module.
 pub mod platform;
@@ -34,6 +35,7 @@ pub(crate) mod reflection;
 pub(crate) mod runtime;
 mod runtime_features;
 pub(crate) mod sentinels;
+pub(crate) mod source_method_adapters;
 pub(crate) mod stream_filters;
 pub(crate) mod tls;
 pub(crate) mod try_handlers;
@@ -42,9 +44,13 @@ pub(crate) mod visibility;
 mod wrappers;
 
 pub(crate) use arrays::emit_array_value_type_stamp;
-pub(crate) use compilation_context::{compile_is_web_sapi, compile_php_version, linked_extensions};
+pub(crate) use compilation_context::{
+    compile_is_web_sapi, compile_php_version, ini_overrides, linked_extensions,
+    opcache_api_restricted, opcache_manifest_len,
+};
 pub use compilation_context::{
-    autoload_rule_count, set_autoload_rule_count, set_compile_profile, set_linked_extensions,
+    autoload_rule_count, set_autoload_rule_count, set_compile_profile, set_ini_overrides,
+    set_linked_extensions, set_opcache_api_restricted, set_opcache_manifest_len,
 };
 pub(crate) use declaration_order::{
     declared_class_names, declared_interface_names, declared_trait_names,
@@ -66,7 +72,7 @@ pub(crate) use sentinels::NULL_SENTINEL;
 pub(crate) use value_boxing::{
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
-    runtime_value_tag,
+    mixed_unbox_payload_reg, runtime_value_tag,
 };
 pub(crate) use wrappers::{
     emit_callback_wrapper, emit_extern_callback_trampoline, emit_fiber_wrapper,

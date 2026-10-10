@@ -17,11 +17,12 @@ sidebar:
 | `sleep()` | `sleep($seconds): int` | Sleep for seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name = null, $local_only = false): string\|array\|false` | Get one environment variable, or — with no argument — the whole environment as a string-keyed array. Answers `false` for a name that is not set, and `""` for one set to the empty string. `$local_only` is accepted and has no effect: there is no environment here separate from the process's |
-| `putenv()` | `putenv($assignment): bool` | Set an environment variable (`KEY=VALUE`), or remove it when the argument has no `=` |
+| `putenv()` | `putenv($assignment): bool` | Set an environment variable (`KEY=VALUE`), or remove it when the argument has no `=`. Answers the platform's own status, so `false` when libc refuses the change |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
-| `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
+| `defined()` | `defined($name): bool` | Check whether a string-literal global or `Class::CONST` name is defined |
 | `constant()` | `constant($name): mixed` | Value of a global constant named by a string literal. AOT has no runtime constant table, so a dynamic name, a `Foo::BAR` class constant, and an unknown name are compile errors |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
+| `getmypid()` | `getmypid(): int` | The current process ID, read from `getpid()` on every call, so a `pcntl_fork()` child reports its own id |
 | `phpversion()` | `phpversion(?string $extension = null): string\|false` | Get the targeted PHP language version, or one extension's version (`false` if it is not loaded) |
 | `zend_version()` | `zend_version(): string` | Get the Zend Engine version for the compile target |
 | `php_sapi_name()` | `php_sapi_name(): string` | Get the SAPI name (`"cli"`, or `"cli-server"` under `--web`) |
@@ -30,6 +31,80 @@ sidebar:
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
+
+## The environment and the CLI superglobals
+
+`getenv()` reads the process environment live, so a `putenv()` made earlier in the
+same program is visible to it:
+
+```php
+putenv("APP_MODE=debug");
+echo getenv("APP_MODE");        // debug
+putenv("APP_MODE");             // a bare name REMOVES the variable
+var_dump(getenv("APP_MODE"));   // bool(false)
+```
+
+Called with no argument it answers the whole environment as a string-keyed array,
+and the optional `$local_only` argument is accepted and has no effect — in the CLI
+SAPI there is no environment separate from the process's, so both forms agree:
+
+```php
+$env = getenv();
+echo count($env), "\n";
+echo $env["PATH"], "\n";
+```
+
+A value containing `=` is split on the **first** one, as PHP does, so a variable
+whose value holds an `=` keeps its name and its whole value.
+
+### `$_ENV` and `$_SERVER`
+
+Both superglobals carry the environment in an ordinary compiled CLI program, and
+`$_SERVER` carries PHP's own CLI keys on top of it:
+
+| Key | Value |
+|---|---|
+| `argv` | the program's arguments, like `$argv` |
+| `argc` | the argument count, like `$argc` |
+| `PHP_SELF`, `SCRIPT_NAME`, `SCRIPT_FILENAME`, `PATH_TRANSLATED` | `$argv[0]` — a compiled program has no script at run time, so the thing that was actually invoked is the closest true answer |
+| `DOCUMENT_ROOT` | `""` |
+| `REQUEST_TIME`, `REQUEST_TIME_FLOAT` | the start time, as `time()` and `microtime(true)` |
+
+The five request superglobals (`$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
+`$_REQUEST`) stay empty arrays, exactly as they are under `php` on the command
+line. Under [`--web`](../beyond-php/web.md#request-input) `$_SERVER` describes the
+HTTP request instead.
+
+Seeding is pay-for-use: only the superglobals a program actually spells are built,
+which is what PHP's `auto_globals_jit` does for the same reason.
+
+`$_ENV` and `$_SERVER` are **snapshots taken before the program ran**, so a later
+`putenv()` does not reach them — only `getenv()`. PHP has the same asymmetry:
+
+```php
+putenv("LATE=1");
+var_dump(getenv("LATE"));        // string(1) "1"
+var_dump(isset($_ENV["LATE"]));  // bool(false)
+```
+
+Code run by `eval()` sees the same superglobals from every scope. A fragment
+that names one the compiled program never spelled gets it created with these
+same contents when the fragment starts; see
+[Scope behavior](eval.md#scope-behavior) for how such a value is shared.
+
+#### Known limitation
+
+Reading an **element** of the nested `$_SERVER['argv']` does not work: the index
+returns a raw pointer as an `int` and `foreach` over it iterates zero times, while
+`count($_SERVER['argv'])` is correct. This is a general limitation of a typed
+array held inside a `mixed` value rather than anything specific to `argv`, and it
+predates the CLI superglobals. Read `$argv` directly, which is unaffected:
+
+```php
+foreach ($argv as $i => $arg) {   // correct
+    echo $i, ": ", $arg, "\n";
+}
+```
 
 ## PHP version surface
 
@@ -133,7 +208,7 @@ Inside `eval()`, the interpreter has no access to `--php-version` or `--web` and
 reports the default profile: `PHP_VERSION` `"8.5.0"`, `PHP_SAPI` `"cli"`. On a
 default-profile CLI binary that is identical to the compiled surface.
 
-`define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode.
+`define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode. The literal may name a global constant or a `Class::CONST` class, interface, trait-imported, or enum member; missing class-like types or members are `false`. Class-constant existence follows PHP visibility: public from any scope, private only from the declaring class, and protected from classes in the same inheritance family (a parent method can see a child's protected constant). Lookup stops at the first inherited declaration, so an inaccessible shadow does not fall through. `self::` and `parent::` use the lexical class, while `static::` dispatches on the runtime called class across the known AOT hierarchy. A trait constant is visible through each class using the trait (including transitive trait uses), but the trait name itself is not a valid `defined()` receiver. Using `self::` or `static::` without a class scope, or `parent::` without a parent scope, raises a catchable `Error`. Eval-mode class-constant names remain unresolved.
 
 `php_uname()` supports PHP's standard one-character modes:
 
@@ -163,7 +238,7 @@ default-profile CLI binary that is identical to the compiled surface.
 | `gettimeofday()` | `gettimeofday($as_float = false): array\|float` | Current time as `['sec' => int, 'usec' => int, 'minuteswest' => int, 'dsttime' => int]` (minuteswest/dsttime from the default zone), or a float of seconds when `$as_float` is true. `usec` is derived from `microtime()`. |
 | `strftime()` / `gmstrftime()` | `strftime($format [, $timestamp]): string` | Format a timestamp with C `strftime` `%`-specifiers (deprecated in PHP 8.1). Specifiers match PHP exactly, including the week numbers `%U` (Sunday-based), `%W` (Monday-based) and `%V` (ISO), the space-padded `%e`/`%k`/`%l`, `%c` (with its space-padded day), and the two-digit ISO year `%g`. `%x`/`%X` use the default C-locale forms (`%m/%d/%y`, `%H:%M:%S`). One known difference: `%P` yields lowercase `am`/`pm` here, whereas PHP's `strftime` emits a literal `P` (it never implemented the GNU lowercase extension). `gmstrftime()` formats in UTC. |
 | `strptime()` | `strptime($timestamp, $format): array\|false` | Inverse of `strftime()`: parse a string against C `strftime` `%`-specifiers (`%Y %y %m %d %e %H %M %S %j %B %b %h %A %a %p %P`, the week specifiers `%u %w %U %W %V` and the timezone specifiers `%z`/`%Z` (consumed but not used to build the instant), plus `%n`/`%t` and `%%`) into a `struct tm` array (`tm_sec`/`tm_min`/`tm_hour`/`tm_mday`/`tm_mon` 0-based/`tm_year` since 1900/`tm_wday`/`tm_yday`/`unparsed`), or `false` on mismatch. Deprecated in PHP 8.1. |
-| `strtotime()` | `strtotime($datetime [, $baseTimestamp]): int\|false` | Parse a date/time string into a Unix timestamp. Supports ISO dates, time-only, relative offsets, named weekdays, and bare keywords. When `$baseTimestamp` is given, relative/keyword/time-only forms resolve against it instead of the current time. An ISO field outside its range (month > 12, day > 31, hour > 24, minute > 59, second > 60) returns `false`, matching PHP; in-range calendar overflow such as `"2026-02-30"` is still normalized. Returns `false` on failure (use `=== false`; `-1` is the valid timestamp one second before the epoch). |
+| `strtotime()` | `strtotime($datetime [, $baseTimestamp]): int\|false` | Parse a date/time string into a Unix timestamp. Supports ISO dates (a one-digit month or day, as in `"2020-1-5"`, is accepted like PHP), time-only, relative offsets, named weekdays, bare keywords, and the `@<timestamp>` epoch form. An epoch takes an optional `-`, a fraction of 1 to 6 digits (a negative fractional value floors, so `"@-5.5"` is `-6`), and one trailing timezone token that PHP ignores (`"@123 UTC"`, `"@123abc"`); a relative offset, time, zone identifier, or strtotime keyword after the epoch is not evaluated and returns `false`. When `$baseTimestamp` is given, relative/keyword/time-only forms resolve against it instead of the current time. An ISO field outside its range (month > 12, day > 31, hour > 24, minute > 59, second > 60) returns `false`, matching PHP; in-range calendar overflow such as `"2026-02-30"` is still normalized. Returns `false` on failure (use `=== false`; `-1` is the valid timestamp one second before the epoch). |
 
 When `date_default_timezone_set()` has not been called, the default timezone is **UTC** (matching PHP), so `date()`, `strtotime()`, `mktime()`, and `DateTime` produce host-independent output rather than following the build machine's local zone.
 
@@ -203,17 +278,17 @@ A backslash escapes the next character so it is emitted literally instead of bei
 
 `strtotime()` accepts the following shapes (input is case-insensitive for keywords/unit names/weekday names, and leading/trailing ASCII whitespace is trimmed):
 
-- **ISO date / datetime** — `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DDTHH:MM`, or `YYYY-MM-DDTHH:MM:SS`. Lowercase `t` is also accepted as the date/time separator.
-- **`@<timestamp>`** — a UNIX timestamp (e.g. `"@1700000000"`); an optional sign and a truncated fractional part are accepted. Returned verbatim (UTC), independent of the current time.
-- **American `M/D/Y`** — `MM/DD/YYYY` or single-digit `M/D/Y`, with an optional `HH:MM[:SS]` time suffix (e.g. `"12/25/2024"`, `"6/15/2024 8:05"`). A 2-digit year windows to 2000–2069 (`0`–`69`) or 1970–1999 (`70`–`99`). Month must be `<= 12` and day `<= 31`.
-- **Textual dates** — `D Month Y` (`"25 December 2024"`) or `Month D[,] Y` (`"December 25, 2024"`, `"July 4 2024"`), with full or 3-letter month names (case-insensitive) and an optional `HH:MM[:SS]` time suffix. The day is not range-checked, so `"31 feb 2024"` normalizes to March 2 as in PHP. A 2-digit year follows the same windowing as slash dates.
-- **Bare keywords** — `now`, `today`, `tomorrow`, `yesterday`, `midnight`, `noon`. (`midnight` is an alias for `today`.)
-- **Time-only** — `H:MM`, `HH:MM`, `H:MM:SS`, `HH:MM:SS` — combined with today's date.
-- **Relative offsets** — `[+-]?N unit [N unit ...]`, `a/an unit`, and `N unit ago` / `a/an unit ago` (negates the whole expression). Units: `sec(s)`, `second(s)`, `min(s)`, `minute(s)`, `hour(s)`, `day(s)`, `week(s)`, `month(s)`, `year(s)`. Composite forms like `"+1 day 2 hours"`, `"an hour"`, and `"a day ago"` are supported. Day/week offsets honor DST through libc `mktime` normalization.
-- **Relative units** — `this <unit>` (no change), `next <unit>` (+1), and `last <unit>` (-1) for the units `second`, `minute`, `hour`, `day`, `week`, `month`, `year` (e.g. `"next month"`, `"last year"`, `"this hour"`, `"next week"`), preserving the time of day with calendar arithmetic. The `week` unit is Monday-anchored, matching PHP.
-- **Named weekdays** — `Monday`..`Sunday` and 3-letter abbreviations `Mon`..`Sun`. Modifiers: `next <weekday>` (next future occurrence; today + 7 if today matches), `last <weekday>` (most recent past; today - 7 if today matches), `this <weekday>` (delta may be zero when today matches). Result is midnight of the target day.
-- **`first/last day of <modifier> month`** — `this`, `next`, `last`/`previous`/`prev` select the month; `first day of` sets the 1st and `last day of` the final day. The time of day is preserved (e.g. `"last day of next month"`).
-- **`<ordinal> <weekday> of <modifier> month`** — `first`..`fifth` or `last` of a named weekday (e.g. `"first monday of next month"`, `"last friday of this month"`, `"third tuesday of next month"`). A `fifth` occurrence that overflows rolls into the next month; the time resets to midnight.
+- **ISO date / datetime**: `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DDTHH:MM`, or `YYYY-MM-DDTHH:MM:SS`. Lowercase `t` is also accepted as the date/time separator, and the month and day may have one digit (`"2020-1-5"`, `"2020-1-5 10:30"`).
+- **`@<timestamp>`**: a UNIX timestamp (e.g. `"@1700000000"`), returned verbatim (UTC), independent of the current time. An optional `-` (not `+`) and a fraction of 1 to 6 digits are accepted; the fraction truncates, except that a negative value floors (`"@-5.5"` is `-6`). One trailing timezone token that PHP ignores may follow (`"@123 UTC"`, `"@123abc"`, `"@123 (UTC)"`); anything PHP would evaluate there (an offset, a time, a zone identifier, a keyword) returns `false`. An integer part outside the 64-bit range returns `false`, while a fraction that floors below `PHP_INT_MIN` wraps to `PHP_INT_MAX` (`"@-9223372036854775808.5"`), exactly as PHP 8.5 does.
+- **American `M/D/Y`**: `MM/DD/YYYY` or single-digit `M/D/Y`, with an optional `HH:MM[:SS]` time suffix (e.g. `"12/25/2024"`, `"6/15/2024 8:05"`). A 2-digit year windows to 2000–2069 (`0`–`69`) or 1970–1999 (`70`–`99`). Month must be `<= 12` and day `<= 31`.
+- **Textual dates**: `D Month Y` (`"25 December 2024"`) or `Month D[,] Y` (`"December 25, 2024"`, `"July 4 2024"`), with full or 3-letter month names (case-insensitive) and an optional `HH:MM[:SS]` time suffix. The day is not range-checked, so `"31 feb 2024"` normalizes to March 2 as in PHP. A 2-digit year follows the same windowing as slash dates.
+- **Bare keywords**: `now`, `today`, `tomorrow`, `yesterday`, `midnight`, `noon`. (`midnight` is an alias for `today`.)
+- **Time-only**: `H:MM`, `HH:MM`, `H:MM:SS`, `HH:MM:SS`, combined with today's date.
+- **Relative offsets**: `[+-]?N unit [N unit ...]`, `a/an unit`, and `N unit ago` / `a/an unit ago` (negates the whole expression). Units: `sec(s)`, `second(s)`, `min(s)`, `minute(s)`, `hour(s)`, `day(s)`, `week(s)`, `month(s)`, `year(s)`. Composite forms like `"+1 day 2 hours"`, `"an hour"`, and `"a day ago"` are supported. Day/week offsets honor DST through libc `mktime` normalization.
+- **Relative units**: `this <unit>` (no change), `next <unit>` (+1), and `last <unit>` (-1) for the units `second`, `minute`, `hour`, `day`, `week`, `month`, `year` (e.g. `"next month"`, `"last year"`, `"this hour"`, `"next week"`), preserving the time of day with calendar arithmetic. The `week` unit is Monday-anchored, matching PHP.
+- **Named weekdays**: `Monday`..`Sunday` and 3-letter abbreviations `Mon`..`Sun`. Modifiers: `next <weekday>` (next future occurrence; today + 7 if today matches), `last <weekday>` (most recent past; today - 7 if today matches), `this <weekday>` (delta may be zero when today matches). Result is midnight of the target day.
+- **`first/last day of <modifier> month`**: `this`, `next`, `last`/`previous`/`prev` select the month; `first day of` sets the 1st and `last day of` the final day. The time of day is preserved (e.g. `"last day of next month"`).
+- **`<ordinal> <weekday> of <modifier> month`**: `first`..`fifth` or `last` of a named weekday (e.g. `"first monday of next month"`, `"last friday of this month"`, `"third tuesday of next month"`). A `fifth` occurrence that overflows rolls into the next month; the time resets to midnight.
 
 An ISO 8601 datetime may carry a trailing explicit timezone: a **numeric UTC offset** `+HH:MM`, `-HH:MM`, `+HHMM` (optionally space-separated), `Z`, or the words `UTC`/`GMT` (e.g. `"2024-06-15T12:00:00+02:00"`, `"2024-06-15 12:00:00 +0200"`, `"...Z"`, `"... UTC"`). The wall-clock is then interpreted at that offset (`Z`/`UTC`/`GMT` = UTC offset 0), overriding the configured default zone. A trailing **IANA zone name** is also accepted (e.g. `"2024-06-15 12:00:00 America/New_York"`): the date/time is interpreted in that zone with full daylight-saving handling resolved from the system timezone database (so the example is `12:00` EDT = `16:00` UTC), and the previous default zone is restored afterwards. The zone name is the final space-separated token, distinguished from the time by containing a letter, so a bare `"YYYY-MM-DD HH:MM:SS"` is unaffected. Bare ordinal weekdays without `of <month>` (`"first monday"`) are not accepted (use `next monday` or the `of <month>` form). Malformed input returns `false` (use `=== false` to detect failure). Pre-1900 year handling is described under [Date and Time](datetime.md).
 
@@ -294,7 +369,7 @@ Encoding rules for objects:
 | Function | Signature | Notes |
 |---|---|---|
 | `serialize()` | `serialize($value): string` | Produces PHP's `serialize()` wire format, byte-for-byte: `N;` (null), `b:0;`/`b:1;` (bool), `i:<int>;` (int), `d:<float>;` (float, shortest round-trip at `serialize_precision = -1`, with `INF`/`-INF`/`NAN` for non-finite values), `s:<bytelen>:"<raw>";` (string, raw bytes with the exact byte length and no escaping), `a:<count>:{<key><value>...}` (indexed and associative arrays, nested, with int keys as `i:K;` and string keys as `s:N:"...";`, in insertion order), and `O:<len>:"<Class>":<count>:{...}` (objects). |
-| `unserialize()` | `unserialize($data, $options = []): mixed` | Parses the `serialize()` wire format back into a boxed `Mixed` value. Scalars, arrays, and objects round-trip exactly. Malformed or unsupported input returns `false`, matching PHP's failure indicator. The `$options` argument is accepted for signature compatibility and currently ignored. |
+| `unserialize()` | `unserialize($data, $options = []): mixed` | Parses the `serialize()` wire format back into a boxed `Mixed` value. Scalars, arrays, and objects round-trip exactly. Malformed or unsupported input returns `false`, matching PHP's failure indicator. `$options['allowed_classes']` accepts `true`, `false`, or an array of class names; disallowed objects become `__PHP_Incomplete_Class` instances. Invalid option shapes raise the matching catchable `TypeError`. |
 
 `serialize()`/`unserialize()` round-trip the scalar, array, and object subset exactly,
 and the produced bytes are interchangeable with the PHP interpreter. They share the same
@@ -305,7 +380,14 @@ formatter, so float output matches `json_encode`'s precision.
 
 Objects serialize as `O:<len>:"<Class>":<count>:{...}` with PHP's exact property-key
 mangling: public properties use the bare name, protected use `\0*\0name`, and private
-use `\0Class\0name`. Properties are emitted in declaration order (inherited first).
+use `\0Class\0name`. Properties are emitted in declaration order (inherited first). A typed
+property that was never initialized is left out, and not counted, as in PHP.
+
+Instances of the builtin classes PHP marks not serializable (the Reflection family, `Closure`,
+`Generator`, `Fiber`, the `SplFileInfo` family, `Phar`/`PharData`, and the PDO, curl, gd and
+XML handles, plus their subclasses) throw `Exception("Serialization of '<Class>' is not
+allowed")`. `unserialize()` refuses the same classes with `Unserialization of '<Class>' is not
+allowed` as soon as it reads the class name, before it builds anything else in the payload.
 
 Serialization magic methods are honoured:
 
@@ -316,7 +398,8 @@ Serialization magic methods are honoured:
   is treated as a string/int-keyed array so `$data['key']` works (a bare `array` hint
   otherwise resolves to an integer-indexed array).
 - **`__sleep(): array`** — serializes only the named properties, in `__sleep()`'s order,
-  using their mangled keys.
+  using their mangled keys. A named typed property that was never initialized is left out and
+  not counted, as in PHP; an unknown name is left out too, without PHP's warning.
 - **`__wakeup(): void`** — runs after properties are injected (when `__unserialize()` is
   not defined).
 
@@ -348,7 +431,7 @@ wrappers are documented in [Streams](streams.md).
 | Function | Signature | Description |
 |---|---|---|
 | `file_get_contents()` | `file_get_contents($filename, $use_include_path = false, $context = null, $offset = 0, $length = null): string\|false` | Read a file, or `false` if it cannot be opened. `$offset` starts the read at a byte position, counting from the end of the data when negative; a negative offset that reaches before the first byte emits `file_get_contents(): Failed to seek to position N in the stream` and returns `false`, while an offset past the end simply returns `""`. `$length` caps the bytes returned and is bounded by what is actually available; `null` reads to the end and a negative `$length` throws `\ValueError` before the file is opened. `$use_include_path` is accepted and behaves as `false`, because elephc resolves paths against the current directory only (the same result an include path of `"."` gives). `$context` must be `null`: elephc has no stream-context plumbing on the read path, so a non-null one is a compile error rather than a silently dropped option set. A literal `phar://` URL is decoded at compile time; non-literal `phar://` is read at runtime. Native PHAR, tar-based PHAR, and zip-based PHAR containers are readable; native gzip/bzip2 entries and ZIP deflate entries are decoded transparently. Literal and runtime-string `http://`, `https://`, `ftp://`, and `ftps://` URLs open the matching wrapper, read the whole body, and return it (`false` on a failed open). |
-| `file_put_contents()` | `file_put_contents($filename, $data): int` | Write file |
+| `file_put_contents()` | `file_put_contents($filename, $data, $flags = 0): int` | Write a file and return the byte count. `$flags` accepts `FILE_APPEND`, which extends the file instead of truncating it, and `LOCK_EX`, which takes an exclusive `flock` on the descriptor for the duration of the write; the two combine. `LOCK_EX` without `FILE_APPEND` opens the file without truncating it and truncates only once the lock is held, so a writer waiting for the lock cannot have its contents erased first; a lock that cannot be taken is a failed write, not an unlocked one. Every other `FILE_*` flag is ignored. A `phar://` destination rejects a non-zero `$flags`: a phar entry is rewritten whole, so there is nothing for `FILE_APPEND` to append to — a literal `phar://` path is a compile error and a runtime one returns `-1`, rather than silently truncating what the caller asked to extend. |
 | `file()` | `file($filename [, $flags]): array\|false` | Read into array of lines, or `false` when the file cannot be read — the only way to tell a failed read from a genuinely empty file, which returns `[]`. `$flags` accepts `FILE_IGNORE_NEW_LINES`, `FILE_SKIP_EMPTY_LINES` and `FILE_USE_INCLUDE_PATH` (accepted, no effect). The stream-context parameter is not supported. |
 | `file_exists()` | `file_exists($filename): bool` | Check exists |
 | `is_file()` | `is_file($filename): bool` | Is regular file |
@@ -362,7 +445,7 @@ wrappers are documented in [Streams](streams.md).
 | `copy()` | `copy($source, $dest): bool` | Copy file |
 | `rename()` | `rename($old, $new): bool` | Rename/move |
 | `unlink()` | `unlink($filename): bool` | Delete file |
-| `mkdir()` | `mkdir($pathname): bool` | Create directory |
+| `mkdir()` | `mkdir($directory, $permissions = 0777, $recursive = false): bool` | Create a directory. `$permissions` is masked by the process umask, as in PHP, so the default still yields `0755` under the usual `umask 022`. `$recursive` creates every missing parent, which receive the same `$permissions`; without it a missing parent fails, as in PHP. A registered stream wrapper's `mkdir()` receives both arguments as PHP passes them — the mode, and an options word carrying `STREAM_REPORT_ERRORS` plus `STREAM_MKDIR_RECURSIVE` when requested. Only the final component decides the result, so creating a directory that already exists returns `false` either way. The stream-context parameter is not supported. |
 | `rmdir()` | `rmdir($pathname): bool` | Remove directory |
 | `scandir()` | `scandir($directory): array` | List files |
 | `opendir()` | `opendir($directory): resource\|false` | Open a directory stream for iteration with `readdir()`; returns a stream resource, or `false` on failure |
@@ -405,7 +488,7 @@ wrappers are documented in [Streams](streams.md).
 
 > The 13 `stat()` / `lstat()` / `fstat()` fields are inserted in PHP's documented order. Check the return value against `false` before reading fields when the path or stream may be invalid.
 
-> On a registered userspace stream wrapper path (`scheme://…`), the stat family dispatches to the wrapper's `url_stat()` method instead of the filesystem: `stat()`, `lstat()`, `file_exists()`, `filesize()`, `filemtime()`, `is_file()`, `is_dir()`, `is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` all consult the wrapper, handing it the same `STREAM_URL_STAT_*` flag values PHP passes. The permission predicates follow PHP's single-triad rule: the owner bits when the reported `uid` matches the process uid, the group bits when the reported `gid` matches the process gid or a supplementary group, the world bits otherwise. See [Streams](streams.md) for wrapper registration.
+> On a registered userspace stream wrapper path (`scheme://…`), the stat family dispatches to the wrapper's `url_stat()` method instead of the filesystem: `stat()`, `lstat()`, `file_exists()`, `filesize()`, `filemtime()`, `fileatime()`, `filectime()`, `fileperms()`, `fileowner()`, `filegroup()`, `fileinode()`, `is_file()`, `is_dir()`, `is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` all consult the wrapper, handing it the same `STREAM_URL_STAT_*` flag values PHP passes. The integer getters read the matching `url_stat()` key (`size`, `mtime`, `atime`, `ctime`, `mode`, `uid`, `gid`, `ino`) and return `false` when the wrapper reports the path absent. The permission predicates follow PHP's single-triad rule: the owner bits when the reported `uid` matches the process uid, the group bits when the reported `gid` matches the process gid or a supplementary group, the world bits otherwise. See [Streams](streams.md) for wrapper registration.
 
 ## Path manipulation
 

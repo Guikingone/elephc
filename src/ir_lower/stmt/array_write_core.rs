@@ -96,9 +96,77 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
-    let array_value = ctx.load_local(array, Some(span));
-    let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
+    let update = desugared_element_update(value, span, |read| {
+        reads_local_array_element(read, array, index)
+    });
+    if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
+        crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+        return;
+    }
+    lower_array_assign_with_diagnosed_key(ctx, array, index, value, span, update.is_some());
+}
+
+/// How a statement value produced by the parser's update desugaring re-reads its own target.
+///
+/// `$place[$k] op= $v` is written as `$place[$k] op $v` and `$place[$k] ??= $v` as
+/// `$place[$k] ?? $v`, both built with the statement's own span. A right-hand side the user
+/// wrote never carries that span, so `$a[$k] = $a[$k] + 1` stays two separate PHP accesses.
+pub(crate) enum ElementUpdate<'a> {
+    /// A compound operator. The value already read the element, so the write reuses the key
+    /// that read converted instead of diagnosing a float key a second time.
+    Compound,
+    /// A null-coalescing assignment. `read` probes the element, and `default` is written only
+    /// when that probe produced null, as PHP does.
+    NullCoalesce { read: &'a Expr, default: &'a Expr },
+}
+
+/// Classifies a statement value that re-reads the element the statement writes.
+pub(crate) fn desugared_element_update<'a>(
+    value: &'a Expr,
+    assignment_span: Span,
+    reads_target: impl Fn(&Expr) -> bool,
+) -> Option<ElementUpdate<'a>> {
+    if value.span != assignment_span {
+        return None;
+    }
+    match &value.kind {
+        ExprKind::BinaryOp { left, .. } if reads_target(left) => Some(ElementUpdate::Compound),
+        ExprKind::NullCoalesce { value: read, default } if reads_target(read) => {
+            Some(ElementUpdate::NullCoalesce { read, default })
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether `read` is the element `$array[index]` of the named local.
+fn reads_local_array_element(read: &Expr, array: &str, index: &Expr) -> bool {
+    matches!(
+        &read.kind,
+        ExprKind::ArrayAccess { array: receiver, index: read_index }
+            if matches!(&receiver.kind, ExprKind::Variable(name) if name == array)
+                && read_index.as_ref() == index
+    )
+}
+
+/// Lowers an array write after an earlier read of the same source-level dimension.
+pub(crate) fn lower_array_assign_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    let array_value = load_array_local_for_write(ctx, array, span);
     let op = array_set_op(array_value.ir_type);
+    if op == Op::RuntimeCall && matches!(
+        array_value.ir_type,
+        IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
+    ) {
+        lower_boxed_array_local_set(ctx, array_value, index, value, span, key_already_diagnosed);
+        return;
+    }
+    let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
     // A literal string index always means a hash key, so promote the destination
     // to associative storage like PHP. A boxed Mixed/Union index may hold either
     // an integer or a string key (foreach loop keys are always Mixed in EIR via
@@ -117,11 +185,15 @@ pub(super) fn lower_array_assign(
         && index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)
     {
-        lower_mixed_key_array_set(ctx, array, array_value, index_value, value_value, span);
+        lower_mixed_key_array_set(
+            ctx, array, array_value, index_value, value_value, span, key_already_diagnosed,
+        );
         return;
     }
     if op == Op::ArraySet {
-        index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+        index_value = coerce_array_key_to_int_at_span(
+            ctx, index_value, Some(index.span), key_already_diagnosed,
+        );
         let array_ty = ctx.builder.value_php_type(array_value.value);
         value_value = coerce_indexed_array_set_value(ctx, &array_ty, value_value, Some(value.span));
     }
@@ -155,12 +227,51 @@ pub(super) fn lower_array_assign(
     ctx.emit_void(
         op,
         vec![array_value.value, index_value.value, value_value.value],
-        None,
+        (op == Op::HashSet && key_already_diagnosed).then_some(Immediate::Bool(true)),
         op.default_effects(),
         Some(span),
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Roots and retires operands borrowed by the boxed writer, including on same-frame catches.
+/// The backend copies strings and retains other payloads in a separate consumed box.
+/// `key_already_diagnosed` marks the write half of a compound update, whose read already
+/// reported a float key's conversion, so the boxed writer rebuilds the key silently.
+fn lower_boxed_array_local_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: LoweredValue,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    let mut roots = Vec::new();
+    let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
+        let value = lower_expr(ctx, expr);
+        let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);
+        if let Some(root) = root { roots.push(root); }
+        value
+    };
+    // Preserve the existing PHP ordering for bare variable keys versus computed keys.
+    let (index, value) = if matches!(index.kind, ExprKind::Variable(_)) {
+        let value = lower_operand(ctx, value);
+        (lower_operand(ctx, index), value)
+    } else {
+        let index = lower_operand(ctx, index);
+        (index, lower_operand(ctx, value))
+    };
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![array.value, index.value, value.value],
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
+        Op::RuntimeCall.default_effects(),
+        Some(span),
+    );
+    for root in roots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
+    }
 }
 
 /// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.
@@ -196,7 +307,7 @@ pub(super) fn lower_string_key_array_promotion(
     let current_ty = ctx.builder.value_php_type(array_value.value);
     let value_ty = ctx.builder.value_php_type(value.value);
     let assoc_ty = promoted_assoc_array_type(current_ty, value_ty);
-    ctx.prepare_mutated_local_owner(array, array_value, assoc_ty.clone(), Some(span));
+    ctx.prepare_mutated_local_owner_for_backend_retire(array, array_value, assoc_ty.clone(), Some(span));
     let hash = ctx.emit_value(
         Op::ArrayToHash,
         vec![array_value.value],
@@ -232,12 +343,13 @@ pub(super) fn lower_mixed_key_array_set(
     index: LoweredValue,
     value: LoweredValue,
     span: Span,
+    key_already_diagnosed: bool,
 ) {
     let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
     let result = ctx.emit_value(
         Op::ArraySetMixedKey,
         vec![array_value.value, index.value, value.value],
-        None,
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
         mixed_array_ty.clone(),
         Op::ArraySetMixedKey.default_effects(),
         Some(span),
@@ -265,4 +377,3 @@ pub(super) fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) 
         value: Box::new(assoc_value_ty),
     }
 }
-

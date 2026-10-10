@@ -15,7 +15,7 @@ use crate::codegen::platform::Target;
 use crate::ir::print_module;
 use crate::names::Name;
 use crate::parser::ast::{
-    BinOp, CallableTarget, CastType, CatchClause, ClassConst, ClassMethod, ClassProperty,
+    ArrayEntry, BinOp, CallableTarget, CastType, CatchClause, ClassConst, ClassMethod, ClassProperty,
     CType, EnumCaseDecl, Expr, ExprKind, ExternField, ExternParam, InstanceOfTarget,
     MagicConstant, PackedField, Program, PropertyHooks, StaticReceiver, Stmt, StmtKind,
     TraitUse, TypeExpr, UseItem, UseKind, Visibility,
@@ -83,6 +83,7 @@ fn dummy_check_result() -> CheckResult {
             declared_params: vec![true],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         },
     );
 
@@ -120,6 +121,12 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        requested_instantiations: Vec::new(),
+        requested_class_instantiations: Vec::new(),
+        requested_method_instantiations: Vec::new(),
+        generic_method_sites: std::collections::HashMap::new(),
+        generic_new_sites: Default::default(),
+        generic_call_sites: HashMap::new(),
         global_env: HashMap::new(),
         functions,
         function_attribute_names: HashMap::new(),
@@ -139,10 +146,14 @@ fn dummy_check_result() -> CheckResult {
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),
+        boxed_reference_promotion_sites: HashMap::new(),
+        buffer_read_sites: Default::default(),
+        first_class_builtin_call_types: HashMap::new(),
         loop_storage_types: HashMap::new(),
         string_incdec_locals: Default::default(),
         ref_cell_mixed_locals: Default::default(),
         local_bind_kill_sites: Default::default(),
+        local_ref_detach_sites: Default::default(),
         local_retype_sites: Default::default(),
         mixed_storage_store_sites: Default::default(),
     }
@@ -162,6 +173,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         declared_params: Vec::new(),
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     let mut methods = HashMap::new();
     methods.insert("m".to_string(), method_sig.clone());
@@ -170,12 +182,17 @@ fn class_info(_class_name: &str) -> ClassInfo {
     ClassInfo {
         class_id: 1,
         declaration_span: crate::span::Span::dummy(),
+        is_internal: false,
         parent: None,
         is_abstract: false,
         is_final: false,
         is_readonly_class: false,
         allow_dynamic_properties: true,
+        eval_property_storage: false,
+        clone_override_property_storage: false,
+        scope_dynamic_property_storage: false,
         constants: HashMap::new(),
+        constant_order: Vec::new(),
         constant_deprecations: HashMap::new(),
         constant_types: HashMap::new(),
         constant_visibilities: Default::default(),
@@ -206,6 +223,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         property_reference_slots: Vec::new(),
         abstract_properties: Default::default(),
         abstract_property_hooks: HashMap::new(),
+        property_hooks: HashMap::new(),
         static_properties: Vec::new(),
         static_defaults: Vec::new(),
         static_property_declaring_classes: HashMap::new(),
@@ -223,12 +241,14 @@ fn class_info(_class_name: &str) -> ClassInfo {
         final_methods: Default::default(),
         method_declaring_classes: HashMap::new(),
         method_impl_classes: HashMap::new(),
+        abstract_methods: Default::default(),
         vtable_methods: Vec::new(),
         vtable_slots: HashMap::new(),
         static_method_visibilities: HashMap::new(),
         final_static_methods: Default::default(),
         static_method_declaring_classes: HashMap::new(),
         static_method_impl_classes: HashMap::new(),
+        abstract_static_methods: Default::default(),
         static_vtable_methods: Vec::new(),
         static_vtable_slots: HashMap::new(),
         interfaces: Vec::new(),
@@ -295,6 +315,11 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::FunctionCall { name: name("strlen"), args: vec![str_lit("abc")] }),
         expr(ExprKind::ArrayLiteral(vec![int(1), int(2)])),
         expr(ExprKind::ArrayLiteralAssoc(vec![(str_lit("k"), int(1))])),
+        expr(ExprKind::ArrayLiteralMixed(vec![
+            ArrayEntry::Keyed(str_lit("k"), int(1)),
+            ArrayEntry::Spread(expr(ExprKind::ArrayLiteral(vec![int(2)]))),
+            ArrayEntry::Value(int(3)),
+        ])),
         expr(ExprKind::Match {
             subject: Box::new(int(1)),
             arms: vec![(vec![int(1)], str_lit("one"))],
@@ -399,7 +424,12 @@ fn lowers_every_stmt_variant_smoke() {
         span: sp(),
         attributes: Vec::new(),
     };
-    let trait_use = TraitUse { trait_names: vec![name("T")], adaptations: Vec::new(), span: sp() };
+    let trait_use = TraitUse {
+        trait_names: vec![name("T")],
+        type_args: vec![Vec::new()],
+        adaptations: Vec::new(),
+        span: sp(),
+    };
     let object = expr(ExprKind::NewObject { class_name: name("C"), args: Vec::new() });
 
     let program = vec![
@@ -445,7 +475,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::Synthetic(vec![stmt(StmtKind::Echo(str_lit("synthetic")))])),
         stmt(StmtKind::Try {
             try_body: vec![stmt(StmtKind::Echo(str_lit("try")))],
-            catches: vec![CatchClause { exception_types: vec![name("Exception")], variable: Some("e".to_string()), body: vec![stmt(StmtKind::Echo(str_lit("catch")))] }],
+            catches: vec![CatchClause { exception_type_args: Vec::new(), exception_types: vec![name("Exception")], variable: Some("e".to_string()), body: vec![stmt(StmtKind::Echo(str_lit("catch")))] }],
             finally_body: Some(vec![stmt(StmtKind::Echo(str_lit("finally")))]),
         }),
         stmt(StmtKind::ExprStmt(int(0))),
@@ -456,6 +486,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::UseDecl { imports: vec![UseItem { kind: UseKind::Const, name: name("CONST_NAME"), alias: "CONST_NAME".to_string() }] }),
         stmt(StmtKind::FunctionDecl {
             name: "f".to_string(),
+            type_params: Vec::new(),
             params: vec![("x".to_string(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -473,6 +504,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::Global { vars: vec!["g".to_string()] }),
         stmt(StmtKind::StaticVar { name: "sv".to_string(), init: int(1) }),
         stmt(StmtKind::ClassDecl {
+            generics: None,
             name: "C".to_string(),
             extends: None,
             implements: Vec::new(),
@@ -484,10 +516,10 @@ fn lowers_every_stmt_variant_smoke() {
             methods: vec![method.clone(), static_method.clone()],
             constants: vec![class_const.clone()],
         }),
-        stmt(StmtKind::EnumDecl { name: "E".to_string(), backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
+        stmt(StmtKind::EnumDecl { name: "E".to_string(), generics: None, backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::PackedClassDecl { name: "P".to_string(), fields: vec![PackedField { name: "x".to_string(), type_expr: TypeExpr::Int, span: sp() }] }),
-        stmt(StmtKind::InterfaceDecl { name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
-        stmt(StmtKind::TraitDecl { name: "T".to_string(), trait_uses: Vec::new(), properties: Vec::new(), methods: vec![method], constants: vec![class_const] }),
+        stmt(StmtKind::InterfaceDecl { generics: None, name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
+        stmt(StmtKind::TraitDecl { name: "T".to_string(), generics: None, trait_uses: Vec::new(), properties: Vec::new(), methods: vec![method], constants: vec![class_const] }),
         stmt(StmtKind::PropertyAssign { object: Box::new(object.clone()), property: "p".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyArrayPush { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
@@ -508,6 +540,7 @@ fn lowers_every_stmt_variant_smoke() {
 /// Constructs a concrete class method declaration for synthetic class-like AST nodes.
 fn class_method(name: &str, is_static: bool) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static,
@@ -524,5 +557,54 @@ fn class_method(name: &str, is_static: bool) -> ClassMethod {
         body: vec![stmt(StmtKind::Return(Some(int(1))))],
         span: sp(),
         attributes: Vec::new(),
+    }
+}
+
+/// Verifies the three `ArrayLiteralMixed` entry forms lower to the ops their order depends on.
+///
+/// The smoke list above only proves the node lowers at all. `["k" => 1, ...[2], 3]` is the shape
+/// the ORDER matters for -- the spread's elements take the next free integer key where the
+/// spread sits -- so each form has to emit its own op, in source order, into the one hash the
+/// literal opens with. The bare value appends through a generic `runtime_call` rather than an
+/// op of its own, so this also pins that the call takes the literal's hash as its receiver.
+#[test]
+fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
+    let text = lower_program(vec![stmt(StmtKind::Assign {
+        name: "mixed".to_string(),
+        value: expr(ExprKind::ArrayLiteralMixed(vec![
+            ArrayEntry::Keyed(str_lit("k"), int(1)),
+            ArrayEntry::Spread(expr(ExprKind::ArrayLiteral(vec![int(2)]))),
+            ArrayEntry::Value(int(3)),
+        ])),
+    })]);
+
+    let ops: Vec<&str> = text
+        .lines()
+        .filter_map(|line| {
+            ["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"]
+                .into_iter()
+                .find(|op| line.contains(op))
+        })
+        .collect();
+    assert_eq!(
+        ops,
+        vec!["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"],
+        "unexpected mixed-literal EIR: {text}"
+    );
+
+    // The one hash every entry writes into: an indexed source is promoted to its own hash first
+    // (`array_to_hash`), so "a hash exists" is not enough to prove the append went to the right
+    // one.
+    let hash = text
+        .lines()
+        .find_map(|line| line.split_once(": Heap(Hash)"))
+        .map(|(value, _)| value.trim())
+        .unwrap_or_else(|| panic!("no hash in mixed-literal EIR: {text}"));
+    for op in ["hash_set", "hash_spread", "runtime_call"] {
+        assert!(
+            text.lines()
+                .any(|line| line.trim().starts_with(&format!("{op} {hash} "))),
+            "{op} does not write into the literal's own hash {hash}: {text}"
+        );
     }
 }

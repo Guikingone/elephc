@@ -24,6 +24,9 @@ pub(crate) fn lower_curl_easy_perform(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_curl_arg_count(inst, "__elephc_curl_easy_perform", 1)?;
+    // BEFORE the handle is loaded: publishing clobbers the argument registers, and the
+    // default write path needs the sink in place for the duration of the transfer.
+    crate::codegen::curl::publish_elephc_curl_output_sink(ctx.emitter);
     load_handle_to_first_arg(ctx, inst, 0, "curl_exec")?;
     crate::codegen::curl::publish_elephc_curl_function_pointers(ctx.emitter);
     abi::emit_call_label(ctx.emitter, "__rt_curl_easy_perform");

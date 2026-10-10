@@ -18,6 +18,10 @@ pub(super) fn lower_property_array_push(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+        lower_php_array_property_write(ctx, object, property, None, value, span, false);
+        return;
+    }
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
@@ -69,6 +73,9 @@ pub(super) fn lower_property_array_push(
 }
 
 /// Lowers `$object->prop[index] = value`.
+///
+/// A desugared `??=` becomes a probe plus a conditional insert, and a desugared compound update
+/// writes with the key its own read already converted (see `ElementUpdate`).
 pub(super) fn lower_property_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
@@ -77,7 +84,66 @@ pub(super) fn lower_property_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let update = desugared_element_update(value, span, |read| {
+        reads_property_array_element(read, object, property, index)
+    });
+    if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
+        crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+        return;
+    }
+    lower_property_array_assign_with_diagnosed_key(
+        ctx,
+        object,
+        property,
+        index,
+        value,
+        span,
+        update.is_some(),
+    );
+}
+
+/// Returns whether `read` is the element `$object->property[index]` a statement writes.
+fn reads_property_array_element(read: &Expr, object: &Expr, property: &str, index: &Expr) -> bool {
+    matches!(
+        &read.kind,
+        ExprKind::ArrayAccess { array, index: read_index }
+            if read_index.as_ref() == index
+                && matches!(
+                    &array.kind,
+                    ExprKind::PropertyAccess { object: read_object, property: read_property }
+                        if read_object.as_ref() == object && read_property == property
+                )
+    )
+}
+
+/// Lowers `$object->prop[index] = value`, optionally reusing a float-key diagnosis.
+///
+/// `key_already_diagnosed` marks the write half of a compound update: its read of the same
+/// element already reported the float key's conversion, as PHP does once per update. An
+/// `ArrayAccess` property receives the key unconverted, and a runtime-typed receiver keeps its
+/// own conversion, so neither consults the flag.
+pub(crate) fn lower_property_array_assign_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
     let object = lower_expr(ctx, object);
+    if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+        lower_php_array_property_write(
+            ctx,
+            object,
+            property,
+            Some(index),
+            value,
+            span,
+            key_already_diagnosed,
+        );
+        return;
+    }
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
@@ -98,6 +164,8 @@ pub(super) fn lower_property_array_assign(
         // the same source line.
         let (index, value) =
             crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+        let index =
+            coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &property_ty, value, Some(span));
         ctx.emit_void(
             Op::ArraySet,
@@ -145,7 +213,7 @@ pub(super) fn lower_property_array_assign(
         ctx.emit_void(
             Op::HashSet,
             vec![property_value.value, index.value, value.value],
-            None,
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
             Op::HashSet.default_effects(),
             Some(span),
         );
@@ -210,8 +278,57 @@ pub(super) fn lower_property_array_assign(
     );
 }
 
+/// Separates a declared PHP array property before mutating its packed-or-hash boxed payload.
+/// `PropGetForWrite` publishes the detached cell and returns a borrow owned by the property.
+/// `key_already_diagnosed` lets the boxed writer rebuild a float key its read already reported.
+fn lower_php_array_property_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    index: Option<&Expr>,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    let data = ctx.intern_string(property);
+    let array = ctx.emit_value(
+        Op::PropGetForWrite,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::php_array(),
+        Op::PropGetForWrite.default_effects(),
+        Some(span),
+    );
+    ctx.builder.set_value_ownership(array.value, Ownership::Borrowed);
+    let value = if let Some(index) = index {
+        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![array.value, index.value, value.value],
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, index, span);
+        value
+    } else {
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![array.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        value
+    };
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+}
+
 /// Releases a temporary assigned into an object property after `PropSet` retains or boxes it.
-pub(super) fn release_property_assignment_source_after_retaining_store(
+pub(in crate::ir_lower) fn release_property_assignment_source_after_retaining_store(
     ctx: &mut LoweringContext<'_, '_>,
     property_ty: &PhpType,
     value: LoweredValue,
@@ -234,17 +351,47 @@ pub(super) fn release_property_array_insert_value_after_retain(
     value: LoweredValue,
     span: Span,
 ) {
-    let element_ty = indexed_property_array_element_type(property_ty);
-    // Property arrays use the same retaining setters as local arrays. In particular, an
-    // already-boxed `Mixed` result is retained by `__rt_array_set_mixed`, so its producer
-    // reference must be released after the write. Concrete values are instead boxed by the
-    // setter and transfer that fresh box directly; the shared helper distinguishes the two.
-    crate::ir_lower::stmt::array_write_core::release_indexed_array_write_operand(
-        ctx,
-        element_ty.as_ref(),
-        value,
-        span,
-    );
+    if !property_array_insert_retains_value(ctx, property_ty, value) {
+        return;
+    }
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+}
+
+/// Returns true when the backend insert helper takes its own reference to the element value.
+///
+/// Three disciplines meet here, and only the first needs a release:
+///
+/// - **Indexed storage** (`__rt_array_set_*`, `__rt_array_push_*`): the value is incref'd into
+///   the slot unconditionally, so an owning temporary keeps a reference nobody consumes.
+/// - **Mixed-element indexed storage from a concrete value**: codegen boxes the value first,
+///   and the boxing path releases the box it made, so releasing here would double-free.
+/// - **Assoc storage** (`__rt_hash_set`): the value is only incref'd when it cannot hand over
+///   its own reference (`value_can_own_mixed_box_source`), so an owning temporary is moved in
+///   and the store consumes it.
+///
+/// A Mixed-element *indexed* array fed an already-boxed Mixed value therefore falls in the
+/// first group, not the second: nothing boxes, the incref still fires, and without the release
+/// every `$o->items[0] += 1` / `$o->items[] = f()` leaks one Mixed cell (issue #1041).
+fn property_array_insert_retains_value(
+    ctx: &LoweringContext<'_, '_>,
+    property_ty: &PhpType,
+    value: LoweredValue,
+) -> bool {
+    let Some(elem_ty) = indexed_property_array_element_type(property_ty) else {
+        return false;
+    };
+    if !matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable) {
+        return true;
+    }
+    if !matches!(property_ty.codegen_repr(), PhpType::Array(_)) {
+        return false;
+    }
+    matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    )
 }
 
 /// Releases the loaded property value after rewriting it through a retaining `PropSet`.
@@ -271,7 +418,8 @@ pub(super) fn property_store_keeps_independent_ref(property_ty: &PhpType, value_
     {
         return true;
     }
-    if matches!(property_ty, PhpType::Str) {
+    // Callable slots retain through the descriptor ABI, outside is_refcounted().
+    if matches!(property_ty, PhpType::Str | PhpType::Callable) {
         return true;
     }
     property_ty.is_refcounted()

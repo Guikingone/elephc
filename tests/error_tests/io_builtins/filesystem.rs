@@ -32,7 +32,7 @@ function read_file(): string {
     return file_get_contents("missing.txt");
 }
 "#,
-        "Function 'read_file' return type expects Str, got Union([Str, False])",
+        "Function 'read_file' return type expects string, got string|false",
     );
 }
 
@@ -60,16 +60,23 @@ function dump_file(): int {
     return readfile("missing.txt");
 }
 "#,
-        "Function 'dump_file' return type expects Int, got Union([Int, False])",
+        "Function 'dump_file' return type expects int, got int|false",
     );
 }
 
 /// Verifies `file_put_contents()` rejects one argument (requires 2) with arity error.
+///
+/// The wording moved with the signature: `$flags` was added in issue #506, so the accepted
+/// count is a range now.
 #[test]
 fn test_error_file_put_contents_wrong_args() {
     expect_error(
         r#"<?php file_put_contents("x");"#,
-        "file_put_contents() takes exactly 2 arguments",
+        "file_put_contents() takes 2 or 3 arguments",
+    );
+    expect_error(
+        r#"<?php file_put_contents("x", "y", 0, null);"#,
+        "file_put_contents() takes 2 or 3 arguments",
     );
 }
 
@@ -83,9 +90,16 @@ fn test_error_file_exists_wrong_args() {
 }
 
 /// Verifies `mkdir()` rejects zero arguments with arity error.
+///
+/// The wording moved with the signature: `$permissions` and `$recursive` were added in
+/// issue #506, so the accepted count is a range now.
 #[test]
 fn test_error_mkdir_wrong_args() {
-    expect_error("<?php mkdir();", "mkdir() takes exactly 1 argument");
+    expect_error("<?php mkdir();", "mkdir() takes 1 to 3 arguments");
+    expect_error(
+        r#"<?php mkdir("a", 0777, true, null);"#,
+        "mkdir() takes 1 to 3 arguments",
+    );
 }
 
 /// Verifies `copy()` rejects one argument (requires 2) with arity error.

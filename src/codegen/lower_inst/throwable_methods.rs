@@ -6,13 +6,16 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Nullable previous-exception results acquire their object owner exactly once during boxing.
 
 use super::*;
+use crate::codegen_support::emit::Emitter;
 
 /// Returns true when a direct method call can be satisfied from the compact Throwable payload.
 ///
-/// PDOException and its subclasses keep `getCode()` and `getPrevious()` on their PHP
-/// implementations because those values live outside the compiler-owned base payload.
+/// PDOException keeps getCode on its PHP implementation because its SQLSTATE string lives
+/// outside the compiler-owned integer code payload. getPrevious uses the inherited final
+/// Throwable accessor.
 pub(super) fn is_throwable_standard_method_call(
     ctx: &FunctionContext<'_>,
     class_name: &str,
@@ -32,7 +35,7 @@ pub(super) fn is_throwable_standard_method_call(
             .get(name)
             .and_then(|info| info.parent.as_deref());
     }
-    if pdo_exception_receiver && matches!(method_key.as_str(), "getcode" | "getprevious") {
+    if pdo_exception_receiver && method_key == "getcode" {
         return false;
     }
     is_throwable_standard_method_key(&method_key)
@@ -140,7 +143,8 @@ pub(super) fn lower_throwable_standard_method_loaded(
     object_reg: &str,
     method_name: &str,
 ) -> Result<()> {
-    let return_ty = match php_symbol_key(method_name).as_str() {
+    let method_key = php_symbol_key(method_name);
+    let return_ty = match method_key.as_str() {
         "getmessage" => lower_throwable_get_message(ctx, object_reg),
         "getcode" => lower_throwable_get_code(ctx, object_reg),
         "getfile" => lower_throwable_get_file(ctx),
@@ -158,9 +162,20 @@ pub(super) fn lower_throwable_standard_method_loaded(
         && matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed)
         && !matches!(return_ty.codegen_repr(), PhpType::Mixed)
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+        emit_box_throwable_method_result(ctx.emitter, &method_key, &return_ty.codegen_repr());
     }
     store_if_result(ctx, inst)
+}
+
+/// Transfers getter-owned payloads into Mixed while preserving the borrowed empty trace string.
+fn emit_box_throwable_method_result(emitter: &mut Emitter, method_key: &str, return_ty: &PhpType) {
+    if method_key == "gettraceasstring" {
+        emit_box_current_value_as_mixed(emitter, return_ty);
+    } else {
+        // String getters persist their payload and getTrace allocates its own array.
+        // Borrowed boxing would copy or retain those results without retiring the original owner.
+        emit_box_current_owned_value_as_mixed(emitter, return_ty);
+    }
 }
 
 /// Loads `Throwable::getMessage()` from payload offsets 8/16 and returns a caller-owned string copy.
@@ -246,7 +261,7 @@ pub(super) fn lower_throwable_empty_trace_array(ctx: &mut FunctionContext<'_>) -
     Ok(PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
-/// Loads `Throwable::getPrevious()` from payload offset 40, retaining a non-null previous.
+/// Reads `Throwable::getPrevious()` through runtime layout metadata, retaining a non-null previous.
 ///
 /// When the EIR result is `Mixed` (`?Throwable`), both the object and null arms box here and
 /// return `Mixed` so the shared intrinsic post-box path does not retag a live object as null
@@ -261,7 +276,8 @@ pub(super) fn lower_throwable_get_previous(
     let done_label = ctx.next_label("throwable_previous_done");
     let result_is_mixed = matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed);
     let object_ty = PhpType::Object("Throwable".to_string());
-    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, 40);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -271,13 +287,15 @@ pub(super) fn lower_throwable_get_previous(
                 ctx.emitter
                     .instruction(&format!("mov x0, {}", result_reg)); // move previous into incref arg
             }
-            abi::emit_call_label(ctx.emitter, "__rt_incref"); // caller owns the returned previous
+            if !result_is_mixed {
+                abi::emit_call_label(ctx.emitter, "__rt_incref"); // raw-object results acquire their owner here; boxing acquires its own
+            }
             if result_reg != "x0" {
                 ctx.emitter
                     .instruction(&format!("mov {}, x0", result_reg)); // restore result register
             }
             if result_is_mixed {
-                emit_box_current_owned_value_as_mixed(ctx.emitter, &object_ty);
+                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
             }
             ctx.emitter
                 .instruction(&format!("b {}", done_label)); // skip null materialization
@@ -291,7 +309,7 @@ pub(super) fn lower_throwable_get_previous(
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // distinguish a missing previous object before taking ownership
                 &format!("test {}, {}", result_reg, result_reg)
             );                                                                  // missing previous → null
             ctx.emitter
@@ -300,13 +318,15 @@ pub(super) fn lower_throwable_get_previous(
                 ctx.emitter
                     .instruction(&format!("mov rax, {}", result_reg)); // move previous into incref arg
             }
-            abi::emit_call_label(ctx.emitter, "__rt_incref"); // caller owns the returned previous
+            if !result_is_mixed {
+                abi::emit_call_label(ctx.emitter, "__rt_incref"); // raw-object results acquire their owner here; boxing acquires its own
+            }
             if result_reg != "rax" {
                 ctx.emitter
                     .instruction(&format!("mov {}, rax", result_reg)); // restore result register
             }
             if result_is_mixed {
-                emit_box_current_owned_value_as_mixed(ctx.emitter, &object_ty);
+                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
             }
             ctx.emitter
                 .instruction(&format!("jmp {}", done_label)); // skip null materialization
@@ -324,5 +344,39 @@ pub(super) fn lower_throwable_get_previous(
         Ok(PhpType::Mixed)
     } else {
         Ok(object_ty)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Mixed getter results consume fresh strings and arrays on every supported target.
+    #[test]
+    fn throwable_getter_boxing_transfers_fresh_payload_owners_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for method in ["getmessage", "getfile", "__tostring"] {
+                let mut emitter = Emitter::new(target);
+                emit_box_throwable_method_result(&mut emitter, method, &PhpType::Str);
+                let asm = emitter.output();
+                assert!(asm.contains("__rt_heap_alloc"), "{name}: {method}");
+                assert!(!asm.contains("__rt_mixed_from_value"), "{name}: {method}");
+                assert!(!asm.contains("__rt_str_persist"), "{name}: {method}");
+            }
+            let mut emitter = Emitter::new(target);
+            emit_box_throwable_method_result(
+                &mut emitter, "gettrace", &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+            let asm = emitter.output();
+            let boxed = asm.find("__rt_mixed_from_value").unwrap();
+            let released = asm.find("__rt_decref_array").unwrap();
+            assert!(boxed < released, "{name}");
+
+            let mut emitter = Emitter::new(target);
+            emit_box_throwable_method_result(&mut emitter, "gettraceasstring", &PhpType::Str);
+            assert!(emitter.output().contains("__rt_mixed_from_value"), "{name}");
+        }
     }
 }

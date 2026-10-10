@@ -1,8 +1,8 @@
 ---
 title: "mysqli_info()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns information about the last query, when the server supplies it."
 sidebar:
-  order: 135
+  order: 136
 ---
 
 ## mysqli_info()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_info(mixed $mysql): ?string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns information about the last query, when the server supplies it.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

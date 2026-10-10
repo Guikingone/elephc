@@ -1,8 +1,8 @@
 ---
 title: "mysqli_field_count()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many columns the last query produced."
 sidebar:
-  order: 124
+  order: 125
 ---
 
 ## mysqli_field_count()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_field_count(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many columns the last query produced.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -90,7 +90,10 @@ pub(super) fn reflection_class_metadata_for_name(
         let method_members = reflection_class_method_members(ctx, class_name, info, &method_names)?;
         let property_members =
             reflection_class_property_members(ctx, class_name, info, &property_names);
-        let constructor_member = reflection_constructor_member(&method_members);
+        let constructor_member = match reflection_constructor_member(&method_members) {
+            Some(member) => Some(member),
+            None => inherited_private_constructor_member(ctx, class_name)?,
+        };
         let is_instantiable =
             reflection_class_is_instantiable(info, is_enum, constructor_member.as_ref());
         let is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum);
@@ -125,6 +128,7 @@ pub(super) fn reflection_class_metadata_for_name(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             is_final: info.is_final,
             is_abstract: info.is_abstract,
@@ -193,6 +197,7 @@ pub(super) fn reflection_class_metadata_for_name(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             is_final: false,
             is_abstract: false,
@@ -267,6 +272,7 @@ pub(super) fn reflection_class_metadata_for_name(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             is_final: false,
             is_abstract: false,

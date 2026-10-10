@@ -15,6 +15,18 @@ use elephc_builtin_contract::{
     BuiltinContract, DefaultSpec, TypeSpec,
 };
 
+/// Keeps variadic passing modes in the AOT signature aligned with the shared contract.
+#[test]
+fn builtin_variadic_reference_modes_match_contracts() {
+    for name in registry::names() {
+        let def = registry::lookup(name).expect("registered builtin");
+        if def.spec.variadic.is_some() {
+            assert_eq!(def.ref_params.last().copied(), Some(def.spec.variadic_by_ref),
+                "{name} variadic passing mode");
+        }
+    }
+}
+
 /// Returns the PHP-visible extension builtins a prelude must never call directly.
 fn php_visible_extension_builtins() -> Vec<String> {
     let mut names: Vec<String> = vec!["buffer_new".to_string()];
@@ -252,7 +264,8 @@ fn shared_php_visible_extension_contracts(
             matches!(
                 aot_support(contract),
                 BackendSupport::Implemented(
-                    BackendImplementation::Registry | BackendImplementation::DedicatedSyntax
+                    BackendImplementation::Registry
+                        | BackendImplementation::DedicatedSyntax
                 )
             )
         })
@@ -544,8 +557,8 @@ fn parse_prelude_param(raw: &str, function: &str) -> PreludeParam {
 
 /// Returns whether a prelude's declared PHP type is the contract's neutral type.
 ///
-/// `TypeSpec` spells the scalars, `array`, `callable`, `ptr` and `?T` exactly, so each of
-/// those must match the declaration; it has no object or union vocabulary, so a class-typed
+/// `TypeSpec` spells scalars, `object`, `array`, `callable`, `ptr` and `?T` exactly, so each of
+/// those must match the declaration; it has no class-specific or union vocabulary, so a class-typed
 /// or union surface is `Mixed` in the catalog and the prelude is free to declare
 /// `CurlHandle`, `mixed` or a union for it. The check is therefore compatibility, not
 /// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared with a
@@ -560,6 +573,7 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Float => "float",
         TypeSpec::Str => "string",
         TypeSpec::Bool => "bool",
+        TypeSpec::Object => "object",
         TypeSpec::Void => "void",
         // Neither is a PHP scalar, and neither is `Mixed`'s open surface: `Ptr` is elephc's
         // own `ptr` type and `Callable` is the owned descriptor `callable` lowers to. Both
@@ -568,12 +582,22 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Ptr => "ptr",
         TypeSpec::Callable => "callable",
         TypeSpec::Array => "array",
+        TypeSpec::False => "false",
+        TypeSpec::Null => "null",
+        TypeSpec::Union(members) => {
+            let declared_members = declared.split('|').map(str::trim).collect::<Vec<_>>();
+            return declared_members.len() == members.len()
+                && declared_members.iter().all(|part|
+                    members.iter().any(|member| php_type_matches(*member, part)))
+                && members.iter().all(|member|
+                    declared_members.iter().any(|part| php_type_matches(*member, part)));
+        }
         // `declared` already had its `?` stripped above, so compare the inner type.
         TypeSpec::Nullable(inner) => return php_type_matches(*inner, declared),
         TypeSpec::Mixed => {
             return !matches!(
                 declared,
-                "int" | "float" | "string" | "bool" | "ptr" | "callable" | "array"
+                "int" | "float" | "string" | "bool" | "object" | "ptr" | "callable" | "array"
             );
         }
     };
@@ -597,6 +621,7 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
         }
         // A built prelude carries the folded literal; PHP text spells the constant.
         DefaultSpec::IntMax => declared == "PHP_INT_MAX" || declared.parse::<i64>() == Ok(i64::MAX),
+        DefaultSpec::ErrorAll => declared == "E_ALL",
         DefaultSpec::EmptyArray => declared == "[]" || declared.replace(' ', "") == "array()",
         DefaultSpec::Constant(name) => declared == *name,
         DefaultSpec::Expr(source) => {
@@ -623,6 +648,7 @@ fn default_text(default: &DefaultSpec) -> String {
         DefaultSpec::Float(value) => format!("{value:?}"),
         DefaultSpec::Str(value) => format!("\"{value}\""),
         DefaultSpec::IntMax => "PHP_INT_MAX".to_string(),
+        DefaultSpec::ErrorAll => "E_ALL".to_string(),
         DefaultSpec::EmptyArray => "[]".to_string(),
         DefaultSpec::Constant(name) => (*name).to_string(),
         DefaultSpec::Expr(source) => (*source).to_string(),
@@ -777,6 +803,7 @@ fn prelude_parameters_parse_every_php_passing_form() {
     assert!(!default_matches(&DefaultSpec::Float(1.0), "5.0"));
     assert!(default_matches(&DefaultSpec::Null, "NULL"));
     assert!(!default_matches(&DefaultSpec::Bool(false), "true"));
+    assert!(default_matches(&DefaultSpec::ErrorAll, "E_ALL"));
 }
 
 /// Returns the PHP-visible function names one prelude source declares at top level.
@@ -808,8 +835,15 @@ fn dump_prelude_contract_seed_on_request() {
     };
     use crate::parser::ast::{Expr, Stmt, StmtKind, TypeExpr};
 
+    /// Serializes a parsed PHP type into the seed catalog spelling.
     fn type_text(ty: &TypeExpr) -> String {
         match ty {
+            // No builtin declares one; rendering it keeps this helper total.
+            TypeExpr::CallableSig { params, ret } => format!(
+                "callable({}): {}",
+                params.iter().map(type_text).collect::<Vec<_>>().join(", "),
+                type_text(ret)
+            ),
             TypeExpr::Int => "int".to_string(),
             TypeExpr::Float => "float".to_string(),
             TypeExpr::Bool => "bool".to_string(),
@@ -818,10 +852,15 @@ fn dump_prelude_contract_seed_on_request() {
             TypeExpr::Void => "void".to_string(),
             TypeExpr::Never => "never".to_string(),
             TypeExpr::Iterable => "iterable".to_string(),
-            TypeExpr::Array(_) => "array".to_string(),
+            TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => "array".to_string(),
             TypeExpr::Ptr(_) => "ptr".to_string(),
             TypeExpr::Buffer(_) => "buffer".to_string(),
             TypeExpr::Named(name) => name.as_str().to_string(),
+            TypeExpr::GenericClass { name, args } => format!(
+                "{}<{}>",
+                name.as_str(),
+                args.iter().map(type_text).collect::<Vec<_>>().join(", ")
+            ),
             TypeExpr::Nullable(inner) => format!("?{}", type_text(inner)),
             TypeExpr::Union(members) => members.iter().map(type_text).collect::<Vec<_>>().join("|"),
             TypeExpr::Intersection(members) => {
@@ -829,9 +868,11 @@ fn dump_prelude_contract_seed_on_request() {
             }
         }
     }
+    /// Serializes one parsed default expression for the catalog seed.
     fn default_text(expr: &Expr) -> String {
         crate::synthetic_class::print::print_expr(expr)
     }
+    /// Collects function signatures recursively from the injected prelude statements.
     fn collect(stmts: &[Stmt], prelude: &str, out: &mut Vec<serde_json::Value>) {
         for stmt in stmts {
             match &stmt.kind {

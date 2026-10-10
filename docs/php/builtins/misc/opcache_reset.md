@@ -1,8 +1,8 @@
 ---
 title: "opcache_reset()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Clears the whole opcode cache."
 sidebar:
-  order: 620
+  order: 645
 ---
 
 ## opcache_reset()
@@ -11,7 +11,7 @@ sidebar:
 function opcache_reset(): bool
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Clears the whole opcode cache.
 
 **Parameters**: none.
 
@@ -20,9 +20,9 @@ Implemented by the compiler-injected OPcache prelude.
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported through native OPcache prelude declarations or dedicated interpreter handlers; see [OPcache](../../opcache.md).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

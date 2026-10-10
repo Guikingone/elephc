@@ -31,6 +31,10 @@ fn type_spec_str(ty: &TypeSpec) -> String {
         TypeSpec::Float => "float".to_string(),
         TypeSpec::Str => "string".to_string(),
         TypeSpec::Bool => "bool".to_string(),
+        TypeSpec::Object => "object".to_string(),
+        TypeSpec::False => "false".to_string(),
+        TypeSpec::Null => "null".to_string(),
+        TypeSpec::Union(members) => members.iter().map(type_spec_str).collect::<Vec<_>>().join("|"),
         TypeSpec::Mixed => "mixed".to_string(),
         TypeSpec::Void => "void".to_string(),
         // Not a PHP type: the `Area::Pointers` builtins are elephc extensions and this is the
@@ -75,6 +79,7 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
         DefaultSpec::Float(v) => json!(v),
         DefaultSpec::Str(v) => json!(v),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
+        DefaultSpec::ErrorAll => json!("E_ALL"),
         DefaultSpec::EmptyArray => json!([]),
         DefaultSpec::Constant(name) => json!({ "constant": name }),
         DefaultSpec::Expr(source) => json!({ "expr": source }),
@@ -182,6 +187,8 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     };
     let argument_lowering = match semantics.argument_lowering {
         BuiltinArgumentLowering::Standard => "standard",
+        BuiltinArgumentLowering::PreserveValues => "preserve_values",
+        BuiltinArgumentLowering::MaterializeDefaults => "materialize_defaults",
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",
         BuiltinArgumentLowering::JsonDecode => "json_decode",
@@ -194,10 +201,14 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::OpensslEncrypt => "openssl_encrypt",
         BuiltinArgumentLowering::ArraySplice => "array_splice",
         BuiltinArgumentLowering::XmlHandlerSetter => "xml_handler_setter",
+        BuiltinArgumentLowering::BareArrayValues { .. } => "bare_array_values",
         BuiltinArgumentLowering::ArrayInternalPointer(_) => "array_internal_pointer",
     };
     let callable = match semantics.callable {
         BuiltinCallablePolicy::Dynamic(_) => json!({"kind": "dynamic"}),
+        BuiltinCallablePolicy::DirectOnly(reason) => {
+            json!({"kind": "direct_only", "reason": reason})
+        }
         BuiltinCallablePolicy::DynamicRuntime(target) => {
             json!({"kind": "dynamic_target", "target": target.as_eir()})
         }

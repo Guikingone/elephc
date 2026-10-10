@@ -95,6 +95,7 @@ fn patch_async_cancellation_for_parallel(program: &mut Program) {
     if !had_constructor {
         methods.push(ClassMethod {
             name: "__construct".to_string(),
+            type_params: Vec::new(),
             visibility: Visibility::Public,
             is_static: false,
             is_abstract: false,
@@ -217,16 +218,19 @@ mod tests {
     use super::*;
     use crate::parser::ast::StmtKind;
 
+    /// Parses user injection fixtures without compiler-internal declaration privileges.
     fn parse(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse(&tokens).expect("fixture must parse")
     }
 
+    /// Parses the reviewable Parallel PHP oracle with internal declarations enabled.
     fn parsed_declarations() -> Program {
         let tokens = crate::lexer::tokenize(SOURCE).expect("Parallel prelude must tokenize");
         crate::parser::parse_internal(&tokens).expect("Parallel prelude must parse")
     }
 
+    /// Erases source positions before comparing the generated and oracle ASTs.
     fn strip_spans(rendered: &str) -> String {
         let mut cleaned = String::with_capacity(rendered.len());
         let mut rest = rendered;
@@ -241,6 +245,7 @@ mod tests {
         cleaned
     }
 
+    /// Pins generated Parallel declarations to the PHP oracle with local mismatch diagnostics.
     #[test]
     fn built_declarations_match_the_php_oracle() {
         let built = parallel_declarations();
@@ -265,6 +270,7 @@ mod tests {
         }
     }
 
+    /// Pins the public enum/class/function inventory and builtin-contract catalog parity.
     #[test]
     fn declarations_expose_the_locked_v1_surface() {
         let declarations = parallel_declarations();
@@ -322,6 +328,7 @@ mod tests {
         assert_eq!(declared, catalogued, "Parallel prelude class catalog drift");
     }
 
+    /// Requires closed-scope and cancellation-admission guards on public TaskGroup operations.
     #[test]
     fn task_group_tracks_and_rejects_post_scope_use() {
         let declarations = parallel_declarations();
@@ -371,6 +378,7 @@ mod tests {
         assert!(format!("{:?}", spawn.body).contains("__assertSpawnable"));
     }
 
+    /// Leaves Parallel root fixtures unchanged when extension injection is disabled.
     #[test]
     fn strict_php_does_not_inject_the_extension_surface() {
         let program = parse("<?php \\Elephc\\Parallel\\run(static fn ($tasks): int => 1);");
@@ -380,6 +388,7 @@ mod tests {
         assert_eq!(injected.len(), original_len);
     }
 
+    /// Requires an aliased Parallel root to inject both Parallel and shared Async cancellation.
     #[test]
     fn aliased_parallel_run_import_injects_both_scheduler_surfaces() {
         let program = parse(
@@ -402,6 +411,7 @@ parallelRun(static fn ($tasks): int => 1);
         assert!(namespaces.contains("Elephc\\Async"));
     }
 
+    /// Prevents Async-only roots from acquiring Parallel declarations or bridge dependencies.
     #[test]
     fn async_run_import_does_not_inject_the_parallel_bridge() {
         let program = parse(
@@ -424,6 +434,7 @@ run(static fn (): int => 1);
         assert!(!namespaces.contains("Elephc\\Parallel"));
     }
 
+    /// Checks the worker job identifier and native cancellation probe added to private Async state.
     #[test]
     fn parallel_injection_adds_worker_cancellation_probe_only_to_async_state() {
         let program = parse("<?php \\Elephc\\Parallel\\run(static fn ($tasks): int => 1);");
@@ -465,6 +476,7 @@ run(static fn (): int => 1);
             .contains("elephc_parallel_job_cancellation_requested"));
     }
 
+    /// Requires the Parallel-worker refusal guard at the start of the Async root body.
     #[test]
     fn parallel_injection_adds_a_worker_guard_to_async_run() {
         let program = parse("<?php \\Elephc\\Parallel\\run(static fn ($tasks): int => 1);");

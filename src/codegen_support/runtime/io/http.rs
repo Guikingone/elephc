@@ -655,7 +655,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_http_open_loc_host_ok_x");                    // branch when comparison is at least target
     emitter.instruction("lea rax, [rcx + 7]");                                  // buf offset = 7 + i
     emitter.instruction("movzx edx, BYTE PTR [r12 + rax]");                     // redirect buf byte
-    emitter.instruction("movzx eax, BYTE PTR [r8 + rcx]");                     // active host byte
+    emitter.instruction("movzx eax, BYTE PTR [r8 + rcx]");                      // active host byte
     emitter.instruction("cmp dl, al");                                          // compare runtime values for the next branch
     emitter.instruction("jne __rt_http_open_check_err_x");                      // host differs → don't follow cross-host
     emitter.instruction("inc rcx");                                             // advance runtime pointer or counter

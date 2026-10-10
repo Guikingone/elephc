@@ -10,6 +10,7 @@
 use super::*;
 use crate::elephc_parallel_transfer_free;
 
+/// Builds a borrowed C input view whose backing test slice remains alive through encoding.
 fn bytes(value: &[u8]) -> ParallelBytes {
     ParallelBytes {
         ptr: value.as_ptr(),
@@ -17,14 +18,17 @@ fn bytes(value: &[u8]) -> ParallelBytes {
     }
 }
 
+/// Produces the null/zero representation of an absent optional failure field.
 fn absent() -> ParallelBytes {
     ParallelBytes::EMPTY
 }
 
+/// Reads a borrowed test view before its source transfer blob is freed.
 fn view_bytes(value: ParallelBytes) -> &'static [u8] {
     unsafe { std::slice::from_raw_parts(value.ptr, value.len) }
 }
 
+/// Encodes live test inputs into an owned blob and asserts successful ABI completion.
 fn encoded(input: &ParallelFailureInput) -> ParallelTransferBlob {
     let mut output = ParallelTransferBlob::EMPTY;
     assert_eq!(
@@ -34,6 +38,7 @@ fn encoded(input: &ParallelFailureInput) -> ParallelTransferBlob {
     output
 }
 
+/// Wire lengths fail before truncation when a native usize exceeds the u32 header range.
 #[test]
 fn failure_wire_lengths_are_checked_before_narrowing_to_u32() {
     assert_eq!(wire_u32_len(17), Some(17));
@@ -43,6 +48,7 @@ fn failure_wire_lengths_are_checked_before_narrowing_to_u32() {
     }
 }
 
+/// Failure category, strings, signed code and optional trace-frame fields round-trip without pointers.
 #[test]
 fn failure_envelope_round_trips_all_fields_and_frames() {
     let frames = [
@@ -90,6 +96,7 @@ fn failure_envelope_round_trips_all_fields_and_frames() {
     unsafe { elephc_parallel_transfer_free(blob) };
 }
 
+/// Truncated envelopes clear a prepopulated output view rather than exposing partial decoded fields.
 #[test]
 fn invalid_or_truncated_envelopes_fail_closed_and_clear_views() {
     let input = ParallelFailureInput {
@@ -120,6 +127,7 @@ fn invalid_or_truncated_envelopes_fail_closed_and_clear_views() {
     unsafe { elephc_parallel_transfer_free(blob) };
 }
 
+/// Unknown categories and invalid null/nonzero input lengths are rejected without publishing a blob.
 #[test]
 fn unknown_failure_kinds_and_invalid_pointer_lengths_are_rejected() {
     let mut output = ParallelTransferBlob::EMPTY;

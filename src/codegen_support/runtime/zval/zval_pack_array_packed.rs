@@ -377,7 +377,7 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // return the HashTable pointer
     emitter.instruction("mov rbx, QWORD PTR [rbp - 88]");                       // restore the caller's callee-saved rbx value
-    emitter.instruction("add rsp, 112");                                         // release the local slots
+    emitter.instruction("add rsp, 112");                                        // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the zend_array pointer in rax
 }

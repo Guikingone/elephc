@@ -10,8 +10,8 @@
 //! - Main currently exits through the process syscall used by normal executable output.
 //! - Each frame stores the inherited concat-buffer offset so statement resets do not clobber
 //!   `_concat_buf` slices that were passed in by the caller.
-//! - Cdylib user frames publish cleanup activations so boundary-caught exceptions release
-//!   owned locals before control returns to the native host.
+//! - Executable and library PHP frames publish cleanup activations so escaping exceptions
+//!   release owned locals before control reaches the surviving catch or native host.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,11 +19,15 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
-    emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
+    emit_box_current_value_as_mixed,
+    emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::data_section::DataWord;
-use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
-use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
+use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
+use crate::ir::{
+    CoreBuiltinOp, Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
+    RuntimeCallTarget, ValueDef, ValueId,
+};
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
 use crate::types::PhpType;
@@ -33,7 +37,18 @@ use super::local_analysis::LocalSlotAnalysis;
 use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
+mod destructor_cleanup;
+pub(super) use destructor_cleanup::is_destructor;
+
 const FRAME_FOOTER_BYTES: usize = 16;
+// Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
+const EXCEPTION_ACTIVATION_BYTES: usize = 40;
+
+/// Bytes reserved for one addressable iterator state record.
+///
+/// Fourteen 8-byte words hold the source, cursor, current key/value, source snapshot, and two
+/// owned successor-key anchors used to recover from associative-table relocation.
+const ITERATOR_STATE_BYTES: usize = 112;
 
 /// Symbol name for the C-callable `--web` top-level handler.
 ///
@@ -50,8 +65,11 @@ pub(super) struct FrameLayout {
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
+    pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
+    pub(super) exception_cleanup_activation: bool,
+    pub(super) backtrace_activation: bool,
     pub(super) frame_size: usize,
     pub(super) allocation: Allocation,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
@@ -70,6 +88,7 @@ pub(super) fn layout_for_function(
     target: Target,
     regalloc_linear: bool,
     exception_activations: bool,
+    backtrace_activations: bool,
 ) -> FrameLayout {
     let allocation = if regalloc_linear {
         allocate_registers(function, target)
@@ -91,7 +110,12 @@ pub(super) fn layout_for_function(
             .get(local.id.as_raw() as usize)
             .map(|param| param.php_type.codegen_repr().stack_size())
             .unwrap_or(0);
-        let bytes = value_placement::bytes_for(local.ir_type)
+        let local_bytes = if local.kind == LocalKind::IteratorState {
+            ITERATOR_STATE_BYTES
+        } else {
+            value_placement::bytes_for(local.ir_type)
+        };
+        let bytes = local_bytes
             .max(local.php_type.codegen_repr().stack_size())
             .max(incoming_param_bytes);
         if bytes == 0 {
@@ -101,9 +125,9 @@ pub(super) fn layout_for_function(
         local_offsets.insert(local.id, offset);
     }
     let mut ref_cell_state_offsets = HashMap::new();
-    let mut dynamic_ref_cell_slots = local_analysis.dynamic_ref_cell_slots().collect::<Vec<_>>();
-    dynamic_ref_cell_slots.sort_by_key(|slot| slot.as_raw());
-    for slot in dynamic_ref_cell_slots {
+    let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
+    ref_cell_slots.sort_by_key(|slot| slot.as_raw());
+    for slot in ref_cell_slots {
         offset += 8;
         ref_cell_state_offsets.insert(slot, offset);
     }
@@ -111,6 +135,14 @@ pub(super) fn layout_for_function(
     for token in try_handler_tokens(function) {
         offset += TRY_HANDLER_SLOT_SIZE;
         try_handler_offsets.insert(token, offset);
+    }
+    let mut exception_guard_offsets = HashMap::new();
+    for inst in &function.instructions {
+        if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned))) {
+            let token = inst.result.expect("owned-value guard produces its stack token");
+            offset += EXCEPTION_GUARD_SLOT_SIZE;
+            exception_guard_offsets.insert(token, offset);
+        }
     }
     let mut callee_saved_offsets = Vec::new();
     for reg in allocation.used_callee_saved() {
@@ -130,8 +162,8 @@ pub(super) fn layout_for_function(
     }
     offset += 8;
     let concat_base_offset = offset;
-    let exception_activation_offset = if exception_activations {
-        offset += 24;
+    let exception_activation_offset = if exception_activations || backtrace_activations {
+        offset += EXCEPTION_ACTIVATION_BYTES;
         Some(offset)
     } else {
         None
@@ -142,13 +174,138 @@ pub(super) fn layout_for_function(
         local_offsets,
         ref_cell_state_offsets,
         try_handler_offsets,
+        exception_guard_offsets,
         concat_base_offset,
         exception_activation_offset,
+        exception_cleanup_activation: exception_activations,
+        backtrace_activation: backtrace_activations,
         frame_size,
         allocation,
         callee_saved_offsets,
         local_analysis,
     }
+}
+
+/// Returns whether any emitted EIR body can request a PHP Core backtrace.
+pub(super) fn module_uses_backtrace(module: &Module) -> bool {
+    if module.required_runtime_features.eval_bridge {
+        return true;
+    }
+    let functions = || {
+        module
+            .functions
+            .iter()
+            .chain(module.class_methods.iter())
+            .chain(module.closures.iter())
+            .chain(module.fiber_wrappers.iter())
+            .chain(module.callback_wrappers.iter())
+            .chain(module.extern_callback_trampolines.iter())
+            .chain(module.runtime_callable_invokers.iter())
+    };
+    if functions().any(function_keeps_backtrace_argument_snapshot) {
+        return true;
+    }
+    functions()
+        .flat_map(|function| function.instructions.iter())
+        .any(|inst| {
+            inst.op == Op::CoreBuiltin
+                && matches!(
+                    inst.immediate,
+                    Some(Immediate::I64(selector))
+                        if matches!(
+                            CoreBuiltinOp::from_i64(selector),
+                            Some(CoreBuiltinOp::DebugBacktrace | CoreBuiltinOp::DebugPrintBacktrace)
+                        )
+                )
+        })
+}
+
+/// Returns whether an emitted body can observe per-request GC timing metrics.
+fn module_uses_gc_timing(module: &Module) -> bool {
+    if module.required_runtime_features.eval_bridge {
+        return true;
+    }
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .flat_map(|function| function.instructions.iter())
+        .any(|inst| {
+            inst.op == Op::GcControl
+                && matches!(
+                    inst.immediate,
+                    Some(Immediate::I64(selector))
+                        if matches!(
+                            GcControlOp::from_i64(selector),
+                            Some(
+                                GcControlOp::ApplicationTime
+                                    | GcControlOp::CollectorTime
+                                    | GcControlOp::DestructorTime
+                                    | GcControlOp::FreeTime
+                            )
+                        )
+                )
+        })
+}
+
+/// Returns whether process shutdown can own an OS resource that needs explicit release.
+fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
+    if module.required_runtime_features.eval_bridge {
+        return true;
+    }
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .flat_map(|function| function.instructions.iter())
+        .any(|inst| {
+            let id = match inst.immediate {
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(id)))
+                | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                    target: id,
+                    ..
+                })) => id,
+                _ => return false,
+            };
+            id.produces_resource_inventory_entry()
+        })
+}
+
+/// Returns true when the frontend retained one frame's arguments for a dynamic backtrace.
+///
+/// Descriptor-only calls to `debug_backtrace()` and `debug_print_backtrace()` do not leave a
+/// `CoreBuiltin` instruction in EIR. The argument-introspection pass marks their reachability by
+/// retaining a generated collector, count, or source-variadic snapshot in each PHP frame. The
+/// physical EIR parameters are authoritative because public signature metadata may omit generated
+/// ABI slots. Reading both shapes here keeps activation emission aligned with the frontend gate. A
+/// frame using the same storage for `func_get_args()` is an intentional conservative match: it
+/// costs an inactive reader slot but cannot change PHP behavior.
+fn function_keeps_backtrace_argument_snapshot(function: &Function) -> bool {
+    function.params.iter().any(|param| {
+        matches!(
+            param.name.as_str(),
+            crate::func_args::HIDDEN_ARGS_PARAM | crate::func_args::HIDDEN_ARGC_PARAM
+        )
+    }) || function.signature.as_ref().is_some_and(|signature| {
+        crate::func_args::sig_collects_surplus_args(signature)
+            || crate::func_args::sig_has_hidden_argc_param(signature)
+    }) || function.locals.iter().any(|local| {
+        matches!(
+            local.name.as_deref(),
+            Some(crate::func_args::SNAPSHOT_KEY_LOCAL)
+                | Some(crate::func_args::SNAPSHOT_VALUE_LOCAL)
+        )
+    })
 }
 
 /// Saves the callee-saved registers the allocator used into their reserved
@@ -207,20 +364,21 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
     }
 }
 
-/// Returns true when the function contains a method call whose receiver is
-/// dispatched through the reserved nested-call register: a union receiver or a
-/// receiver whose codegen representation is `Mixed`. `lower_mixed_method_call`
-/// and `lower_nullable_receiver_method_call` hand-use `nested_call_reg` to hold
-/// the unboxed object payload across argument-lowering calls, but that register
-/// is callee-saved and outside the allocator's tracking — without a reserved
-/// save slot the function silently clobbers the caller's value (issue #511: a
-/// `--web` handler calling a method on a `PDOStatement|bool` receiver corrupted
-/// the hyper worker's `x19`, freeing a garbage pointer during response flush).
-/// A plain single non-nullable object receiver uses direct dispatch and is
-/// excluded. Over-detection is harmless — an unused save/restore pair costs one
-/// store and one load — so the receiver test errs toward inclusion.
+/// Detects dispatch paths that preserve a receiver in the reserved nested-call register.
+/// Mixed/union method calls, dynamic construction and Mixed string coercion use this
+/// callee-saved register outside the allocator's tracking. Each function must therefore
+/// save and restore it explicitly, including when all SSA values are stack allocated.
 fn function_uses_nested_call_reg(function: &Function) -> bool {
     function.instructions.iter().any(|inst| {
+        // Dynamic constructors preserve their receiver across managed reference-cell staging.
+        if matches!(inst.op, Op::DynamicObjectNew | Op::DynamicObjectNewMixed) {
+            return true;
+        }
+        // A runtime-name property write can dispatch a missing name to `__set`, preserving the
+        // selected receiver in the same callee-saved register while its arguments are staged.
+        if inst.op == Op::DynamicPropSet {
+            return true;
+        }
         // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
         // and is neither of the method-call opcodes below, so it used to slip through: a
         // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that
@@ -268,15 +426,19 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     // ordinary call and clobbers the C-ABI argument registers they arrive in. `main` itself
     // is never guarded — it is the root of every call chain and runs before the floor exists.
     stack_guard::emit_stack_limit_init_call(ctx.emitter);
+    if module_uses_gc_timing(ctx.module) {
+        abi::emit_call_label(ctx.emitter, "__rt_gc_request_start");
+    }
     emit_probe_init(ctx);
     register_main_instr(ctx);
     emit_instr_init(ctx);
+    emit_opcache_configuration(ctx);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
     }
     zero_initialize_main_cleanup_locals(ctx);
-    zero_initialize_ref_cell_state_slots(ctx);
+    initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -338,12 +500,12 @@ pub(super) fn emit_function_prologue_with_label(
             emit_box_current_value_as_mixed(ctx.emitter, &param.php_type.codegen_repr());
             abi::emit_store(ctx.emitter, &PhpType::Mixed, offset);
         }
-        if ctx.owns_parameter_slot(slot) && !converted_to_owned_mixed {
+        if !param.by_ref && ctx.owns_parameter_slot(slot) && !converted_to_owned_mixed {
             retain_owned_parameter_local(ctx.emitter, offset, &local_ty);
         }
     }
     zero_initialize_function_cleanup_locals(ctx);
-    zero_initialize_ref_cell_state_slots(ctx);
+    initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -355,26 +517,36 @@ pub(super) fn emit_function_prologue_with_label(
     Ok(())
 }
 
-/// Publishes one cleanup activation for a cdylib-callable PHP frame.
+/// Publishes one cleanup and/or backtrace activation for a PHP frame.
 fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &str) {
     let Some(offset) = ctx.exception_activation_offset else {
         return;
     };
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
-    ctx.emitter.comment("publish cdylib exception cleanup activation");
+    ctx.emitter.comment("publish PHP frame activation");
     let scratch = match ctx.emitter.target.arch {
         Arch::AArch64 => "x10",
         Arch::X86_64 => "r10",
     };
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
     abi::store_at_offset(ctx.emitter, scratch, offset);
-    abi::emit_symbol_address(ctx.emitter, scratch, &callback);
+    if ctx.exception_cleanup_activation {
+        abi::emit_symbol_address(ctx.emitter, scratch, &callback);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    }
     abi::store_at_offset(ctx.emitter, scratch, offset - 8);
     let frame_pointer = match ctx.emitter.target.arch {
         Arch::AArch64 => "x29",
         Arch::X86_64 => "rbp",
     };
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    abi::store_at_offset(ctx.emitter, scratch, offset - 24);
+    if ctx.backtrace_activation {
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
+    }
+    abi::store_at_offset(ctx.emitter, scratch, offset - 32);
     abi::emit_frame_slot_address(ctx.emitter, scratch, offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
@@ -392,18 +564,23 @@ fn emit_exception_activation_pop(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
 
-/// Emits the cleanup callback referenced by a cdylib PHP activation record.
+/// Emits a non-escaping cleanup callback for one abandoned PHP activation.
 pub(super) fn emit_exception_cleanup_callback(
     ctx: &mut FunctionContext<'_>,
     entry_label: &str,
 ) {
-    if ctx.exception_activation_offset.is_none() {
+    if !ctx.exception_cleanup_activation {
         return;
     }
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
-    ctx.emitter.comment("cdylib exceptional frame cleanup callback");
+    ctx.emitter.comment("exceptional PHP frame cleanup callback");
+    if is_destructor(ctx.function) {
+        destructor_cleanup::emit_callback(ctx, entry_label);
+        return;
+    }
     ctx.emitter.label_global(&callback);
+    ctx.unwinding_cleanup = true;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve an aligned callback frame
@@ -433,6 +610,7 @@ pub(super) fn emit_exception_cleanup_callback(
             ctx.emitter.instruction("ret");                                     // return to the exception frame walker
         }
     }
+    ctx.unwinding_cleanup = false;
 }
 
 /// Retains a mutable by-value parameter so its frame slot has one callee-owned reference.
@@ -476,6 +654,13 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
     super::enum_singletons::emit_enum_slot_cleanup(ctx);
+    emit_main_static_property_cleanup(ctx);
+    if module_uses_resource_inventory_cleanup(ctx.module) {
+        abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
+    }
+    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_release_catalog");
+    }
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and
@@ -503,6 +688,48 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Retires class static owners once, finishing every property before propagating a destructor throw.
+fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>) {
+    let properties = super::runtime_metadata::refcounted_static_properties(ctx.module);
+    if properties.is_empty() { return; }
+    for (symbol, php_type) in properties {
+        let ty = php_type.codegen_repr();
+        let done = ctx.next_label("static_property_cleanup_done");
+        let result = abi::int_result_reg(ctx.emitter);
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        ctx.emitter.comment(&format!("epilogue cleanup static property {symbol}"));
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, &symbol, 8);
+        abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {result}, {scratch}"));   // distinguish uninitialized typed storage from a live owner
+                ctx.emitter.instruction(&format!("b.eq {done}"));               // skip properties that never acquired an owner
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {result}, {scratch}"));   // distinguish uninitialized typed storage from a live owner
+                ctx.emitter.instruction(&format!("je {done}"));                 // skip properties that never acquired an owner
+            }
+        }
+        if ty == PhpType::Str {
+            abi::emit_load_symbol_to_reg(ctx.emitter, result, &symbol, 0);
+        } else {
+            abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
+        }
+        ctx.emitter.comment("retire the static property before invoking its destructor");
+        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+        abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &symbol, 8);
+        if ty == PhpType::Str {
+            abi::emit_unary_cleanup_preserving_exception(ctx.emitter, "__rt_heap_free_safe", result);
+        } else {
+            abi::emit_decref_preserving_exception(ctx.emitter, &ty);
+        }
+        ctx.emitter.label(&done);
+    }
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
 }
 
 /// Releases initialized function static locals before process-exit diagnostics.
@@ -533,7 +760,13 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
-    let globals = ctx.module.data.global_names.clone();
+    let mut globals = ctx.module.data.global_names.clone();
+    // Eval exposes process globals even when no source-level global instruction names them.
+    for name in ["argc", "argv"] {
+        if superglobal_storage_needed(ctx, name) && !globals.iter().any(|global| global == name) {
+            globals.push(name.to_string());
+        }
+    }
     for name in globals {
         if ctx.module.extern_globals.contains_key(&name) {
             continue;
@@ -600,10 +833,12 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // every function is emitted; the call here forward-references its label.
     ctx.emitter.comment("reset per-request persistent state");
     abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    emit_opcache_configuration(ctx);
+    emit_opcache_restart_boundary(ctx);
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
-    zero_initialize_ref_cell_state_slots(ctx);
+    initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -612,6 +847,98 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // profiler before the bridge invokes this handler.
     register_main_instr(ctx);
     emit_registered_instr_enter(ctx);
+}
+
+/// Installs the compiled OPcache configuration before any of the program's code runs.
+///
+/// php-src configures OPcache during module startup, so every directive is in force for the
+/// first statement. elephc installed it lazily at the first `ensure_eval_context` instead,
+/// which made the ANSWER depend on program order: `opcache_compile_file()` returned `false`
+/// before the program's first `eval()` and `true` after it, and
+/// `opcache_get_configuration()['blacklist']` was `[]` then populated — same binary, same
+/// directives, two answers decided by where the call happened to sit.
+///
+/// Emitted only when the binary links the eval bridge, so pay-for-use is unchanged: without
+/// one there is no runtime cache to configure and every `rt_*` call folds away anyway.
+///
+/// Under `--web` this runs per request rather than once. The call is a setter over
+/// compile-time constants, so re-installing is idempotent, and putting it in the handler
+/// prologue is what guarantees a recycled worker starts configured.
+fn emit_opcache_configuration(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    ctx.emitter
+        .comment("install the compiled OPcache configuration (php-src does this at startup)");
+    crate::codegen::lower_inst::builtins::configure_eval_opcache(ctx);
+}
+
+/// Runs `opcache.preload`'s top-level code ONCE, here in the master, before serving starts.
+///
+/// php-src runs preload during startup, before any request exists. elephc's `--web` top-level
+/// body IS the per-request handler, so the preload's statements used to execute inside the
+/// FIRST request of every worker — and again after each `--max-requests` recycle. MEASURED on
+/// reference `php -S`: the preload's output goes to the server log once, no header it sets
+/// reaches a response, and a global it assigns reads back as `NULL` in the request. elephc put
+/// all three into response 1.
+///
+/// `web_prelude::lift_preload_to_startup` has already moved those statements into a synthetic
+/// function, leaving the preload file's DECLARATIONS at the top level where they compile into
+/// the binary. This calls that function.
+///
+/// POSITION IS THE WHOLE FIX, in two ways that both fall out of it rather than needing code:
+/// this runs in the master before `elephc_web_run` forks, so it happens once for every worker
+/// rather than once per worker; and `_elephc_web_capture` is still clear, so `__rt_stdout_write`
+/// takes its plain `write(1, …)` path and the output reaches the server's stdout instead of a
+/// response body.
+fn emit_web_preload_startup(ctx: &mut FunctionContext<'_>) -> crate::codegen::Result<()> {
+    let declared = ctx
+        .module
+        .functions
+        .iter()
+        .any(|function| function.name == crate::web_prelude::PRELOAD_STARTUP_FN);
+    if !declared {
+        return Ok(());
+    }
+    // STATIC PROPERTY DEFAULTS FIRST. They are written by a runtime store into a
+    // zero-initialized symbol, not baked into the data section, and the store lives in the
+    // per-request HANDLER body — which runs after this stub. A preload reading
+    // `SomeClass::$n` therefore saw `0` where reference sees the declared default, while
+    // every request after it saw the right value. Reference initializes class statics during
+    // startup, before preload runs, so seeding them here is the ordering php-src has.
+    //
+    // The handler still seeds them per request, and must: `__rt_web_reset` clears
+    // process-persistent state between requests, so each one needs its own fresh defaults.
+    // This call is the master's copy, which is what the preload reads.
+    super::block_emit::emit_static_property_initializers(ctx)?;
+    ctx.emitter
+        .comment("run opcache.preload once, before serving (php-src does this at startup)");
+    let symbol = crate::names::function_symbol(crate::web_prelude::PRELOAD_STARTUP_FN);
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
+}
+
+/// Emits the request-boundary call that performs a deferred `opcache_reset()`.
+///
+/// php-src schedules a restart and performs it at the START of the next request, so this
+/// sits beside the other per-request resets rather than inside `opcache_reset()` itself.
+/// A request that calls `opcache_reset()` therefore keeps being served by the cache, and
+/// the one after it starts cold — which is what reference PHP does.
+///
+/// PAY-FOR-USE, the same rule the `opcache_get_status()` readers follow: a binary with no
+/// eval bridge has no runtime script cache to restart, so the call is not emitted at all
+/// and the interpreter archive stays unlinked.
+fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    ctx.emitter
+        .comment("apply a restart scheduled by opcache_reset() in an earlier request");
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_apply_restart");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
@@ -668,7 +995,7 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_entry_stub(
     ctx: &mut FunctionContext<'_>,
     isolation: super::WebIsolation,
-) {
+) -> crate::codegen::Result<()> {
     let target = ctx.emitter.target;
     if target.arch == Arch::AArch64 {
         ctx.emitter.raw(".align 2");
@@ -701,6 +1028,19 @@ pub(super) fn emit_web_entry_stub(
     // request. (A `--no-web-heap-guard` opt-out for benchmarking is a follow-up.)
     ctx.emitter.comment("enable web heap-guard flag");
     abi::emit_enable_web_heap_guard_flag(ctx.emitter);
+    // BEFORE the preload, not after. The preload's own code can call `opcache_*`, and every
+    // one of those answers comes from the bridge. Running it first left the bridge at its
+    // DEFAULT configuration — a disabled cache — so `opcache_compile_file()` in a preload
+    // answered `false` while the same call in every request answered `true`: one binary, one
+    // file, opposite answers. That is the order-dependence the prologue install was added to
+    // remove, reintroduced by the hoist in the one place that now runs ahead of it.
+    //
+    // The handler prologue still installs it per request, and that is not redundant: a worker
+    // forked from this master inherits the installed configuration, but the handler call is
+    // what a RECYCLED worker relies on. The call is a setter over compile-time constants, so
+    // installing twice costs two stores.
+    emit_opcache_configuration(ctx);
+    emit_web_preload_startup(ctx)?;
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
     let handler_reg = abi::int_arg_reg_name(target, 2);
@@ -713,6 +1053,7 @@ pub(super) fn emit_web_entry_stub(
     let bridge_entry = target.extern_symbol(isolation.bridge_symbol());
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
+    Ok(())
 }
 
 /// Zero-initializes cleanup-tracked locals so skipped assignments stay safe at epilogue.
@@ -732,6 +1073,8 @@ fn zero_initialize_main_cleanup_locals(ctx: &mut FunctionContext<'_>) {
 
 /// Releases owned main locals that still hold refcounted storage at process exit.
 fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    emit_hash_entry_ref_epilogue_cleanup(ctx);
+    emit_ref_cell_owner_epilogue_cleanup(ctx);
     for (name, slot, ty, offset) in main_cleanup_locals(ctx) {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
         emit_owned_local_epilogue_cleanup(ctx, slot, offset, &ty);
@@ -770,6 +1113,7 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
         })
         .filter(|local| {
             ctx.local_slot_has_store(local.id) || function_has_eval_scope(ctx.function)
+                || matches!(local.name.as_deref(), Some("argc" | "argv"))
         })
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();
@@ -795,18 +1139,31 @@ fn zero_initialize_ref_cell_owner_locals(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Zero-initializes runtime flags for slots that may later store ref-cell pointers.
-fn zero_initialize_ref_cell_state_slots(ctx: &mut FunctionContext<'_>) {
-    let mut offsets = ctx
+/// Initializes runtime flags for slots whose raw/ref-cell representation can change.
+fn initialize_ref_cell_state_slots(ctx: &mut FunctionContext<'_>) {
+    let mut slots = ctx
         .function
         .locals
         .iter()
-        .filter_map(|local| ctx.ref_cell_state_offset(local.id))
+        .filter_map(|local| {
+            ctx.ref_cell_state_offset(local.id)
+                .map(|offset| (local.id, offset))
+        })
         .collect::<Vec<_>>();
-    offsets.sort_unstable();
-    offsets.dedup();
-    for offset in offsets {
-        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    slots.sort_by_key(|(_, offset)| *offset);
+    slots.dedup_by_key(|(_, offset)| *offset);
+    for (slot, offset) in slots {
+        let incoming_ref = ctx
+            .function
+            .params
+            .get(slot.as_raw() as usize)
+            .is_some_and(|param| param.by_ref);
+        if incoming_ref {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        } else {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
     }
 }
 
@@ -816,37 +1173,68 @@ fn emit_ref_cell_owner_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners);
 }
 
+/// Releases live foreach-by-reference aliases recorded in local representation words.
+fn emit_hash_entry_ref_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    let mut slots = ctx
+        .function
+        .locals
+        .iter()
+        .filter(|local| ctx.local_slot_ever_stores_ref_cell_pointer(local.id))
+        .map(|local| local.id)
+        .collect::<Vec<_>>();
+    slots.sort_by_key(|slot| slot.as_raw());
+    slots.dedup();
+    for slot in slots {
+        ctx.release_counted_ref_binding(slot);
+    }
+}
+
 /// Releases a precomputed set of hidden ref-cell owner slots.
 fn emit_ref_cell_owner_epilogue_cleanup_for(
     ctx: &mut FunctionContext<'_>,
     owners: Vec<(String, LocalSlotId, PhpType, usize)>,
 ) {
-    for (name, _, ty, offset) in owners {
+    for (name, slot, ty, offset) in owners {
+        if !ctx.unwinding_cleanup
+            && ctx.function.locals[slot.as_raw() as usize].kind == LocalKind::ReturnRefCell
+        {
+            continue;
+        }
         ctx.emitter
             .comment(&format!("epilogue cleanup ref-cell owner ${}", name));
         emit_ref_cell_owner_cleanup(ctx, offset, &ty);
     }
 }
 
-/// Releases the owner slot's ref-cell pointer when it is non-null, then clears the owner.
+/// Detaches a non-null ref-cell owner before releasing its cell, including throwing payloads.
 fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
     let done = ctx.next_label("ref_cell_owner_cleanup_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset, "x11");
             ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip released or never-created fallback ref-cells
-            abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
+            abi::emit_reg_move(ctx.emitter, "x0", "x9");
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            emit_ref_cell_cleanup_call(ctx, "x0", ty);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", offset, "r10");
             ctx.emitter.instruction("test r11, r11");                           // check whether this owner still holds a fallback ref-cell
             ctx.emitter.instruction(&format!("je {}", done));                   // skip released or never-created fallback ref-cells
-            abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            emit_ref_cell_cleanup_call(ctx, "r11", ty);
         }
     }
     ctx.emitter.label(&done);
+}
+
+/// Selects propagating or exception-preserving retirement for the owned reference cell.
+fn emit_ref_cell_cleanup_call(ctx: &mut FunctionContext<'_>, cell_reg: &str, ty: &PhpType) {
+    if ctx.unwinding_cleanup {
+        abi::emit_release_local_ref_cell_preserving_exception(ctx.emitter, cell_reg, ty);
+    } else {
+        abi::emit_release_local_ref_cell(ctx.emitter, cell_reg, ty);
+    }
 }
 
 /// Returns hidden owner locals that track promoted fallback ref-cells.
@@ -855,7 +1243,7 @@ fn ref_cell_owner_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId,
         .function
         .locals
         .iter()
-        .filter(|local| local.kind == LocalKind::RefCell)
+        .filter(|local| matches!(local.kind, LocalKind::RefCell | LocalKind::ReturnRefCell))
         .filter_map(|local| {
             let offset = ctx.local_offset(local.id).ok()?;
             let name = local
@@ -905,14 +1293,10 @@ fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let done = ctx.next_label("eval_scope_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    if arg_reg != result_reg {
-        ctx.emitter
-            .instruction(&format!("mov {}, {}", arg_reg, result_reg)); // pass the persistent eval scope handle to the free helper
-    }
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_free");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    // The Rust scope is gone before a contained destructor exception can reenter frame cleanup.
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    emit_eval_handle_cleanup_call(ctx, &symbol, result_reg);
     ctx.emitter.label(&done);
 }
 
@@ -922,14 +1306,20 @@ fn emit_eval_context_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let done = ctx.next_label("eval_context_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    if arg_reg != result_reg {
-        ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));   // pass the persistent eval context handle to the free helper
-    }
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_free");
-    abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    emit_eval_handle_cleanup_call(ctx, &symbol, result_reg);
     ctx.emitter.label(&done);
+}
+
+/// Releases a detached eval handle without allowing exceptional frame cleanup to escape early.
+fn emit_eval_handle_cleanup_call(ctx: &mut FunctionContext<'_>, symbol: &str, handle_reg: &str) {
+    if ctx.unwinding_cleanup {
+        abi::emit_unary_cleanup_preserving_exception(ctx.emitter, symbol, handle_reg);
+    } else {
+        abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), handle_reg);
+        abi::emit_call_label(ctx.emitter, symbol);
+    }
 }
 
 /// Returns hidden eval scope slots and their frame offsets.
@@ -990,6 +1380,7 @@ pub(super) fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: us
     let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, ptr_reg, offset);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -1006,7 +1397,7 @@ pub(super) fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: us
     }
 }
 
-/// Releases a refcounted local when the slot contains a non-null heap pointer.
+/// Clears and releases a non-null refcounted local so destructor throws cannot release it twice.
 pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done = ctx.next_label("main_refcounted_cleanup_done");
@@ -1022,7 +1413,12 @@ pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset
             ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized refcounted locals
         }
     }
-    abi::emit_decref_if_refcounted(ctx.emitter, ty);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    if ctx.unwinding_cleanup {
+        abi::emit_decref_preserving_exception(ctx.emitter, ty);
+    } else {
+        abi::emit_decref_if_refcounted(ctx.emitter, ty);
+    }
     ctx.emitter.label(&done);
 }
 
@@ -1049,31 +1445,46 @@ fn emit_function_local_epilogue_cleanup(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
 ) {
+    if ctx.exception_activation_offset.is_some() && is_destructor(ctx.function) {
+        destructor_cleanup::emit_call(ctx);
+        return;
+    }
     // Instrument exit runs FIRST — before the early return for cleanup-free
     // functions — so every return path records the exit. It preserves the
     // return value across its own call.
     emit_instr_exit(ctx);
     let cleanup_locals = function_cleanup_locals(ctx, skip_return_slot);
     let ref_cell_owners = ref_cell_owner_locals(ctx);
+    let has_hash_entry_refs = ctx
+        .function
+        .locals
+        .iter()
+        .any(|local| ctx.local_slot_ever_stores_ref_cell_pointer(local.id));
     let eval_scopes = eval_scope_locals(ctx);
     let eval_contexts = eval_context_locals(ctx);
     if cleanup_locals.is_empty()
         && ref_cell_owners.is_empty()
+        && !has_hash_entry_refs
         && eval_scopes.is_empty()
         && eval_contexts.is_empty()
     {
         return;
     }
-    let return_ty = ctx.function.return_php_type.codegen_repr();
+    let return_ty = if ctx.function.flags.by_ref_return {
+        PhpType::Pointer(None)
+    } else {
+        ctx.function.return_php_type.codegen_repr()
+    };
     let preserves_return = !matches!(return_ty, PhpType::Void | PhpType::Never);
     if preserves_return {
         push_return_value(ctx, &return_ty);
     }
+    emit_hash_entry_ref_epilogue_cleanup(ctx);
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners);
     for (name, slot, ty, offset) in cleanup_locals {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
         emit_owned_local_epilogue_cleanup(ctx, slot, offset, &ty);
     }
-    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners);
     for (name, offset) in eval_scopes {
         ctx.emitter.comment(&format!("epilogue cleanup {}", name));
         emit_eval_scope_cleanup(ctx, offset);
@@ -1135,6 +1546,21 @@ fn function_cleanup_locals(
         .collect::<Vec<_>>();
     locals.sort_by_key(|(_, _, _, offset)| *offset);
     locals
+}
+
+/// Returns whether the frame epilogue owns the refcounted value in a local slot.
+pub(super) fn local_slot_has_epilogue_owner(
+    ctx: &FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> bool {
+    let cleanup_locals = if ctx.is_main {
+        main_cleanup_locals(ctx)
+    } else {
+        function_cleanup_locals(ctx, None)
+    };
+    cleanup_locals
+        .iter()
+        .any(|(_, cleanup_slot, _, _)| *cleanup_slot == slot)
 }
 
 /// Returns whether a local slot belongs to a function parameter.
@@ -1247,11 +1673,59 @@ fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
 }
 
 /// Returns the local slot whose cleanup this return path must skip, if ownership is transferred.
-pub(super) fn return_cleanup_skip_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
-    let result_ty = function.value(value)?.php_type.codegen_repr();
-    let return_ty = function.return_php_type.codegen_repr();
+pub(super) fn return_cleanup_skip_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Option<LocalSlotId> {
+    let result_ty = ctx.function.value(value)?.php_type.codegen_repr();
+    let return_ty = ctx.function.return_php_type.codegen_repr();
     let mut visited = HashSet::new();
-    return_cleanup_skip_slot_inner(function, value, &result_ty, &return_ty, &mut visited)
+    let slot = return_cleanup_skip_slot_inner(
+        ctx.function,
+        value,
+        &result_ty,
+        &return_ty,
+        &mut visited,
+    )?;
+    function_cleanup_locals(ctx, None)
+        .iter()
+        .any(|(_, owned_slot, _, _)| *owned_slot == slot)
+        .then_some(slot)
+}
+
+/// Returns whether a string return transfers an ordinary local owner out of the frame.
+///
+/// The slot trace alone also finds borrowed parameters, whose slots are never epilogue owners.
+/// Requiring a non-parameter cleanup local with a real store matches the local epilogue's transfer
+/// case and lets descriptor wrappers avoid persisting an already-owned result.
+pub(in crate::codegen) fn return_transfers_local_string_owner(
+    function: &Function,
+    value: ValueId,
+) -> bool {
+    let Some(result_ty) = function.value(value).map(|value| value.php_type.codegen_repr()) else {
+        return false;
+    };
+    let return_ty = function.return_php_type.codegen_repr();
+    let Some(slot) = return_cleanup_skip_slot_inner(
+        function, value, &result_ty, &return_ty, &mut HashSet::new(),
+    ) else {
+        return false;
+    };
+    if local_slot_is_parameter(function, slot)
+        || function.no_epilogue_cleanup_slots.contains(&slot)
+    {
+        return false;
+    }
+    let Some(local) = function.locals.get(slot.as_raw() as usize) else {
+        return false;
+    };
+    local.id == slot
+        && local_kind_needs_epilogue_cleanup(local.kind)
+        && local.php_type.codegen_repr() == PhpType::Str
+        && function.instructions.iter().any(|instruction| {
+            instruction.op == Op::StoreLocal
+                && instruction.immediate == Some(Immediate::LocalSlot(slot))
+        })
 }
 
 /// Recursively traces forwarding return values back to the owned local they transfer.
@@ -1361,6 +1835,8 @@ fn local_load_transfers_stored_owner(local_ty: &PhpType, result_ty: &PhpType) ->
         (local_ty, result_ty),
         (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::Array(_), PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
     )
 }
 
@@ -1376,6 +1852,8 @@ fn return_preserves_result_owner(result_ty: &PhpType, return_ty: &PhpType) -> bo
         (result_ty, return_ty),
         (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::Array(_), PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
     )
 }
 
@@ -1725,7 +2203,11 @@ fn emit_instr_exit(ctx: &mut FunctionContext<'_>) {
         return;
     };
     ctx.emitter.comment("instrument: exit (--instrument)");
-    let return_ty = ctx.function.return_php_type.codegen_repr();
+    let return_ty = if ctx.function.flags.by_ref_return {
+        PhpType::Pointer(None)
+    } else {
+        ctx.function.return_php_type.codegen_repr()
+    };
     let preserves_return = !matches!(return_ty, PhpType::Void | PhpType::Never);
     if preserves_return {
         push_return_value(ctx, &return_ty);
@@ -1960,10 +2442,25 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_function_return_epilogue(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
+    return_ownership: super::return_ownership::ReturnOwnershipStatus,
 ) {
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
+    for local in &ctx.function.locals {
+        if local.kind == LocalKind::ReturnRefCell {
+            let offset = ctx.local_offset(local.id).expect("return cell owner has frame storage");
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
+    }
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
+    match return_ownership {
+        super::return_ownership::ReturnOwnershipStatus::Static(owned) => {
+            super::return_ownership::emit_status(ctx.emitter, owned);
+        }
+        super::return_ownership::ReturnOwnershipStatus::Dynamic(offset) => {
+            super::return_ownership::emit_load_status(ctx.emitter, offset);
+        }
+    }
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
 }
@@ -1981,6 +2478,7 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_function_local_epilogue_cleanup(ctx, None);
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
+    super::return_ownership::emit_status(ctx.emitter, true);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
     ctx.epilogue_emitted = true;
@@ -2031,7 +2529,7 @@ fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
     if matches!(argv_ty, PhpType::Mixed | PhpType::Union(_)) {
-        emit_box_current_value_as_mixed(ctx.emitter, &array_ty);
+        crate::codegen_support::emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
     }
     abi::emit_store(ctx.emitter, &argv_ty, offset);
 }
@@ -2042,10 +2540,11 @@ fn store_argc_global_if_needed(ctx: &mut FunctionContext<'_>) {
         return;
     }
     let symbol = ir_global_symbol("argc");
-    ctx.data.add_comm(symbol.clone(), PhpType::Int.stack_size().max(8));
+    ctx.data.add_comm(symbol.clone(), PhpType::Mixed.stack_size().max(8));
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, false);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
 }
 
 /// Initializes program-global `$argv` storage for eval or static `global $argv`.
@@ -2058,7 +2557,8 @@ fn store_argv_global_if_needed(ctx: &mut FunctionContext<'_>) {
     ctx.data.add_comm(symbol.clone(), array_ty.stack_size().max(8));
     ctx.emitter.comment("build global $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &array_ty, false);
+    crate::codegen_support::emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
 }
 
 /// Returns true when a process superglobal needs program-global storage.

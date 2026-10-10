@@ -49,6 +49,7 @@ pub fn emit_buffer_registry_drain(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with no active Buffer payload owners
 }
 
+/// Scans x86_64 Buffer descriptors, clearing each active owner before releasing its payload.
 fn emit_buffer_registry_drain_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_registry_drain ---");
@@ -87,6 +88,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};
 
+    /// Pins detach-before-free ordering and bounded registry traversal on both runtime ABIs.
     #[test]
     fn fatal_buffer_drain_detaches_before_free_on_both_abis() {
         for target in [

@@ -12,6 +12,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
+use crate::codegen_support::sentinels::TAGGED_SCALAR_PROPERTY_TAG;
+use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
     method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
@@ -20,6 +22,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
+use super::NOT_SERIALIZABLE_BUILTIN_CLASSES;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
@@ -36,6 +39,7 @@ const EVAL_REFLECTION_PROPERTY_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_PROPERTY_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED: u64 = 512;
+const EVAL_REFLECTION_PROPERTY_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
@@ -44,6 +48,11 @@ const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
 const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK: u64 = 32768;
+/// Set when the method is declared `function &m()` (or is a `&get` hook), which eval's
+/// `ReflectionMethod::returnsReference()` reports. The bit is property-only in the member-flag
+/// space, where it means private(set), so a method row can carry it without ambiguity.
+const EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE: u64 = 4096;
 const EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
 const EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT: u64 = 16;
 const EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT: u64 = 40;
@@ -62,11 +71,12 @@ pub(crate) fn emit_runtime_data_user(
     declared_trait_source_lines: &HashMap<String, u32>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
+    property_initializer_ids: &HashSet<u64>,
     allowed_class_names: Option<&HashSet<String>>,
     emit_eval_reflection_metadata: bool,
     source_path: Option<&str>,
     target: Target,
-) -> String {
+) -> Result<String, String> {
     let mut out = String::new();
 
     let mut sorted_globals: Vec<&String> = global_var_names.iter().collect();
@@ -156,6 +166,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
     emit_name_lookup_data(
         &mut out,
         "_interface_names_count",
@@ -210,6 +221,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_stack_class_id", "SplStack"),
         ("_spl_queue_class_id", "SplQueue"),
         ("_spl_fixed_array_class_id", "SplFixedArray"),
+        ("_spl_exception_class_id", "Exception"),
         ("_spl_error_class_id", "Error"),
         ("_spl_logic_exception_class_id", "LogicException"),
         ("_spl_runtime_exception_class_id", "RuntimeException"),
@@ -413,6 +425,34 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Per-class "the dump walkers append the dynamic-property tail" flags, read by
+    // `__rt_obj_dump_dyn_props`. A class carries the tail exactly when the flag above is
+    // set, EXCEPT when `__debugInfo()` folded into a projection: PHP then prints only the
+    // returned array, so the dynamic properties must stay out of the dump as well.
+    out.push_str(".globl _class_dump_dyn_prop_flags\n_class_dump_dyn_prop_flags:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
+                (Some(class_info), Some(class_name)) => u8::from(
+                    class_uses_dynamic_property_tail(class_name, class_info)
+                        && var_dump_debug_info_projection(class_info).is_none(),
+                ),
+                _ => 0,
+            };
+            out.push_str(&format!("    .quad {}\n", flag));
+        }
+    }
+
+    out.push_str(".globl _class_reflection_parameter_cast_public_flags\n_class_reflection_parameter_cast_public_flags:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = class_name_by_id
+                .get(&class_id)
+                .is_some_and(|class_name| class_name.as_str() == "ReflectionParameter");
+            out.push_str(&format!("    .quad {}\n", u8::from(flag)));
+        }
+    }
+
     out.push_str(".globl _class_gc_desc_count\n_class_gc_desc_count:\n");
     out.push_str(&format!(
         "    .quad {}\n",
@@ -440,6 +480,17 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    out.push_str(".globl _class_source_vtable_ptrs\n_class_source_vtable_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_source_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_vtable_missing\n");
+            }
+        }
+    }
+
     // Per-class destructor symbol table — consulted by __rt_call_object_destructor
     // (invoked at the top of __rt_object_free_deep) to run a class's PHP
     // __destruct before its storage is freed. Each entry resolves through the
@@ -455,11 +506,14 @@ pub(crate) fn emit_runtime_data_user(
     if let Some(max_class_id) = max_class_id {
         let destruct_key = php_symbol_key("__destruct");
         for class_id in 0..=max_class_id {
-            let entry = class_info_by_id
-                .get(&class_id)
-                .and_then(|class_info| class_info.method_impl_classes.get(&destruct_key))
-                .map(|impl_class| method_symbol(impl_class, &destruct_key))
-                .unwrap_or_else(|| "0".to_string());
+            let entry = match class_info_by_id.get(&class_id) {
+                Some(class_info) => source_instance_method_entry(
+                    class_info,
+                    &destruct_key,
+                    classes,
+                )?,
+                None => "0".to_string(),
+            };
             out.push_str(&format!("    .quad {}\n", entry));
         }
     }
@@ -476,11 +530,14 @@ pub(crate) fn emit_runtime_data_user(
     if let Some(max_class_id) = max_class_id {
         let tostring_key = php_symbol_key("__toString");
         for class_id in 0..=max_class_id {
-            let entry = class_info_by_id
-                .get(&class_id)
-                .and_then(|class_info| class_info.method_impl_classes.get(&tostring_key))
-                .map(|impl_class| method_symbol(impl_class, &tostring_key))
-                .unwrap_or_else(|| "0".to_string());
+            let entry = match class_info_by_id.get(&class_id) {
+                Some(class_info) => source_instance_method_entry(
+                    class_info,
+                    &tostring_key,
+                    classes,
+                )?,
+                None => "0".to_string(),
+            };
             out.push_str(&format!("    .quad {}\n", entry));
         }
     }
@@ -527,8 +584,8 @@ pub(crate) fn emit_runtime_data_user(
                                 .get(&method_key)
                                 .is_some_and(|sig| sig.return_type.codegen_repr() == returns)
                     })
-                    .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
-                    .map(|impl_class| method_symbol(impl_class, &method_key))
+                    .map(|class_info| source_instance_method_entry(class_info, &method_key, classes))
+                    .transpose()?
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));
             }
@@ -551,26 +608,50 @@ pub(crate) fn emit_runtime_data_user(
         if let Some(max_class_id) = max_class_id {
             let method_key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
+                // A class PHP refuses to serialize routes `__serialize` to the throwing helper,
+                // so the denial holds wherever the object is found: nested in an array, behind
+                // `mixed`, or reached through a subclass that declares its own `__serialize`.
+                // The unserialize side refuses by wire name instead (see below), before any
+                // object exists.
+                let denied = table == "_class_serialize_ptrs"
+                    && class_name_by_id
+                        .get(&class_id)
+                        .is_some_and(|name| class_serialization_denied(name, classes));
+                if denied {
+                    out.push_str("    .quad __rt_throw_serialization_denied\n");
+                    continue;
+                }
                 let entry = class_info_by_id
                     .get(&class_id)
-                    .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
-                    .map(|impl_class| method_symbol(impl_class, &method_key))
+                    .map(|class_info| source_instance_method_entry(class_info, &method_key, classes))
+                    .transpose()?
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));
             }
         }
     }
 
-    // _class_propinit_ptrs: dense class_id-indexed table of property-default
-    // init thunks. Entry = _class_propinit_<id> when the class has any property
-    // default, else 0 (null = nothing to init). __rt_new_by_name indexes this
-    // by class_id and calls the thunk (when non-zero) after zeroing the object.
-    // The has-default predicate MUST match EIR property-init thunk generation.
+    emit_unserialize_refusal_table(&mut out, &sorted_classes, classes);
+
+    // Hydration hooks receive a parsed hash, while PHP array/Mixed parameters use boxed cells.
+    out.push_str(".globl _class_unserialize_data_boxed\n_class_unserialize_data_boxed:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let boxed = class_info_by_id.get(&class_id)
+                .and_then(|class_info| class_info.methods.get("__unserialize"))
+                .and_then(|signature| signature.params.first())
+                .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed);
+            out.push_str(&format!("    .quad {}\n", u8::from(boxed)));
+        }
+    }
+
+    // Only emitted EIR initializers have entries. A class with no defaults can
+    // still need a thunk to mark typed slots uninitialized after zeroing.
     out.push_str(".globl _class_propinit_ptrs\n_class_propinit_ptrs:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
             match class_info_by_id.get(&class_id) {
-                Some(class_info) if class_info.defaults.iter().any(|d| d.is_some()) => {
+                Some(_) if property_initializer_ids.contains(&class_id) => {
                     out.push_str(&format!("    .quad _class_propinit_{}\n", class_id));
                 }
                 _ => out.push_str("    .quad 0\n"),
@@ -613,6 +694,20 @@ pub(crate) fn emit_runtime_data_user(
         for class_id in 0..=max_class_id {
             if class_info_by_id.contains_key(&class_id) {
                 out.push_str(&format!("    .quad _class_static_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_static_vtable_missing\n");
+            }
+        }
+    }
+
+    out.push_str(".globl _class_source_static_vtable_ptrs\n_class_source_static_vtable_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!(
+                    "    .quad _class_source_static_vtable_{}\n",
+                    class_id
+                ));
             } else {
                 out.push_str("    .quad _class_static_vtable_missing\n");
             }
@@ -929,11 +1024,12 @@ pub(crate) fn emit_runtime_data_user(
                 if let Some(impl_class) = class_info.method_impl_classes.get(method_name) {
                     let symbol = interface_method_table_symbol(
                         class_info,
+                        interface_name,
                         interface_info,
                         method_name,
                         impl_class,
                         classes,
-                    );
+                    )?;
                     out.push_str(&format!("    .quad {}\n", symbol));
                 } else {
                     out.push_str("    .quad 0\n");
@@ -979,14 +1075,10 @@ pub(crate) fn emit_runtime_data_user(
         out.push_str(&format!("    .quad {}\n", flags));
         if implements_jsonserializable {
             let key = php_symbol_key("jsonSerialize");
-            if let Some(impl_class) = class_info.method_impl_classes.get(&key) {
-                out.push_str(&format!(
-                    "    .quad {}\n",
-                    method_symbol(impl_class, &key),
-                ));
-            } else {
-                out.push_str("    .quad 0\n");
-            }
+            out.push_str(&format!(
+                "    .quad {}\n",
+                source_instance_method_entry(class_info, &key, classes)?,
+            ));
         } else {
             out.push_str("    .quad 0\n");
         }
@@ -994,6 +1086,8 @@ pub(crate) fn emit_runtime_data_user(
         for (prop_index, (prop_name, prop_ty)) in &public_props {
             let tag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
                 0
+            } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+                TAGGED_SCALAR_PROPERTY_TAG
             } else {
                 match prop_ty {
                     PhpType::Int => 0,
@@ -1036,7 +1130,14 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str(", ");
                 }
                 let prop_name = &class_info.properties[i].0;
-                let mut tag = match prop_ty {
+                let tag = if class_info.property_slot_is_reference(i, prop_name) {
+                    if class_info.owned_reference_properties.contains(prop_name) { 11 } else { 0 }
+                } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+                    // An inline `{payload, tag}` slot owns no heap reference: reading it as
+                    // Mixed (7) handed the integer payload to decref/mark as a cell pointer.
+                    0
+                } else {
+                    match prop_ty {
                         PhpType::Int => 0,
                         PhpType::Str => 1,
                         PhpType::Float => 2,
@@ -1057,12 +1158,7 @@ pub(crate) fn emit_runtime_data_user(
                         | PhpType::Packed(_)
                         | PhpType::Never
                         | PhpType::Void => 0,
-                    };
-                if class_info.property_slot_is_reference(i, prop_name) {
-                    // Bit 7 identifies an object-owned reference cell; the low seven bits retain
-                    // the payload tag so object destruction can drop its shared cell owner and
-                    // deep-release the payload only when no captured closure still owns it.
-                    tag |= 0x80;
+                    }
                 };
                 out.push_str(&tag.to_string());
             }
@@ -1231,6 +1327,22 @@ pub(crate) fn emit_runtime_data_user(
         }
 
         out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_source_vtable_{0}\n_class_source_vtable_{0}:\n",
+            class_info.class_id
+        ));
+        if class_info.vtable_methods.is_empty() {
+            out.push_str("    .quad 0\n");
+        } else {
+            for method_name in &class_info.vtable_methods {
+                out.push_str(&format!(
+                    "    .quad {}\n",
+                    source_instance_vtable_entry(class_info, method_name, classes)?,
+                ));
+            }
+        }
+
+        out.push_str("    .p2align 3\n");
         out.push_str(&format!(".globl _class_static_vtable_{}\n_class_static_vtable_{}:\n", class_info.class_id, class_info.class_id));
         if class_info.static_vtable_methods.is_empty() {
             out.push_str("    .quad 0\n");
@@ -1244,9 +1356,25 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
 
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_source_static_vtable_{0}\n_class_source_static_vtable_{0}:\n",
+            class_info.class_id
+        ));
+        if class_info.static_vtable_methods.is_empty() {
+            out.push_str("    .quad 0\n");
+        } else {
+            for method_name in &class_info.static_vtable_methods {
+                out.push_str(&format!(
+                    "    .quad {}\n",
+                    source_static_vtable_entry(class_info, method_name, classes)?,
+                ));
+            }
+        }
+
         emit_class_callable_methods(&mut out, class_info);
-        emit_user_wrapper_vtable(&mut out, class_info);
-        emit_user_filter_vtable(&mut out, class_info);
+        emit_user_wrapper_vtable(&mut out, class_info, classes)?;
+        emit_user_filter_vtable(&mut out, class_info, classes)?;
     }
 
     let stdclass_id = classes
@@ -1257,7 +1385,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".globl _stdclass_class_id\n_stdclass_class_id:\n");
     out.push_str(&format!("    .quad {}\n", stdclass_id));
 
-    out
+    Ok(out)
 }
 
 /// Emits a dense class-id to class-name lookup table for runtime `get_class()`.
@@ -1372,6 +1500,10 @@ fn emit_eval_reflection_method_lookup_data(
         .iter()
         .map(|(name, info)| (name.as_str(), *info))
         .collect::<HashMap<_, _>>();
+    let interface_infos = sorted_interfaces
+        .iter()
+        .map(|(name, info)| (name.as_str(), *info))
+        .collect::<HashMap<_, _>>();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
         let mut methods = class_info.methods.keys().collect::<Vec<_>>();
@@ -1383,21 +1515,68 @@ fn emit_eval_reflection_method_lookup_data(
                 method_name,
             );
             let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
+            let hook_flag = if declaring_info.is_property_hook_method(method_name) {
+                EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK
+            } else { 0 };
             let flags = eval_reflection_method_flags_with_source_lines(
-                eval_reflection_instance_method_flags(class_info, method_name),
+                eval_reflection_instance_method_flags(class_info, method_name) | hook_flag,
                 declaring_info,
                 method_name,
                 false,
+            );
+            let declared_name = eval_reflection_declared_method_name(
+                &class_infos,
+                &interface_infos,
+                &[declaring_class, class_name],
+                method_name,
             );
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 class_name,
-                method_name,
+                &declared_name,
                 flags,
                 declaring_class,
             );
+        }
+
+        // A private method is not inherited, so a descendant of a class with a private
+        // constructor has no `__construct` key of its own and the loop above emitted no row
+        // for it. PHP still reports one through `ReflectionClass::getConstructor()`, on the
+        // DECLARING class, so eval-side reflection needs the row too (issue #869). The row is
+        // keyed by the descendant and carries the OWNER as its declaring class and flags.
+        //
+        // This table backs ReflectionMethod lookups only. `method_exists()` and
+        // `get_class_methods()` answer from `class_method`/`class_method_names`, which are
+        // untouched here — so they keep reporting `false`/empty for such a descendant, exactly
+        // as PHP does.
+        let constructor_key = php_symbol_key("__construct");
+        if !class_info.methods.contains_key(&constructor_key) {
+            if let Some((owner_name, owner_info)) =
+                eval_reflection_constructor_owner(&class_infos, class_name)
+            {
+                let declaring_class = eval_reflection_instance_method_declaring_class(
+                    owner_name,
+                    owner_info,
+                    &constructor_key,
+                );
+                let flags = eval_reflection_method_flags_with_source_lines(
+                    eval_reflection_instance_method_flags(owner_info, &constructor_key),
+                    owner_info,
+                    &constructor_key,
+                    false,
+                );
+                push_eval_reflection_method_lookup_row(
+                    out,
+                    &mut entries,
+                    &mut index,
+                    class_name,
+                    &constructor_key,
+                    flags,
+                    declaring_class,
+                );
+            }
         }
 
         let mut static_methods = class_info.static_methods.keys().collect::<Vec<_>>();
@@ -1412,12 +1591,18 @@ fn emit_eval_reflection_method_lookup_data(
                 method_name,
                 true,
             );
+            let declared_name = eval_reflection_declared_method_name(
+                &class_infos,
+                &interface_infos,
+                &[declaring_class, class_name],
+                method_name,
+            );
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 class_name,
-                method_name,
+                &declared_name,
                 flags,
                 declaring_class,
             );
@@ -1433,13 +1618,22 @@ fn emit_eval_reflection_method_lookup_data(
                 interface_info,
                 method_name,
             );
+            let declared_name = eval_reflection_declared_method_name(
+                &class_infos,
+                &interface_infos,
+                &[declaring_interface, interface_name],
+                method_name,
+            );
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 interface_name,
-                method_name,
-                eval_reflection_interface_method_flags(false),
+                &declared_name,
+                eval_reflection_interface_method_flags(
+                    false,
+                    interface_info.methods.get(method_name.as_str()),
+                ),
                 declaring_interface,
             );
         }
@@ -1452,13 +1646,22 @@ fn emit_eval_reflection_method_lookup_data(
                 interface_info,
                 method_name,
             );
+            let declared_name = eval_reflection_declared_method_name(
+                &class_infos,
+                &interface_infos,
+                &[declaring_interface, interface_name],
+                method_name,
+            );
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 interface_name,
-                method_name,
-                eval_reflection_interface_method_flags(true),
+                &declared_name,
+                eval_reflection_interface_method_flags(
+                    true,
+                    interface_info.static_methods.get(method_name.as_str()),
+                ),
                 declaring_interface,
             );
         }
@@ -1479,6 +1682,44 @@ fn emit_eval_reflection_method_lookup_data(
         out.push_str(&format!("    .quad {}\n", declaring_label));
         out.push_str(&format!("    .quad {}\n", declaring_len));
     }
+}
+
+/// The method's DECLARED spelling for one eval-visible AOT row, or the key when none is known.
+///
+/// Every reader of this table compares with `__rt_strcasecmp`, so storing the declaration
+/// rather than the lowercase key changes nothing about which row a lookup finds — it only
+/// changes what eval REPORTS. Without it, `get_class_methods()` and `ReflectionMethod::
+/// getName()` inside `eval()` answered `match` for a method declared `Match`, disagreeing with
+/// the same program's AOT reflection as well as with PHP (issue #571).
+///
+/// `method_decls` already holds the source declarations, flattened trait methods included, so
+/// the declaring class-like is consulted first and the reflected one second: an inherited
+/// method takes its spelling from where it was written. A compiler-injected class-like has no
+/// user source, and keeps the key.
+fn eval_reflection_declared_method_name(
+    class_infos: &HashMap<&str, &ClassInfo>,
+    interface_infos: &HashMap<&str, &InterfaceInfo>,
+    owners: &[&str],
+    method_key: &str,
+) -> String {
+    owners
+        .iter()
+        .find_map(|owner| {
+            let owner = owner.trim_start_matches('\\');
+            let declarations = class_infos
+                .get(owner)
+                .map(|info| info.method_decls.as_slice())
+                .or_else(|| {
+                    interface_infos
+                        .get(owner)
+                        .map(|info| info.method_decls.as_slice())
+                })?;
+            declarations
+                .iter()
+                .find(|method| php_symbol_key(&method.name) == method_key)
+                .map(|method| method.name.clone())
+        })
+        .unwrap_or_else(|| method_key.to_string())
 }
 
 /// Adds one eval ReflectionMethod lookup row and its backing string labels.
@@ -1545,29 +1786,60 @@ fn eval_reflection_method_flags_with_source_lines(
 }
 
 /// Returns the class name that declares one visible instance method.
+/// Walks to the class whose `__construct` PHP runs when `class_name` is instantiated.
+///
+/// The same rule as [`crate::types::constructor_owner`], over the borrowed map this emitter
+/// already builds: reproducing the walk here avoids cloning every `ClassInfo` into the owned
+/// map that function takes. A cycle in the parent chain terminates the walk rather than
+/// hanging the emitter.
+fn eval_reflection_constructor_owner<'a>(
+    class_infos: &HashMap<&'a str, &'a ClassInfo>,
+    class_name: &'a str,
+) -> Option<(&'a str, &'a ClassInfo)> {
+    let mut current = Some(class_name);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = current {
+        if !seen.insert(name) {
+            return None;
+        }
+        let (owner_name, info) = class_infos.get_key_value(name)?;
+        if info.methods.contains_key("__construct") {
+            return Some((owner_name, info));
+        }
+        current = info.parent.as_deref();
+    }
+    None
+}
+
+/// Returns the class name that declares one visible instance method.
+///
+/// Reads the declaring-class map AOT reflection reads, before the implementing class: the two
+/// differ where a compiler-injected body keeps an inherited final method's declarer, as
+/// `PDOException::getCode()` keeps `Exception`.
 fn eval_reflection_instance_method_declaring_class<'a>(
     reflected_class: &'a str,
     class_info: &'a ClassInfo,
     method_name: &str,
 ) -> &'a str {
     class_info
-        .method_impl_classes
+        .method_declaring_classes
         .get(method_name)
-        .or_else(|| class_info.method_declaring_classes.get(method_name))
+        .or_else(|| class_info.method_impl_classes.get(method_name))
         .map(String::as_str)
         .unwrap_or(reflected_class)
 }
 
-/// Returns the class name that declares one visible static method.
+/// Returns the class name that declares one visible static method, reading the same
+/// declaring-class map as AOT reflection before the implementing class.
 fn eval_reflection_static_method_declaring_class<'a>(
     reflected_class: &'a str,
     class_info: &'a ClassInfo,
     method_name: &str,
 ) -> &'a str {
     class_info
-        .static_method_impl_classes
+        .static_method_declaring_classes
         .get(method_name)
-        .or_else(|| class_info.static_method_declaring_classes.get(method_name))
+        .or_else(|| class_info.static_method_impl_classes.get(method_name))
         .map(String::as_str)
         .unwrap_or(reflected_class)
 }
@@ -1608,8 +1880,11 @@ fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &s
     if class_info.final_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
     }
-    if !class_info.method_impl_classes.contains_key(method_name) {
+    if class_info.abstract_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
+    }
+    if class_info.methods.get(method_name).is_some_and(|sig| sig.by_ref_return) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE;
     }
     flags
 }
@@ -1625,17 +1900,23 @@ fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str
     if class_info.final_static_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
     }
-    if !class_info.static_method_impl_classes.contains_key(method_name) {
+    if class_info.abstract_static_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
+    }
+    if class_info.static_methods.get(method_name).is_some_and(|sig| sig.by_ref_return) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE;
     }
     flags
 }
 
 /// Returns eval ReflectionMethod bitflags for one interface method entry.
-fn eval_reflection_interface_method_flags(is_static: bool) -> u64 {
+fn eval_reflection_interface_method_flags(is_static: bool, signature: Option<&FunctionSig>) -> u64 {
     let mut flags = EVAL_REFLECTION_METHOD_FLAG_PUBLIC | EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     if is_static {
         flags |= EVAL_REFLECTION_METHOD_FLAG_STATIC;
+    }
+    if signature.is_some_and(|sig| sig.by_ref_return) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE;
     }
     flags
 }
@@ -2175,6 +2456,9 @@ fn eval_reflection_instance_property_flags(
     if class_info.promoted_properties.contains(property_name) {
         flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED;
     }
+    if class_info.property_is_virtual(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_VIRTUAL;
+    }
     match class_info.property_set_visibilities.get(property_name) {
         Some(Visibility::Protected) => flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET,
         Some(Visibility::Private) => flags |= EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET,
@@ -2308,7 +2592,7 @@ fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize 
 
 /// Returns whether this class layout stores a dynamic-property hash tail.
 fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) -> bool {
-    class_name == "stdClass" || class_info.allow_dynamic_properties
+    class_name == "stdClass" || class_info.has_property_hash_storage()
 }
 
 /// The number of fixed-slot stream-wrapper methods recorded per class in
@@ -2477,9 +2761,13 @@ fn class_has_user_filter_method(class_info: &ClassInfo) -> bool {
 }
 
 /// Emits runtime metadata for user filter vtable.
-fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
+fn emit_user_filter_vtable(
+    out: &mut String,
+    class_info: &ClassInfo,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<(), String> {
     if !class_has_user_filter_method(class_info) {
-        return;
+        return Ok(());
     }
     out.push_str("    .p2align 3\n");
     out.push_str(&format!(
@@ -2491,11 +2779,10 @@ fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
             .method_visibilities
             .get(*method_name)
             .is_some_and(|visibility| matches!(visibility, Visibility::Public));
-        let impl_class = class_info.method_impl_classes.get(*method_name);
-        if is_public && impl_class.is_some() {
+        if is_public && class_info.method_impl_classes.contains_key(*method_name) {
             out.push_str(&format!(
                 "    .quad {}\n",
-                method_symbol(impl_class.unwrap(), method_name)
+                source_instance_method_entry(class_info, method_name, classes)?
             ));
         } else {
             out.push_str("    .quad 0\n");
@@ -2508,6 +2795,8 @@ fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
     let brigade_arity = class_info
         .methods
         .get("filter")
+        .map(source_method_adapters::source_visible_signature)
+        .transpose()?
         .map(|sig| sig.params.len() == 4)
         .unwrap_or(false);
     out.push_str(&format!("    .quad {}\n", if brigade_arity { 1 } else { 0 }));
@@ -2517,12 +2806,17 @@ fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
         .copied()
         .unwrap_or(0);
     out.push_str(&format!("    .quad {}\n", params_offset));
+    Ok(())
 }
 
 /// Emits runtime metadata for user wrapper vtable.
-fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
+fn emit_user_wrapper_vtable(
+    out: &mut String,
+    class_info: &ClassInfo,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<(), String> {
     if !class_has_user_wrapper_method(class_info) {
-        return;
+        return Ok(());
     }
     out.push_str("    .p2align 3\n");
     out.push_str(&format!(
@@ -2534,11 +2828,10 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
             .method_visibilities
             .get(*method_name)
             .is_some_and(|visibility| matches!(visibility, Visibility::Public));
-        let impl_class = class_info.method_impl_classes.get(*method_name);
-        if is_public && impl_class.is_some() {
+        if is_public && class_info.method_impl_classes.contains_key(*method_name) {
             out.push_str(&format!(
                 "    .quad {}\n",
-                method_symbol(impl_class.unwrap(), method_name)
+                source_instance_method_entry(class_info, method_name, classes)?
             ));
         } else {
             out.push_str("    .quad 0\n");
@@ -2549,6 +2842,7 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
         "    .quad {}\n",
         user_wrapper_boxed_result_mask(class_info)
     ));
+    Ok(())
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.
@@ -2651,20 +2945,252 @@ fn emit_static_callable_method_data(out: &mut String, sorted_classes: &[(&String
 /// implementing class uses a narrower type (the wrapper bridges the type mismatch).
 fn interface_method_table_symbol(
     class_info: &ClassInfo,
+    interface_name: &str,
     interface_info: &InterfaceInfo,
     method_name: &str,
     impl_class: &str,
     classes: &HashMap<String, ClassInfo>,
-) -> String {
-    if interface_method_needs_return_wrapper(interface_info, method_name, impl_class, classes) {
-        interface_method_wrapper_symbol(
+) -> Result<String, String> {
+    let interface_sig = interface_info
+        .methods
+        .get(method_name)
+        .ok_or_else(|| format!("missing interface signature for {method_name}"))?;
+    let actual_sig = classes
+        .get(impl_class)
+        .and_then(|class_info| class_info.methods.get(method_name))
+        .ok_or_else(|| format!("missing implementation signature for {impl_class}::{method_name}"))?;
+    let abi_plan = source_method_adapters::plan_method_abi(interface_sig, actual_sig)
+        .map_err(|error| format!(
+            "{error}: {interface_name}::{method_name} implemented by {impl_class}::{method_name}; caller {:?} -> {:?}, physical {:?} -> {:?}",
+            interface_sig.params, interface_sig.return_type,
+            actual_sig.params, actual_sig.return_type,
+        ))?;
+    if interface_method_needs_return_wrapper(interface_info, method_name, impl_class, classes)
+        || abi_plan != MethodAbiPlan::Direct
+    {
+        Ok(interface_method_wrapper_symbol(
             class_info.class_id,
             interface_info.interface_id,
             method_name,
-        )
+        ))
     } else {
-        method_symbol(impl_class, method_name)
+        Ok(method_symbol(impl_class, method_name))
     }
+}
+
+/// Returns whether PHP forbids serializing and unserializing instances of a class: one of the
+/// builtin classes php-src marks `ZEND_ACC_NOT_SERIALIZABLE` that elephc registers
+/// ([`NOT_SERIALIZABLE_BUILTIN_CLASSES`]: the Reflection family, `Generator`, `Fiber`, the
+/// `SplFileInfo` family, `Phar`, `PharData`, the PDO, curl, gd and XML handles, ...), or any class
+/// that extends one of them.
+///
+/// A listed name counts only when elephc itself declares that class (`ClassInfo::is_internal`).
+/// The curl and PDO driver classes come from a prelude injected only for programs that use them,
+/// so a program that does not may declare its own `CurlHandle` or `Pdo\Sqlite`, and that class
+/// serializes like any user class. The same holds for a user class named after a PHP internal
+/// elephc does not model at all (`WeakMap`, `ReflectionType`), which the list never names. The
+/// list names every refused class itself too, because elephc registers some of them without
+/// their PHP parents (`Phar` and `PharData` do not extend `SplFileInfo` here).
+///
+/// The comparison is exact-case on purpose: class names and `parent` links here are the
+/// resolver's canonical spellings (declared case), so `extends reflectionclass` arrives as
+/// `ReflectionClass`. A class registered without name resolution must use PHP's spelling.
+fn class_serialization_denied(class_name: &str, classes: &HashMap<String, ClassInfo>) -> bool {
+    let mut current = class_name.trim_start_matches('\\');
+    for _ in 0..=classes.len() {
+        let Some(info) = classes.get(current) else {
+            return false;
+        };
+        if info.is_internal && NOT_SERIALIZABLE_BUILTIN_CLASSES.contains(&current) {
+            return true;
+        }
+        let Some(parent) = info.parent.as_deref() else {
+            return false;
+        };
+        current = parent.trim_start_matches('\\');
+    }
+    false
+}
+
+/// Emits `_unser_refused_class_count` and `_unser_refused_classes`: the class names
+/// `unserialize()` refuses in this program, as `(name_ptr, name_len)` rows that the unserialize
+/// preflight scans before the decoder allocates anything.
+///
+/// A name is refused when the class the program would hydrate under it is denied
+/// ([`class_serialization_denied`]: a builtin PHP marks not serializable, or a subclass of one),
+/// or when no class the program declares answers to it and it names such a builtin. The wire
+/// alone decides which class `unserialize()` meets, so PHP refuses `O:15:"ReflectionClass":0:{}`
+/// whether or not the script mentions the class. A class the program declares itself under a
+/// builtin's name (a `CurlHandle` in a program without ext/curl) hydrates normally, so its name is
+/// left out. Each row carries the declared spelling, which is what the message prints.
+fn emit_unserialize_refusal_table(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+    classes: &HashMap<String, ClassInfo>,
+) {
+    let declared: HashSet<String> = sorted_classes
+        .iter()
+        .map(|(name, _)| php_symbol_key(name.trim_start_matches('\\')))
+        .collect();
+    let names: Vec<&str> = sorted_classes
+        .iter()
+        .filter(|(name, _)| class_serialization_denied(name, classes))
+        .map(|(name, _)| name.trim_start_matches('\\'))
+        .chain(
+            NOT_SERIALIZABLE_BUILTIN_CLASSES
+                .iter()
+                .copied()
+                .filter(|name| !declared.contains(&php_symbol_key(name))),
+        )
+        .collect();
+    for (index, name) in names.iter().enumerate() {
+        out.push_str(&format!(
+            "_unser_refused_class_name_{index}:\n    .ascii \"{}\"\n",
+            escaped_ascii(name)
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _unser_refused_class_count\n_unser_refused_class_count:\n");
+    out.push_str(&format!("    .quad {}\n", names.len()));
+    out.push_str(".globl _unser_refused_classes\n_unser_refused_classes:\n");
+    for (index, name) in names.iter().enumerate() {
+        out.push_str(&format!("    .quad _unser_refused_class_name_{index}\n"));
+        out.push_str(&format!("    .quad {}\n", name.len()));
+    }
+}
+
+/// Resolves one source-ABI instance entry through its physical implementing class.
+fn source_instance_method_entry(
+    class_info: &ClassInfo,
+    method_name: &str,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<String, String> {
+    let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
+        return Ok("0".to_string());
+    };
+    let Some(physical) = physical_instance_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+    )? else {
+        return Ok(method_symbol(impl_class, method_name));
+    };
+    source_method_adapters::source_method_entry_symbol(
+        impl_class,
+        method_name,
+        physical,
+        MethodKind::Instance,
+    )
+}
+
+/// Selects the source vtable entry without adapting a physical source-variadic slot.
+///
+/// A plain source variadic already has the same entry ABI. If it also carries hidden argc,
+/// physical call sites use the original vtable, while injected fixed overrides are rejected.
+fn source_instance_vtable_entry(
+    class_info: &ClassInfo,
+    method_name: &str,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<String, String> {
+    let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
+        return Ok("0".to_string());
+    };
+    let Some(physical) = physical_instance_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+    )? else {
+        return Ok(method_symbol(impl_class, method_name));
+    };
+    source_method_adapters::source_vtable_entry_symbol(
+        impl_class,
+        method_name,
+        physical,
+        MethodKind::Instance,
+    )
+}
+
+/// Static counterpart of `source_instance_vtable_entry`.
+fn source_static_vtable_entry(
+    class_info: &ClassInfo,
+    method_name: &str,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<String, String> {
+    let Some(impl_class) = class_info.static_method_impl_classes.get(method_name) else {
+        return Ok("0".to_string());
+    };
+    let Some(physical) = physical_static_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+    )? else {
+        return Ok(static_method_symbol(impl_class, method_name));
+    };
+    source_method_adapters::source_vtable_entry_symbol(
+        impl_class,
+        method_name,
+        physical,
+        MethodKind::Static,
+    )
+}
+
+/// Finds the physical instance signature on the class that emits the method body.
+fn physical_instance_method_signature<'a>(
+    class_info: &'a ClassInfo,
+    impl_class: &str,
+    method_name: &str,
+    classes: &'a HashMap<String, ClassInfo>,
+) -> Result<Option<&'a FunctionSig>, String> {
+    physical_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+        |info| &info.methods,
+        "method",
+    )
+}
+
+/// Finds the physical static signature on the class that emits the method body.
+fn physical_static_method_signature<'a>(
+    class_info: &'a ClassInfo,
+    impl_class: &str,
+    method_name: &str,
+    classes: &'a HashMap<String, ClassInfo>,
+) -> Result<Option<&'a FunctionSig>, String> {
+    physical_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+        |info| &info.static_methods,
+        "static method",
+    )
+}
+
+/// Resolves inherited physical signatures without requiring filtered runtime-native classes.
+fn physical_method_signature<'a>(
+    class_info: &'a ClassInfo,
+    impl_class: &str,
+    method_name: &str,
+    classes: &'a HashMap<String, ClassInfo>,
+    methods: impl Fn(&'a ClassInfo) -> &'a HashMap<String, FunctionSig>,
+    kind: &str,
+) -> Result<Option<&'a FunctionSig>, String> {
+    if let Some(impl_info) = classes.get(impl_class) {
+        if let Some(signature) = methods(impl_info).get(method_name) {
+            return Ok(Some(signature));
+        }
+        if impl_info.declaration_span != crate::span::Span::dummy() {
+            return Err(format!(
+                "missing physical {kind} signature for {impl_class}::{method_name}"
+            ));
+        }
+    }
+    Ok(methods(class_info).get(method_name))
 }
 
 /// Returns true when an interface method requires a return-type wrapper at call sites.
@@ -2688,6 +3214,7 @@ fn interface_method_needs_return_wrapper(
     };
 
     matches!(interface_sig.return_type.codegen_repr(), PhpType::Mixed)
+        && !actual_sig.by_ref_return
         && !matches!(actual_sig.return_type.codegen_repr(), PhpType::Mixed)
 }
 
@@ -2993,10 +3520,15 @@ fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
 /// Maps a declared property's static type to the runtime value tag consumed by
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
 /// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
-/// properties are stored as boxed `Mixed` cells (tag 7).
+/// properties are stored as boxed `Mixed` cells (tag 7), except `int|null`, whose
+/// inline `{payload, tag}` pair gets `TAGGED_SCALAR_PROPERTY_TAG`. A `Closure`
+/// property holds its callable descriptor directly (tag 10), never a Mixed box.
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
     if class_info.reference_properties.contains(prop_name) {
         return 7;
+    }
+    if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+        return TAGGED_SCALAR_PROPERTY_TAG;
     }
     match prop_ty {
         PhpType::Int => 0,
@@ -3006,6 +3538,7 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
+        PhpType::Callable => 10,
         _ => 7,
     }
 }
@@ -3035,6 +3568,7 @@ mod boxed_result_mask_tests {
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+            is_generator: false,
         }
     }
 
@@ -3163,9 +3697,172 @@ mod tests {
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
     use crate::parser::ast::Visibility;
-    use crate::types::{ClassInfo, PhpType};
+    use crate::types::{ClassInfo, FunctionSig, PhpType};
 
-    use super::emit_runtime_data_user;
+    use super::{
+        emit_runtime_data_user, source_instance_method_entry, source_instance_vtable_entry,
+        source_static_vtable_entry, NOT_SERIALIZABLE_BUILTIN_CLASSES,
+    };
+
+    /// Builds a direct physical method signature for source-entry lookup tests.
+    fn direct_method_signature() -> FunctionSig {
+        FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        }
+    }
+
+    /// Inherited source entries read the signature from the class that owns the body.
+    #[test]
+    fn inherited_source_entries_use_the_implementing_class_signature() {
+        let mut parent = empty_class_info(1, "run");
+        parent
+            .method_impl_classes
+            .insert("run".to_string(), "Parent".to_string());
+        parent
+            .methods
+            .insert("run".to_string(), direct_method_signature());
+        parent
+            .static_method_impl_classes
+            .insert("build".to_string(), "Parent".to_string());
+        parent
+            .static_methods
+            .insert("build".to_string(), direct_method_signature());
+
+        let mut child = empty_class_info(2, "run");
+        child
+            .method_impl_classes
+            .insert("run".to_string(), "Parent".to_string());
+        child
+            .static_method_impl_classes
+            .insert("build".to_string(), "Parent".to_string());
+        let classes = HashMap::from([
+            ("Parent".to_string(), parent),
+            ("Child".to_string(), child.clone()),
+        ]);
+
+        assert_eq!(
+            source_instance_method_entry(&child, "run", &classes).unwrap(),
+            "_method_Parent_run"
+        );
+        assert_eq!(
+            source_instance_vtable_entry(&child, "run", &classes).unwrap(),
+            "_method_Parent_run"
+        );
+        assert_eq!(
+            source_static_vtable_entry(&child, "build", &classes).unwrap(),
+            "_static_Parent_build"
+        );
+    }
+
+    /// Static abstractness comes from declarations even after concrete bodies are trimmed.
+    #[test]
+    fn test_eval_static_abstract_flags_survive_emission_trimming_on_all_targets() {
+        let mut info = empty_class_info(1, "unused");
+        info.is_abstract = true;
+        for method in ["make", "required"] {
+            info.static_methods.insert(method.to_string(), direct_method_signature());
+            info.static_method_declaring_classes
+                .insert(method.to_string(), "StaticMetadata".to_string());
+        }
+        info.abstract_static_methods.insert("required".to_string());
+        info.static_method_impl_classes
+            .insert("make".to_string(), "StaticMetadata".to_string());
+        assert_eq!(
+            info.static_method_impl_classes.remove("make").as_deref(),
+            Some("StaticMetadata"),
+        );
+        let classes = HashMap::from([("StaticMetadata".to_string(), info)]);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = emit_runtime_data_user(
+                &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
+                &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
+                &classes, &HashMap::new(), &HashSet::new(), None, true, None,
+                Target::parse(name).expect("supported target"),
+            )
+            .unwrap();
+            let methods = asm.split("_eval_reflection_methods:\n").nth(1).unwrap();
+            assert_eq!(methods.lines().nth(4).unwrap().trim(), ".quad 3", "{name}: concrete static");
+            assert_eq!(methods.lines().nth(11).unwrap().trim(), ".quad 35", "{name}: declared abstract static");
+        }
+    }
+
+    /// All supported targets retain hook lookup rows while marking only virtual storage and real accessors.
+    #[test]
+    fn test_eval_hook_metadata_flags_on_every_supported_target() {
+        let mut info = empty_class_info(1, "__propget_virtual");
+        let signature = crate::types::FunctionSig {
+            params: Vec::new(), param_type_exprs: Vec::new(), param_attributes: Vec::new(),
+            defaults: Vec::new(), return_type: PhpType::Int, declared_return: true,
+            by_ref_return: false, ref_params: Vec::new(), declared_params: Vec::new(),
+            variadic: None, deprecation: None,
+            is_generator: false,
+        };
+        for (index, (name, hooked, backed)) in [
+            ("virtual", true, false), ("backed", true, true), ("plain", false, true),
+        ].into_iter().enumerate() {
+            info.properties.push((name.to_string(), PhpType::Int));
+            info.property_offsets.insert(name.to_string(), 16 + index * 8);
+            info.defaults.push(None);
+            let mut hooks = crate::parser::ast::PropertyHooks::none();
+            hooks.get = hooked;
+            hooks.uses_backing_slot = backed;
+            info.property_hooks.insert(name.to_string(), hooks);
+            let method = format!("__propget_{name}");
+            info.methods.insert(method.clone(), signature.clone());
+            info.method_declaring_classes.insert(method.clone(), "HookMetadata".to_string());
+            info.method_impl_classes.insert(method, "HookMetadata".to_string());
+        }
+        let classes = HashMap::from([("HookMetadata".to_string(), info)]);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = emit_runtime_data_user(
+                &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
+                &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
+                &classes, &HashMap::new(), &HashSet::new(), None, true, None, target,
+            )
+            .unwrap();
+            let properties = asm.split("_eval_reflection_properties:\n").nth(1).unwrap();
+            let flags = properties.lines().take(21).collect::<Vec<_>>();
+            assert_eq!(flags[4].trim(), ".quad 1026", "{name}: virtual property");
+            assert_eq!(flags[11].trim(), ".quad 2", "{name}: backed hook");
+            assert_eq!(flags[18].trim(), ".quad 2", "{name}: ordinary property");
+            let methods = asm.split("_eval_reflection_methods:\n").nth(1).unwrap();
+            let flags = methods.lines().take(21).collect::<Vec<_>>();
+            assert_eq!(flags[4].trim(), ".quad 32770", "{name}: backed getter row");
+            assert_eq!(flags[11].trim(), ".quad 2", "{name}: prefix-like user method");
+            assert_eq!(flags[18].trim(), ".quad 32770", "{name}: virtual getter row");
+        }
+    }
+
+    /// The initializer pointer table follows emitted EIR symbols even for default-less typed slots.
+    #[test]
+    fn property_initializer_table_uses_emitted_symbols_on_all_targets() {
+        let classes = HashMap::from([("TypedOnly".to_string(), empty_class_info(1, "run"))]);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for emitted in [HashSet::new(), HashSet::from([1])] {
+                let asm = emit_runtime_data_user(
+                    &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
+                    &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
+                    &classes, &HashMap::new(), &emitted, None, false, None, Target::parse(name).unwrap(),
+                )
+                .unwrap();
+                let expected = if emitted.is_empty() { ".quad 0" } else { ".quad _class_propinit_1" };
+                let table = asm.split("_class_propinit_ptrs:\n").nth(1).unwrap();
+                assert_eq!(table.lines().nth(1).unwrap().trim(), expected, "{name}");
+            }
+        }
+    }
 
     /// Provides the Empty class info helper used by the user module.
     pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
@@ -3178,12 +3875,17 @@ mod tests {
         ClassInfo {
             class_id,
             declaration_span: crate::span::Span::dummy(),
+            is_internal: false,
             parent: None,
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
             allow_dynamic_properties: false,
+            eval_property_storage: false,
+            clone_override_property_storage: false,
+            scope_dynamic_property_storage: false,
             constants: HashMap::new(),
+            constant_order: Vec::new(),
     constant_deprecations: HashMap::new(),
     constant_types: HashMap::new(),
     constant_visibilities: HashMap::new(),
@@ -3214,6 +3916,7 @@ mod tests {
             property_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
+            property_hooks: HashMap::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
             static_property_declaring_classes: HashMap::new(),
@@ -3231,12 +3934,14 @@ mod tests {
             final_methods: HashSet::new(),
             method_declaring_classes: HashMap::new(),
             method_impl_classes,
+            abstract_methods: HashSet::new(),
             vtable_methods: vec![method_name.to_string()],
             vtable_slots,
             static_method_visibilities: HashMap::new(),
             final_static_methods: HashSet::new(),
             static_method_declaring_classes: HashMap::new(),
             static_method_impl_classes: HashMap::new(),
+            abstract_static_methods: HashSet::new(),
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
             interfaces: Vec::new(),
@@ -3272,11 +3977,13 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            &HashSet::new(),
             Some(&allowed_class_names),
             false,
             None,
             Target::new(Platform::MacOS, Arch::AArch64),
-        );
+        )
+        .unwrap();
 
         assert!(asm.contains("_class_vtable_1"));
         assert!(asm.contains("_method_Exception_run"));
@@ -3310,11 +4017,13 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            &HashSet::new(),
             None,
             false,
             None,
             Target::new(Platform::MacOS, Arch::AArch64),
-        );
+        )
+        .unwrap();
 
         assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
         assert!(asm.contains("_class_parent_ids:\n    .quad -2\n    .quad -1\n    .quad -1\n    .quad -1\n"));
@@ -3349,12 +4058,82 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            &HashSet::new(),
             None,
             false,
             None,
             Target::new(Platform::MacOS, Arch::AArch64),
-        );
+        )
+        .unwrap();
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));
+    }
+
+    /// Every name the serializers refuse is a catalogued builtin class spelled as PHP declares it,
+    /// so a user class that merely shares the name of a PHP internal elephc does not model
+    /// (`WeakMap`) is never refused.
+    #[test]
+    fn test_refused_classes_are_catalogued_builtins() {
+        for name in NOT_SERIALIZABLE_BUILTIN_CLASSES {
+            let contract = elephc_builtin_contract::lookup_class(name)
+                .unwrap_or_else(|| panic!("{name} is refused but not a catalogued builtin class"));
+            assert_eq!(contract.name, *name, "{name} must use the catalogue's PHP spelling");
+        }
+    }
+
+    /// Only elephc's own declaration of a listed builtin is refused. A builtin and a user subclass
+    /// of it refuse both directions; a program's own `CurlHandle` (no curl prelude) keeps its
+    /// hooks and stays out of the unserialize refusal table, while every listed builtin the
+    /// program does not declare stays in it, once, with its backslashes escaped.
+    #[test]
+    fn test_refusals_skip_user_classes_named_like_builtins() {
+        let mut builtin = empty_class_info(1, "run");
+        builtin.is_internal = true;
+        let mut subclass = empty_class_info(2, "run");
+        subclass.parent = Some("ReflectionClass".to_string());
+        let classes = HashMap::from([
+            ("ReflectionClass".to_string(), builtin),
+            ("Mine".to_string(), subclass),
+            ("CurlHandle".to_string(), empty_class_info(3, "run")),
+        ]);
+
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            &HashSet::new(),
+            None,
+            false,
+            None,
+            Target::new(Platform::Linux, Arch::X86_64),
+        )
+        .unwrap();
+
+        assert!(asm.contains(
+            "_class_serialize_ptrs:\n    .quad 0\n    .quad __rt_throw_serialization_denied\n    \
+             .quad __rt_throw_serialization_denied\n    .quad 0\n"
+        ));
+        assert!(!asm.contains("__rt_throw_unserialization_denied"));
+        let lines: Vec<&str> = asm.lines().collect();
+        let refused: Vec<&str> = lines
+            .windows(2)
+            .filter(|pair| pair[0].starts_with("_unser_refused_class_name_"))
+            .map(|pair| pair[1].trim().trim_start_matches(".ascii \"").trim_end_matches('"'))
+            .collect();
+        for name in ["ReflectionClass", "Mine", "GdImage", "Closure", "Pdo\\\\Sqlite"] {
+            assert_eq!(refused.iter().filter(|row| **row == name).count(), 1, "{name}: {refused:?}");
+        }
+        assert!(!refused.contains(&"CurlHandle"), "{refused:?}");
+        assert_eq!(refused.len(), NOT_SERIALIZABLE_BUILTIN_CLASSES.len());
+        assert!(asm.contains(&format!("_unser_refused_class_count:\n    .quad {}\n", refused.len())));
+        assert!(asm.contains("_unser_refused_classes:\n    .quad _unser_refused_class_name_0\n    .quad 15\n"));
     }
 }

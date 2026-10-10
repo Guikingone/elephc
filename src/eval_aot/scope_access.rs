@@ -313,6 +313,7 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::ExprCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             if let ExprKind::ExprCall { callee, .. } = &expr.kind {
@@ -331,6 +332,13 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
             for (key, value) in pairs {
                 collect_expr_scope_access(key, access);
                 collect_expr_scope_access(value, access);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    collect_expr_scope_access(expr, access);
+                }
             }
         }
         ExprKind::Match {

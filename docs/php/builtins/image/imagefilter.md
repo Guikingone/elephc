@@ -1,8 +1,8 @@
 ---
 title: "imagefilter()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Applies one of GD's built-in filters to an image."
 sidebar:
-  order: 505
+  order: 506
 ---
 
 ## imagefilter()
@@ -11,7 +11,7 @@ sidebar:
 function imagefilter(mixed $image, int $filter, int $arg1 = 0, int $arg2 = 0, int $arg3 = 0, int $arg4 = 0): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Applies one of GD's built-in filters to an image.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -28,7 +28,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

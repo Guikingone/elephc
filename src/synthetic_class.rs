@@ -490,7 +490,19 @@ pub fn e_ternary(condition: Expr, then_value: Expr, else_value: Expr) -> Expr {
     )
 }
 
-/// `(int) value`, `(string) value`, … — a scalar cast.
+/// Builds a strict match expression, preserving grouped labels and an optional default.
+pub fn e_match(subject: Expr, arms: Vec<(Vec<Expr>, Expr)>, default: Option<Expr>) -> Expr {
+    Expr::new(
+        ExprKind::Match {
+            subject: Box::new(subject),
+            arms,
+            default: default.map(Box::new),
+        },
+        Span::dummy(),
+    )
+}
+
+/// `(int) value`, `(string) value`: a scalar cast.
 pub fn e_cast(target: CastType, value: Expr) -> Expr {
     Expr::new(
         ExprKind::Cast {
@@ -1021,6 +1033,8 @@ pub fn s_try(
     let catches = catches
         .into_iter()
         .map(|(types, variable, body)| CatchClause {
+            // A synthesised catch names ordinary classes; nothing generic reaches here.
+            exception_type_args: Vec::new(),
             exception_types: types.into_iter().map(class_name).collect(),
             variable: variable.map(str::to_string),
             body,
@@ -1061,6 +1075,7 @@ pub fn s_do_while(body: Vec<Stmt>, condition: Expr) -> Stmt {
     Stmt::new(StmtKind::DoWhile { body, condition }, Span::synthetic())
 }
 
+/// Builds a synthetic while statement with its condition and body.
 pub fn s_while(condition: Expr, body: Vec<Stmt>) -> Stmt {
     Stmt::new(StmtKind::While { condition, body }, Span::synthetic())
 }
@@ -1302,6 +1317,18 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
         | ExprKind::Negate(inner) => walk_expr(inner, out),
+        ExprKind::Match { subject, arms, default } => {
+            walk_expr(subject, out);
+            for (labels, value) in arms {
+                for label in labels {
+                    walk_expr(label, out);
+                }
+                walk_expr(value, out);
+            }
+            if let Some(default) = default {
+                walk_expr(default, out);
+            }
+        }
         ExprKind::InstanceOf { value, .. } => walk_expr(value, out),
         // `new $class(...$args)`: the spread argument READS `$args`, so a parameter that
         // only ever reaches a constructor this way counts as used.
@@ -1607,6 +1634,7 @@ impl MethodBuilder {
         // of a method that has no body.
         let param_attributes = vec![Vec::new(); self.signature.params.len()];
         ClassMethod {
+            type_params: Vec::new(),
             name: self.name,
             visibility: self.visibility,
             is_static: self.is_static,
@@ -1646,6 +1674,7 @@ impl MethodBuilder {
         param_attributes
             .resize_with(params.len() + usize::from(variadic_name.is_some()), Vec::new);
         ClassMethod {
+            type_params: Vec::new(),
             name: self.name,
             visibility: self.visibility,
             is_static: self.is_static,
@@ -1792,6 +1821,9 @@ impl FunctionBuilder {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: self.name,
+                // Synthetic declarations are already monomorphic: a builder emits one concrete
+                // function, never a template to instantiate.
+                type_params: Vec::new(),
                 params,
                 param_attributes,
                 variadic: variadic_name,
@@ -2117,6 +2149,18 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
         | ExprKind::Negate(inner) => audit_expr(inner, out),
+        ExprKind::Match { subject, arms, default } => {
+            audit_expr(subject, out);
+            for (labels, value) in arms {
+                for label in labels {
+                    audit_expr(label, out);
+                }
+                audit_expr(value, out);
+            }
+            if let Some(default) = default {
+                audit_expr(default, out);
+            }
+        }
         ExprKind::InstanceOf { value, .. } => audit_expr(value, out),
         // A closure body is ordinary code and can call anything, so it has to be walked — a
         // leaf arm here would exempt every call written inside one from this whole audit.
@@ -2440,7 +2484,8 @@ impl ClassBuilder {
     pub fn build(self) -> Stmt {
         Stmt::new(
             StmtKind::ClassDecl {
-                name: self.name,
+                generics: None,
+            name: self.name,
                 extends: self.extends,
                 implements: self.implements,
                 is_abstract: false,
@@ -2514,6 +2559,7 @@ impl EnumBuilder {
         Stmt::new(
             StmtKind::EnumDecl {
                 name: self.name,
+                generics: Default::default(),
                 backing_type: self.backing_type,
                 cases: self.cases,
                 implements: self.implements,
@@ -2580,7 +2626,8 @@ impl InterfaceBuilder {
     pub fn build(self) -> Stmt {
         Stmt::new(
             StmtKind::InterfaceDecl {
-                name: self.name,
+                generics: None,
+            name: self.name,
                 extends: self.extends,
                 properties: Vec::new(),
                 methods: self.methods,
@@ -3261,6 +3308,7 @@ function ignore_mode(int $mode = 0): bool {
         assert_eq!(body.len(), 1, "a read parameter needs no consumption");
     }
 
+    /// Synthetic static closures preserve their explicit captures.
     #[test]
     fn closure_builder_can_make_a_static_capturing_closure() {
         let built = closure()
@@ -3281,6 +3329,28 @@ function ignore_mode(int $mode = 0): bool {
                 ..
             } if captures == vec!["body".to_string(), "args".to_string()]
         ));
+    }
+
+    /// Match subjects, labels, results and defaults all contribute reads and audited calls.
+    #[test]
+    fn match_operands_are_visible_to_prelude_scans() {
+        let names = ["subject", "first", "second", "result", "fallback"];
+        let operand = |name: &str| e_call(name, vec![e_var(name)]);
+        let mut declaration = function("choose");
+        for name in names {
+            declaration = declaration.param(name, t_mixed());
+        }
+        let built = declaration.returning(e_match(
+            operand("subject"),
+            vec![(vec![operand("first"), operand("second")], operand("result"))],
+            Some(operand("fallback")),
+        )).build();
+        let StmtKind::FunctionDecl { body, .. } = &built.kind else {
+            panic!("expected a function declaration");
+        };
+        assert_eq!(body.len(), 1, "match-only reads must not gain unused-parameter statements");
+        assert_eq!(reads_of(body), names);
+        assert_eq!(called_function_names(&vec![built]), names);
     }
 
     /// Declarations are built under the internal source mode, which exempts them from the

@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_free_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Releases the result a prepared statement buffered."
 sidebar:
-  order: 167
+  order: 168
 ---
 
 ## mysqli_stmt_free_result()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_free_result(mixed $statement): void
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Releases the result a prepared statement buffered.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

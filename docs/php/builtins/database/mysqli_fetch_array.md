@@ -1,8 +1,8 @@
 ---
 title: "mysqli_fetch_array()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the next row as a numeric array, an associative array, or both."
 sidebar:
-  order: 115
+  order: 116
 ---
 
 ## mysqli_fetch_array()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_array(mixed $result, int $mode = 3): ?array
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the next row as a numeric array, an associative array, or both.
 
 **Parameters**:
 - `$result` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

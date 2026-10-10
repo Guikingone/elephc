@@ -1,15 +1,17 @@
 //! Purpose:
 //! Walks EIR basic blocks in function order and delegates instruction/terminator lowering.
-//! Owns function setup for the initial Phase 04 backend path.
+//! Owns native function, method, generator, and program-entry setup.
 //!
 //! Called from:
 //! - `crate::codegen::generate_user_asm_from_ir()`.
 //!
 //! Key details:
-//! - This first backend increment supports straight-line main blocks and reports
-//!   explicit unsupported-feature errors for control flow not lowered yet.
+//! - PHP source ranges end before separately emitted cleanup helpers; generator
+//!   constructors are synthetic, while their bodies carry PHP debug locations.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
+//! - Executable and library PHP frames publish local cleanup activations so a throw
+//!   releases abandoned frame owners before control reaches the surviving catch.
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -48,7 +50,7 @@ use super::shared_state::SharedCodegenState;
 use super::{CodegenIrError, Result};
 
 
-/// Emits all supported EIR functions and then the process-entry main function.
+/// Emits EIR bodies and the process entry, retaining shared state for deferred helper emission.
 ///
 /// `web` restructures the entry point: the top-level body is emitted as the
 /// C-callable `_elephc_web_handler` and the real entry becomes a stub that calls
@@ -69,7 +71,7 @@ pub(super) fn emit_module(
     regalloc_linear: bool,
     web: bool,
     web_isolation: WebIsolation,
-) -> Result<()> {
+) -> Result<SharedCodegenState> {
     let mut shared = SharedCodegenState::default();
     shared.counters = counters;
     shared.instrument = instrument;
@@ -86,6 +88,7 @@ pub(super) fn emit_module(
         }
     }
     function_variants::emit_dispatchers(module, emitter, data);
+    super::shared_mbstring_callable::emit(module, emitter, data, &mut shared)?;
     // Emitted before the module's own bodies so every string context that calls them is
     // lowered against helpers that already exist.
     super::shared_mixed_string::emit_shared_mixed_string_helpers(
@@ -131,7 +134,7 @@ pub(super) fn emit_module(
     // `Emit::Cdylib`, which returns before the main function is emitted.
     super::enum_singletons::emit_enum_case_materializers(emitter, module, data);
     if emit.is_library() {
-        return Ok(());
+        return Ok(shared);
     }
     let main = module
         .functions
@@ -160,10 +163,17 @@ pub(super) fn emit_module(
     }
     // The probe symbol table's terminating sentinel resolves to this label,
     // emitted after every function so it bounds the last real function's range.
+    //
+    // Out-of-line thunks (`Emitter::begin_out_of_line`) land AFTER it, so a sample in a descriptor
+    // invoker or wrapper resolves to `<native>`, like any other compiler-generated glue. That is
+    // deliberate: inline, it was charged to whichever function happened to mint the thunk first —
+    // and invokers are cached by signature and shared, so a call from `g` was billed to `f`.
+    // Moving this label past the thunks would be worse still: they would all be charged to the
+    // last user function in the file.
     if probe {
         emitter.raw(&format!("{PROBE_TEXT_END_LABEL}:"));
     }
-    Ok(())
+    Ok(shared)
 }
 
 /// Emits the static EIR Fiber wrappers needed for closure callbacks.
@@ -225,7 +235,7 @@ fn emit_user_function(
 ) -> Result<()> {
     let entry_label = user_function_entry_symbol(function);
     let synthetic = function.flags.is_synthetic || is_property_init_thunk(function);
-    emit_fn_marker(emitter, &function.name, &entry_label, synthetic);
+    emit_fn_marker(emitter, &function.name, &entry_label, synthetic || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -236,41 +246,15 @@ fn emit_user_function(
             shared,
             regalloc_linear,
         )?;
-        emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
-    // A throw can bypass this function's ordinary epilogue regardless of whether
-    // it is a closure or a named user function. Any non-parameter local with an
-    // owning representation therefore needs an activation record so the runtime
-    // unwinder can run this frame's normal cleanup callback before the caller's
-    // catch observes the Throwable.
-    let function_exception_cleanup_frame = function.locals.iter().any(|local| {
-            function.params.get(local.id.as_raw() as usize).is_none()
-                && matches!(
-                    local.php_type.codegen_repr(),
-                    PhpType::Str
-                        | PhpType::Callable
-                        | PhpType::Mixed
-                        | PhpType::Union(_)
-                        | PhpType::Array(_)
-                        | PhpType::AssocArray { .. }
-                        | PhpType::Object(_)
-                        | PhpType::Iterable
-                )
-        });
-    // A Parallel worker callback is emitted as a synthetic closure. It can be
-    // bypassed by the worker-local fatal `longjmp` after reconstructing the
-    // task payload, so its own decoded values need an activation even when the
-    // called task closure already has one.
-    let parallel_worker_exception_cleanup_frame =
-        function.flags.is_synthetic && function.name.ends_with("__parallel_worker");
+    // Every callable publishes cleanup, including synthetic Parallel workers and Async methods.
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary
-            || function_exception_cleanup_frame
-            || parallel_worker_exception_cleanup_frame,
+        true,
+        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
     );
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
@@ -288,8 +272,8 @@ fn emit_user_function(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     emit_endfn_marker(ctx.emitter, &function.name);
+    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     Ok(())
 }
 
@@ -307,7 +291,8 @@ pub(super) fn emit_synthetic_function_with_label(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
+        false,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -407,7 +392,7 @@ fn is_property_init_thunk(function: &Function) -> bool {
     function.name.starts_with("_class_propinit_")
 }
 
-/// Emits a class method using the legacy runtime metadata symbol shape.
+/// Emits a class method and gives runtime-called destructors exceptional local cleanup.
 fn emit_class_method(
     module: &Module,
     function: &Function,
@@ -417,7 +402,7 @@ fn emit_class_method(
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
-    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic);
+    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -428,59 +413,15 @@ fn emit_class_method(
             shared,
             regalloc_linear,
         )?;
-        emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
-    // Class methods can throw across their normal epilogue just like free functions. Their
-    // refcounted locals therefore need an activation record for the runtime unwinder; limiting
-    // this to a short Async allowlist leaves ordinary table-reset/rethrow methods with leaked or
-    // stale owners after longjmp.
-    let method_exception_cleanup_frame = function.locals.iter().any(|local| {
-        function.params.get(local.id.as_raw() as usize).is_none()
-            && matches!(
-                local.php_type.codegen_repr(),
-                PhpType::Str
-                    | PhpType::Callable
-                    | PhpType::Mixed
-                    | PhpType::Union(_)
-                    | PhpType::Array(_)
-                    | PhpType::AssocArray { .. }
-                    | PhpType::Object(_)
-                    | PhpType::Iterable
-            )
-    });
-    let async_exception_cleanup_frame = function
-        .name
-        .ends_with("Elephc\\Async\\TaskGroup::sleep")
-        || function
-            .name
-            .ends_with("Elephc\\Async\\__TaskStart::start")
-        || function
-            .name
-            .ends_with("Elephc\\Async\\__Scheduler::throwIfCancellationRequested")
-        || function
-            .name
-            .ends_with("Elephc\\Async\\__Scheduler::awaitTask")
-        || function
-            .name
-            .ends_with("Elephc\\Async\\__Scheduler::throwFirstUnobservedFailure")
-        || function
-            .name
-            .ends_with("Elephc\\Async\\__Scheduler::runRoot")
-        || function
-            .name
-            .ends_with("Elephc\\Async\\__TaskOutcome::throwIfFailed")
-        || function
-            .name
-            .ends_with("Elephc\\Async\\__TaskOutcome::observeAndThrowIfFailed")
-        || function
-            .name
-            .ends_with("Elephc\\Async\\Awaitable::await");
+    // Every callable publishes cleanup, including synthetic Parallel workers and Async methods.
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary || method_exception_cleanup_frame || async_exception_cleanup_frame,
+        true,
+        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -498,8 +439,8 @@ fn emit_class_method(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     emit_endfn_marker(ctx.emitter, &function.name);
+    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     Ok(())
 }
 
@@ -542,6 +483,7 @@ fn emit_generator_function(
         )));
     }
     emit_generator_constructor(emitter, entry_label, &callback_label, &param_types);
+    emit_endfn_marker(emitter, &function.name);
     emit_generator_body(
         module,
         function,
@@ -580,6 +522,8 @@ enum GenParamKind {
     Float,
     /// Two integer registers: string pointer followed by length.
     Str,
+    /// Two integer registers: tagged-scalar payload followed by its runtime tag.
+    TaggedScalar,
     /// An already-boxed Mixed cell pointer forwarded as-is.
     Mixed,
 }
@@ -589,6 +533,7 @@ fn gen_param_kind(ty: &PhpType) -> GenParamKind {
     match ty {
         PhpType::Float => GenParamKind::Float,
         PhpType::Str => GenParamKind::Str,
+        PhpType::TaggedScalar => GenParamKind::TaggedScalar,
         PhpType::Mixed | PhpType::Union(_) => GenParamKind::Mixed,
         _ => GenParamKind::IntLike,
     }
@@ -714,6 +659,18 @@ fn emit_generator_constructor(
                     crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Str);
                 }
             },
+            GenParamKind::TaggedScalar => match target.arch {
+                Arch::AArch64 => {
+                    abi::load_at_offset(emitter, "x0", slot);
+                    abi::load_at_offset(emitter, "x1", slot - 8);
+                    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
+                }
+                Arch::X86_64 => {
+                    abi::load_at_offset(emitter, "rax", slot);
+                    abi::load_at_offset(emitter, "rdx", slot - 8);
+                    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
+                }
+            },
             GenParamKind::IntLike => {
                 abi::load_at_offset(emitter, gen_reg, slot);
                 crate::codegen::emit_box_current_value_as_mixed(emitter, ty);
@@ -772,11 +729,14 @@ fn emit_generator_body(
     // A suspended generator may be abandoned without returning through this function's ordinary
     // epilogue. Keep an activation cleanup record so object destruction can release owned locals
     // before unmapping the coroutine stack.
+    // PHP source locations belong to the body, not to the synthetic coroutine constructor.
+    emit_fn_marker(emitter, &function.name, body_label, function.flags.is_synthetic);
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
         true,
+        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
     );
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(
@@ -794,6 +754,7 @@ fn emit_generator_body(
     frame::emit_function_prologue_with_label(&mut ctx, body_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
+    emit_endfn_marker(ctx.emitter, &function.name);
     frame::emit_exception_cleanup_callback(&mut ctx, body_label);
     Ok(())
 }
@@ -876,6 +837,14 @@ fn emit_generator_callback(
                 abi::store_at_offset(emitter, "rdi", slot);
                 abi::store_at_offset(emitter, "rdx", slot - 8);
             }
+            (GenParamKind::TaggedScalar, Arch::AArch64) => {
+                abi::store_at_offset(emitter, "x1", slot); // preserve the payload word
+                abi::store_at_offset(emitter, "x0", slot - 8); // preserve the Mixed runtime tag
+            }
+            (GenParamKind::TaggedScalar, Arch::X86_64) => {
+                abi::store_at_offset(emitter, "rdi", slot); // preserve the payload word
+                abi::store_at_offset(emitter, "rax", slot - 8); // preserve the Mixed runtime tag
+            }
             (_, Arch::AArch64) => abi::store_at_offset(emitter, "x1", slot),
             (_, Arch::X86_64) => abi::store_at_offset(emitter, "rdi", slot),
         }
@@ -898,14 +867,14 @@ fn emit_generator_callback(
                 abi::load_at_offset(emitter, freg, slot);
                 abi::emit_push_float_reg(emitter, freg); // stage the float parameter on the temporary call stack
             }
-            GenParamKind::Str => {
+            GenParamKind::Str | GenParamKind::TaggedScalar => {
                 let (lo, hi) = match target.arch {
                     Arch::AArch64 => ("x9", "x10"),
                     Arch::X86_64 => ("r10", "r11"),
                 };
                 abi::load_at_offset(emitter, lo, slot);
                 abi::load_at_offset(emitter, hi, slot - 8);
-                abi::emit_push_reg_pair(emitter, lo, hi); // stage the string pointer/length pair on the temporary call stack
+                abi::emit_push_reg_pair(emitter, lo, hi); // stage the two-word string/tagged-scalar argument
             }
             GenParamKind::IntLike | GenParamKind::Mixed => {
                 let reg = match target.arch {
@@ -1001,7 +970,13 @@ fn emit_main_function(
         emitter.entry_symbol()
     };
     emit_fn_marker(emitter, &function.name, entry_symbol, false);
-    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear, false);
+    let layout = frame::layout_for_function(
+        function,
+        emitter.target,
+        regalloc_linear,
+        false,
+        false,
+    );
     let mut ctx = FunctionContext::new(
         module, function, emitter, data, shared, layout, true, gc_stats, heap_debug, None,
     );
@@ -1013,6 +988,14 @@ fn emit_main_function(
     }
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
+    }
+    if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
+        if module.mbstring_startup.is_some() {
+            abi::emit_call_label(ctx.emitter, "__rt_mbstring_startup");
+        }
+        // This entry runs once per CLI invocation or once per web request. Eval fragments
+        // enter below it, preserving the same request settings and encoding lookup cache.
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_request_reset");
     }
     // Enum cases are NOT initialized here any more: each case now materializes on
     // its first evaluation through `super::enum_singletons`, so a case that user
@@ -1029,7 +1012,7 @@ fn emit_main_function(
     }
     emit_endfn_marker(ctx.emitter, &function.name);
     if web {
-        frame::emit_web_entry_stub(&mut ctx, web_isolation);
+        frame::emit_web_entry_stub(&mut ctx, web_isolation)?;
     }
     Ok(())
 }
@@ -1040,7 +1023,7 @@ fn is_main(function: &Function) -> bool {
 }
 
 /// Initializes static-property storage before user code runs.
-fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()> {
+pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let mut default_initializers = Vec::new();
     let mut uninitialized_static_properties = Vec::new();
     let mut class_names = super::runtime_referenced_class_names(ctx.module)
@@ -1181,6 +1164,40 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::Str(value) => {
             emit_string_literal_default_to_result(ctx, value);
         }
+        // `public static Level $l = Level::Low;` — the same singleton the instance-property
+        // path loads, into the result register this function's caller then stores. See
+        // `LiteralDefaultValue::EnumCase` for why the receiver is only settled here.
+        LiteralDefaultValue::EnumCase {
+            enum_name,
+            case_name,
+        } => {
+            let is_case = ctx
+                .module
+                .enum_infos
+                .get(enum_name.as_str())
+                .is_some_and(|info| info.cases.iter().any(|case| &case.name == case_name));
+            if !is_case {
+                return Err(CodegenIrError::unsupported(format!(
+                    "enum case default {}::{} for static property {}::${}",
+                    enum_name, case_name, class_name, property
+                )));
+            }
+            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                ctx.emitter,
+                ctx.module,
+                enum_name,
+                case_name,
+            );
+            // The static slot becomes a new OWNER, so it retains, exactly as the instance
+            // path and an ordinary `Enum::Case` read do (issue #349). Without it,
+            // `Config::$shared = Level::High;` releases the global's only reference. There is
+            // no object register to preserve here — the caller stores straight from the
+            // result register.
+            abi::emit_incref_if_refcounted(
+                ctx.emitter,
+                &crate::types::PhpType::Object(enum_name.clone()),
+            );
+        }
         LiteralDefaultValue::Null => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
@@ -1240,6 +1257,19 @@ fn emit_static_property_default_value(
                 &PhpType::Array(Box::new(elem_type.clone())),
             );
         }
+        LiteralDefaultValue::BoxedAssocArray {
+            value_type,
+            entries,
+        } => {
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(value_type.clone()),
+                },
+            );
+        }
     }
     let symbol = static_property_symbol(class_name, property);
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, php_type, false);
@@ -1295,7 +1325,7 @@ fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId
     if span.line > 0 {
         let mut marker = format!("@src line={} col={}", span.line, span.col);
         if span.has_extent() {
-            let _ = write!(marker, " end={}:{}", span.end_line, span.end_col);
+            let _ = write!(marker, " end={}:{}", span.end_line, span.end_column());
         }
         let _ = write!(marker, " op={}", inst.op.name());
         if let Some(origin) = inst.origin {

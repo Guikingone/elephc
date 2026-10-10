@@ -9,6 +9,44 @@
 
 use super::*;
 
+/// Backed hook declarations retain defaults, including implicit backing writes in short setters.
+#[test]
+fn test_parse_backed_property_hook_defaults() {
+    for hooks in ["get => $this->x;", "set => $value;", "set { $this->x = $value; }"] {
+        let source = format!("<?php class C {{ public int $x = 7 {{ {hooks} }} }}");
+        let stmts = parse_source(&source);
+        let StmtKind::ClassDecl { properties, .. } = &stmts[0].kind else {
+            panic!("expected class declaration");
+        };
+        assert!(!properties[0].hooks.is_virtual(), "{hooks}");
+        assert!(matches!(properties[0].default.as_ref().map(|value| &value.kind),
+            Some(ExprKind::IntLiteral(7))), "{hooks}");
+    }
+}
+
+/// Hook storage detection includes dead branches but excludes separately compiled closure bodies.
+#[test]
+fn test_parse_property_hook_backing_storage_metadata() {
+    for (hooks, virtual_property) in [
+        ("get => 42;", true),
+        ("get => $this->other;", true),
+        ("get => $this->x;", false),
+        ("set => $value;", false),
+        ("set { $this->x = $value; }", false),
+        ("get { if (false) { return $this->x; } return 42; }", false),
+        ("get { $read = fn() => $this->x; return $read(); }", true),
+        ("get { $read = function () { return $this->x; }; return $read(); }", true),
+        ("get { $name = 'x'; return $this->{$name}; }", true),
+    ] {
+        let source = format!("<?php class C {{ public int $x {{ {hooks} }} }}");
+        let stmts = parse_source(&source);
+        let StmtKind::ClassDecl { properties, .. } = &stmts[0].kind else {
+            panic!("expected class declaration");
+        };
+        assert_eq!(properties[0].hooks.is_virtual(), virtual_property, "{hooks}");
+    }
+}
+
 /// Parses `abstract class` with `implements` interfaces and verifies the AST captures
 /// `is_abstract`, interface names, and an abstract method with visibility and no body.
 #[test]
@@ -296,6 +334,59 @@ fn test_parse_asymmetric_visibility_set_only_defaults_get_public() {
         }
         other => panic!("Expected ClassDecl, got {:?}", other),
     }
+}
+
+/// Verifies that PHP 8.4 asymmetric visibility on promoted constructor parameters (issue #823)
+/// parses into the same `visibility` / `set_visibility` pair as an ordinary declaration: a lone
+/// `private(set)` defaults the read side to public, the modifiers combine with `readonly` in any
+/// order, and a plain promoted parameter keeps no `set` visibility.
+#[test]
+fn test_parse_constructor_promoted_asymmetric_visibility() {
+    let stmts = parse_source(
+        "<?php class P { public function __construct(private(set) string $a, public protected(set) int $b, protected private(set) int $c, readonly public private(set) int $d, protected(set) readonly string $e, public int $f) {} }",
+    );
+    let StmtKind::ClassDecl {
+        properties,
+        methods,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("Expected ClassDecl, got {:?}", stmts[0].kind);
+    };
+    let expected = [
+        ("a", Visibility::Public, Some(Visibility::Private), false),
+        ("b", Visibility::Public, Some(Visibility::Protected), false),
+        ("c", Visibility::Protected, Some(Visibility::Private), false),
+        ("d", Visibility::Public, Some(Visibility::Private), true),
+        ("e", Visibility::Public, Some(Visibility::Protected), true),
+        ("f", Visibility::Public, None, false),
+    ];
+    assert_eq!(properties.len(), expected.len());
+    for (property, (name, visibility, set_visibility, readonly)) in
+        properties.iter().zip(expected)
+    {
+        assert_eq!(property.name, name);
+        assert_eq!(property.visibility, visibility);
+        assert_eq!(property.set_visibility, set_visibility);
+        assert_eq!(property.readonly, readonly);
+        assert!(property.is_promoted);
+    }
+    assert_eq!(methods[0].params.len(), 6);
+    for (stmt, name) in methods[0].body.iter().zip(["a", "b", "c", "d", "e", "f"]) {
+        assert_promoted_assignment(stmt, name);
+    }
+}
+
+/// Verifies that a promoted constructor parameter rejects a repeated `(set)` visibility, and
+/// that `(set)` visibility still counts as promotion outside a constructor (both rejected).
+#[test]
+fn test_parse_constructor_promoted_asymmetric_visibility_rejections() {
+    assert!(parse_fails(
+        "<?php class P { public function __construct(private(set) protected(set) int $a) {} }"
+    ));
+    assert!(parse_fails(
+        "<?php class P { public function run(private(set) int $a) {} }"
+    ));
 }
 
 /// Verifies that an ordinary property without a `(set)` modifier has no asymmetric write

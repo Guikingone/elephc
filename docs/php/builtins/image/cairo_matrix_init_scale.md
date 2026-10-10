@@ -1,8 +1,8 @@
 ---
 title: "cairo_matrix_init_scale()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a matrix that scales by the given x and y factors."
 sidebar:
-  order: 414
+  order: 415
 ---
 
 ## cairo_matrix_init_scale()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_matrix_init_scale(float $sx, float $sy): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a matrix that scales by the given x and y factors.
 
 **Parameters**:
 - `$sx` (`float`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

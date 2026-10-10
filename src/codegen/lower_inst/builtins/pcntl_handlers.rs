@@ -414,9 +414,9 @@ fn emit_push_mixed_handler_pair(
             ctx.load_value_to_reg(handler, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction(&format!("cmp x0, #{MIXED_TAG_INT}"));      // detect an integer signal disposition
-            ctx.emitter.instruction(&format!("b.eq {scalar}"));                 // normalize an integer through the scalar path
+            abi::emit_branch_if_equal_wide(ctx.emitter, &scalar);               // normalize an integer past the runtime-name case tables
             ctx.emitter.instruction(&format!("cmp x0, #{MIXED_TAG_BOOL}"));     // detect PHP's rejected boolean case
-            ctx.emitter.instruction(&format!("b.eq {bool_error}"));             // throw the callable-or-int type error
+            abi::emit_branch_if_equal_wide(ctx.emitter, &bool_error);           // throw the callable-or-int type error past those tables
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(handler, "rax")?;
@@ -569,10 +569,10 @@ fn emit_handler_bool_type_error(
 fn emit_unboxed_handler_bool_type_error(ctx: &mut FunctionContext<'_>) {
     let false_label = ctx.next_label("pcntl_signal_mixed_false_handler");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x1, {false_label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x1, {false_label}")), // branch to the `false` arm when the unboxed bool payload is zero
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rdi, rdi");
-            ctx.emitter.instruction(&format!("jz {false_label}"));
+            ctx.emitter.instruction("test rdi, rdi");                           // test the unboxed bool payload
+            ctx.emitter.instruction(&format!("jz {false_label}"));              // branch to the `false` arm when it is zero
         }
     }
     super::super::exceptions::emit_type_error(

@@ -11,6 +11,7 @@
 use crate::errors::CompileError;
 use crate::types::{packed_type_size, PhpType};
 
+use super::object_types::canonical_builtin_iterable_interface_name;
 use super::super::Checker;
 
 impl Checker {
@@ -56,6 +57,26 @@ impl Checker {
         span: crate::span::Span,
     ) -> Result<PhpType, CompileError> {
         match type_expr {
+            // A declared signature resolves to an ORDINARY callable: the storage is one callable
+            // descriptor either way, and the signature exists for inference, which reads it off
+            // the declaration rather than off the resolved type. Giving it its own `PhpType`
+            // would make every existing callable path have two shapes to handle for no gain.
+            crate::parser::ast::TypeExpr::CallableSig { .. } => Ok(PhpType::Callable),
+            // The instantiated class, named exactly as `generics::classes` names it.
+            //
+            // Almost every generic mention is rewritten to a `Named` before this checker runs.
+            // The exception is the checker's OWN work: instantiating `unwrap<int>` from
+            // `function unwrap<T>(Box<T> $b)` substitutes `T` and resolves the result in the
+            // same pass, so the freshly built signature still says `Box<int>` structurally.
+            // Naming it here is not a guess — the AST splice appends that same instantiation,
+            // and the next monomorphization round emits the class under this very name.
+            //
+            // A mention whose class declares no type parameters never reaches here:
+            // `generics::classes` rejects it while rewriting, with a message that names the
+            // class rather than the type it failed to become.
+            type_expr @ crate::parser::ast::TypeExpr::GenericClass { .. } => Ok(PhpType::Object(
+                crate::generics::describe_type(type_expr),
+            )),
             crate::parser::ast::TypeExpr::Int => Ok(PhpType::Int),
             crate::parser::ast::TypeExpr::Float => Ok(PhpType::Float),
             crate::parser::ast::TypeExpr::Bool => Ok(PhpType::Bool),
@@ -66,6 +87,22 @@ impl Checker {
             crate::parser::ast::TypeExpr::Iterable => Ok(PhpType::Iterable),
             crate::parser::ast::TypeExpr::Array(inner) => {
                 Ok(PhpType::Array(Box::new(self.resolve_type_expr(inner, span)?)))
+            }
+            crate::parser::ast::TypeExpr::AssocArray { key, value } => {
+                let key_ty = self.resolve_type_expr(key, span)?;
+                if !matches!(key_ty, PhpType::Int | PhpType::Str | PhpType::Mixed) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "array<K, V> key type must be int, string, or mixed, got {}",
+                            key_ty
+                        ),
+                    ));
+                }
+                Ok(PhpType::AssocArray {
+                    key: Box::new(key_ty),
+                    value: Box::new(self.resolve_type_expr(value, span)?),
+                })
             }
             crate::parser::ast::TypeExpr::Nullable(inner) => {
                 let inner_ty = self.resolve_type_expr(inner, span)?;
@@ -113,6 +150,9 @@ impl Checker {
             }
             crate::parser::ast::TypeExpr::Named(name) => {
                 let name_str = name.as_str();
+                if let Some(canonical) = canonical_builtin_iterable_interface_name(name_str) {
+                    return Ok(PhpType::Object(canonical.to_string()));
+                }
                 match name_str.to_ascii_lowercase().as_str() {
                     "string" => Ok(PhpType::Str),
                     "mixed" => Ok(PhpType::Mixed),
@@ -120,6 +160,10 @@ impl Checker {
                     "closure" => Ok(PhpType::Callable),
                     "object" => Ok(PhpType::Object(String::new())),
                     "void" => Ok(PhpType::Void),
+                    // User PHP declarations accept packed and hash arrays without fixing their
+                    // storage from a default or the first caller. Compiler-synthesized methods
+                    // have explicit internal array ABIs and keep their existing storage type.
+                    "array" if span.line != 0 => Ok(PhpType::php_array()),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
                     // Relative class types only survive to this point when used outside a class
                     // body; inside a class they are rewritten to the enclosing class beforehand.

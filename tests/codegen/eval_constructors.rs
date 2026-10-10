@@ -3,10 +3,16 @@
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests eval_constructor` through Rust's test harness.
+//! - `cargo test --test codegen_tests aot_throw` for eval-declared throwables.
 //!
 //! Key details:
 //! - Fixtures focus on constructor bridge argument binding and by-reference
 //!   writeback for non-variable eval caller targets.
+//! - Throw fixtures cover eval-declared `Exception` and `Error` subclasses,
+//!   including rethrow and nested `try`/`catch`.
+//! - A constructor bridge is called directly, one argument per PHYSICAL parameter, so the
+//!   argument-frame fixture also covers the compiler-internal count and collector slots eval has
+//!   to materialize on top of the PHP-visible signature.
 
 use crate::support::{compile_and_run, compile_and_run_capture};
 
@@ -457,4 +463,173 @@ return gettype($box->value) . ":" . $box->value;');
         out,
         "Exception:eval-ctor-lvalue:integer:12|Exception:eval-ctor-lvalue:integer:16"
     );
+}
+
+/// An eval `new` into an AOT constructor reports the frame the PHP source declares.
+///
+/// A constructor bridge is reached the same way a method bridge is: eval supplies one argument
+/// per PHYSICAL parameter, including the compiler-internal argument count and, when the source
+/// declares no variadic of its own, the hidden surplus collector whose first element carries
+/// that count. The two shapes are covered separately because they materialize different hidden
+/// slots, and each is exercised with the optional both omitted and supplied plus a surplus tail.
+#[test]
+fn test_eval_aot_constructor_frames_follow_the_declared_signature() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCtorVariadicFrameShape {
+    public string $tally = "";
+
+    public function __construct($first, $second = 5, ...$rest) {
+        $this->tally = func_num_args() . ":" . implode(",", func_get_args())
+            . ":" . implode(",", $rest);
+    }
+}
+
+class EvalCtorCollectorFrameShape {
+    public string $tally = "";
+
+    public function __construct($first, $second = 5) {
+        $this->tally = func_num_args() . ":" . implode(",", func_get_args());
+    }
+}
+
+echo eval('$a = new EvalCtorVariadicFrameShape(1);
+echo $a->tally, "|";
+$b = new EvalCtorVariadicFrameShape(1, 2, 3, 4);
+echo $b->tally, "|";
+$c = new EvalCtorCollectorFrameShape(1);
+echo $c->tally, "|";
+$d = new EvalCtorCollectorFrameShape(1, 2, 3);
+echo $d->tally, "|";
+$e = new EvalCtorCollectorFrameShape(first: 1);
+return $e->tally;');
+"#,
+    );
+
+    assert_eq!(out, "1:1:|4:1,2,3,4:3,4|1:1|3:1,2,3|1:1");
+}
+
+/// An eval `new` into an AOT constructor whose optional default has NO eval representation still
+/// sees the optional as optional, and still reports the real argument count.
+///
+/// Same contract as the method fixture in `tests/codegen/eval_callables.rs`, on the constructor
+/// registration path, which registers its own shape through its own ABI entry point. The default
+/// nests twenty array levels deep, past `MAX_NATIVE_DEFAULT_CONSTANT_DEPTH`, so no default is
+/// registered for `$second`; an enum-case default is unrepresentable for the same reason. Without
+/// the explicit shape, `new EvalCtorUnrepresentableDefault(1)` would be rejected as missing a
+/// mandatory argument, and the hidden collector would carry no count for `func_num_args()`.
+///
+/// The named-argument call at the end also pins that no hidden slot became reachable by name in
+/// the process: hidden slots register the empty name, and a PHP parameter name is never empty.
+#[test]
+fn test_eval_aot_constructor_optional_default_without_an_eval_representation_stays_optional() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCtorUnrepresentableDefault {
+    public string $tally = "";
+
+    public function __construct($first, $second = [[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]) {
+        $this->tally = func_num_args() . ":" . count(func_get_args()) . ":" . count($second);
+    }
+}
+
+echo eval('$a = new EvalCtorUnrepresentableDefault(1);
+echo $a->tally, "|";
+$b = new EvalCtorUnrepresentableDefault(1, [7, 8, 9]);
+echo $b->tally, "|";
+$c = new EvalCtorUnrepresentableDefault(first: 1);
+return $c->tally;');
+"#,
+    );
+
+    assert_eq!(out, "1:1:1|2:2:3|1:1:1");
+}
+
+/// AOT throw statements defer Throwable validation for classes introduced by an earlier eval.
+#[test]
+fn test_aot_throw_accepts_eval_declared_throwable_class() {
+    let out = compile_and_run(r#"<?php
+eval('class EvalThrownRuntimeException extends RuntimeException {}');
+try { $unused = true ? throw new EvalThrownRuntimeException('expression') : null; } catch (Exception $error) { echo $error->getMessage(), '|'; }
+$through_local = new EvalThrownRuntimeException('local');
+try { throw $through_local; } catch (Exception $error) { echo $error->getMessage(), '|'; }
+try { throw new EvalThrownRuntimeException('direct'); } catch (Exception $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "expression|local|direct");
+}
+
+/// Invalid Mixed throws raise PHP Error with distinct non-object and non-Throwable diagnostics.
+#[test]
+fn test_aot_throw_runtime_checks_eval_mixed_values_are_throwable() {
+    let out = compile_and_run(r#"<?php
+eval('$scalar = 42; $plain_object = new stdClass();');
+try { throw $scalar; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+try { throw $plain_object; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+try { $unused = true ? throw $scalar : null; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+try { $unused = true ? throw $plain_object : null; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(); }
+"#);
+    assert_eq!(out, "Error:Can only throw objects|Error:Cannot throw objects that do not implement Throwable|Error:Can only throw objects|Error:Cannot throw objects that do not implement Throwable");
+}
+
+/// An eval-declared class that extends Error is throwable and is not an Exception.
+#[test]
+fn test_aot_throw_accepts_eval_declared_error_subclass() {
+    let out = compile_and_run(r#"<?php
+eval('class EvalThrownError extends Error {}');
+try { throw new EvalThrownError('direct'); } catch (Exception $error) { echo 'exception|'; } catch (Error $error) { echo $error->getMessage(), '|'; }
+$through_local = new EvalThrownError('local');
+try { throw $through_local; } catch (Error $error) { echo $error->getMessage(), '|'; }
+try { $unused = true ? throw new EvalThrownError('expression') : null; } catch (Throwable $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "direct|local|expression");
+}
+
+/// Rethrowing a caught eval-declared throwable reaches the outer handler.
+#[test]
+fn test_aot_throw_rethrows_eval_declared_throwable() {
+    let out = compile_and_run(r#"<?php
+eval('class EvalRethrownException extends Exception {}');
+try {
+    try {
+        throw new EvalRethrownException('once');
+    } catch (Exception $error) {
+        echo 'inner:', $error->getMessage(), '|';
+        throw $error;
+    }
+} catch (Exception $error) {
+    echo 'outer:', $error->getMessage();
+}
+"#);
+    assert_eq!(out, "inner:once|outer:once");
+}
+
+/// Nested try/catch distinguishes eval-declared Exception and Error subclasses.
+#[test]
+fn test_aot_throw_nests_try_around_eval_declared_throwables() {
+    let out = compile_and_run(r#"<?php
+eval('class EvalNestedException extends Exception {} class EvalNestedError extends Error {}');
+try {
+    try {
+        throw new EvalNestedException('inner');
+    } catch (Exception $error) {
+        echo 'inner:', $error->getMessage(), '|';
+    }
+    $outer = new EvalNestedError('outer');
+    throw $outer;
+} catch (Exception $error) {
+    echo 'missed-exception|';
+} catch (Error $error) {
+    echo 'outer:', $error->getMessage(), '|';
+}
+try {
+    try {
+        throw new EvalNestedError('bubble');
+    } catch (Exception $error) {
+        echo 'missed-inner|';
+    }
+} catch (Error $error) {
+    echo 'bubbled:', $error->getMessage();
+}
+"#);
+    assert_eq!(out, "inner:inner|outer:outer|bubbled:bubble");
 }

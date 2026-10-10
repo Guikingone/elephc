@@ -10,6 +10,7 @@
 
 use crate::support::*;
 
+/// Checks scalar/nested-array capture transferability with a synchronous checker fixture.
 #[test]
 fn parallel_transfer_accepts_scalars_nested_arrays_and_static_captures() {
     let out = compile_and_run(
@@ -35,6 +36,7 @@ namespace {
     assert_eq!(out, "ok|1|x");
 }
 
+/// Accepts the specific Cancellation by-reference exception in the transfer checker fixture.
 #[test]
 fn parallel_transfer_accepts_the_named_cancellation_reference_exception() {
     let out = compile_and_run(
@@ -60,6 +62,7 @@ namespace {
     assert_eq!(out, "1");
 }
 
+/// Preserves a proven transferable array result through closure assignment and aliasing.
 #[test]
 fn parallel_transfer_keeps_array_return_proof_on_an_assigned_closure() {
     let out = compile_and_run(
@@ -84,6 +87,7 @@ namespace {
     assert_eq!(out, "ok|1|x");
 }
 
+/// Accepts a reference-aliased scalar as a by-value task argument in the checker fixture.
 #[test]
 fn parallel_transfer_copies_a_reference_aliased_scalar_argument_by_value() {
     let out = compile_and_run(

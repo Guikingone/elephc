@@ -137,6 +137,12 @@ pub(super) fn builtin_reflection_owner_class(
             false_bool(),
         ));
         properties.push(builtin_property(
+            "__returns_reference",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__type",
             Visibility::Private,
             Some(mixed_type()),
@@ -174,8 +180,12 @@ pub(super) fn builtin_reflection_owner_class(
             "isDeprecated",
             "__is_deprecated",
         ));
-        methods.push(builtin_reflection_constant_false_bool_method(
+        // Was a baked `false`, which is wrong for every `function &f()` and
+        // `public function &m()`: PHP answers `true` for those (#1231). Every sibling predicate
+        // that can vary is property-backed for exactly this reason.
+        methods.push(builtin_reflection_class_bool_method(
             "returnsReference",
+            "__returns_reference",
         ));
         methods.push(builtin_reflection_class_bool_method(
             "isGenerator",
@@ -235,7 +245,13 @@ pub(super) fn builtin_reflection_owner_class(
         Some(array_type()),
         empty_array(),
     ));
-    methods.push(builtin_reflection_owner_get_attributes_method());
+    // PHP names the class that declares `getAttributes()` in its `$flags` ValueError.
+    let attributes_owner = match name {
+        "ReflectionFunction" | "ReflectionMethod" => "ReflectionFunctionAbstract",
+        "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => "ReflectionClassConstant",
+        other => other,
+    };
+    methods.push(builtin_reflection_owner_get_attributes_method(attributes_owner));
     FlattenedClass {
         name: name.to_string(),
         span: dummy(),

@@ -10,6 +10,7 @@
 
 use crate::support::*;
 
+/// Runs one boxed-stream diagnostic fixture and requires its expected output and clean heap.
 fn assert_closed_stream(body: &str, expected: &str) {
     let source = format!(
         "<?php\nfunction boxed(mixed $value): mixed {{ return $value; }}\n{body}\n"
@@ -19,6 +20,7 @@ fn assert_closed_stream(body: &str, expected: &str) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Makes explicit close visible to every boxed stream alias before a later write.
 #[test]
 fn closed_stream_resources_write_through_alias_throws_type_error() {
     assert_closed_stream(
@@ -40,6 +42,7 @@ unset($source); unset($alias);
     );
 }
 
+/// Rejects reads from a closed boxed stream with balanced exception cleanup.
 #[test]
 fn closed_stream_resources_read_throws_type_error() {
     assert_closed_stream(
@@ -59,6 +62,7 @@ unset($source);
     );
 }
 
+/// Reports a second close without invoking native close on the already-retired descriptor.
 #[test]
 fn closed_stream_resources_second_close_throws_without_reclosing_descriptor() {
     assert_closed_stream(

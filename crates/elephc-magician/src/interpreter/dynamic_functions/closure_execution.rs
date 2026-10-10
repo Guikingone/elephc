@@ -72,7 +72,12 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let static_names = static_var_names(function.body());
     context.push_function(function.name());
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    // Named functions have global lexical scope even when a method calls them. Empty sentinels
+    // hide the caller's class and late-static scopes until this activation returns.
+    context.push_class_scope(String::new());
+    context.push_called_class_scope(String::new());
+    let bound_call = match bind_evaluated_function_args_with_ref_mode(
+        function.name(),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -85,20 +90,31 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     ) {
         Ok(args) => args,
         Err(status) => {
+            context.pop_called_class_scope();
+            context.pop_class_scope();
             context.pop_function();
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = bound_call;
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
     let mut function_scope = ElephcEvalScope::new();
-    bind_method_scope_args(
+    let binding_result = bind_method_scope_args(
         &mut function_scope,
-        function.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    frame.bind_scope(&function_scope);
+    context.push_function_args(frame);
+    let result = binding_result.and_then(|()| execute_statements(function.body(), context, &mut function_scope, values));
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -124,6 +140,16 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             values,
         ),
     };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &function_scope,
+        values,
+    );
+    let return_result = release_function_args(return_result, context, values);
+    context.pop_called_class_scope();
+    context.pop_class_scope();
+    let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
     context.pop_function();
     return_result
 }
@@ -343,6 +369,25 @@ struct EvalClosureBinding {
     called_class: String,
 }
 
+/// Returns the name PHP gives a closure in diagnostics.
+///
+/// PHP 8.4 names a closure after where it is declared, `{closure:<file>:<line>}`; earlier
+/// profiles print `{closure}`. Eval records the declaration line but neither the enclosing
+/// function (PHP names a closure declared inside `f` as `{closure:f():<line>}`) nor the eval
+/// site it was declared in, so this uses the current eval site. That is exact for a closure
+/// declared at the top level of the eval fragment calling it.
+fn eval_closure_display_name(function: &EvalFunction, context: &ElephcEvalContext) -> String {
+    let file = context.eval_file_magic();
+    match function.source_location() {
+        Some(location)
+            if crate::eval_php_profile::eval_php_minor_version() >= 4 && !file.is_empty() =>
+        {
+            format!("{{closure:{file}:{}}}", location.start_line())
+        }
+        _ => "{closure}".to_string(),
+    }
+}
+
 /// Returns the closure function's declared by-reference parameter flags.
 fn function_ref_flags(closure: &EvalClosure) -> &[bool] {
     closure.function().parameter_is_by_ref()
@@ -366,7 +411,8 @@ fn eval_closure_with_optional_binding(
         context.push_class_scope(binding.class_scope.clone());
         context.push_called_class_scope(binding.called_class.clone());
     }
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    let bound_call = match bind_evaluated_function_args_with_ref_mode(
+        &eval_closure_display_name(function, context),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -387,20 +433,38 @@ fn eval_closure_with_optional_binding(
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = bound_call;
     let mut function_scope = ElephcEvalScope::new();
     bind_closure_captures(&mut function_scope, closure.captures());
-    if let Some(object) = binding.and_then(|binding| binding.this_object) {
+    let backtrace_class = binding
+        .as_ref()
+        .map(|binding| binding.class_scope.clone());
+    let backtrace_object = binding.as_ref().and_then(|binding| binding.this_object);
+    if let Some(object) = backtrace_object {
         function_scope.set("this", object, ScopeCellOwnership::Borrowed);
     }
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
-    bind_method_scope_args(
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
+    let binding_result = bind_method_scope_args(
         &mut function_scope,
-        function.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    frame.bind_scope(&function_scope);
+    context.push_function_args_with_backtrace(
+        frame,
+        backtrace_class,
+        backtrace_object,
+        backtrace_object.is_none(),
+    );
+    let result = binding_result.and_then(|()| execute_statements(function.body(), context, &mut function_scope, values));
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -436,10 +500,18 @@ fn eval_closure_with_optional_binding(
             values,
         ),
     };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &function_scope,
+        values,
+    );
     if bound_class_pushed {
         context.pop_called_class_scope();
         context.pop_class_scope();
     }
+    let return_result = release_function_args(return_result, context, values);
+    let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
     context.pop_function();
     return_result
 }
@@ -517,6 +589,8 @@ pub(in crate::interpreter) fn persist_static_locals(
 ) -> Result<(), EvalStatus> {
     for name in names {
         if let Some(cell) = scope.visible_cell(name) {
+            if context.static_local(function_name, name) == Some(cell) { continue; }
+            let cell = values.retain(cell)?;
             if let Some(replaced) =
                 context.set_static_local(function_name.to_string(), name.clone(), cell)
             {
@@ -525,6 +599,17 @@ pub(in crate::interpreter) fn persist_static_locals(
         }
     }
     Ok(())
+}
+
+/// Retains a borrowed return before its activation releases local owners.
+pub(in crate::interpreter) fn retain_static_local_return(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    _static_names: &[String],
+    _scope: &ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = result?;
+    if result.is_borrowed() { values.retain(result) } else { Ok(result) }
 }
 
 /// One source-order static local declaration and its initializer expression.
@@ -649,7 +734,8 @@ fn visit_static_var_declarations(
             | EvalStmt::UnsetDynamicStaticPropertyName { .. }
             | EvalStmt::UnsetProperty { .. }
             | EvalStmt::UnsetStaticProperty { .. }
-            | EvalStmt::UnsetVar { .. } => {}
+            | EvalStmt::UnsetVar { .. }
+            | EvalStmt::GcCollect => {}
         }
     }
 }

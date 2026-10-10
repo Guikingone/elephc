@@ -12,19 +12,23 @@
 
 use super::*;
 
+/// Locates one parameter's pointer/tag pair beyond the invoker's fixed frame fields.
 fn offset(index: usize) -> usize { INVOKER_FRAME_SIZE + index * 16 }
 
+/// Initializes every pending-owner record before marshalling can acquire argument leases.
 pub(super) fn clear(emitter: &mut Emitter, ctx: &InvokerEmitContext) {
     for index in 0..ctx.owner_slot_count {
         clear_slot(emitter, index);
     }
 }
 
+/// Clears one owner pointer and its release tag without destroying or transferring the value.
 pub(super) fn clear_slot(emitter: &mut Emitter, index: usize) {
     abi::emit_store_zero_to_local_slot(emitter, offset(index));
     abi::emit_store_zero_to_local_slot(emitter, offset(index) - 8);
 }
 
+/// Selects a storage-aware release tag, using the heap header for generic container carriers.
 fn owner_tag(php_type: &PhpType) -> Option<i64> {
     match php_type.codegen_repr() {
         PhpType::Str => Some(1),
@@ -38,6 +42,7 @@ fn owner_tag(php_type: &PhpType) -> Option<i64> {
     }
 }
 
+/// Registers a newly acquired owner from the temporary stack for later failure/return cleanup.
 pub(super) fn register_pushed(emitter: &mut Emitter, index: usize, php_type: &PhpType) {
     let Some(tag) = owner_tag(php_type) else { return };
     let scratch = abi::symbol_scratch_reg(emitter);
@@ -47,6 +52,7 @@ pub(super) fn register_pushed(emitter: &mut Emitter, index: usize, php_type: &Ph
     abi::store_at_offset(emitter, scratch, offset(index) - 8);
 }
 
+/// Registers an owned current result and its concrete release contract in the parameter record.
 pub(super) fn register_result(emitter: &mut Emitter, index: usize, php_type: &PhpType) {
     let Some(tag) = owner_tag(php_type) else { return };
     abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset(index));
@@ -55,6 +61,7 @@ pub(super) fn register_result(emitter: &mut Emitter, index: usize, php_type: &Ph
     abi::store_at_offset(emitter, scratch, offset(index) - 8);
 }
 
+/// Tracks an owned temporary managed reference cell separately from its contained payload kind.
 pub(super) fn register_pushed_ref_cell(emitter: &mut Emitter, index: usize) {
     let scratch = abi::symbol_scratch_reg(emitter);
     abi::emit_load_temporary_stack_slot(emitter, scratch, 0);
@@ -73,6 +80,7 @@ pub(super) fn transfer_string_result_alias(emitter: &mut Emitter, ctx: &mut Invo
     transfer_result_alias(emitter, ctx, 1, abi::string_result_regs(emitter).0);
 }
 
+/// Detaches exactly one matching pending owner when a borrowed result aliases an argument lease.
 fn transfer_result_alias(emitter: &mut Emitter, ctx: &mut InvokerEmitContext, expected_tag: i64, result: &str) {
     let done = ctx.next_label("pending_mixed_alias_transferred");
     let tag = abi::secondary_scratch_reg(emitter);
@@ -95,16 +103,19 @@ fn transfer_result_alias(emitter: &mut Emitter, ctx: &mut InvokerEmitContext, ex
     emitter.label(&done);
 }
 
+/// Retires all pending records, including the reserved result owner, in reverse acquisition order.
 pub(super) fn release(emitter: &mut Emitter, ctx: &mut InvokerEmitContext) {
     let count = ctx.owner_slot_count;
     release_slots(emitter, ctx, count);
 }
 
+/// Releases argument leases while keeping the final reserved result-owner slot intact.
 pub(super) fn release_arguments(emitter: &mut Emitter, ctx: &mut InvokerEmitContext) {
     let count = ctx.owner_slot_count.saturating_sub(1);
     release_slots(emitter, ctx, count);
 }
 
+/// Clears each record before dispatching its typed release, preventing reentrant duplicate cleanup.
 fn release_slots(emitter: &mut Emitter, ctx: &mut InvokerEmitContext, count: usize) {
     for index in (0..count).rev() {
         let done = ctx.next_label("pending_argument_released");

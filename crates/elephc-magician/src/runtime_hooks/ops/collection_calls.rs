@@ -46,6 +46,22 @@ macro_rules! impl_collection_call_ops {
         array: RuntimeCellHandle,
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let value = Self::handle(unsafe { __elephc_eval_value_array_get(array.as_ptr(), index.as_ptr()) })?;
+        if self.is_reference(value)? {
+            let result = self.copy_value(value);
+            self.release(value)?;
+            result
+        } else {
+            Ok(value)
+        }
+    }
+
+    /// Retains the stored boxed slot for argument binding without detaching its reference identity.
+    fn array_get_preserving_references(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_array_get(array.as_ptr(), index.as_ptr()) })
     }
 
@@ -65,6 +81,31 @@ macro_rules! impl_collection_call_ops {
         position: usize,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_array_iter_key(array.as_ptr(), position as u64) })
+    }
+
+    /// Copies an insertion-order element without conflating numeric string and integer keys.
+    fn array_iter_value(&mut self, array: RuntimeCellHandle, position: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        let value = Self::handle(unsafe { __elephc_eval_value_array_iter_value(array.as_ptr(), position as u64) })?;
+        if self.is_reference(value)? {
+            let result = self.copy_value(value);
+            self.release(value)?;
+            result
+        } else {
+            Ok(value)
+        }
+    }
+
+    /// Detaches the array's boxed value while retaining its payload for ordinary COW writes.
+    fn copy_array_value(
+        &mut self,
+        array: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let tag = self.type_tag(array)?;
+        if !self.is_array_like(array)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let word = self.raw_value_word(array)?;
+        self.raw_word_value(tag, word)
     }
 
     /// Writes one element to a boxed Mixed array through the generated runtime wrapper.
@@ -139,6 +180,57 @@ macro_rules! impl_collection_call_ops {
         } else {
             Ok(())
         }
+    }
+
+    /// Shares eval magic-set recursion state with native property-write lowering.
+    fn native_magic_set_guard_push(
+        &mut self,
+        object_identity: u64,
+        property: &str,
+        node: &mut [u64; 4],
+    ) -> Result<bool, EvalStatus> {
+        Ok(unsafe {
+            __elephc_eval_magic_set_guard_push(
+                object_identity,
+                property.as_ptr(),
+                property.len() as u64,
+                node.as_mut_ptr(),
+            ) != 0
+        })
+    }
+
+    /// Unlinks the eval-owned node before its Rust stack storage leaves scope.
+    fn native_magic_set_guard_pop(
+        &mut self,
+        node: &mut [u64; 4],
+    ) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_magic_set_guard_pop(node.as_mut_ptr()); }
+        Ok(())
+    }
+
+    /// Uninitializes a native typed slot without assigning a coerced PHP null value.
+    fn unset_native_typed_property(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let mut throwable = std::ptr::null_mut();
+        let unset = unsafe {
+            __elephc_eval_value_typed_property_unset(
+                object.as_ptr(), property.as_ptr(), property.len() as u64, scope_ptr, scope_len,
+                &mut throwable,
+            )
+        };
+        if throwable.is_null() {
+            return Ok(unset != 0);
+        }
+        let throwable = RuntimeCellHandle::from_raw(throwable);
+        if let Err(status) = self.schedule_pending_throw(throwable) {
+            self.release(throwable)?;
+            return Err(status);
+        }
+        Err(EvalStatus::UncaughtThrowable)
     }
 
     /// Reads an AOT static property through the generated user helper.
@@ -256,6 +348,21 @@ macro_rules! impl_collection_call_ops {
         })
     }
 
+    /// Probes the generated user class's dynamic-property hash without exposing declared slots.
+    fn object_dynamic_property_exists(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        Ok(unsafe {
+            __elephc_eval_value_dynamic_property_exists(
+                object.as_ptr(),
+                property.as_ptr(),
+                property.len() as u64,
+            )
+        } != 0)
+    }
+
     /// Calls a boxed Mixed object method through the generated user helper.
     fn method_call(
         &mut self,
@@ -264,7 +371,7 @@ macro_rules! impl_collection_call_ops {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let arg_array = Self::arg_array(args)?;
+        let arg_array = self.arg_array(args)?;
         let result = unsafe {
             __elephc_eval_value_method_call(
                 object.as_ptr(),
@@ -276,10 +383,7 @@ macro_rules! impl_collection_call_ops {
                 self.context.cast(),
             )
         };
-        unsafe {
-            __elephc_eval_value_release(arg_array.as_ptr());
-        }
-        self.handle_native_call_result(result)
+        self.finish_native_call(result, arg_array)
     }
 
     /// Calls an AOT static method through the generated user helper.
@@ -290,7 +394,7 @@ macro_rules! impl_collection_call_ops {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let arg_array = Self::arg_array(args)?;
+        let arg_array = self.arg_array(args)?;
         let result = unsafe {
             __elephc_eval_value_static_method_call(
                 class_name.as_ptr(),
@@ -303,10 +407,7 @@ macro_rules! impl_collection_call_ops {
                 self.context.cast(),
             )
         };
-        unsafe {
-            __elephc_eval_value_release(arg_array.as_ptr());
-        }
-        self.handle_native_call_result(result)
+        self.finish_native_call(result, arg_array)
     }
 
     /// Converts a native free-function result into eval status, preserving pending throwables.

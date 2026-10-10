@@ -15,8 +15,8 @@ use crate::types::traits::FlattenedClass;
 
 use super::super::super::Checker;
 use super::super::validation::{
-    build_method_sig, matches_global_builtin_attribute, validate_override_signature,
-    visibility_rank,
+    build_method_sig, declaration_is_source, matches_global_builtin_attribute,
+    validate_override_signature, visibility_rank,
 };
 use super::state::ClassBuildState;
 use super::{collect_attribute_args, collect_attribute_names};
@@ -31,6 +31,13 @@ pub(super) fn apply_methods(
 ) -> Result<(), CompileError> {
     for method in &class.methods {
         validate_method_shape(class, method)?;
+        // A generic method is a TEMPLATE and has no signature of its own: its parameter types
+        // name type parameters that only a call site can bind, so resolving it here would report
+        // `Unknown type: U`. Its instantiations are ordinary methods on this same class and go
+        // through this same loop. Mirrors `resolve_unchecked_functions` for generic functions.
+        if !method.type_params.is_empty() {
+            continue;
+        }
         if method.is_static {
             apply_static_method(state, class, checker, method)?;
         } else {
@@ -133,6 +140,10 @@ fn apply_static_method(
         }
     }
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
+        let parent_is_source = state
+            .static_method_declaring_classes
+            .get(&method_key)
+            .is_none_or(|owner| declaration_is_source(checker, owner));
         validate_override_signature(
             checker,
             class,
@@ -142,6 +153,7 @@ fn apply_static_method(
                 .late_static_static_method_returns
                 .get(&method_key),
             true,
+            parent_is_source,
         )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, true)
@@ -190,14 +202,20 @@ fn apply_static_method(
         .insert(method_key.clone(), collect_attribute_args(&method.attributes));
     if method.is_abstract {
         state.static_method_impl_classes.remove(&method_key);
+        state.abstract_static_methods.insert(method_key.clone());
     } else {
         state
             .static_method_impl_classes
             .insert(method_key.clone(), class.name.clone());
+        state.abstract_static_methods.remove(&method_key);
     }
     if method.visibility != Visibility::Private
+        && !method_key.contains('<')
         && !state.static_vtable_slots.contains_key(&method_key)
     {
+        // Same rule as the instance path, and for the same reason: an instantiated generic
+        // static method is named exactly by its call site, so it needs no slot — and giving it
+        // one lets two instantiations of a class number their statics differently.
         let slot = state.static_vtable_methods.len();
         state.static_vtable_slots.insert(method_key.clone(), slot);
         state.static_vtable_methods.push(method_key);
@@ -216,6 +234,8 @@ fn apply_instance_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
+    let internal_exception_override = injected_exception_final_override(class, method, &method_key);
+    let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
     let sig = build_method_sig(checker, method, &class.name)?;
     if state.final_static_methods.contains(&method_key) {
         return Err(final_method_error(
@@ -230,7 +250,7 @@ fn apply_instance_method(
     if state.static_sigs.contains_key(&method_key) {
         return Err(method_kind_error(class, method));
     }
-    if state.final_methods.contains(&method_key) {
+    if state.final_methods.contains(&method_key) && !internal_exception_override {
         return Err(final_method_error(
             state
                 .method_declaring_classes
@@ -258,14 +278,21 @@ fn apply_instance_method(
         }
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
-        validate_override_signature(
-            checker,
-            class,
-            method,
-            parent_sig,
-            state.late_static_method_returns.get(&method_key),
-            false,
-        )?;
+        if !internal_exception_override {
+            let parent_is_source = state
+                .method_declaring_classes
+                .get(&method_key)
+                .is_none_or(|owner| declaration_is_source(checker, owner));
+            validate_override_signature(
+                checker,
+                class,
+                method,
+                parent_sig,
+                state.late_static_method_returns.get(&method_key),
+                false,
+                parent_is_source,
+            )?;
+        }
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, false)
     {
@@ -295,14 +322,19 @@ fn apply_instance_method(
     state
         .method_visibilities
         .insert(method_key.clone(), method.visibility.clone());
-    if method.is_final {
+    if method.is_final || internal_exception_override {
         state.final_methods.insert(method_key.clone());
     } else {
         state.final_methods.remove(&method_key);
     }
+    let declaring_class = if internal_exception_override {
+        inherited_declaring_class.unwrap_or_else(|| class.name.clone())
+    } else {
+        class.name.clone()
+    };
     state
         .method_declaring_classes
-        .insert(method_key.clone(), class.name.clone());
+        .insert(method_key.clone(), declaring_class);
     state
         .method_attribute_names
         .insert(method_key.clone(), collect_attribute_names(&method.attributes));
@@ -311,12 +343,25 @@ fn apply_instance_method(
         .insert(method_key.clone(), collect_attribute_args(&method.attributes));
     if method.is_abstract {
         state.method_impl_classes.remove(&method_key);
+        state.abstract_methods.insert(method_key.clone());
     } else {
         state
             .method_impl_classes
             .insert(method_key.clone(), class.name.clone());
+        state.abstract_methods.remove(&method_key);
     }
-    if method.visibility != Visibility::Private && !state.vtable_slots.contains_key(&method_key) {
+    // An INSTANTIATED generic method takes no slot, and that is a soundness rule rather than an
+    // optimization. Its call site names it exactly — that is what instantiation means — so there
+    // is nothing to dispatch on. And giving it one breaks the invariant two instantiations of a
+    // class must keep: `Pair<int>` may be called with `withRight<string>` where `Pair<string>`
+    // never is, so the slot after it lands at a different number in each, and a variance
+    // widening takes the slot from one class and indexes the other's table.
+    // `assert_instantiation_vtable_slots_aligned` fails loudly if this ever stops holding.
+    let is_instantiation = method_key.contains('<');
+    if method.visibility != Visibility::Private
+        && !is_instantiation
+        && !state.vtable_slots.contains_key(&method_key)
+    {
         let slot = state.vtable_methods.len();
         state.vtable_slots.insert(method_key.clone(), slot);
         state.vtable_methods.push(method_key);
@@ -325,6 +370,23 @@ fn apply_instance_method(
 }
 
 /// Constructs a `CompileError` for overriding a `final` method.
+/// Allows the compiler-injected PDOException getCode body to model its internal SQLSTATE
+/// behavior while retaining the inherited final flag and declaring class. Source declarations
+/// with the same class or method name never receive this exception.
+fn injected_exception_final_override(
+    class: &FlattenedClass,
+    method: &ClassMethod,
+    method_key: &str,
+) -> bool {
+    class.span.line == 0
+        && class.span.col == 0
+        && method.span.line == 0
+        && method.span.col == 0
+        && php_symbol_key(&class.name) == "pdoexception"
+        && method_key == "getcode"
+}
+
+/// Builds the diagnostic for an attempt to override the selected final method.
 fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileError {
     CompileError::new(
         method.span,

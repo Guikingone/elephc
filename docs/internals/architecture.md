@@ -54,7 +54,7 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
-│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,web,version}_prelude*
+│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,xml,web,version}_prelude*
 │              │  Injects only the compiler-owned PHP surfaces required by
 │              │  resolved source usage, forced bridge flags, or --web.
 └─────┬────────┘
@@ -74,6 +74,12 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌──────────────┐
+│ Object casts │  src/object_cast_prelude*
+│              │  Injects stdClass declarations for object casts after autoload.
+└─────┬────────┘
+      │
+      ▼
 ┌──────────────┐
 │ Function args│  src/func_args/
 │  desugaring  │  Rewrites func_num_args/get_args/get_arg into a hidden
@@ -96,9 +102,10 @@ PHP source (.php)
       │
       ▼
 ┌─────────┐
-│  Type    │  src/types/
+│  Type    │  src/types/ + src/generics.rs
 │  Checker │  traits.rs, checker/mod.rs, checker/builtins/, checker/functions/, warnings/
-│          │  Validates types, computes packed layouts, collects warnings, returns CheckResult
+│          │  Specializes reachable templates to a fixed point, validates types,
+│          │  computes packed layouts, collects warnings, returns CheckResult
 └────┬─────┘
      │
      ▼
@@ -155,12 +162,14 @@ PHP source (.php)
 │ EIR passes  │  src/ir_passes/
 │             │  Module-level fixed-point pipeline: a cross-function
 │             │  small-function inliner interleaved with the per-function
-│             │  pass driver (identity folding, peephole rewrites, constant
-│             │  folding, common-subexpression elimination, loop-invariant
-│             │  code motion, dead-instruction elimination, dead-store
-│             │  elimination, branch simplification) plus dominance and loop
-│             │  analysis and linear-scan register allocation (liveness,
-│             │  intervals, pools) before codegen.
+│             │  pass driver (identity folding, peephole rewrites, scalar
+│             │  local promotion, immutable local classification, checked-
+│             │  integer sinking, integer range analysis (IntegerRange),
+│             │  boxed numeric-chain fusion, constant folding,
+│             │  common-subexpression elimination, loop-invariant code motion,
+│             │  dead-instruction elimination, dead-store elimination, branch
+│             │  simplification) plus dominance and loop analysis and linear-
+│             │  scan register allocation (liveness, intervals, pools).
 └──────┬──────┘
        │
        ▼
@@ -191,6 +200,56 @@ dynamic fragments enable the optional `elephc-magician` interpreter staticlib
 at final linking. This is a lowering/linking decision, not a separate timed
 compiler phase. See [Eval Runtime Architecture](eval-runtime.md).
 
+### Generated-artifact write policy
+
+**Source:** `src/pipeline/artifact_io.rs`
+
+Every output path is derived from the **source filename** (`pipeline/output.rs`'s
+`output_paths`), so a checked-out tree someone else controls — an untrusted pull
+request, a shared build directory — chooses them. A symlink named `main.s`,
+`main.map`, `libmain.h` or `main.key` next to `main.php` used to make the
+compiler truncate and overwrite that symlink's target with the compiling user's
+permissions. One module now owns the policy for all of them.
+
+**Preflight, before any work runs.** `reject_unsafe_destinations` inspects each
+destination with `symlink_metadata` — which does not follow the final component,
+unlike `metadata`, whose answer would describe the *target* — and refuses a
+symbolic link or an existing non-regular file (a directory, a FIFO, a device
+node). An existing **regular** file is accepted: recompiling over yesterday's
+`main.s` is the normal case. Only `ErrorKind::NotFound` counts as absence; any
+other inspection failure is refused rather than assumed benign, because a path
+whose kind could not be read is exactly the one that cannot be vouched for.
+
+The check is **scoped to the run about to happen**. `ArtifactPlan::for_run`
+derives the destination set from the flags that decide where `compile()` returns:
+`--check` and `--emit-ir` return before the backend stage and produce none of
+these files, `--emit-asm` stops after the assembly, and the probe-key sidecar is
+a destination only under `--with-monitoring`. Validating a path the command will
+never write would turn an unrelated symlink at that name into a refusal of a
+valid command.
+
+**Staged replacement, for what this process writes.** `write_artifact` creates a
+private file in the destination's own directory with `O_CREAT | O_EXCL`, writes
+and syncs it, then renames it over the destination. `rename(2)` **replaces** a
+symlink rather than following it, so for the assembly, the source map, the
+generated header and the probe key the window between the preflight and the write
+is closed rather than merely narrowed. `write_private_artifact` is the same path
+with `mode(0o600)` applied at creation — used for the probe key, whose bytes are
+the monitoring HMAC credential and must never exist at their well-known `.key`
+name under a permissive umask, not even for the instant before a `chmod`.
+
+**What the preflight does *not* close.** The object file and the final binary are
+written by an external assembler and linker, which this process never opens
+itself — refusing before the tool runs is the only place to cover them, and it
+covers the threat above completely, because a symlink that arrives in a checkout
+is present before the compile starts. It does not cover an attacker running
+*concurrently* with write access to the build directory, who can plant one in the
+interval between the check and the invocation. Staging those two would close it,
+at the cost of reworking the debug-info path: the linker's debug map records the
+object path **as handed to it** (`keep_obj_for_debug` in `pipeline/backend.rs`
+deliberately keeps the object at that path for debuggers to follow), and
+`dsymutil` names its bundle after the binary it is given.
+
 ## Target Model
 
 The compiler now distinguishes the operating-system side of a target from the instruction set:
@@ -213,6 +272,8 @@ src/
 ├── main.rs                    CLI binary entry point
 ├── cli.rs                     Command-line option parsing
 ├── pipeline.rs                Frontend/backend compilation pipeline
+│   └── artifact_io.rs         Generated-artifact write policy: preflight destination
+│                              validation and O_EXCL-staged atomic replacement
 ├── exports.rs                 #[Export] collection and C-ABI signature validation for --emit cdylib
 ├── link_plan.rs               Ordered typed archives, libraries, paths, frameworks, and Linux link mode
 ├── link_planning.rs           Compile/runtime/user/managed inputs to one final ordered link plan
@@ -225,13 +286,17 @@ src/
 │   ├── doctor.rs              Read-only project/artifact/cache-size diagnostics
 │   ├── prune.rs               Explicit stale-fingerprint and abandoned-staging cleanup
 │   ├── resolver.rs            Read-only compile requirement to exact archive resolution
-│   └── recipes/               Reviewed PCRE2, zlib, OpenSSL, nghttp2, libssh2, curl, and libxml2 source-build recipes
+│   └── recipes/               Reviewed PCRE2, zlib, OpenSSL, nghttp2, libssh2, curl, Oniguruma, and libxml2 source-build recipes
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
 ├── builtins/                  AOT `builtin!` bindings: checker/EIR semantics joined to `elephc-builtin-contract`
 ├── builtin_metadata.rs        Public builtin metadata snapshots for parity tests and external audits
 ├── string_bytes.rs            Parser string-literal payload → PHP runtime bytes conversion
+├── docblock.rs                Per-file generic PHPDoc annotation application
+├── docblock/                  Declaration binding and generic member annotations
+├── generics.rs                Type-checking and specialization fixed point
+├── generics/                  Class/method/constructor specialization, scope keys, variance
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
@@ -252,7 +317,7 @@ src/
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination, declaration reachability pruning
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
-├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
+├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, scalar local promotion, immutable integer-local loads, checked-integer sinking, integer range and induction-variable analysis, numeric-chain fusion, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
 ├── codegen/                   Active EIR to target assembly backend
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
 ├── runtime_cache.rs           Cached shared runtime object preparation
@@ -353,8 +418,8 @@ src/
 │   ├── runtime_callable_invoker.rs Runtime callable-descriptor invocation lowering
 │   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
 │   ├── literal_defaults.rs    Literal property defaults → backend-native values
-│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (9 files)
-│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, the boxed-mixed __toString ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (4 files)
+│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: arguments, callables, class constants, constructors, error handlers, methods, properties, ref args, reflection (+ owners), static properties, and values (13 files)
+│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, mbstring callable dispatch, the boxed-mixed __toString ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (5 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
 │
@@ -410,7 +475,7 @@ src/
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points
-│       ├── data/              Fixed, user-program, and instanceof runtime data tables (4 files)
+│       ├── data/              Fixed, user-program, and instanceof runtime data tables (5 files)
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
@@ -420,22 +485,22 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, and conversion helpers (97 top-level files + iconv/ target-neutral bridge helpers, 4 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (175 files + hash_sort/ target split, 2 files)
-│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (103 top-level files + 68 nested helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (204 top-level files + 7 nested target/debug helpers)
+│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (121 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (126 top-level files + 1 nested response-metadata helper)
 │       ├── buffers/           Generation-safe handle resolution, allocation/free, length, bounds/size/use-after-free diagnostics (8 files incl. mod.rs)
 │       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls (3 files incl. target assembly)
 │       ├── curl/              Easy, multi, share, callback, multipart, error, and version bridge adapters (14 files)
-│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, and builtin adapters (23 files)
+│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, mbstring, output, and builtin adapters (36 top-level files + 1 nested output helper)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
+│       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (22 files)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (43 top-level files + 38 files under 6 subdirectories)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (45 top-level files + 44 nested files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
-│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (15 files)
+│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (17 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
@@ -454,12 +519,16 @@ crates/
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-instr/              Exact profiling instrumentation runtime
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
+├── elephc-mbstring/           Shared mbstring engine and native bridge with managed Oniguruma-backed mbregex
+├── elephc-monitoring-contract/ Typed monitoring policy shared by the compiler and every bridge
+├── elephc-pcntl/              Unix process control, wait, exec, priority, and signal bridge staticlib
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-probe/              Sampled profiling and authenticated service endpoint
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
-└── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
+├── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
+└── elephc-xml/                ext/xml and ext/xmlwriter bridge over the catalog's static libxml2
 ```
 
 ## ARM64 calling conventions
@@ -563,9 +632,10 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
 | Buffer registry | `_buffer_registry`, `_buffer_registry_free`, `_buffer_registry_next` | Static generation-safe descriptors, recycled-slot free-list head, and next never-issued descriptor index |
-| Runtime diagnostics | `_rt_diag_suppression`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible warning state/text plus fatal error messages and heap-debug summary/failure strings |
-| GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
-| Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
+| Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_*`, `_php_diagnostic_*`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible and deferred warning state/text plus source locations, fatal messages, and heap-debug summary/failure strings |
+| GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_enabled`, `_gc_collecting`, `_gc_freeing_unreachable`, `_gc_pin_head`, `_gc_pending_throw`, `_gc_release_suppressed`, `_gc_runs`, `_gc_collected`, `_gc_application_started`, `_gc_*_started`, `_gc_*_time`, `_gc_destructor_depth` | Allocation/free/live-byte counters, collector lifecycle and timing state, pinned roots, and deferred throws |
+| Exception and handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, `_php_error_handler_*`, `_php_exception_handler_*`, `_class_parent_ids` | Active exception and cleanup stacks, current user handlers with heap-backed restore stacks, magic-set recursion guard, and parent links used for catch matching |
+| Reference and resource tracking | `_rt_unmanaged_ref_borrow_top`, `_resource_inventory_head`, `_resource_inventory_tail` | Active unmanaged array-element borrow plus the heap-backed resource-incarnation inventory used by `get_resources()` |
 | Include-once guards | `_include_once_<hash>` | Per-resolved-file loaded flags used by `include_once` / `require_once` runtime guards |
 | Include-loaded function variants | `_fn_variant_active_<function>` | Active hidden implementation pointer for a function loaded through an include point |
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags`, `_principal_lookup_buf`, `_etc_passwd_path`, `_etc_group_path`, `_principal_lookup_read_mode` | Syscall-oriented C-string scratch buffers, EOF bookkeeping, and passwd/group lookup state for `chown()` / `chgrp()` name resolution |
@@ -587,7 +657,8 @@ Offset  Size  Field
  16      8    value_type  (coarse summary: 0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null)
  24      8    head        (slot index of first inserted entry, or -1)
  32      8    tail        (slot index of last inserted entry, or -1)
- 40      ...  entries     (each entry is 64 bytes)
+ 40      8    entries     (owned pointer to separate storage, each entry is 64 bytes)
+ 48      8    pins        (physical lifetime roots excluded from PHP copy-on-write ownership)
 ```
 
 Each hash table entry:

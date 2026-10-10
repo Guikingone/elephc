@@ -12,6 +12,10 @@
 //! - `HashGetForWrite` is a lookup that also WRITES: it separates the container the
 //!   matching entry holds and republishes it into that entry's value slot, whose
 //!   address comes from `__rt_hash_get`'s entry-address output (issue #580).
+//! - `DescriptorArgSet` / `DescriptorArgKeyExists` share every one of those mechanics with
+//!   `HashSet` / `array_key_exists` and differ in exactly one place: the key is materialized
+//!   WITHOUT `__rt_hash_normalize_key`. A descriptor argument container keys parameter NAMES,
+//!   where `"12"` means `$12`, not position 12. Ordinary array writes keep PHP normalization.
 
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
@@ -134,6 +138,7 @@ pub(super) fn lower_hash_get(
                 &result_ty,
                 warn_on_missing,
                 false,
+                false,
             )
         }
         Arch::X86_64 => {
@@ -145,6 +150,7 @@ pub(super) fn lower_hash_get(
                 &value_ty,
                 &result_ty,
                 warn_on_missing,
+                false,
                 false,
             )
         }
@@ -177,6 +183,7 @@ pub(super) fn lower_hash_get_for_write(
     let value_ty = assoc_value_type(&ctx.value_php_type(hash)?, inst)?;
     require_hash_get_result(&value_ty, inst)?;
     let result_ty = inst.result_php_type.codegen_repr();
+    let key_already_diagnosed = matches!(inst.immediate, Some(Immediate::Bool(true)));
     if matches!(result_ty, PhpType::Mixed) {
         return match ctx.emitter.target.arch {
             Arch::AArch64 => lower_hash_get_aarch64(
@@ -188,6 +195,7 @@ pub(super) fn lower_hash_get_for_write(
                 &result_ty,
                 true,
                 true,
+                key_already_diagnosed,
             ),
             Arch::X86_64 => lower_hash_get_x86_64(
                 ctx,
@@ -198,6 +206,7 @@ pub(super) fn lower_hash_get_for_write(
                 &result_ty,
                 true,
                 true,
+                key_already_diagnosed,
             ),
         };
     }
@@ -206,8 +215,8 @@ pub(super) fn lower_hash_get_for_write(
     })?;
     super::arrays::separate_get_for_write_receiver(ctx, hash, "__rt_hash_ensure_unique")?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_get_for_write_aarch64(ctx, inst, hash, key, &result_ty, helper),
-        Arch::X86_64 => lower_hash_get_for_write_x86_64(ctx, inst, hash, key, &result_ty, helper),
+        Arch::AArch64 => lower_hash_get_for_write_aarch64(ctx, inst, hash, key, &result_ty, helper, key_already_diagnosed),
+        Arch::X86_64 => lower_hash_get_for_write_x86_64(ctx, inst, hash, key, &result_ty, helper, key_already_diagnosed),
     }
 }
 
@@ -225,8 +234,13 @@ fn lower_hash_get_for_write_aarch64(
     key: ValueId,
     result_ty: &PhpType,
     helper: &str,
+    key_already_diagnosed: bool,
 ) -> Result<()> {
-    materialize_hash_key_aarch64(ctx, key)?;
+    if key_already_diagnosed {
+        materialize_hash_key_aarch64_after_first(ctx, key)?;
+    } else {
+        materialize_hash_key_aarch64(ctx, key)?;
+    }
     ctx.load_value_to_reg(hash, "x0")?;
     let miss = ctx.next_label("hash_get_fw_miss");
     let null_receiver = ctx.next_label("hash_get_fw_null_recv");
@@ -267,8 +281,13 @@ fn lower_hash_get_for_write_x86_64(
     key: ValueId,
     result_ty: &PhpType,
     helper: &str,
+    key_already_diagnosed: bool,
 ) -> Result<()> {
-    materialize_hash_key_x86_64(ctx, key)?;
+    if key_already_diagnosed {
+        materialize_hash_key_x86_64_after_first(ctx, key)?;
+    } else {
+        materialize_hash_key_x86_64(ctx, key)?;
+    }
     ctx.load_value_to_reg(hash, "rdi")?;
     let miss = ctx.next_label("hash_get_fw_miss");
     let null_receiver = ctx.next_label("hash_get_fw_null_recv");
@@ -311,26 +330,144 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    receiver.prepare_consuming_storeback(ctx, hash)?;
+    let normalization = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        HashKeyNormalization::PhpAlreadyDiagnosed
+    } else {
+        HashKeyNormalization::Php
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_hash_set_aarch64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
+        Arch::X86_64 => lower_hash_set_x86_64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
+    }
+    ctx.store_result_value(hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
+    ctx.writeback_global_array_source(hash)?;
+    Ok(())
+}
+
+/// Whether a hash key goes through PHP's numeric-string normalization.
+///
+/// `Php` is every ordinary array and hash write. `RawString` exists only for descriptor
+/// argument containers, whose string keys are parameter names rather than PHP array keys.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum HashKeyNormalization {
+    /// `__rt_hash_normalize_key` decides: a numeric string becomes an integer key.
+    Php,
+    /// Normalize again without repeating a float diagnostic already emitted by this access.
+    PhpAlreadyDiagnosed,
+    /// A string key stays a string key, byte for byte.
+    RawString,
+}
+
+/// Lowers a descriptor-invoker argument write, keeping numeric-string keys as names.
+///
+/// Identical to [`lower_hash_set`] apart from the key materialization, write-back included:
+/// `__rt_hash_set` persists a newly inserted string key and may grow the table, so the pointer
+/// it returns is stored back into the receiver's SSA slot AND into the frame slot the container
+/// was published in. A descriptor container is read through that published slot on every
+/// insertion, so a grown table that was not written back would be lost.
+pub(super) fn lower_descriptor_arg_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let value = expect_operand(inst, 2)?;
+    let hash_ty = ctx.value_php_type(hash)?;
+    require_hash(hash_ty.clone(), inst)?;
+    let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
+    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
     if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
     }
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
-        Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
+        Arch::AArch64 => lower_hash_set_aarch64_with(
+            ctx, hash, key, value, &value_ty, &storage_value_ty, HashKeyNormalization::RawString,
+        )?,
+        Arch::X86_64 => lower_hash_set_x86_64_with(
+            ctx, hash, key, value, &value_ty, &storage_value_ty, HashKeyNormalization::RawString,
+        )?,
     }
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
+    Ok(())
+}
+
+/// Lowers a raw `array_key_exists` probe over a descriptor-invoker argument container.
+///
+/// The probe must read the same key space [`lower_descriptor_arg_set`] writes, otherwise a
+/// duplicate-name guard would report the NAME `"12"` absent from a container that carries it,
+/// because the probe normalized it to the integer key 12.
+pub(super) fn lower_descriptor_arg_key_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    require_hash(ctx.value_php_type(hash)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::RawString)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::RawString)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        }
+    }
+    // `__rt_hash_get` returns the found flag in the integer result register, which is exactly
+    // the Bool this op produces. The borrowed payload registers are deliberately discarded.
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP's duplicate-name refusal, naming the key the caller actually supplied.
+///
+/// The name is a run-time value, so the message is composed by
+/// `__rt_throw_named_parameter_overwrite`, the helper the callable invoker's prevalidation walk
+/// already calls. It publishes `_exc_value` and tail-jumps to `__rt_throw_current`, which is the
+/// same unwinder `Terminator::Throw` enters: the `Error` is catchable in this very frame, and
+/// `__rt_exception_cleanup_frames` retires the descriptor's published owner records on the way.
+///
+/// The key is materialized through the descriptor key space, so a numeric-looking NAME reaches
+/// the message unchanged. Only the string arm is reachable, because the duplicate guard sits on
+/// the named branch of the unpack walk, and there a string key leaves the pointer in the key_lo
+/// register and the byte length in key_hi.
+pub(super) fn lower_throw_named_parameter_overwrite(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let key = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::RawString)?;
+            ctx.emitter.instruction("mov x0, x1");                              // key_lo is the parameter-name pointer
+            ctx.emitter.instruction("mov x1, x2");                              // key_hi is its byte length
+            abi::emit_call_label(ctx.emitter, "__rt_throw_named_parameter_overwrite");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::RawString)?;
+            ctx.emitter.instruction("mov rdi, rsi");                            // key_lo is the parameter-name pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // key_hi is its byte length
+            abi::emit_call_label(ctx.emitter, "__rt_throw_named_parameter_overwrite");
+        }
+    }
     Ok(())
 }
 
 /// Lowers `unset($hash[$key])` for associative arrays through the shared hash-unset helper.
 ///
-/// Materializes the key into the hash ABI key registers, then calls `__rt_hash_unset`, which
-/// copy-on-write splits the table, removes the matching entry (releasing its owned key/value
-/// payloads), and returns the unique (possibly cloned) table pointer. That pointer is written
-/// back to the source SSA slot and array local, mirroring `lower_hash_set`. A missing key is a
-/// runtime no-op.
+/// Publishes a unique table before the removal can invoke a throwing or reentrant destructor.
+/// The runtime's returned pointer must not be written back after such a callback: PHP may have
+/// replaced the receiver meanwhile. A missing key remains a runtime no-op.
 pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
@@ -340,6 +477,11 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
     }
+    ctx.load_value_to_reg(hash, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+    ctx.store_result_value(hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
+    ctx.writeback_global_array_source(hash)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             materialize_hash_key_aarch64(ctx, key)?;
@@ -356,8 +498,6 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
         }
     }
-    ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
     Ok(())
 }
 
@@ -378,7 +518,7 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
         Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty)?,
     }
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
@@ -414,15 +554,42 @@ pub(super) fn lower_hash_array_union(ctx: &mut FunctionContext<'_>, inst: &Instr
     let result_value_ty = require_hash_union_result(&inst.result_php_type.codegen_repr(), inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            let hash_right = ctx.next_label("hash_array_union_hash_right");
+            let done = ctx.next_label("hash_array_union_runtime_done");
+            ctx.load_value_to_reg(right, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // detect a runtime-promoted right array
+            ctx.emitter.instruction(&format!("b.eq {hash_right}"));             // two hash operands use the associative helper
             ctx.load_value_to_reg(left, "x0")?;
-            ctx.load_value_to_reg(right, "x1")?;
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_array_union");
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the fresh hash result in x0
+            ctx.emitter.label(&hash_right);
+            ctx.load_value_to_reg(left, "x0")?;
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_union");
+            ctx.emitter.label(&done);
         }
         Arch::X86_64 => {
+            let hash_right = ctx.next_label("hash_array_union_hash_right");
+            let done = ctx.next_label("hash_array_union_runtime_done");
+            ctx.load_value_to_reg(right, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // detect a runtime-promoted right array
+            ctx.emitter.instruction(&format!("je {hash_right}"));               // two hash operands use the associative helper
             ctx.load_value_to_reg(left, "rdi")?;
-            ctx.load_value_to_reg(right, "rsi")?;
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_array_union");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the fresh hash result in rax
+            ctx.emitter.label(&hash_right);
+            ctx.load_value_to_reg(left, "rdi")?;
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_union");
+            ctx.emitter.label(&done);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_array_union");
     convert_hash_union_result_to_mixed_if_needed(ctx, &result_value_ty);
     store_if_result(ctx, inst)
 }
@@ -453,7 +620,7 @@ pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_spread");
     ctx.store_result_value(dest)?;
-    receiver.store_back_value(ctx, dest)?;
+    receiver.store_back_container_writeback(ctx, dest)?;
     ctx.writeback_global_array_source(dest)?;
     Ok(())
 }
@@ -468,8 +635,13 @@ fn lower_hash_get_aarch64(
     result_ty: &PhpType,
     warn_on_missing: bool,
     for_write: bool,
+    key_already_diagnosed: bool,
 ) -> Result<()> {
-    materialize_hash_key_aarch64(ctx, key)?;
+    if key_already_diagnosed {
+        materialize_hash_key_aarch64_after_first(ctx, key)?;
+    } else {
+        materialize_hash_key_aarch64(ctx, key)?;
+    }
     ctx.load_value_to_reg(hash, "x0")?;
     let miss = ctx.next_label("hash_get_miss");
     let null_receiver = ctx.next_label("hash_get_null_recv");
@@ -514,8 +686,13 @@ fn lower_hash_get_x86_64(
     result_ty: &PhpType,
     warn_on_missing: bool,
     for_write: bool,
+    key_already_diagnosed: bool,
 ) -> Result<()> {
-    materialize_hash_key_x86_64(ctx, key)?;
+    if key_already_diagnosed {
+        materialize_hash_key_x86_64_after_first(ctx, key)?;
+    } else {
+        materialize_hash_key_x86_64(ctx, key)?;
+    }
     ctx.load_value_to_reg(hash, "rdi")?;
     let miss = ctx.next_label("hash_get_miss");
     let null_receiver = ctx.next_label("hash_get_null_recv");
@@ -552,7 +729,7 @@ fn lower_hash_get_x86_64(
 }
 
 /// Lowers an associative-array write for AArch64 targets.
-fn lower_hash_set_aarch64(
+pub(super) fn lower_hash_set_aarch64(
     ctx: &mut FunctionContext<'_>,
     hash: ValueId,
     key: ValueId,
@@ -560,7 +737,22 @@ fn lower_hash_set_aarch64(
     value_ty: &PhpType,
     storage_value_ty: &PhpType,
 ) -> Result<()> {
-    materialize_hash_key_aarch64(ctx, key)?;
+    lower_hash_set_aarch64_with(
+        ctx, hash, key, value, value_ty, storage_value_ty, HashKeyNormalization::Php,
+    )
+}
+
+/// Lowers an associative-array write for AArch64 targets under a chosen key normalization.
+fn lower_hash_set_aarch64_with(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
+    materialize_hash_key_aarch64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -581,8 +773,8 @@ fn lower_hash_append_aarch64(
     ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve temporary slots for the hash pointer and computed append key
     ctx.load_value_to_reg(hash, "x0")?;
     ctx.emitter.instruction("str x0, [sp, #0]");                                // preserve the hash pointer across value materialization
-    emit_hash_append_key_scan_aarch64(ctx);
-    ctx.emitter.instruction("str x11, [sp, #8]");                               // preserve the next PHP integer append key
+    abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // preserve the checked next index before acquiring a value owner
     materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("ldr x0, [sp, #0]");                                // pass the hash pointer to hash_set
     ctx.emitter.instruction("ldr x1, [sp, #8]");                                // pass the computed integer append key
@@ -594,7 +786,7 @@ fn lower_hash_append_aarch64(
 }
 
 /// Lowers an associative-array write for x86_64 targets.
-fn lower_hash_set_x86_64(
+pub(super) fn lower_hash_set_x86_64(
     ctx: &mut FunctionContext<'_>,
     hash: ValueId,
     key: ValueId,
@@ -602,7 +794,22 @@ fn lower_hash_set_x86_64(
     value_ty: &PhpType,
     storage_value_ty: &PhpType,
 ) -> Result<()> {
-    materialize_hash_key_x86_64(ctx, key)?;
+    lower_hash_set_x86_64_with(
+        ctx, hash, key, value, value_ty, storage_value_ty, HashKeyNormalization::Php,
+    )
+}
+
+/// Lowers an associative-array write for x86_64 targets under a chosen key normalization.
+fn lower_hash_set_x86_64_with(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
+    materialize_hash_key_x86_64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
@@ -623,8 +830,8 @@ fn lower_hash_append_x86_64(
     ctx.emitter.instruction("sub rsp, 32");                                     // reserve aligned slots for the hash pointer and computed append key
     ctx.load_value_to_reg(hash, "rdi")?;
     ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");                        // preserve the hash pointer across value materialization
-    emit_hash_append_key_scan_x86_64(ctx);
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r11");                    // preserve the next PHP integer append key
+    abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // preserve the checked next index before acquiring a value owner
     materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // pass the hash pointer to hash_set
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // pass the computed integer append key
@@ -635,87 +842,30 @@ fn lower_hash_append_x86_64(
     Ok(())
 }
 
-/// Computes the next PHP integer append key for the hash pointer in `x0`.
-fn emit_hash_append_key_scan_aarch64(ctx: &mut FunctionContext<'_>) {
-    let loop_label = ctx.next_label("hash_append_key_loop");
-    let update_label = ctx.next_label("hash_append_key_update");
-    let next_label = ctx.next_label("hash_append_key_next");
-    let done_label = ctx.next_label("hash_append_key_done");
 
-    ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load hash capacity from the header
-    ctx.emitter.instruction("mov x9, #0");                                      // start scanning at hash slot zero
-    ctx.emitter.instruction("mov x11, #0");                                     // default append key when no integer keys exist
-    ctx.emitter.instruction("mov x12, #0");                                     // track whether any integer key has been seen
-    ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x9, x10");                                     // stop once every allocated hash slot has been checked
-    ctx.emitter.instruction(&format!("b.ge {}", done_label));                   // finish scanning when the slot index reaches capacity
-    ctx.emitter.instruction("mov x13, #64");                                    // each hash entry occupies 64 bytes
-    ctx.emitter.instruction("mul x14, x9, x13");                                // compute byte offset for the current hash slot
-    ctx.emitter.instruction("add x14, x0, x14");                                // add the slot offset to the hash base
-    ctx.emitter.instruction("add x14, x14, #40");                               // skip the 40-byte hash header to the current entry
-    ctx.emitter.instruction("ldr x15, [x14]");                                  // read the occupied flag for this entry
-    ctx.emitter.instruction("cmp x15, #1");                                     // only occupied entries can contribute integer keys
-    ctx.emitter.instruction(&format!("b.ne {}", next_label));                   // skip empty entries
-    ctx.emitter.instruction("ldr x15, [x14, #16]");                             // load key_hi to distinguish integer from string keys
-    ctx.emitter.instruction("cmn x15, #1");                                     // integer keys use key_hi = -1
-    ctx.emitter.instruction(&format!("b.ne {}", next_label));                   // skip string-keyed entries
-    ctx.emitter.instruction("ldr x15, [x14, #8]");                              // load the integer key low word
-    ctx.emitter.instruction("add x15, x15, #1");                                // candidate append key is existing integer key plus one
-    ctx.emitter.instruction(&format!("cbz x12, {}", update_label));             // first integer key always seeds the append key
-    ctx.emitter.instruction("cmp x15, x11");                                    // compare the candidate with the best key so far
-    ctx.emitter.instruction(&format!("b.le {}", next_label));                   // keep the existing best key when it is larger
-    ctx.emitter.label(&update_label);
-    ctx.emitter.instruction("mov x11, x15");                                    // keep the largest observed integer key plus one
-    ctx.emitter.instruction("mov x12, #1");                                     // remember that at least one integer key was found
-    ctx.emitter.label(&next_label);
-    ctx.emitter.instruction("add x9, x9, #1");                                  // advance to the next hash slot
-    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning hash slots
-    ctx.emitter.label(&done_label);
-}
 
-/// Computes the next PHP integer append key for the hash pointer in `rdi`.
-fn emit_hash_append_key_scan_x86_64(ctx: &mut FunctionContext<'_>) {
-    let loop_label = ctx.next_label("hash_append_key_loop");
-    let update_label = ctx.next_label("hash_append_key_update");
-    let next_label = ctx.next_label("hash_append_key_next");
-    let done_label = ctx.next_label("hash_append_key_done");
-
-    ctx.emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                    // load hash capacity from the header
-    ctx.emitter.instruction("xor r9, r9");                                      // start scanning at hash slot zero
-    ctx.emitter.instruction("xor r11, r11");                                    // default append key when no integer keys exist
-    ctx.emitter.instruction("xor r8, r8");                                      // track whether any integer key has been seen
-    ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r9, r10");                                     // stop once every allocated hash slot has been checked
-    ctx.emitter.instruction(&format!("jge {}", done_label));                    // finish scanning when the slot index reaches capacity
-    ctx.emitter.instruction("mov rcx, r9");                                     // copy the slot index before scaling it
-    ctx.emitter.instruction("imul rcx, 64");                                    // compute byte offset for the current hash slot
-    ctx.emitter.instruction("lea rax, [rdi + rcx + 40]");                       // compute the current entry address after the hash header
-    ctx.emitter.instruction("cmp QWORD PTR [rax], 1");                          // only occupied entries can contribute integer keys
-    ctx.emitter.instruction(&format!("jne {}", next_label));                    // skip empty entries
-    ctx.emitter.instruction("mov rdx, QWORD PTR [rax + 16]");                   // load key_hi to distinguish integer from string keys
-    ctx.emitter.instruction("cmp rdx, -1");                                     // integer keys use key_hi = -1
-    ctx.emitter.instruction(&format!("jne {}", next_label));                    // skip string-keyed entries
-    ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                    // load the integer key low word
-    ctx.emitter.instruction("add rcx, 1");                                      // candidate append key is existing integer key plus one
-    ctx.emitter.instruction("test r8, r8");                                     // has any integer key already seeded the append key?
-    ctx.emitter.instruction(&format!("jz {}", update_label));                   // first integer key always seeds the append key
-    ctx.emitter.instruction("cmp rcx, r11");                                    // compare the candidate with the best key so far
-    ctx.emitter.instruction(&format!("jle {}", next_label));                    // keep the existing best key when it is larger
-    ctx.emitter.label(&update_label);
-    ctx.emitter.instruction("mov r11, rcx");                                    // keep the largest observed integer key plus one
-    ctx.emitter.instruction("mov r8, 1");                                       // remember that at least one integer key was found
-    ctx.emitter.label(&next_label);
-    ctx.emitter.instruction("add r9, 1");                                       // advance to the next hash slot
-    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning hash slots
-    ctx.emitter.label(&done_label);
-}
-
-/// Materializes an EIR value as a normalized hash key for AArch64.
+/// Materializes an EIR value as a PHP-normalized hash key for AArch64.
 pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::Php)
+}
+
+/// Rebuilds an AArch64 hash key after the same access has diagnosed its float conversion.
+pub(super) fn materialize_hash_key_aarch64_after_first(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)
+}
+
+/// Materializes an EIR value as a hash key for AArch64 under a chosen key normalization.
+pub(super) fn materialize_hash_key_aarch64_with(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "x1", "x2")?;
-            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            if normalization != HashKeyNormalization::RawString {
+                abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            }
             Ok(())
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
@@ -723,9 +873,29 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
+        PhpType::TaggedScalar => {
+            let null = ctx.next_label("tagged_hash_key_null");
+            let done = ctx.next_label("tagged_hash_key_done");
+            ctx.load_value_to_result(key)?;
+            ctx.emitter.instruction("cmp x1, #8");                              // the inline tag distinguishes PHP null from integer zero
+            ctx.emitter.instruction(&format!("b.eq {null}"));                   // null becomes the empty string key, not an integer key
+            ctx.emitter.instruction("mov x1, x0");                              // preserve the non-null integer payload as key_lo
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&null);
+            emit_empty_string_hash_key_aarch64(ctx);
+            ctx.emitter.label(&done);
+            Ok(())
+        }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "d0")?;
-            abi::emit_php_float_to_int(ctx.emitter, "x1");
+            if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+                abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+                ctx.emitter.instruction("mov x0, x9");                          // recover the previously diagnosed PHP integer key
+            } else {
+                abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            }
+            ctx.emitter.instruction("mov x1, x0");                              // use the diagnosed PHP integer as the hash key
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
@@ -736,7 +906,7 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            materialize_mixed_hash_key_aarch64(ctx, key)
+            materialize_mixed_hash_key_aarch64(ctx, key, normalization)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",
@@ -745,13 +915,29 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
     }
 }
 
-/// Materializes an EIR value as a normalized hash key for x86_64.
+/// Materializes an EIR value as a PHP-normalized hash key for x86_64.
 pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::Php)
+}
+
+/// Rebuilds an x86_64 hash key after the same access has diagnosed its float conversion.
+pub(super) fn materialize_hash_key_x86_64_after_first(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)
+}
+
+/// Materializes an EIR value as a hash key for x86_64 under a chosen key normalization.
+pub(super) fn materialize_hash_key_x86_64_with(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "rax", "rdx")?;
-            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
-            ctx.emitter.instruction("mov rsi, rax");                            // move the normalized string-or-integer key low word into the hash ABI register
+            if normalization != HashKeyNormalization::RawString {
+                abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            }
+            ctx.emitter.instruction("mov rsi, rax");                            // move the string-or-integer key low word into the hash ABI register
             Ok(())
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
@@ -759,9 +945,29 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }
+        PhpType::TaggedScalar => {
+            let null = ctx.next_label("tagged_hash_key_null");
+            let done = ctx.next_label("tagged_hash_key_done");
+            ctx.load_value_to_result(key)?;
+            ctx.emitter.instruction("cmp rdx, 8");                              // the inline tag distinguishes PHP null from integer zero
+            ctx.emitter.instruction(&format!("je {null}"));                     // null becomes the empty string key, not an integer key
+            ctx.emitter.instruction("mov rsi, rax");                            // preserve the non-null integer payload as key_lo
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&null);
+            emit_empty_string_hash_key_x86_64(ctx);
+            ctx.emitter.label(&done);
+            Ok(())
+        }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "xmm0")?;
-            abi::emit_php_float_to_int(ctx.emitter, "rsi");
+            if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+                abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+                ctx.emitter.instruction("mov rax, r11");                        // recover the previously diagnosed PHP integer key
+            } else {
+                abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            }
+            ctx.emitter.instruction("mov rsi, rax");                            // use the diagnosed PHP integer as the hash key
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }
@@ -772,7 +978,7 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            materialize_mixed_hash_key_x86_64(ctx, key)
+            materialize_mixed_hash_key_x86_64(ctx, key, normalization)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",
@@ -782,13 +988,13 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
 }
 
 /// Emits PHP's undefined-key warning for a normalized associative key on AArch64.
-fn emit_undefined_hash_key_warning_aarch64(
+pub(super) fn emit_undefined_hash_key_warning_aarch64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
 ) -> Result<()> {
     let integer_label = ctx.next_label("hash_warn_integer_key");
     let done_label = ctx.next_label("hash_warn_key_done");
-    materialize_hash_key_aarch64(ctx, key)?;
+    materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)?;
     ctx.emitter.instruction("cmn x2, #1");                                      // integer hash keys carry key_hi = -1
     ctx.emitter.instruction(&format!("b.eq {}", integer_label));                // select the decimal undefined-key warning
     abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_str");
@@ -801,13 +1007,13 @@ fn emit_undefined_hash_key_warning_aarch64(
 }
 
 /// Emits PHP's undefined-key warning for a normalized associative key on x86_64.
-fn emit_undefined_hash_key_warning_x86_64(
+pub(super) fn emit_undefined_hash_key_warning_x86_64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
 ) -> Result<()> {
     let integer_label = ctx.next_label("hash_warn_integer_key");
     let done_label = ctx.next_label("hash_warn_key_done");
-    materialize_hash_key_x86_64(ctx, key)?;
+    materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)?;
     ctx.emitter.instruction("cmp rdx, -1");                                     // integer hash keys carry key_hi = -1
     ctx.emitter.instruction(&format!("je {}", integer_label));                  // select the decimal undefined-key warning
     ctx.emitter.instruction("mov rdi, rsi");                                    // pass the missing string key pointer to the warning helper
@@ -825,6 +1031,7 @@ fn emit_undefined_hash_key_warning_x86_64(
 fn materialize_mixed_hash_key_aarch64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
+    normalization: HashKeyNormalization,
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
@@ -847,7 +1054,13 @@ fn materialize_mixed_hash_key_aarch64(
     ctx.emitter.instruction(&format!("b {}", scalar_key));                      // the float arm sits between here and the scalar path
     ctx.emitter.label(&float_key);
     ctx.emitter.instruction("fmov d0, x1");                                     // move the raw IEEE-754 payload bits into an FP register
-    ctx.emitter.instruction("fcvtzs x1, d0");                                   // truncate toward zero: PHP casts a float array key to int
+    if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+        abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+        ctx.emitter.instruction("mov x0, x9");                                  // recover the normalized PHP integer key without another warning
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    }
+    ctx.emitter.instruction("mov x1, x0");                                      // use the diagnosed PHP integer key
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks scalar mixed keys as integers
     ctx.emitter.instruction(&format!("b {}", done));                            // skip string-key normalization after scalar selection
@@ -855,7 +1068,9 @@ fn materialize_mixed_hash_key_aarch64(
     emit_empty_string_hash_key_aarch64(ctx);                                   // null normalizes to the empty string "" hash key
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the string-key normalization path
     ctx.emitter.label(&string_key);
-    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+    if normalization != HashKeyNormalization::RawString {
+        abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+    }
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -864,6 +1079,7 @@ fn materialize_mixed_hash_key_aarch64(
 fn materialize_mixed_hash_key_x86_64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
+    normalization: HashKeyNormalization,
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
@@ -887,7 +1103,13 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
     ctx.emitter.label(&float_key);
     ctx.emitter.instruction("movq xmm0, rdi");                                  // move the raw IEEE-754 payload bits into an FP register
-    ctx.emitter.instruction("cvttsd2si rsi, xmm0");                             // truncate toward zero: PHP casts a float array key to int
+    if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+        abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+        ctx.emitter.instruction("mov rax, r11");                                // recover the normalized PHP integer key without another warning
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    }
+    ctx.emitter.instruction("mov rsi, rax");                                    // use the diagnosed PHP integer key
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks the truncated float as an integer key
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after the float conversion
     ctx.emitter.label(&null_key);
@@ -898,9 +1120,11 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks scalar mixed keys as integers
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after scalar selection
     ctx.emitter.label(&string_key);
-    ctx.emitter.instruction("mov rax, rdi");                                    // move the unboxed string pointer into the hash normalizer input
-    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
-    ctx.emitter.instruction("mov rsi, rax");                                    // move normalized key_lo into the hash-set ABI register
+    ctx.emitter.instruction("mov rax, rdi");                                    // move the unboxed string pointer into the hash key low word
+    if normalization != HashKeyNormalization::RawString {
+        abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+    }
+    ctx.emitter.instruction("mov rsi, rax");                                    // move key_lo into the hash-set ABI register
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -1317,6 +1541,9 @@ pub(super) fn emit_hash_get_success_aarch64(
     result_ty: &PhpType,
     for_write: bool,
 ) -> Result<()> {
+    if !matches!(value_ty, PhpType::Mixed) {
+        emit_hash_get_concrete_reference_payload_aarch64(ctx);
+    }
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov x0, x1");                              // move the borrowed hash scalar payload into the standard integer result
@@ -1355,6 +1582,9 @@ pub(super) fn emit_hash_get_success_x86_64(
     result_ty: &PhpType,
     for_write: bool,
 ) -> Result<()> {
+    if !matches!(value_ty, PhpType::Mixed) {
+        emit_hash_get_concrete_reference_payload_x86_64(ctx);
+    }
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash scalar payload into the standard integer result
@@ -1387,6 +1617,31 @@ pub(super) fn emit_hash_get_success_x86_64(
         }
     }
     Ok(())
+}
+
+/// Unboxes an AArch64 reference entry before a statically concrete hash read.
+///
+/// Persistent reference entries can still be read through an earlier concrete SSA value.
+/// `__rt_hash_get` exposes a reference cell as tag 7 plus its box pointer, so concrete consumers
+/// must recover the payload registers first.
+fn emit_hash_get_concrete_reference_payload_aarch64(ctx: &mut FunctionContext<'_>) {
+    let concrete = ctx.next_label("hash_get_concrete_payload");
+    ctx.emitter.instruction("cmp x3, #7");                                      // detect a boxed payload returned through a reference entry
+    ctx.emitter.instruction(&format!("b.ne {}", concrete));                     // ordinary typed entries already use the concrete payload ABI
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the boxed Mixed pointer to the unbox helper
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.label(&concrete);
+}
+
+/// Unboxes an x86_64 reference entry before a statically concrete hash read.
+fn emit_hash_get_concrete_reference_payload_x86_64(ctx: &mut FunctionContext<'_>) {
+    let concrete = ctx.next_label("hash_get_concrete_payload");
+    ctx.emitter.instruction("cmp rcx, 7");                                      // detect a boxed payload returned through a reference entry
+    ctx.emitter.instruction(&format!("jne {}", concrete));                      // ordinary typed entries already use the concrete payload ABI
+    ctx.emitter.instruction("mov rax, rdi");                                    // pass the boxed Mixed pointer to the unbox helper
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("mov rsi, rdx");                                    // restore hash-get's high payload register for the common result path
+    ctx.emitter.label(&concrete);
 }
 
 /// Materializes a successful AArch64 Mixed hash lookup as a boxed Mixed result.
@@ -1442,7 +1697,7 @@ fn emit_hash_get_mixed_for_write_aarch64(
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_push_reg(ctx.emitter, "x0");
-    materialize_hash_key_aarch64(ctx, key)?;
+    materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     ctx.load_value_to_reg(hash, "x0")?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -1476,7 +1731,7 @@ fn emit_hash_get_mixed_for_write_x86_64(
     abi::emit_pop_reg(ctx.emitter, "rax");
     abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_push_reg(ctx.emitter, "rax");
-    materialize_hash_key_x86_64(ctx, key)?;
+    materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     ctx.load_value_to_reg(hash, "rdi")?;
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");

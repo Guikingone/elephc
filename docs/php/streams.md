@@ -156,6 +156,19 @@ path cannot locate a sidecar and therefore reject OpenSSL-signed input.
 `getSignature()` returns `['hash' => <uppercase hex>,
 'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL']`.
 
+> **Security note on OpenSSL signing.** The RSA implementation behind
+> `setSignatureAlgorithm(Phar::OPENSSL, …)` carries a known timing side-channel on
+> private-key operations ([RUSTSEC-2023-0071], the Marvin attack), and no fixed release of
+> that crate exists. Recovering a key through it requires an attacker who can submit many
+> chosen inputs to the signing operation **and** measure how long each one takes. Signing a
+> phar is an authoring-time operation on a key the program supplies itself, so elephc
+> exposes no such oracle on its own — but a program that turns phar signing into a remote,
+> attacker-triggerable service would. Sign during a build, not in response to a request.
+> Verification (`getSignature()`, opening a signed archive) uses only the **public** key and
+> is unaffected.
+
+[RUSTSEC-2023-0071]: https://rustsec.org/advisories/RUSTSEC-2023-0071
+
 Metadata persistence covers the same scalar+array subset as
 [`serialize()`/`unserialize()`](system-and-io.md#serialization); object metadata is not
 serialized.
@@ -276,11 +289,13 @@ Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`.
 
-`url_stat` is consulted by the whole stat family — `stat()`, `lstat()`,
-`file_exists()`, `filesize()`, `filemtime()`, `is_file()`, `is_dir()`,
-`is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` — each
-handing the wrapper the same `STREAM_URL_STAT_*` flag values reference PHP
-passes. See [System & I/O](system-and-io.md) for the per-builtin semantics.
+`url_stat` is consulted by the whole stat family: `stat()`, `lstat()`,
+`file_exists()`, the integer getters (`filesize()`, `filemtime()`, `fileatime()`,
+`filectime()`, `fileperms()`, `fileowner()`, `filegroup()`, and `fileinode()`),
+`is_file()`, `is_dir()`, `is_readable()`, `is_writable()`, `is_writeable()`, and
+`is_executable()`. Each one hands the wrapper the same `STREAM_URL_STAT_*` flag
+values reference PHP passes. See [System & I/O](system-and-io.md) for the
+per-builtin semantics.
 
 Wrapper methods should declare return types that match their PHP contracts.
 `stream_stat()` and `url_stat()` are exceptions: declare them without a return

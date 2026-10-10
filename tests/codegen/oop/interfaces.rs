@@ -9,6 +9,304 @@
 
 use super::*;
 
+/// An explicit mixed implementation keeps the boxed ABI of an untyped interface parameter.
+#[test]
+fn test_untyped_interface_parameter_accepts_explicit_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+interface Sink { public function put($value, $fallback = null); }
+class Box implements Sink {
+    public function put(mixed $value, mixed $fallback = null) {
+        echo gettype($value), gettype($fallback);
+    }
+}
+function send(Sink $sink) { $sink->put(42); }
+send(new Box());
+"#,
+    );
+    assert_eq!(out, "integerNULL");
+}
+
+/// Interface dispatch boxes a typed object before entering a mixed implementation parameter.
+#[test]
+fn test_interface_object_parameter_widens_to_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public function take(User $user, string $label); }
+class Box implements Named {
+    public function take(mixed $user, mixed $label) {
+        echo gettype($user), gettype($label);
+    }
+}
+function send(Named $sink, User $user) { $sink->take($user, "name"); }
+$box = new Box();
+$user = new User();
+$box->take($user, "name");
+send($box, $user);
+"#,
+    );
+    assert_eq!(out, "objectstringobjectstring");
+}
+
+/// A returned mixed value remains alive after the adapter releases its argument cell.
+#[test]
+fn test_interface_widened_argument_can_be_returned() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Identity { public function keep(User $user): mixed; }
+class Box implements Identity {
+    public function keep(mixed $user): mixed { return $user; }
+}
+function send(Identity $box, User $user): mixed { return $box->keep($user); }
+echo gettype(send(new Box(), new User()));
+"#,
+    );
+    assert_eq!(out, "object");
+}
+
+/// A widened reference keeps caller storage through nested by-reference calls.
+#[test]
+fn test_interface_widened_reference_writes_through_nested_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public function take(User &$user); }
+class Box implements Named {
+    public function take(mixed &$user) { $user = "changed"; }
+}
+class Exact implements Named {
+    public function take(User &$user) { $user = new User(); }
+}
+function relay(Named $box, User &$user) { $box->take($user); }
+$user = new User();
+$alias =& $user;
+relay(new Box(), $user);
+$other = new User();
+relay(new Exact(), $other);
+echo $user, ":", $alias, ":", gettype($other);
+"#,
+    );
+    assert_eq!(out, "changed:changed:object");
+}
+
+/// The declared object type is checked again when a widened reference is passed later.
+#[test]
+fn test_interface_widened_reference_rechecks_entry_type() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public function take(User &$user); }
+class Box implements Named {
+    public function take(mixed &$user) { $user = "changed"; }
+}
+function relay(Named $box, User &$user) { $box->take($user); }
+$user = new User();
+relay(new Box(), $user);
+try { relay(new Box(), $user); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// Direct interface dispatch also enforces the declared object type after a reference retypes it.
+#[test]
+fn test_interface_widened_reference_direct_dispatch_rechecks_entry_type() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public function take(User &$user); }
+class Box implements Named {
+    public function take(mixed &$user) { $user = "changed"; }
+}
+$box = new Box();
+function dispatch(Named $box) {
+    $user = new User();
+    $box->take($user);
+    try { $box->take($user); } catch (TypeError $error) { echo "caught"; }
+}
+dispatch($box);
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// A concrete method checks its declared object type after a reference changes type.
+#[test]
+fn test_concrete_object_reference_rechecks_after_mixed_write() {
+    let out = compile_and_run(
+        r#"<?php
+class User { public string $name = "user"; }
+class Admin extends User { public string $name = "admin"; }
+function change(User &$user) { $user = "changed"; }
+class Exact {
+    public function take(User &$user) { echo $user->name; }
+}
+$exact = new Exact();
+$valid = new Admin();
+$exact->take($valid);
+$user = new User();
+change($user);
+try { $exact->take($user); } catch (TypeError $error) { echo ":caught"; }
+"#,
+    );
+    assert_eq!(out, "admin:caught");
+}
+
+/// Static calls retain the declared object check after physical ABI boxing.
+#[test]
+fn test_concrete_static_object_reference_rechecks_after_mixed_write() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(User &$user) { $user = "changed"; }
+class Exact {
+    public static function take(User &$user) { echo "entered"; }
+}
+$user = new User();
+change($user);
+try { Exact::take($user); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// A typed function's entry check stays catchable when its body cannot throw.
+#[test]
+fn test_object_reference_function_entry_type_error_remains_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(User &$user) { $user = "changed"; }
+function take(User &$user) { echo "entered"; }
+$user = new User();
+change($user);
+try { take($user); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// Constructor entry checks remain visible to catch analysis for a pure body.
+#[test]
+fn test_object_reference_constructor_entry_type_error_remains_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(User &$user) { $user = "changed"; }
+class Exact {
+    public function __construct(User &$user) { echo "entered"; }
+}
+$user = new User();
+change($user);
+try { new Exact($user); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// The generic object hint checks its boxed reference payload on a later call.
+#[test]
+fn test_concrete_object_hint_reference_rechecks_after_type_change() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(object &$value) { $value = "changed"; }
+class Exact {
+    public function take(object &$value) { echo "entered"; }
+}
+$value = new User();
+change($value);
+$exact = new Exact();
+try { $exact->take($value); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// A typed implementation shares the canonical reference cell used by interface dispatch.
+#[test]
+fn test_interface_exact_object_reference_uses_shared_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class User { public string $name = "before"; }
+interface Named { public function take(User &$user); }
+class Exact implements Named {
+    public function take(User &$user) { $user->name = "after"; }
+}
+function relay(Named $box, User &$user) { $box->take($user); }
+$user = new User();
+relay(new Exact(), $user);
+echo $user->name;
+"#,
+    );
+    assert_eq!(out, "after");
+}
+
+/// A static implementation can widen an object reference and update an existing alias.
+#[test]
+fn test_static_interface_widened_reference_updates_alias() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public static function take(User &$user); }
+class Box implements Named {
+    public static function take(mixed &$user) { $user = "changed"; }
+}
+function relay(User &$user) { Box::take($user); }
+$user = new User();
+$alias =& $user;
+relay($user);
+echo $alias;
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
+/// A typed reference can retype its caller after validating the incoming object.
+#[test]
+fn test_typed_reference_parameter_can_retype_caller() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(User &$user) { $user = "changed"; }
+$user = new User();
+change($user);
+echo $user;
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
+/// Keeps untyped interface defaults callable after concrete method parameters widen.
+#[test]
+fn test_untyped_interface_method_defaults_use_stable_boxed_abi() {
+    let out = compile_and_run(
+        r#"<?php
+interface BindingContract {
+    public function bind($abstract, $concrete = null, $shared = false);
+}
+
+class BindingContainer implements BindingContract {
+    public function bind($abstract, $concrete = null, $shared = false) {
+        echo $abstract;
+    }
+}
+
+function invoke(BindingContract $container) {
+    $result = $container->bind(42);
+    echo gettype($result);
+}
+
+$container = new BindingContainer();
+$container->bind("x", "value", true);
+invoke($container);
+"#,
+    );
+    assert_eq!(out, "x42NULL");
+}
+
 /// Verifies a concrete class can satisfy an interface contract by implementing all required methods.
 /// Fixture: interface `Named` with method `name()`, concrete `User` implementing `Named`.
 /// Asserts the method call on the concrete instance returns the expected string.
@@ -433,4 +731,121 @@ echo (new AlwaysCopyable())->copy()->label();
 "#,
     );
     assert_eq!(out, "copy");
+}
+
+/// `??` over object operands keeps an object type: `?Contract ?? new Implementation()` is a
+/// `Contract`, and two unrelated implementations are a union both of whose members satisfy a
+/// declared `Contract`. It was typed `mixed`, so passing it to a `Contract` parameter or
+/// returning it from a `Contract` function was refused. Regression for #822.
+#[test]
+fn test_null_coalesce_over_objects_keeps_the_object_type() {
+    let out = compile_and_run(
+        r#"<?php
+interface Contract { public function name(): string; }
+final class Implementation implements Contract { public function name(): string { return "impl"; } }
+final class Other implements Contract { public function name(): string { return "other"; } }
+
+final class Consumer
+{
+    public function __construct(public Contract $value) {}
+
+    public static function make(?Contract $value = null): self
+    {
+        return new self($value ?? new Implementation());
+    }
+}
+
+echo Consumer::make()->value->name(), "\n";
+echo Consumer::make(new Other())->value->name(), "\n";
+
+function pick(?Implementation $a, Other $b): Contract { return $a ?? $b; }
+echo pick(null, new Other())->name(), " ", pick(new Implementation(), new Other())->name(), "\n";
+
+function maybe(?Contract $c, ?Other $d): ?Contract { return $c ?? $d; }
+var_dump(maybe(null, null));
+echo maybe(null, new Other())->name(), "\n";
+for ($i = 0; $i < 20; $i++) { $k = Consumer::make($i % 2 ? new Other() : null); }
+echo $k->value->name(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "impl\n",
+            "other\n",
+            "other impl\n",
+            "NULL\n",
+            "other\n",
+            "other\n",
+        )
+    );
+}
+
+/// `??` whose left operand can never be null keeps that operand's type: `find()` declares
+/// `Implementation|false`, so `find() ?? new Other()` is still `Implementation|false` and may be
+/// returned from a function declaring it, and so are the same calls through an instance and a
+/// static method. The unreachable `Other` default made the result `Implementation|false|Other`,
+/// which the return check refused. Regression for #1462.
+#[test]
+fn test_null_coalesce_drops_an_unreachable_object_default() {
+    let out = compile_and_run(
+        r#"<?php
+interface Contract { public function name(): string; }
+final class Implementation implements Contract { public function name(): string { return "impl"; } }
+final class Other implements Contract { public function name(): string { return "other"; } }
+final class Repo {
+    public function find(bool $ok): Implementation|false { return $ok ? new Implementation() : false; }
+    public static function first(bool $ok): Implementation|false { return $ok ? new Implementation() : false; }
+}
+
+function find(bool $ok): Implementation|false { return $ok ? new Implementation() : false; }
+function lookup(bool $ok): Implementation|false { return find($ok) ?? new Other(); }
+function viaMethod(Repo $repo, bool $ok): Implementation|false { return $repo->find($ok) ?? new Other(); }
+function viaStatic(bool $ok): Implementation|false { return Repo::first($ok) ?? new Other(); }
+function label(bool $ok): string { $found = find($ok) ?? new Other(); return $found === false ? "none" : $found->name(); }
+
+var_dump(lookup(false));
+echo lookup(true)->name(), "\n";
+var_dump(viaMethod(new Repo(), false));
+echo viaMethod(new Repo(), true)->name(), " ", viaStatic(true)->name(), "\n";
+var_dump(viaStatic(false));
+echo label(false), " ", label(true), "\n";
+echo (new Implementation() ?? new Other())->name(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nimpl\nbool(false)\nimpl impl\nbool(false)\nnone impl\nimpl\n"
+    );
+}
+
+/// `??` over an arm that mixes an object with a scalar keeps a union, so narrowing away the
+/// scalars leaves the object type: `?(Contract|int) ?? new Implementation()` is `Contract|int`,
+/// and after `is_int()` it passes as a `Contract`; with a string default the join is
+/// `Contract|int|string`. Both joins were `mixed`, which the `Contract` parameter refused.
+/// Regression for #1463.
+#[test]
+fn test_null_coalesce_keeps_object_and_scalar_arms_as_a_union() {
+    let out = compile_and_run(
+        r#"<?php
+interface Contract { public function name(): string; }
+final class Implementation implements Contract { public function name(): string { return "impl"; } }
+final class Other implements Contract { public function name(): string { return "other"; } }
+function contractOnly(Contract $c): string { return $c->name(); }
+function run(Contract|int|null $v): string {
+    $r = $v ?? new Implementation();
+    if (is_int($r)) { return "int " . $r; }
+    return contractOnly($r);
+}
+function label(Contract|int|null $v): string {
+    $r = $v ?? "none";
+    if (is_string($r)) { return $r; }
+    if (is_int($r)) { return "int " . $r; }
+    return contractOnly($r);
+}
+echo run(null), " ", run(4), " ", run(new Other()), "\n";
+echo label(null), " ", label(5), " ", label(new Other()), "\n";
+"#,
+    );
+    assert_eq!(out, "impl int 4 other\nnone int 5 other\n");
 }

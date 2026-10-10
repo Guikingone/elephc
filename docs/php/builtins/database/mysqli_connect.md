@@ -1,8 +1,8 @@
 ---
 title: "mysqli_connect()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Opens a connection to a MySQL server."
 sidebar:
-  order: 104
+  order: 105
 ---
 
 ## mysqli_connect()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_connect(?string $hostname = null, ?string $username = null, ?string $password = null, ?string $database = null, ?int $port = null, ?string $socket = null): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Opens a connection to a MySQL server.
 
 **Parameters**:
 - `$hostname` (`?string`), default `null`, optional
@@ -28,7 +28,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

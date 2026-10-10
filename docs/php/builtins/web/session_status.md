@@ -1,8 +1,8 @@
 ---
 title: "session_status()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reports whether sessions are disabled, inactive, or active."
 sidebar:
-  order: 906
+  order: 1001
 ---
 
 ## session_status()
@@ -11,7 +11,7 @@ sidebar:
 function session_status(): int
 ```
 
-Implemented by the compiler-injected web prelude.
+Reports whether sessions are disabled, inactive, or active.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

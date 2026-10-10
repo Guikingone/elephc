@@ -9,6 +9,8 @@
 //! - `crate::version_prelude::inject_if_used`.
 //! - `crate::php_profile::sensitivity::scan`, which needs the SPAN of the first reference to
 //!   point a diagnostic at the construct that made a program profile-dependent.
+//! - `crate::optimize::exception_flow::destruction`, which asks whether a `__destruct`
+//!   declaration exists in a position its own summary collector never reaches.
 //!
 //! Key details:
 //! - The walk is generic over the target name so a single exhaustive traversal backs
@@ -44,7 +46,7 @@
 
 use crate::names::Name;
 use crate::parser::ast::{
-    CallableTarget, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
+    CallableTarget, CastType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     InstanceOfTarget, PackedField, Stmt, StmtKind, TraitUse, TypeExpr, UseItem, UseKind,
 };
 use crate::span::Span;
@@ -93,6 +95,21 @@ pub(crate) enum SymbolKind {
     AsymmetricVisibility,
     /// A TYPED CLASS CONSTANT (`const string N = 'v'`), a PHP 8.3 form.
     TypedClassConst,
+    /// The OBJECT CAST (`(object) $value`), matched as a syntactic form rather than by name.
+    ///
+    /// `object_cast_prelude` injects the PHP helper the cast lowers to, and it must be
+    /// injected exactly when the program spells the cast anywhere — including inside a
+    /// function body, a class member initializer, or a closure.
+    ObjectCast,
+    /// A `__destruct` METHOD DECLARATION, matched as a syntactic form rather than by name.
+    ///
+    /// [`Symbol::name`] is ignored. The exception-flow optimizer needs to know whether a
+    /// program declares a destructor ANYWHERE, including inside a trait, inside a class
+    /// declared in a conditional branch, and inside a class declared in a closure body,
+    /// because a destructor it cannot summarize must keep its program-wide destructor
+    /// summary conservative. Riding on this traversal is what makes that question answerable
+    /// without a second walk that could quietly miss a new `ExprKind`/`StmtKind`.
+    DestructorDeclaration,
 }
 
 /// How a call's first argument narrows a FUNCTION match.
@@ -113,6 +130,9 @@ pub(crate) enum ArgFilter<'a> {
     /// question is whether the source it carries mentions a watched name anywhere, not
     /// whether the argument as a whole equals one.
     Substrings(&'a [&'a str]),
+    /// Matches eval fragments that the shared AOT planner cannot keep out of the interpreter.
+    /// Opaque source and unsupported static calls remain conservative matches.
+    EvalBridge,
 }
 
 /// A named PHP symbol to search for, carrying the matching rules its kind implies.
@@ -247,6 +267,12 @@ fn args_select_subject(args: &[Expr], target: Symbol<'_>) -> bool {
                 .iter()
                 .any(|needle| haystack.contains(&needle.to_ascii_lowercase()))
         }
+        ArgFilter::EvalBridge => crate::eval_aot::plan_literal_fragment_with_static_calls(
+            value,
+            crate::strict_php::is_enabled(),
+            |_, _| false,
+        )
+        .requires_runtime_eval_bridge(),
         ArgFilter::Any => true,
     }
 }
@@ -335,6 +361,87 @@ fn scoped_function_name(name: &Name, namespace: &str, imports: &[UseItem]) -> St
     qualify(raw)
 }
 
+/// Returns whether an `eval()` argument string mentions `target` as a whole word.
+///
+/// A name that appears ONLY inside an `eval()` fragment is still a reference to it. The
+/// string-literal rule above matches an exact name, which covers `function_exists('f')` and
+/// the callable spellings, but an `eval` argument carries the name embedded in code —
+/// `'return opcache_get_status();'` — so it never matched and no prelude was injected.
+///
+/// The consequence was not a missing function but a CONTRADICTORY one: with no declaration
+/// to fall through to, the interpreter's own fallback answered, and that fallback reports the
+/// compile-time CLI default. One program could be told the cache was disabled by
+/// `opcache_get_status()` and, two lines later, that `opcache_compile_file()` had cached a
+/// file — because its siblings read the live cache and it did not.
+///
+/// Whole-word rather than substring, so `my_opcache_get_status_helper` does not count —
+/// see `mentions_word` for why the `\\` boundary is deliberately asymmetric. The
+/// heuristic errs toward injecting: a false positive costs a declaration the program never
+/// calls, which the reachability pruner then removes, while a false negative is the silent
+/// wrong answer above.
+fn fragment_mentions(name: &Name, args: &[Expr], target: Symbol<'_>) -> bool {
+    if target.kind != SymbolKind::Function || !name.as_str().eq_ignore_ascii_case("eval") {
+        return false;
+    }
+    // A FRAGMENT THE COMPILER CANNOT READ DOES NOT COUNT, and it is worth saying why, since
+    // the rest of this module goes the other way: `args_select_subject` treats an
+    // unresolvable argument as a match, and the module docblock states that rule.
+    //
+    // Answering `true` here was tried and MEASURED, and the cost is not the bounded one that
+    // reasoning assumes. It is not "a declaration the program never reaches": every watched
+    // OPcache name gets its prelude injected, and the injected surface is large enough that
+    // `$c = "echo " . "1;"; eval($c);` — a program with nothing whatever to do with OPcache —
+    // stopped compiling, with `fixup value out of range` from the assembler on an AArch64
+    // conditional branch that no longer reached its target across 1.8M lines of output. Any
+    // `eval()` on a computed string paid that, which is most of them.
+    //
+    // An unreadable fragment is not a reference to any one name. Instead, `injection` supplies
+    // all eight declarations for bridge-capable eval in a configured binary.
+    // Literal fragments need the same protection when they compute their callable names.
+    // CLI-default binaries can keep the interpreter's fallback without extra declarations.
+    args.iter().any(|arg| match &arg.kind {
+        ExprKind::StringLiteral(source) => mentions_word(source, target.name),
+        _ => false,
+    })
+}
+
+/// Returns whether `needle` appears in `haystack` bounded by non-identifier characters.
+fn mentions_word(haystack: &str, needle: &str) -> bool {
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let haystack_lower = haystack.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    let bytes = haystack_lower.as_bytes();
+    let mut from = 0;
+    while let Some(offset) = haystack_lower[from..].find(&needle_lower) {
+        let start = from + offset;
+        let end = start + needle_lower.len();
+        // THE TWO SIDES ARE NOT SYMMETRIC, because `\\` is not symmetric in PHP.
+        //
+        // On the LEFT it may be the global-namespace prefix: `\\opcache_get_status()` is a
+        // call to exactly this function, written the way a code generator or a namespaced
+        // file writes it. Treating `\\` as an identifier byte made that spelling a false
+        // negative — no declaration injected, the interpreter's stale fallback answering,
+        // and the self-contradicting status this detector exists to prevent. So a `\\` is
+        // skipped and the test moves to the character before it, which is where
+        // `Other\\opcache_get_status()` — a DIFFERENT function that merely ends in the same
+        // segment — is still correctly rejected.
+        //
+        // On the RIGHT it can only be a namespace separator: `opcache_get_status\\foo` makes
+        // this name a prefix, not the function, so `\\` stays a blocking boundary there.
+        let before_ok = match start {
+            0 => true,
+            _ if bytes[start - 1] == b'\\' => start < 2 || !is_ident(bytes[start - 2]),
+            _ => !is_ident(bytes[start - 1]),
+        };
+        let after_ok = end == bytes.len() || !(is_ident(bytes[end]) || bytes[end] == b'\\');
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
 /// Returns the span of the FIRST reference to `target`, or `None` when the program never
 /// mentions it.
 ///
@@ -345,11 +452,44 @@ pub(crate) fn first_reference(program: &[Stmt], target: Symbol<'_>) -> Option<Sp
     program.iter().find_map(|stmt| stmt_refs(stmt, target))
 }
 
+/// Returns whether eval can reach the interpreter and select an OPcache callable at runtime.
+/// Native or scope-only literal fragments do not require extra declarations, whose cache
+/// operations would otherwise link Magician and activate file-cache startup validation.
+pub(crate) fn program_has_bridge_eval(program: &[Stmt]) -> bool {
+    first_reference(program, Symbol {
+        args: ArgFilter::EvalBridge,
+        ..Symbol::call_site("eval")
+    }).is_some()
+}
+
 /// Returns whether the program already declares its own `target` function (at top level
 /// or inside a namespace/guard/synthetic block), in which case that prelude function
 /// must not be injected so the user definition wins and there is no redeclaration error.
 pub(crate) fn program_declares(program: &[Stmt], target: &str) -> bool {
     program.iter().any(|stmt| stmt_declares(stmt, target))
+}
+
+/// Returns the span of the program's own declaration of `target`, if it has one.
+///
+/// [`program_declares`] answers the question a prelude that lets the USER definition win needs;
+/// this answers the one a prelude that must REJECT the collision needs, so the diagnostic can
+/// point at the offending declaration instead of at the start of the program.
+pub(crate) fn first_declaration(program: &[Stmt], target: &str) -> Option<Span> {
+    program.iter().find_map(|stmt| stmt_declaration_span(stmt, target))
+}
+
+/// Returns the span of one statement's declaration of `target`, recursing into the same
+/// declaration-carrying blocks [`stmt_declares`] walks.
+fn stmt_declaration_span(stmt: &Stmt, target: &str) -> Option<Span> {
+    match &stmt.kind {
+        StmtKind::FunctionDecl { name, .. } if name.eq_ignore_ascii_case(target) => Some(stmt.span),
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body
+            .iter()
+            .find_map(|stmt| stmt_declaration_span(stmt, target)),
+        _ => None,
+    }
 }
 
 /// Returns whether a CALL position names `target`, compared case-insensitively on its
@@ -375,7 +515,9 @@ fn name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
         | SymbolKind::AsymmetricVisibility
-        | SymbolKind::TypedClassConst => false,
+        | SymbolKind::TypedClassConst
+        | SymbolKind::ObjectCast
+        | SymbolKind::DestructorDeclaration => false,
     }
 }
 
@@ -397,7 +539,9 @@ fn const_name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
         | SymbolKind::AsymmetricVisibility
-        | SymbolKind::TypedClassConst => false,
+        | SymbolKind::TypedClassConst
+        | SymbolKind::ObjectCast
+        | SymbolKind::DestructorDeclaration => false,
     }
 }
 
@@ -461,7 +605,16 @@ fn class_property_refs(property: &ClassProperty, target: Symbol<'_>) -> Option<S
 
 /// Returns the span of the first reference to the function in a method's parameter
 /// defaults or body.
+///
+/// A [`SymbolKind::DestructorDeclaration`] search matches the DECLARATION itself, wherever
+/// the owning class-like declaration sits, including a body-less one: an abstract or
+/// interface `__destruct` still names a destructor the program can run through a subclass.
 fn class_method_refs(method: &ClassMethod, target: Symbol<'_>) -> Option<Span> {
+    if target.kind == SymbolKind::DestructorDeclaration
+        && method.name.eq_ignore_ascii_case("__destruct")
+    {
+        return Some(method.span);
+    }
     params_ref(&method.params, target)
         .or_else(|| method.body.iter().find_map(|stmt| stmt_refs(stmt, target)))
 }
@@ -490,6 +643,7 @@ fn packed_field_refs(_field: &PackedField, _target: Symbol<'_>) -> Option<Span> 
 fn instanceof_target_refs(target_ref: &InstanceOfTarget, target: Symbol<'_>) -> Option<Span> {
     match target_ref {
         InstanceOfTarget::Name(_) => None,
+        InstanceOfTarget::Generic(_) => None,
         InstanceOfTarget::Expr(expr) => expr_refs(expr, target),
     }
 }
@@ -536,6 +690,7 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::FunctionCall { name, args } => (name_is(name, target)
             && args_select_subject(args, target))
         .then_some(expr.span)
+        .or_else(|| fragment_mentions(name, args, target).then_some(expr.span))
         .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => expr_refs(object, target)
@@ -596,6 +751,10 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs.iter().find_map(|(key, value)| {
             expr_refs(key, target).or_else(|| expr_refs(value, target))
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .find_map(|expr| expr_refs(expr, target)),
         ExprKind::Match {
             subject,
             arms,
@@ -620,13 +779,21 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         } => expr_refs(condition, target)
             .or_else(|| expr_refs(then_expr, target))
             .or_else(|| expr_refs(else_expr, target)),
-        ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => expr_refs(expr, target),
+        ExprKind::Cast {
+            target: cast_target,
+            expr: inner,
+        } => (target.kind == SymbolKind::ObjectCast && *cast_target == CastType::Object)
+            .then_some(expr.span)
+            .or_else(|| expr_refs(inner, target)),
+        ExprKind::PtrCast { expr, .. } => expr_refs(expr, target),
         ExprKind::Closure { params, body, .. } => params_ref(params, target)
             .or_else(|| body.iter().find_map(|stmt| stmt_refs(stmt, target))),
         ExprKind::NamedArg { value, .. } => expr_refs(value, target),
         ExprKind::ExprCall { callee, args } => expr_refs(callee, target)
             .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
-        ExprKind::NewObject { args, .. } => args.iter().find_map(|arg| expr_refs(arg, target)),
+        ExprKind::NewObject { args, .. } | ExprKind::NewGeneric { args, .. } => {
+            args.iter().find_map(|arg| expr_refs(arg, target))
+        }
         ExprKind::NewDynamic { name_expr, args } => expr_refs(name_expr, target)
             .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
         ExprKind::NewDynamicObject {
@@ -791,9 +958,18 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
             .or_else(|| properties.iter().find_map(|p| class_property_refs(p, target)))
             .or_else(|| methods.iter().find_map(|m| class_method_refs(m, target)))
             .or_else(|| constants.iter().find_map(|c| class_const_refs(c, target))),
-        StmtKind::EnumDecl { cases, .. } => {
-            cases.iter().find_map(|case| enum_case_refs(case, target))
-        }
+        StmtKind::EnumDecl {
+            cases,
+            trait_uses,
+            methods,
+            constants,
+            ..
+        } => trait_uses
+            .iter()
+            .find_map(|tu| trait_use_refs(tu, target))
+            .or_else(|| cases.iter().find_map(|case| enum_case_refs(case, target)))
+            .or_else(|| methods.iter().find_map(|method| class_method_refs(method, target)))
+            .or_else(|| constants.iter().find_map(|constant| class_const_refs(constant, target))),
         StmtKind::PackedClassDecl { fields, .. } => {
             fields.iter().find_map(|f| packed_field_refs(f, target))
         }
@@ -906,12 +1082,44 @@ mod tests {
         ));
     }
 
+    /// An enum method can execute opaque eval source even though the enum has no destructor.
+    #[test]
+    fn detects_eval_inside_an_enum_method() {
+        let program = parse(r#"<?php
+enum EvalOwner {
+    case Ready;
+    public static function load(string $source): void { eval($source); }
+}
+"#);
+        assert!(first_reference(&program, Symbol::function("eval")).is_some());
+    }
+
+    /// A class declared in an enum method must participate in destructor-enumeration checks.
+    #[test]
+    fn detects_destructor_declared_inside_an_enum_method() {
+        let program = parse(r#"<?php
+enum DeclarationOwner {
+    case Ready;
+    public static function load(): void {
+        class NestedPayload {
+            public function __destruct() { throw new RuntimeException('cleanup'); }
+        }
+    }
+}
+"#);
+        assert!(first_reference(
+            &program,
+            Symbol::syntactic(SymbolKind::DestructorDeclaration),
+        ).is_some());
+    }
+
     /// Case-insensitive matching, as PHP function names are.
     #[test]
     fn detects_case_insensitive() {
         assert!(program_references(&parse(r#"<?php OPCACHE_RESET();"#), RESET));
     }
 
+    /// Counts a fully qualified callable string as a reference to its exact prelude root.
     #[test]
     fn detects_fully_qualified_callable_string_for_prelude_function() {
         let program = parse(
@@ -923,6 +1131,7 @@ mod tests {
         ));
     }
 
+    /// Detects an absolute Parallel root call before ordinary name resolution.
     #[test]
     fn detects_fully_qualified_call_for_prelude_function() {
         let program = parse(r#"<?php \Elephc\Parallel\run(static fn (): int => 1);"#);
@@ -932,6 +1141,7 @@ mod tests {
         ));
     }
 
+    /// Resolves an imported function alias against the exact Async root name.
     #[test]
     fn detects_an_imported_alias_for_the_exact_prelude_function() {
         let program = parse(
@@ -946,6 +1156,7 @@ asyncRun(static fn (): int => 1);
         ));
     }
 
+    /// Covers namespace aliases and relative calls that resolve to the Async root.
     #[test]
     fn detects_namespace_alias_and_namespace_relative_prelude_references() {
         for source in [
@@ -960,6 +1171,7 @@ asyncRun(static fn (): int => 1);
         }
     }
 
+    /// Keeps import tables local to their namespace blocks and semicolon-form scopes.
     #[test]
     fn namespace_import_aliases_do_not_leak_between_scopes() {
         for source in [
@@ -974,6 +1186,7 @@ asyncRun(static fn (): int => 1);
         }
     }
 
+    /// Distinguishes absolute names from names resolved through imports or current namespaces.
     #[test]
     fn qualified_prelude_calls_distinguish_absolute_names_from_aliases() {
         for (source, expected) in [
@@ -987,6 +1200,7 @@ asyncRun(static fn (): int => 1);
         }
     }
 
+    /// Prevents callable strings from inheriting source-code import or namespace resolution rules.
     #[test]
     fn callable_string_prelude_names_do_not_resolve_imports_or_namespaces() {
         for (source, expected) in [
@@ -1000,6 +1214,7 @@ asyncRun(static fn (): int => 1);
         }
     }
 
+    /// Tests explicit namespace-relative Name nodes independently of parser syntax support.
     #[test]
     fn explicit_namespace_relative_function_name_uses_current_scope() {
         // The detector receives Name nodes. Build the namespace-relative call node
@@ -1017,6 +1232,7 @@ asyncRun(static fn (): int => 1);
         assert!(!program_references_function_or_import_alias(&program, "Elephc\\Parallel\\run"));
     }
 
+    /// Rejects an identically spelled function alias imported from a different namespace.
     #[test]
     fn ignores_an_alias_imported_from_another_namespace() {
         let program = parse(
@@ -1031,6 +1247,7 @@ asyncRun(static fn (): int => 1);
         ));
     }
 
+    /// Does not infer a Parallel reference merely from an imported Async run function.
     #[test]
     fn same_short_function_name_from_another_import_does_not_match() {
         let program = parse(

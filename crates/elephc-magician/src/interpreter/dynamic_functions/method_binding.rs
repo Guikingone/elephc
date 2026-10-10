@@ -9,9 +9,153 @@
 //! - Extra positional arguments to user-defined callables are evaluated but ignored like PHP.
 
 use super::*;
+use crate::context::EvalFunctionArgsFrame;
+
+/// Bound arguments plus the activation metadata needed by PHP's `func_*` family.
+pub(in crate::interpreter) struct BoundEvalFunctionArgs {
+    pub(in crate::interpreter) params: Vec<String>,
+    pub(in crate::interpreter) parameter_is_by_ref: Vec<bool>,
+    pub(in crate::interpreter) args: Vec<BoundMethodArg>,
+    pub(in crate::interpreter) frame: EvalFunctionArgsFrame,
+}
+
+/// Binds one eval-declared callable while retaining PHP's actual-argument frame.
+///
+/// `callee` is the PHP-visible name (`f`, `A::m`, a closure name) that a missing-argument
+/// `ArgumentCountError` reports.
+pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
+    callee: &str,
+    params: &[String],
+    parameter_types: &[Option<EvalParameterType>],
+    parameter_defaults: &[Option<EvalExpr>],
+    parameter_is_by_ref: &[bool],
+    parameter_is_variadic: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<BoundEvalFunctionArgs, EvalStatus> {
+    let source_variadic_index = parameter_is_variadic
+        .iter()
+        .position(|is_variadic| *is_variadic);
+    let regular_count = source_variadic_index.unwrap_or(params.len());
+    let regular_params = params[..regular_count].to_vec();
+    let (actual_count, positional_surplus_count) = eval_actual_argument_shape(
+        &regular_params,
+        source_variadic_index.is_some(),
+        &evaluated_args,
+    )?;
+
+    // Surplus arguments are activation metadata, never synthetic PHP parameters.
+    // Retain their snapshot before binding can coerce or alias the source arguments.
+    let mut surplus = Vec::with_capacity(positional_surplus_count);
+    for arg in evaluated_args.iter().filter(|arg| source_variadic_index.is_none() && arg.name.is_none()).skip(regular_count) {
+        match values.retain(arg.value) {
+            Ok(value) => surplus.push(value),
+            Err(status) => {
+                for cell in surplus { let _ = eval_release_value(context, values, cell); }
+                return Err(status);
+            }
+        }
+    }
+    let args = match bind_evaluated_method_args_with_ref_mode(
+        callee,
+        params,
+        parameter_types,
+        parameter_defaults,
+        parameter_is_by_ref,
+        parameter_is_variadic,
+        evaluated_args,
+        by_ref_mode,
+        context,
+        values,
+    ) {
+        Ok(args) => args,
+        Err(status) => {
+            for cell in surplus { let _ = eval_release_value(context, values, cell); }
+            return Err(status);
+        }
+    };
+    if let Some(index) = source_variadic_index {
+        let snapshot = (|| {
+            for position in 0..positional_surplus_count {
+                let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+                let value = values.array_get(args[index].value, key);
+                let released = values.release(key);
+                // Keep any successfully read owner in the cleanup list before propagating errors.
+                if let Ok(value) = value { surplus.push(value); }
+                value?;
+                released?;
+            }
+            Ok(())
+        })();
+        if let Err(status) = snapshot {
+            for cell in surplus { let _ = eval_release_value(context, values, cell); }
+            return Err(status);
+        }
+    }
+
+    Ok(BoundEvalFunctionArgs {
+        params: params.to_vec(),
+        parameter_is_by_ref: parameter_is_by_ref.to_vec(),
+        args,
+        frame: EvalFunctionArgsFrame::new(regular_params, actual_count, surplus),
+    })
+}
+
+/// Releases the detached argument snapshot after preserving the callable's return owner.
+pub(in crate::interpreter) fn release_function_args(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let cells = context.pop_function_args();
+    let mut released = Ok(());
+    for cell in cells {
+        let cleanup = eval_release_value(context, values, cell);
+        if released.is_ok() { released = cleanup; }
+    }
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = eval_release_value(context, values, value);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
+/// Computes PHP's `func_num_args()` count and positional surplus length before binding.
+fn eval_actual_argument_shape(
+    regular_params: &[String],
+    has_source_variadic: bool,
+    evaluated_args: &[EvaluatedCallArg],
+) -> Result<(usize, usize), EvalStatus> {
+    let mut next_positional = 0usize;
+    let mut highest_regular = 0usize;
+    let mut positional_surplus = 0usize;
+    for arg in evaluated_args {
+        if let Some(name) = arg.name.as_deref() {
+            if let Some(position) = regular_params.iter().position(|param| param == name) {
+                highest_regular = highest_regular.max(position + 1);
+            } else if !has_source_variadic {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            continue;
+        }
+        if next_positional < regular_params.len() {
+            highest_regular = highest_regular.max(next_positional + 1);
+            next_positional += 1;
+        } else {
+            positional_surplus += 1;
+        }
+    }
+    Ok((highest_regular + positional_surplus, positional_surplus))
+}
 
 /// Binds evaluated method arguments using a selected by-reference target policy.
 pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
+    callee: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_defaults: &[Option<EvalExpr>],
@@ -31,6 +175,8 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
     let mut next_positional = 0;
     let mut next_variadic_index = 0_i64;
     let mut variadic_named_args = std::collections::HashSet::new();
+    let passed = evaluated_args.len();
+    let named_call = evaluated_args.iter().any(|arg| arg.name.is_some());
 
     if let Some(index) = variadic_index {
         let array = if evaluated_args_contain_named_variadic_values(
@@ -89,7 +235,14 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         }
         if value.is_none() {
             if position < required_count {
-                return Err(EvalStatus::RuntimeFatal);
+                let message = missing_argument_message(
+                    callee,
+                    named_call.then(|| (position, params[position].as_str())),
+                    passed,
+                    required_count,
+                    variadic_index.unwrap_or(params.len()),
+                );
+                return eval_throw_argument_count_error(&message, context, values);
             }
             let Some(Some(default)) = parameter_defaults.get(position) else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -110,6 +263,27 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Words PHP's `ArgumentCountError` for a user callable missing a required argument.
+///
+/// A named call names the first unbound slot (`f(): Argument #1 ($a) not passed`); a positional
+/// call reports the counts. PHP's positional message also says where the call was made
+/// (`0 passed in <file> on line <n> and exactly 1 expected`), but eval tracks no line for a
+/// running statement, so this uses the form PHP itself prints when no userland caller frame
+/// exists (`0 passed and exactly 1 expected`, as for an `array_map` callback).
+pub(super) fn missing_argument_message(
+    callee: &str,
+    named_hole: Option<(usize, &str)>,
+    passed: usize,
+    required: usize,
+    regular: usize,
+) -> String {
+    if let Some((position, param)) = named_hole {
+        return format!("{callee}(): Argument #{} (${param}) not passed", position + 1);
+    }
+    let kind = if required == regular { "exactly" } else { "at least" };
+    format!("Too few arguments to function {callee}(), {passed} passed and {kind} {required} expected")
 }
 
 /// Returns the minimum argument count for a PHP method signature.
@@ -454,7 +628,7 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
         EvalParameterTypeVariant::Callable => Ok(matches!(
             tag,
-            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT
+            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE
         )),
         EvalParameterTypeVariant::Class(class_name) => {
             eval_method_parameter_class_accepts(value, tag, class_name, context, values)
@@ -472,12 +646,12 @@ fn eval_method_parameter_variant_accepts_exact(
         }
         EvalParameterTypeVariant::Mixed => Ok(true),
         EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void => Ok(false),
-        EvalParameterTypeVariant::Object => Ok(tag == EVAL_TAG_OBJECT),
+        EvalParameterTypeVariant::Object => Ok(matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE)),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
     }
 }
 
-/// Returns whether an object value satisfies one class/interface parameter target.
+/// Returns whether an object or native closure satisfies one class/interface parameter target.
 fn eval_method_parameter_class_accepts(
     value: RuntimeCellHandle,
     tag: u64,
@@ -485,13 +659,15 @@ fn eval_method_parameter_class_accepts(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    let target = eval_method_parameter_runtime_class_name(class_name, context)?;
+    if tag == EVAL_TAG_CALLABLE {
+        return Ok(target.eq_ignore_ascii_case("Closure"));
+    }
     if tag != EVAL_TAG_OBJECT {
         return Ok(false);
     }
-    let target = eval_method_parameter_runtime_class_name(class_name, context)?;
-    let identity = values.object_identity(value)?;
-    if let Some(class) = context.dynamic_object_class(identity) {
-        return Ok(context.class_is_a(class.name(), &target, false));
+    if let Some(accepted) = dynamic_object_is_a(value, &target, false, context, values)? {
+        return Ok(accepted);
     }
     values.object_is_a(value, &target, false)
 }
@@ -557,6 +733,60 @@ pub(in crate::interpreter) fn eval_method_parameter_scalar_coercion(
         }
         _ => Ok(None),
     }
+}
+
+/// Returns whether an OBJECT cell can be converted to a string, i.e. whether it has a usable
+/// `__toString()`.
+///
+/// The question a TYPED `string` PARAMETER asks, which is not the one
+/// [`eval_string_context_value`] answers. A string context that cannot convert throws
+/// `Object of class X could not be converted to string`; a typed parameter that cannot accept
+/// the value throws `f(): Argument #N ($p) must be of type string, X given` INSTEAD, and the
+/// caller has to know which before attempting the conversion. php-src draws the same line:
+/// `curl_escape($ch, new stdClass())` is a `TypeError`, while `(string) new stdClass()` is an
+/// `Error`.
+///
+/// Mirrors the two dispatch branches below exactly — an eval-declared class is asked for a
+/// public, non-static, non-abstract, zero-parameter `__toString`, and a runtime object is asked
+/// for eval's own synthetic implementations plus the AOT dispatch metadata — so a value this
+/// reports `true` for is one those branches will convert.
+///
+/// Non-object cells answer `false`: they never take the `__toString` path at all, and a caller
+/// deciding whether to reject them is asking a different question (`null`, `int`, `float` and
+/// `bool` all coerce to `string` under PHP's coercive typing).
+///
+/// Feature-gated for the same reason as `throwables::eval_throw_runtime_exception`: today's
+/// only caller is `builtins::curl::handle::eval_curl_string_argument`, which exists only under
+/// the `curl` feature. The gate comes off as soon as the sibling typed-string builtins named in
+/// issue #872 (`urlencode`, `date`) get the same guard.
+#[cfg(feature = "curl")]
+pub(in crate::interpreter) fn eval_object_has_to_string(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_OBJECT {
+        return Ok(false);
+    }
+    let identity = values.object_identity(value)?;
+    if let Some(class) = context.dynamic_object_class(identity) {
+        let called_class_name = class.name().to_string();
+        let Some((_, method)) = context.class_method(&called_class_name, "__toString") else {
+            return Ok(false);
+        };
+        return Ok(method.visibility() == EvalVisibility::Public
+            && !method.is_static()
+            && !method.is_abstract()
+            && method.params().is_empty());
+    }
+    let class_name = runtime_object_class_name(value, values)?;
+    if eval_runtime_object_has_interpreter_tostring(identity, &class_name, context) {
+        return Ok(true);
+    }
+    Ok(
+        eval_aot_method_dispatch_metadata_in_hierarchy(&class_name, "__toString", context, values)?
+            .is_some(),
+    )
 }
 
 /// Converts objects in string contexts through the applicable `__toString()` dispatch path.
@@ -721,7 +951,7 @@ pub(in crate::interpreter) fn eval_method_parameter_default(
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let mut default_scope = ElephcEvalScope::new();
-    eval_expr(default, context, &mut default_scope, values)
+    eval_owned_expr(default, context, &mut default_scope, values)
 }
 
 /// Returns whether an EvalIR expression can be safely evaluated as a method default.

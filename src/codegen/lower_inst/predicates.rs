@@ -20,6 +20,20 @@ use crate::codegen::{CodegenIrError, Result};
 /// Lowers scalar PHP truthiness into a concrete boolean integer result.
 pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    emit_value_truthiness(ctx, value, inst.op.name())?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits PHP truthiness for one value into the integer result register.
+///
+/// Split out of [`lower_is_truthy`] so a lowering that needs PHP's boolean conversion for an
+/// argument, rather than for an `IsTruthy` instruction, can reuse it. `op_name` only names the
+/// caller in the unsupported-type error.
+pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    op_name: &str,
+) -> Result<()> {
     match ctx.raw_value_php_type(value)? {
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
             ctx.load_value_to_result(value)?;
@@ -37,6 +51,7 @@ pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             emit_array_truthiness(ctx, value)?;
         }
+        PhpType::Object(_) => emit_object_truthiness(ctx, value)?,
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
@@ -47,12 +62,11 @@ pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for PHP type {:?}",
-                inst.op.name(),
-                other
+                op_name, other
             )))
         }
     }
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Emits PHP truthiness for a tagged scalar: null is false, otherwise integer truthiness.
@@ -65,6 +79,32 @@ fn emit_tagged_scalar_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) 
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits PHP object truthiness: every object is `true`, PHP null is `false`.
+///
+/// An object-typed slot still carries PHP null as a zero pointer or as the in-band
+/// null-container sentinel a missed read produces (the same pair `is_null()` tests), so the
+/// answer is "not null" rather than a constant. Used by conditions such as
+/// `if ($row = $it->next())` and by `(bool)` / `boolval()` on an object (issue #1492).
+fn emit_object_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let null_label = ctx.next_label("object_truthy_null");
+    let done_label = ctx.next_label("object_truthy_done");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_label,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
     ctx.emitter.label(&done_label);
     Ok(())
 }

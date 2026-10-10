@@ -19,6 +19,7 @@ use crate::job::{
     elephc_parallel_job_wait, PARALLEL_JOB_COMPLETED,
 };
 
+/// Encodes test bytes through the C ABI and checks that failed conversion leaves an empty output.
 fn from_php(source: &[u8]) -> Result<ParallelTransferBlob, i32> {
     let mut output = ParallelTransferBlob::EMPTY;
     let status = unsafe {
@@ -33,10 +34,12 @@ fn from_php(source: &[u8]) -> Result<ParallelTransferBlob, i32> {
 }
 
 #[test]
+/// Ensures an impossible native buffer capacity returns null instead of unwinding through the ABI.
 fn php_transfer_buffer_allocation_fails_closed_on_capacity_overflow() {
     assert!(elephc_parallel_php_buffer_alloc(usize::MAX).is_null());
 }
 
+/// Copies a decoded serialization into Rust-owned bytes and releases its temporary transfer blob.
 fn to_php(blob: ParallelTransferBlob) -> Result<Vec<u8>, i32> {
     let mut output = ParallelTransferBlob::EMPTY;
     let status = unsafe { elephc_parallel_value_to_php_serialized(blob, &mut output) };
@@ -56,6 +59,7 @@ fn to_php(blob: ParallelTransferBlob) -> Result<Vec<u8>, i32> {
 }
 
 #[test]
+/// Checks nested arrays, sparse keys and binary byte strings survive the PHP/EPV1 round trip.
 fn safe_nested_values_round_trip_through_epv1() {
     let source = b"a:3:{s:4:\"name\";s:5:\"Ada\0!\";i:4;a:3:{i:0;N;i:1;b:1;i:2;d:-1.5;}s:3:\"bin\";s:3:\"\xff\0x\";}";
     let value = from_php(source).expect("safe PHP value should encode");
@@ -68,6 +72,7 @@ fn safe_nested_values_round_trip_through_epv1() {
 }
 
 #[test]
+/// Confirms consecutive zero-based PHP keys select indexed EPV1 storage without changing output.
 fn sequential_php_array_is_compacted_to_indexed_epv1() {
     let source = b"a:2:{i:0;s:1:\"a\";i:1;s:1:\"b\";}";
     let value = from_php(source).expect("indexed PHP array should encode");
@@ -88,6 +93,7 @@ fn sequential_php_array_is_compacted_to_indexed_epv1() {
 }
 
 #[test]
+/// Checks both infinities and NaN retain PHP's special serialized token spellings.
 fn php_special_floats_use_php_tokens() {
     for source in [&b"d:INF;"[..], &b"d:-INF;"[..], &b"d:NAN;"[..]] {
         let value = from_php(source).expect("special float should encode");
@@ -97,6 +103,7 @@ fn php_special_floats_use_php_tokens() {
 }
 
 #[test]
+/// Rejects objects, references, incomplete containers, incorrect string lengths and trailing bytes.
 fn unsafe_or_malformed_php_payloads_fail_closed() {
     for source in [
         &b"O:8:\"stdClass\":0:{}"[..],
@@ -115,6 +122,7 @@ fn unsafe_or_malformed_php_payloads_fail_closed() {
 }
 
 #[test]
+/// Prevents an EPV1 cancellation capability from being reconstructed through PHP unserialize.
 fn cancellation_is_not_routed_through_php_unserialize() {
     let writer = elephc_parallel_value_writer_new();
     assert!(!writer.is_null());
@@ -132,6 +140,7 @@ fn cancellation_is_not_routed_through_php_unserialize() {
 }
 
 #[test]
+/// Exercises owned input and result copies across job creation, running, completion and release.
 fn php_oriented_job_boundary_owns_and_converts_values() {
     let input = b"a:2:{i:0;s:5:\"input\";i:1;i:42;}";
     let id = unsafe { elephc_parallel_job_create_php_serialized(input.as_ptr(), input.len()) };
@@ -177,6 +186,7 @@ fn php_oriented_job_boundary_owns_and_converts_values() {
 }
 
 #[test]
+/// Checks malformed creation fails and an invalid result request clears a stale output descriptor.
 fn php_oriented_job_boundary_clears_outputs_on_failure() {
     assert_eq!(
         unsafe { elephc_parallel_job_create_php_serialized(b"O:0:{}".as_ptr(), 6) },
@@ -196,6 +206,7 @@ fn php_oriented_job_boundary_clears_outputs_on_failure() {
 }
 
 #[test]
+/// Verifies prepared bytes are replaced, isolated between threads and released idempotently.
 fn prepared_php_blob_is_thread_local_replaceable_and_releasable() {
     elephc_parallel_php_blob_release();
     assert!(elephc_parallel_php_blob_ptr().is_null());
@@ -254,6 +265,7 @@ fn prepared_php_blob_is_thread_local_replaceable_and_releasable() {
 }
 
 #[test]
+/// Checks the generated-copy allocator preserves NUL and non-UTF-8 bytes through native storage.
 fn php_copy_buffer_preserves_binary_bytes() {
     let bytes = b"A\0B\xff";
     let pointer = elephc_parallel_php_buffer_alloc(bytes.len());
@@ -267,6 +279,7 @@ fn php_copy_buffer_preserves_binary_bytes() {
 }
 
 #[test]
+/// Uses a publication barrier to show cooperative cancellation preserves an already decoded result.
 fn running_cancellation_during_php_result_transfer_keeps_the_terminal_result() {
     let input = b"N;";
     let id = unsafe { elephc_parallel_job_create_php_serialized(input.as_ptr(), input.len()) };
@@ -301,6 +314,7 @@ fn running_cancellation_during_php_result_transfer_keeps_the_terminal_result() {
 }
 
 #[test]
+/// Round-trips remote failure fields and frames as data without transferring Throwable pointers.
 fn php_failure_fields_round_trip_without_throwable_pointers() {
     let input = b"N;";
     let id = unsafe { elephc_parallel_job_create_php_serialized(input.as_ptr(), input.len()) };

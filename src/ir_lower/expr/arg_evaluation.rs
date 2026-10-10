@@ -11,6 +11,7 @@
 
 use super::*;
 
+/// Transfers successful argument snapshots to call cleanup or releases them before rethrowing.
 pub(super) fn protect_argument_evaluation(
     ctx: &mut LoweringContext<'_, '_>,
     span: Span,
@@ -51,6 +52,7 @@ pub(super) fn protect_argument_evaluation(
     values
 }
 
+/// Removes the argument-evaluation handler without changing the snapshot ownership ledger.
 fn pop_handler(ctx: &mut LoweringContext<'_, '_>, handler: BlockId, span: Span) {
     ctx.emit_void(
         Op::TryPopHandler, Vec::new(), Some(Immediate::I64(handler.as_raw() as i64)),
@@ -58,6 +60,7 @@ fn pop_handler(ctx: &mut LoweringContext<'_, '_>, handler: BlockId, span: Span) 
     );
 }
 
+/// Moves a snapshot owner into the active evaluation ledger without adding a redundant retain.
 pub(super) fn hold_argument_snapshot(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -73,4 +76,18 @@ pub(super) fn hold_argument_snapshot(
     ctx.store_local(&slot, value, php_type, Some(span));
     ctx.argument_snapshot_scopes.last_mut().unwrap().push(slot.clone());
     ctx.load_local(&slot, Some(span)).value
+}
+
+/// Detaches a reference variadic's owner from a slot that successful evaluation will clear.
+/// The acquired SSA value makes ABI staging create a managed temporary cell, not borrow that slot.
+pub(super) fn detach_reference_variadic_snapshot(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let detached = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+        ctx, value, Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    detached
 }

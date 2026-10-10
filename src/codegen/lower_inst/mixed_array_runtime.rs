@@ -127,6 +127,9 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
 }
 
 /// Lowers `$mixed[$key] = $value` through the shared boxed Mixed array/hash/stdClass writer.
+///
+/// An `Immediate::Bool(true)` marks the write half of a compound update whose read already
+/// reported a float key's conversion, so the key is rebuilt without a second deprecation.
 pub(super) fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
@@ -140,9 +143,18 @@ pub(super) fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst:
             )))
         }
     }
+    let normalization = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        hashes::HashKeyNormalization::PhpAlreadyDiagnosed
+    } else {
+        hashes::HashKeyNormalization::Php
+    };
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_mixed_array_runtime_set_aarch64(ctx, receiver, key, value)?,
-        Arch::X86_64 => lower_mixed_array_runtime_set_x86_64(ctx, receiver, key, value)?,
+        Arch::AArch64 => {
+            lower_mixed_array_runtime_set_aarch64(ctx, receiver, key, value, normalization)?
+        }
+        Arch::X86_64 => {
+            lower_mixed_array_runtime_set_x86_64(ctx, receiver, key, value, normalization)?
+        }
     }
     Ok(())
 }
@@ -153,6 +165,7 @@ pub(super) fn lower_mixed_array_runtime_set_aarch64(
     receiver: ValueId,
     key: ValueId,
     value: ValueId,
+    normalization: hashes::HashKeyNormalization,
 ) -> Result<()> {
     let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -161,7 +174,7 @@ pub(super) fn lower_mixed_array_runtime_set_aarch64(
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }
     abi::emit_push_reg(ctx.emitter, "x0");
-    hashes::materialize_hash_key_aarch64(ctx, key)?;
+    hashes::materialize_hash_key_aarch64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     ctx.load_value_to_reg(receiver, "x0")?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -176,6 +189,7 @@ pub(super) fn lower_mixed_array_runtime_set_x86_64(
     receiver: ValueId,
     key: ValueId,
     value: ValueId,
+    normalization: hashes::HashKeyNormalization,
 ) -> Result<()> {
     let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -184,7 +198,7 @@ pub(super) fn lower_mixed_array_runtime_set_x86_64(
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }
     abi::emit_push_reg(ctx.emitter, "rax");
-    hashes::materialize_hash_key_x86_64(ctx, key)?;
+    hashes::materialize_hash_key_x86_64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     ctx.load_value_to_reg(receiver, "rdi")?;
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");

@@ -1,8 +1,8 @@
 ---
 title: "image_type_to_mime_type()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the MIME type for an IMAGETYPE_* constant."
 sidebar:
-  order: 454
+  order: 455
 ---
 
 ## image_type_to_mime_type()
@@ -11,7 +11,7 @@ sidebar:
 function image_type_to_mime_type(int $image_type): string
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the MIME type for an IMAGETYPE_* constant.
 
 **Parameters**:
 - `$image_type` (`int`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

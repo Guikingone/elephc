@@ -2,7 +2,7 @@
 //! Owns native, PHP-pointer-free transfer envelopes for isolated Parallel workers.
 //!
 //! Called from:
-//! - The future Parallel runtime bridge before and after worker-context execution.
+//! - The Parallel runtime bridge before and after worker-context execution.
 //!
 //! Key details:
 //! - Payload bytes are copied into a versioned native allocation and never borrow a PHP arena.
@@ -81,6 +81,7 @@ thread_local! {
 struct ParallelWorkerGuard;
 
 impl ParallelWorkerGuard {
+    /// Marks the calling OS thread as executing isolated PHP until this guard is dropped.
     fn enter() -> Self {
         PARALLEL_WORKER_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
         Self
@@ -88,6 +89,7 @@ impl ParallelWorkerGuard {
 }
 
 impl Drop for ParallelWorkerGuard {
+    /// Restores the calling thread's worker depth on normal return or Rust unwinding.
     fn drop(&mut self) {
         PARALLEL_WORKER_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
@@ -141,6 +143,7 @@ impl ParallelTransferBlob {
     };
 }
 
+/// Checks the native envelope header in storage whose readable range is guaranteed by the caller.
 pub(crate) fn transfer_blob_is_valid(blob: ParallelTransferBlob) -> bool {
     if blob.ptr.is_null() || blob.len < TRANSFER_MAGIC.len() {
         return false;
@@ -149,6 +152,11 @@ pub(crate) fn transfer_blob_is_valid(blob: ParallelTransferBlob) -> bool {
     bytes[..TRANSFER_MAGIC.len()] == TRANSFER_MAGIC
 }
 
+/// Consumes an owned native transfer allocation; a null descriptor is a no-op.
+///
+/// # Safety
+/// A nonnull blob must describe an unreleased bridge allocation with its original length.
+/// No borrowed view or other owner may access that allocation after release.
 pub(crate) unsafe fn release_transfer_blob(blob: ParallelTransferBlob) {
     if blob.ptr.is_null() {
         return;
@@ -191,39 +199,48 @@ impl WorkerStorage {
         })
     }
 
+    /// Returns the requested heap byte limit, excluding alignment padding in the arena allocation.
     pub fn heap_size(&self) -> usize {
         self.heap_size
     }
 
+    /// Borrows the 16-byte-aligned worker arena for the context's managed allocations.
     pub fn arena_ptr(&mut self) -> *mut u8 {
         self.arena.as_mut_ptr().cast::<u8>()
     }
 
+    /// Borrows the worker-local object-handle index table consumed by context acquisition.
     pub fn object_index_ptr(&mut self) -> *mut u32 {
         self.object_index.as_mut_ptr()
     }
 
+    /// Borrows the worker-local free-object-handle stack consumed by context acquisition.
     pub fn object_free_ptr(&mut self) -> *mut u32 {
         self.object_free.as_mut_ptr()
     }
 
+    /// Borrows the worker-local native-buffer registry in the shared context layout.
     pub fn buffer_registry_ptr(&mut self) -> *mut u8 {
         self.buffer_registry.as_mut_ptr().cast::<u8>()
     }
 
+    /// Borrows the serialization identity table without sharing parent-context object pointers.
     pub fn serialize_object_ptrs_ptr(&mut self) -> *mut u64 {
         self.serialize_object_ptrs.as_mut_ptr()
     }
 
+    /// Borrows the matching worker-local serialization object-index table.
     pub fn serialize_object_indexes_ptr(&mut self) -> *mut u64 {
         self.serialize_object_indexes.as_mut_ptr()
     }
 
+    /// Borrows the worker-local unserialization value table for local reconstruction.
     pub fn unserialize_values_ptr(&mut self) -> *mut u64 {
         self.unserialize_values.as_mut_ptr()
     }
 }
 
+/// Allocates a default-initialized worker table with a checked capacity reservation.
 fn zeroed_boxed_slice<T: Default + Clone>(len: usize) -> Result<Box<[T]>, i32> {
     let mut values = Vec::new();
     values
@@ -234,6 +251,11 @@ fn zeroed_boxed_slice<T: Default + Clone>(len: usize) -> Result<Box<[T]>, i32> {
 }
 
 /// Runs one callback with a freshly acquired isolated context on the calling OS thread.
+///
+/// # Safety
+/// Nonzero addresses must name the compiler-owned acquire/release/entry/callback functions
+/// with the exact ABI types above. The job and code must remain valid through execution;
+/// the native entry must obey the context-release-status handoff contract.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_run_worker_v1(
     acquire_addr: usize,
@@ -260,6 +282,7 @@ pub unsafe extern "C" fn elephc_parallel_run_worker_v1(
     }
 }
 
+/// Validates worker settings, owns its backing storage and releases or quarantines the context once.
 pub(crate) fn run_worker_v1(
     acquire_addr: usize,
     release_addr: usize,
@@ -308,6 +331,7 @@ pub(crate) fn run_worker_v1(
         finished: bool,
     }
     impl ReleaseGuard {
+        /// Applies an entry-reported release status, preserving dirty backing instead of freeing it.
         fn finish_with_status(&mut self, status: i64) -> i64 {
             if self.finished {
                 return 1;
@@ -321,6 +345,7 @@ pub(crate) fn run_worker_v1(
             status
         }
 
+        /// Invokes fallback context release only when entry has not already supplied its status.
         fn finish(&mut self) -> i64 {
             if self.finished {
                 return 1;
@@ -330,6 +355,7 @@ pub(crate) fn run_worker_v1(
         }
     }
     impl Drop for ReleaseGuard {
+        /// Attempts context release during unwinding while retaining backing on cleanup failure.
         fn drop(&mut self) {
             self.finish();
         }
@@ -369,6 +395,10 @@ pub(crate) fn run_worker_v1(
 }
 
 /// Copies one serialized PHP payload into native, versioned worker-owned storage.
+///
+/// # Safety
+/// A nonempty source must be readable for its declared length. A nonnull output must be
+/// writable for one blob and disjoint from the source; successful output is caller-owned.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_transfer_copy(
     source: *const u8,
@@ -392,6 +422,7 @@ pub unsafe extern "C" fn elephc_parallel_transfer_copy(
     }
 }
 
+/// Copies a caller-validated byte range behind the versioned header using checked allocation sizing.
 pub(crate) fn copy_transfer_payload(
     source: *const u8,
     source_len: usize,
@@ -417,6 +448,11 @@ pub(crate) fn copy_transfer_payload(
 }
 
 /// Validates a transfer envelope and returns a borrowed view of its serialized payload.
+///
+/// # Safety
+/// A nonnull blob pointer must be readable for its declared length. Nonnull output pointers
+/// must be writable, mutually disjoint and disjoint from the input. The returned view expires
+/// when the blob is released or modified and does not acquire ownership.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_transfer_payload(
     blob: ParallelTransferBlob,
@@ -431,6 +467,7 @@ pub unsafe extern "C" fn elephc_parallel_transfer_payload(
     }
 }
 
+/// Clears caller-validated output slots, then exposes bytes only after the native header matches.
 fn transfer_payload_view(
     blob: ParallelTransferBlob,
     payload_ptr: *mut *const u8,
@@ -454,6 +491,10 @@ fn transfer_payload_view(
 }
 
 /// Releases one blob previously returned by `elephc_parallel_transfer_copy`.
+///
+/// # Safety
+/// A nonnull blob must retain its original allocation pointer and length and be released
+/// exactly once, after every borrowed payload view has expired.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_transfer_free(blob: ParallelTransferBlob) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -472,6 +513,7 @@ mod tests {
     static RELEASED_CONTEXT: AtomicUsize = AtomicUsize::new(0);
     static RELEASE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+    /// Checks supplied table pointers and alignment, returning a non-dereferenced context sentinel.
     unsafe extern "C" fn acquire_context(
         arena: *mut u8,
         heap_size: usize,
@@ -499,6 +541,7 @@ mod tests {
         }
     }
 
+    /// Simulates pool exhaustion without accepting ownership of the supplied worker tables.
     unsafe extern "C" fn unavailable_context(
         _arena: *mut u8,
         _heap_size: usize,
@@ -512,17 +555,20 @@ mod tests {
         ptr::null_mut()
     }
 
+    /// Counts successful mock releases without dereferencing the context sentinel.
     unsafe extern "C" fn release_context(context: *mut c_void) -> i64 {
         RELEASE_CALLS.fetch_add(1, Ordering::Relaxed);
         RELEASED_CONTEXT.store(context as usize, Ordering::Relaxed);
         1
     }
 
+    /// Simulates a dirty context whose backing must remain quarantined after cleanup refusal.
     unsafe extern "C" fn reject_dirty_context(context: *mut c_void) -> i64 {
         RELEASED_CONTEXT.store(context as usize, Ordering::Relaxed);
         0
     }
 
+    /// Checks mock entry settings and leaves release-status reporting to the bridge fallback.
     unsafe extern "C" fn worker_entry(
         context: *mut c_void,
         callback: WorkerCallback,
@@ -538,6 +584,7 @@ mod tests {
         unsafe { callback(job) }
     }
 
+    /// Reports a mock release through the out-parameter to exercise double-release prevention.
     unsafe extern "C" fn worker_entry_releases_context(
         context: *mut c_void,
         callback: WorkerCallback,
@@ -554,6 +601,7 @@ mod tests {
         unsafe { callback(job) }
     }
 
+    /// Reads the live test i64 job payload as the mock worker's return value.
     unsafe extern "C" fn worker_callback(job: *mut c_void) -> i64 {
         if job.is_null() {
             return -98;
@@ -561,11 +609,13 @@ mod tests {
         unsafe { *(job.cast::<i64>()) }
     }
 
+    /// Samples the bridge's thread-local worker flag from inside the isolated callback boundary.
     unsafe extern "C" fn worker_active_callback(_job: *mut c_void) -> i64 {
         i64::from(elephc_parallel_worker_active())
     }
 
     #[test]
+    /// Checks versioned native copying, borrowed payload access and explicit allocation release.
     fn payload_round_trips_through_a_versioned_native_blob() {
         let source = b"a:2:{i:0;i:42;i:1;s:2:\"ok\";}";
         let mut blob = ParallelTransferBlob::EMPTY;
@@ -587,6 +637,7 @@ mod tests {
     }
 
     #[test]
+    /// Distinguishes a valid empty allocation from a null source with a nonzero declared length.
     fn empty_payload_is_distinct_from_invalid_input() {
         let mut blob = ParallelTransferBlob::EMPTY;
         assert_eq!(
@@ -610,6 +661,7 @@ mod tests {
     }
 
     #[test]
+    /// Rejects a wrong envelope header and clears both borrowed-view output slots.
     fn malformed_envelopes_fail_closed_and_clear_outputs() {
         let mut bytes = *b"NOT-EPAR";
         let blob = ParallelTransferBlob {
@@ -627,6 +679,7 @@ mod tests {
     }
 
     #[test]
+    /// Transfers native allocation ownership to another OS thread for decoding and release.
     fn blob_ownership_can_move_to_another_thread() {
         let source = b"s:6:\"worker\";";
         let mut blob = ParallelTransferBlob::EMPTY;
@@ -660,6 +713,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks arena alignment and every zero-initialized table against the shared layout sizing.
     fn worker_storage_matches_the_shared_layout_and_alignment() {
         let heap_size = 4097;
         let mut storage = WorkerStorage::new(heap_size).expect("worker storage");
@@ -681,6 +735,7 @@ mod tests {
     }
 
     #[test]
+    /// Confirms worker backing storage can be owned and dropped by another OS thread.
     fn worker_storage_ownership_moves_to_a_thread() {
         let storage = WorkerStorage::new(4096).expect("worker storage");
         let heap_size = std::thread::spawn(move || storage.heap_size())
@@ -690,6 +745,7 @@ mod tests {
     }
 
     #[test]
+    /// Exercises mock acquisition, callback execution and fallback release of one context.
     fn run_worker_acquires_enters_and_releases_one_context() {
         let _guard = WORKER_TEST_LOCK.lock().unwrap();
         ACQUIRE_VALID.store(0, Ordering::Relaxed);
@@ -712,6 +768,7 @@ mod tests {
     }
 
     #[test]
+    /// Ensures an entry-reported release prevents a second release from the bridge guard.
     fn worker_entry_release_status_prevents_a_second_context_release() {
         let _guard = WORKER_TEST_LOCK.lock().unwrap();
         RELEASE_CALLS.store(0, Ordering::Relaxed);
@@ -734,6 +791,7 @@ mod tests {
     }
 
     #[test]
+    /// Maps refused mock cleanup to a typed failure while preserving dirty context backing.
     fn run_worker_reports_cleanup_failure_and_preserves_dirty_backing() {
         let _guard = WORKER_TEST_LOCK.lock().unwrap();
         RELEASED_CONTEXT.store(0, Ordering::Relaxed);
@@ -754,6 +812,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks the worker flag is active inside the callback and cleared after its return.
     fn worker_active_flag_is_scoped_to_the_isolated_callback() {
         let _guard = WORKER_TEST_LOCK.lock().unwrap();
         assert_eq!(elephc_parallel_worker_active(), 0);
@@ -773,6 +832,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks parent-scope ownership is non-reentrant, thread-local and explicitly cleared.
     fn parent_scope_flag_is_thread_local_non_reentrant_and_clears() {
         assert_eq!(elephc_parallel_parent_scope_active(), 0);
         assert_eq!(elephc_parallel_parent_scope_enter(), 1);
@@ -790,6 +850,7 @@ mod tests {
     }
 
     #[test]
+    /// Rejects missing entry addresses and exhausted context acquisition without attempting release.
     fn run_worker_reports_invalid_or_exhausted_context_without_entering() {
         let _guard = WORKER_TEST_LOCK.lock().unwrap();
         RELEASED_CONTEXT.store(0, Ordering::Relaxed);

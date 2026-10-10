@@ -20,7 +20,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::names::{join_php_symbol, static_property_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -53,32 +53,25 @@ pub(super) fn emit_eval_static_property_helpers(
     emit_static_property_set_helper(module, emitter, data, &slots);
 }
 
-/// Returns true when the EIR module contains a function that can call eval.
+/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
+///
+/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
+/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
+/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
+/// like it. This used to scan for functions carrying an eval local instead, which is a
+/// different question that happened to give the same answer while the ONLY reason to link
+/// the archive was an `eval()` in the program.
+///
+/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
+/// cache, which lives in the archive, so a program calling it needs the archive whether or
+/// not it ever evaluates a string. Keeping the narrower scan here made that combination
+/// unlinkable, which is what kept the fold in place and left the function answering `false`
+/// where reference answers `true`.
+///
+/// The call sites are all inside a block already gated on the same flag, so for a program
+/// that does use `eval()` nothing changes.
 fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
+    module.required_runtime_features.eval_bridge
 }
 
 /// Collects static properties with storage layouts and visibility rules the bridge can access.
@@ -123,7 +116,7 @@ fn collect_class_static_property_slots(
             property: property.clone(),
             visibility: visibility.clone(),
             symbol: static_property_symbol(declaring_class, property),
-            ty: ty.codegen_repr(),
+            ty: super::eval_argument_helpers::bridge_storage_type(ty),
             is_declared: declaring_info.declared_static_properties.contains(property),
         });
     }
@@ -547,22 +540,22 @@ fn emit_x86_64_static_property_scope_check(
     target_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = x86_64_scope_offsets(mode);
-    emitter.instruction(
+    emitter.instruction(                                                        // reload the active eval class-scope pointer
         &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-    );                                                                          // reload the active eval class-scope pointer
-    emitter.instruction(
+    );
+    emitter.instruction(                                                        // reload the active eval class-scope length
         &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-    );                                                                          // reload the active eval class-scope length
+    );
     emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
     emitter.instruction("jz 1f");                                               // skip scoped dispatch outside a class scope
     for scope_name in &slot.allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(
+        emitter.instruction(                                                    // reload the active eval class-scope pointer
             &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-        );                                                                      // reload the active eval class-scope pointer
-        emitter.instruction(
+        );
+        emitter.instruction(                                                    // reload the active eval class-scope length
             &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-        );                                                                      // reload the active eval class-scope length
+        );
         abi::emit_symbol_address(emitter, "rdx", &label);
         abi::emit_load_int_immediate(emitter, "rcx", len as i64);
         emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
@@ -789,7 +782,11 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
             );
             abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null static storage reads as PHP null
-            emitter.instruction("bl __rt_incref");                              // retain the stored Mixed cell for the eval caller
+            if slot.ty.is_php_array() {
+                emitter.instruction("bl __rt_mixed_clone");                     // detach the array zval so eval writes preserve static COW aliases
+            } else {
+                emitter.instruction("bl __rt_incref");                          // retain the stored Mixed cell for the eval caller
+            }
             emitter.instruction(&format!("b {}", done_label));                  // skip null materialization after a retained hit
             emitter.label(&null_label);
             let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
@@ -836,7 +833,11 @@ fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStatic
             abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
             emitter.instruction("test rax, rax");                               // check whether static storage holds a Mixed cell
             emitter.instruction(&format!("jz {}", null_label));                 // null static storage reads as PHP null
-            emitter.instruction("call __rt_incref");                            // retain the stored Mixed cell for the eval caller
+            if slot.ty.is_php_array() {
+                emitter.instruction("call __rt_mixed_clone");                   // detach the array zval so eval writes preserve static COW aliases
+            } else {
+                emitter.instruction("call __rt_incref");                        // retain the stored Mixed cell for the eval caller
+            }
             emitter.instruction(&format!("jmp {}", done_label));                // skip null materialization after a retained hit
             emitter.label(&null_label);
             let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
@@ -858,6 +859,10 @@ fn emit_aarch64_store_static_property_slot(
     slot: &EvalStaticPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("ldr x0, [sp, #32]");                               // borrow the boxed static-property assignment before PHP type validation
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
         PhpType::Bool => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "x0"),
@@ -908,6 +913,10 @@ fn emit_x86_64_store_static_property_slot(
     slot: &EvalStaticPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed static-property assignment before PHP type validation
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
         PhpType::Bool => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "rax"),

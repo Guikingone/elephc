@@ -29,9 +29,8 @@ impl Checker {
     /// Returns true if any named argument in `args` does not correspond to a
     /// declared regular (non-variadic) parameter in `regular_params`.
     ///
-    /// Used to decide whether a variadic parameter should receive type `Iterable`
-    /// (when unknown named args may flow into it) or `Array<elem>` (when all
-    /// named args are known).
+    /// Selects the shared dynamic PHP-array collector when unknown names may flow into it;
+    /// known positional tails retain their indexed element storage.
     pub(super) fn has_unknown_named_variadic_arg(args: &[Expr], regular_params: &[String]) -> bool {
         args.iter().any(|arg| {
             matches!(
@@ -58,7 +57,7 @@ impl Checker {
     /// argument count was out of range, so report a precise arity error — matching
     /// `function_exists()`, which already recognizes these names — instead of the misleading
     /// "Undefined function". Non-alias names keep the plain "Undefined function" diagnostic.
-    pub(super) fn unresolved_function_call_error(&self, name: &str, span: crate::span::Span) -> CompileError {
+    pub(in crate::types::checker) fn unresolved_function_call_error(&self, name: &str, span: crate::span::Span) -> CompileError {
         if let Some((min, max)) = crate::name_resolver::date_procedural_alias_arity(name) {
             let bare = name.rsplit('\\').next().unwrap_or(name);
             let message = if min == max {
@@ -109,6 +108,57 @@ impl Checker {
             .unwrap_or_else(|| name.to_string());
         let name = canonical_name.as_str();
         self.ensure_parallel_prelude_helper_is_internal(name, span)?;
+        // A call site that actually PASSES something is what replaces an untyped parameter's
+        // `Int` placeholder, so it is also what makes the pass-through return widening
+        // unnecessary. Recorded here rather than inferred from `functions` membership: a
+        // first-class callable reference (`h(...)`) resolves the signature without passing
+        // anything (issue #576).
+        //
+        // An empty argument list is excluded for the same reason. `opt()` on
+        // `function opt($b = null) { return $b; }` is a real call that teaches `$b` nothing, so
+        // the parameter keeps the type its default implies and the return still needs widening
+        // for the dynamic callers. This stays coarse for a call that fills SOME untyped
+        // parameters and not others — it marks on any argument rather than per parameter.
+        if !args.is_empty() {
+            self.functions_called_directly.insert(canonical_name.clone());
+        }
+
+        // A generic declaration is a template and never has a signature of its own. Resolve
+        // the call against the instantiation its arguments select, creating that instantiation
+        // on first use; from there it is an ordinary monomorphic function and every existing
+        // path below applies to it unchanged.
+        if self
+            .fn_decls
+            .get(name)
+            .is_some_and(|decl| !decl.type_params.is_empty())
+        {
+            let instantiated = self.instantiate_generic_call(name, args, span, caller_env)?;
+            return self.check_function_call(&instantiated, args, span, caller_env);
+        }
+
+        // `identity<int>(41)` — the type arguments were WRITTEN, and the parser put them in the
+        // name. Decoding them back out of the name is what keeps one spelling: the same string
+        // the inferred path builds with `instantiated_name`, and the same one every diagnostic
+        // prints. The request is recorded on every call, exactly as the inferred path does, so
+        // the splice fixpoint and the reachability pruner both see it.
+        if let Some((base, written)) = written_generic_call(name) {
+            if self
+                .fn_decls
+                .get(base.as_str())
+                .is_some_and(|decl| !decl.type_params.is_empty())
+            {
+                let instantiated =
+                    self.instantiate_written_generic_call(&base, &written, span)?;
+                // Unlike the inferred path, the name that arrived here IS the instantiated one,
+                // so resolving it again would re-enter this branch forever. Falling through
+                // instead lands on the declaration this call just created, which is ordinary and
+                // monomorphic. A differing spelling — the arguments normalized to something the
+                // programmer did not write — is the only case with somewhere else to go.
+                if instantiated != name {
+                    return self.check_function_call(&instantiated, args, span, caller_env);
+                }
+            }
+        }
 
         if let Some(mut sig) = self.functions.get(name).cloned() {
             if let Some(reason) = sig.deprecation.as_deref() {
@@ -126,13 +176,43 @@ impl Checker {
                 == "elephc\\async\\run";
             let is_parallel_run = crate::names::php_symbol_key(name.trim_start_matches('\\'))
                 == "elephc\\parallel\\run";
-            let normalized_args = self.normalize_named_call_args(
+            let plan = self.plan_named_call_args(
                 &effective_sig,
                 args,
                 span,
                 &format!("Function '{}'", name),
                 caller_env,
             )?;
+            self.validate_callable_spread_elements(
+                &effective_sig,
+                args,
+                &plan,
+                caller_env,
+                &format!("Function '{}'", name),
+            )?;
+            let defaults = plan.default_argument_mask();
+            let descriptor_projections = plan.descriptor_projection_mask();
+            let normalized_args = plan.normalized_args();
+            if descriptor_projections
+                .iter()
+                .enumerate()
+                .any(|(index, projected)| {
+                    *projected
+                        && effective_sig
+                            .ref_params
+                            .get(index)
+                            .copied()
+                            .unwrap_or(false)
+                })
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                        name
+                    ),
+                ));
+            }
             if is_async_run {
                 self.record_async_task_callable(&normalized_args);
             }
@@ -156,6 +236,8 @@ impl Checker {
                 &sig,
                 &effective_sig,
                 &normalized_args,
+                &defaults,
+                &descriptor_projections,
                 span,
                 caller_env,
             );
@@ -240,14 +322,25 @@ impl Checker {
                 .collect(),
             variadic: decl.variadic.clone(),
             deprecation: None,
+            is_generator: false,
         };
-        let normalized_args = self.normalize_named_call_args(
+        let plan = self.plan_named_call_args(
             &normalization_sig,
             args,
             span,
             &format!("Function '{}'", name),
             caller_env,
         )?;
+        self.validate_callable_spread_elements(
+            &normalization_sig,
+            args,
+            &plan,
+            caller_env,
+            &format!("Function '{}'", name),
+        )?;
+        let defaults = plan.default_argument_mask();
+        let descriptor_projections = plan.descriptor_projection_mask();
+        let normalized_args = plan.normalized_args();
         let args = normalized_args.as_slice();
         let effective_arg_count = args
             .iter()
@@ -300,12 +393,23 @@ impl Checker {
                             decl.span,
                             &format!("Function '{}' parameter ${}", name, decl.params[i]),
                         )?;
-                        self.require_compatible_arg_type(
-                            &declared_ty,
-                            &ty,
-                            arg.span,
-                            &format!("Function '{}' parameter ${}", name, decl.params[i]),
-                        )?;
+                        // `validate_callable_spread_elements` above has already established that
+                        // this spread is eligible for runtime descriptor validation. Only that
+                        // projected Mixed value may be unboxed into a declared Callable slot, and
+                        // never into a by-reference binding whose lvalue identity cannot come from
+                        // a descriptor projection.
+                        let descriptor_projected_callable = matches!(arg.kind, ExprKind::Spread(_))
+                            && !decl.ref_params.get(i).copied().unwrap_or(false)
+                            && declared_ty.codegen_repr() == PhpType::Callable
+                            && ty.codegen_repr() == PhpType::Mixed;
+                        if !descriptor_projected_callable {
+                            self.require_compatible_arg_type(
+                                &declared_ty,
+                                &ty,
+                                arg.span,
+                                &format!("Function '{}' parameter ${}", name, decl.params[i]),
+                            )?;
+                        }
                         param_types.push((decl.params[i].clone(), declared_ty));
                     } else if matches!(ty, PhpType::Never) {
                         let param_ty = decl
@@ -322,6 +426,24 @@ impl Checker {
                 }
                 arg_idx = decl.params.len();
             } else if arg_idx < decl.params.len() {
+                let supplied_reference = decl.ref_params.get(arg_idx).copied().unwrap_or(false)
+                    && !defaults.get(arg_idx).copied().unwrap_or(false);
+                let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
+                    || self.boxed_reference_promotion_pending(arg, span);
+                if supplied_reference
+                    && descriptor_projections
+                        .get(arg_idx)
+                        .copied()
+                        .unwrap_or(false)
+                {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                            name
+                        ),
+                    ));
+                }
                 if ty == PhpType::Callable {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
                         self.record_callable_param_sig(name, &decl.params[arg_idx], sig);
@@ -332,7 +454,7 @@ impl Checker {
                         self.record_callable_param_sig(name, &decl.params[arg_idx], sig);
                     }
                 }
-                if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {
+                if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -362,30 +484,83 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
-                    if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {
+                    // A tracked two-slot callable array crosses a declared `callable` boundary
+                    // as the descriptor EIR lowering materializes for this exact argument. The
+                    // already-resolved call validator applies the same exception; the first call
+                    // must not reject the underlying `Array(Mixed)` before it can publish the
+                    // function signature and reach that shared validator.
+                    let proven_callable_array = declared_ty.codegen_repr() == PhpType::Callable
+                        && !supplied_reference
+                        && !Self::types_compatible(&declared_ty, &ty)
+                        && !self.type_accepts(&declared_ty, &ty)
+                        && self
+                            .callable_array_param_target(arg, caller_env)?
+                            .is_some();
+                    if supplied_reference {
                         self.require_boxed_by_ref_storage(
                             &declared_ty,
                             &ty,
-                            arg.span,
+                            arg,
+                            caller_env,
+                            can_widen_by_ref_local,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
+                        self.record_boxed_reference_output(
+                            arg,
+                            &declared_ty,
+                            &ty,
+                            span,
+                            caller_env,
+                        );
                     }
-                    self.require_bound_param_arg_type(
-                        &declared_ty,
-                        &ty,
-                        arg,
-                        caller_env,
-                        &format!("Function '{}' parameter ${}", name, param_name),
-                        Some((name, decl.params[arg_idx].as_str())),
-                        decl.ref_params.get(arg_idx).copied().unwrap_or(false),
-                    )?;
+                    if !proven_callable_array {
+                        self.require_bound_param_arg_type(
+                            &declared_ty,
+                            &ty,
+                            arg,
+                            caller_env,
+                            &format!("Function '{}' parameter ${}", name, param_name),
+                            Some((name, decl.params[arg_idx].as_str())),
+                            supplied_reference,
+                        )?;
+                    }
                     let specialized_ty =
                         Self::specialize_generic_array_param_hint(&declared_ty, &ty);
                     param_types.push((decl.params[arg_idx].clone(), specialized_ty));
                     arg_idx += 1;
                     continue;
                 }
-                param_types.push((decl.params[arg_idx].clone(), ty));
+                // An untyped by-reference parameter is semantically mixed. Its frame must use
+                // that canonical cell shape across every call site instead of specializing to
+                // the current payload and later misreading a managed associative entry.
+                let storage_ty = if supplied_reference {
+                    PhpType::Mixed
+                } else {
+                    ty.clone()
+                };
+                if supplied_reference {
+                    let param_name = decl
+                        .params
+                        .get(arg_idx)
+                        .map(String::as_str)
+                        .unwrap_or("arg");
+                    self.require_boxed_by_ref_storage(
+                        &storage_ty,
+                        &ty,
+                        arg,
+                        caller_env,
+                        can_widen_by_ref_local,
+                        &format!("Function '{}' parameter ${}", name, param_name),
+                    )?;
+                    self.record_boxed_reference_output(
+                        arg,
+                        &storage_ty,
+                        &ty,
+                        span,
+                        caller_env,
+                    );
+                }
+                param_types.push((decl.params[arg_idx].clone(), storage_ty));
                 arg_idx += 1;
             } else {
                 // A by-REFERENCE variadic (`&...$xs`) binds every collected argument by
@@ -393,7 +568,15 @@ impl Checker {
                 // `decl.params` excludes the variadic, which is why this cannot be handled by
                 // the regular-parameter branch above.
                 if decl.variadic_by_ref {
-                    self.record_reference_alias_root(arg);
+                    self.validate_by_ref_variadic_argument(
+                        arg,
+                        &ty,
+                        caller_env,
+                        span,
+                        &format!("Function '{}'", name),
+                        decl.variadic.as_deref().unwrap_or("args"),
+                        false,
+                    )?;
                 }
                 // Argument collected into the variadic parameter: enforce its declared element
                 // type (`int ...$xs`) against every passed argument, matching PHP.
@@ -460,7 +643,7 @@ impl Checker {
                 )?;
                 param_types.push((vp.clone(), PhpType::Array(Box::new(elem_ty))));
             } else if Self::has_unknown_named_variadic_arg(args, &decl.params) {
-                param_types.push((vp.clone(), PhpType::Iterable));
+                param_types.push((vp.clone(), crate::types::signatures::descriptor_variadic_container()));
             } else {
                 let variadic_elem_ty = if args.len() > decl.params.len() {
                     self.infer_type(&args[decl.params.len()], caller_env)
@@ -474,6 +657,26 @@ impl Checker {
         }
 
         self.resolve_function_signature(name, &decl, param_types)
+    }
+}
+
+/// Splits a call name that carries WRITTEN type arguments into its template and its arguments.
+///
+/// `identity<int>` is what the parser produces for `identity<int>(41)`, and it is the same
+/// spelling `generics::instantiated_name` produces for the inferred form — so decoding it with
+/// the language's own type grammar (`generics::instantiated_type`) is exact, including for
+/// nested arguments like `wrap<Box<int>>`.
+///
+/// Returns `None` for an ordinary name, which costs one `contains` on the common path.
+fn written_generic_call(name: &str) -> Option<(String, Vec<crate::parser::ast::TypeExpr>)> {
+    if !name.contains('<') {
+        return None;
+    }
+    match crate::generics::instantiated_type(name)? {
+        crate::parser::ast::TypeExpr::GenericClass { name, args } => {
+            Some((name.as_str().to_string(), args))
+        }
+        _ => None,
     }
 }
 

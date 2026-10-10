@@ -15,15 +15,18 @@
 //!   AArch64 and rbx only on x86_64), so no register-allocated value ever
 //!   collides with the ctx pointer.
 //! - x18 is NOT used: Apple AArch64 reserves it for the OS.
-//! - The layout embeds only the heap-path state for the spike: concat scratch
-//!   (buf + off), heap bump offset, free-list head, and the small-bin heads.
-//!   `_heap_buf` itself stays a global symbol during the spike because its base
-//!   address is identical for every ctx and it is never reset per context.
+//! - Mutable request state, heap bookkeeping and resource tables belong to each context.
+//!   The main context installs the global default arena; workers install distinct arenas.
+//! - A pooled context is recycled only after its owners drain and verification succeeds.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use elephc_parallel_contract::RUNTIME_CONTEXT_POOL_SLOTS;
+
+#[cfg(test)]
+#[path = "ctx_register_audit.rs"]
+mod register_audit;
 
 /// Concat scratch capacity in bytes, mirroring `strings::CONCAT_BUF_CAPACITY`.
 /// Duplicated here so the ctx layout is self-contained for the spike.
@@ -155,7 +158,9 @@ pub(crate) const CTX_OB_LEVEL_OFFSET: usize = CTX_PRINT_R_OFF_OFFSET + 8;
 
 /// One entry per nested output buffer, 64 levels of 8 bytes.
 pub(crate) const CTX_OB_TABLE_SIZE: usize = 512;
-pub(crate) const CTX_OB_PTRS_OFFSET: usize = CTX_OB_LEVEL_OFFSET + 8;
+#[path = "ctx_request_state.rs"]
+mod request_state;
+pub(crate) const CTX_OB_PTRS_OFFSET: usize = request_state::END;
 pub(crate) const CTX_OB_LENS_OFFSET: usize = CTX_OB_PTRS_OFFSET + CTX_OB_TABLE_SIZE;
 pub(crate) const CTX_OB_CAPS_OFFSET: usize = CTX_OB_LENS_OFFSET + CTX_OB_TABLE_SIZE;
 pub(crate) const CTX_OB_HANDLER_STUBS_OFFSET: usize = CTX_OB_CAPS_OFFSET + CTX_OB_TABLE_SIZE;
@@ -308,10 +313,9 @@ pub fn ctx_reg(emitter: &Emitter) -> &'static str {
 
 /// Emits the `_rt_ctx` data block: one instance of the context struct.
 ///
-/// A common symbol, like every other runtime global: the block is 64 KiB of
-/// zeroes, and `.space` inside `.data` writes all of them into the image (it
-/// made a ctx binary ~66 KB larger than its legacy twin). A future pool emitter
-/// will replace this with an array plus a free-list for per-thread contexts.
+/// Uses zero-filled common storage of CTX_SIZE bytes rather than embedding the
+/// scratch buffers in the executable image. Pooled worker storage is emitted
+/// separately; `single` controls whether this path declares the main instance.
 // The ctx data block currently ships through `runtime::data::fixed`'s string
 // assembly path; this emitter-shaped variant stays for the pool iteration.
 #[allow(dead_code)]
@@ -399,6 +403,7 @@ pub fn emit_ctx_zero_fields(emitter: &mut Emitter) {
 /// `__rt_ctx_acquire` prepares a slot for a caller that has not published it yet, so it
 /// cannot go through the ctx register — that one still belongs to the acquiring context.
 pub fn emit_ctx_zero_fields_at(emitter: &mut Emitter, ctx: &str) {
+    request_state::initialize(emitter, ctx);
     for offset in [
         CTX_CONCAT_OFF_OFFSET,
         CTX_HEAP_OFF_OFFSET,
@@ -526,7 +531,7 @@ pub fn emit_rt_ctx_init(emitter: &mut Emitter) {
 /// THE ARENA IS A PARAMETER rather than `_heap_buf`, because that is the entire point: a
 /// second context must own different memory, or two contexts bump-allocate into one arena
 /// and hand out the same addresses. `__rt_ctx_init` keeps naming `_heap_buf`, for slot 0.
-pub fn emit_rt_ctx_pool(emitter: &mut Emitter) {
+pub fn emit_rt_ctx_pool(emitter: &mut Emitter, features: crate::codegen_support::RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: ctx_acquire (claim a pooled execution context) ---");
     emitter.label_global("__rt_ctx_acquire");
@@ -644,9 +649,11 @@ pub fn emit_rt_ctx_pool(emitter: &mut Emitter) {
             emitter.instruction("add x29, sp, #32");                            // establish the release frame
             emitter.instruction("mov x19, x0");                                 // retain the pooled context across cleanup calls
             emitter.instruction("mov x28, x0");                                 // publish the context its cleanup helpers must address
-            emitter.instruction("bl __rt_stream_owner_drain");                  // close any descriptor owners left by normal or fatal flow
-            emitter.instruction("bl __rt_buffer_registry_drain");               // release any active Buffer payload owners
-            emitter.instruction("bl __rt_gc_collect_cycles");                   // reclaim cycles exposed by the final resource releases
+            request_state::drain(emitter, features);
+            request_state::cleanup(emitter, "__rt_stream_owner_drain");
+            request_state::cleanup(emitter, "__rt_buffer_registry_drain");
+            request_state::cleanup(emitter, "__rt_gc_collect_cycles");
+            request_state::cleanup(emitter, "__rt_resource_inventory_drain");
             emitter.instruction("bl __rt_ctx_verify_drained");                  // require every owner-bearing table to be empty
             emitter.instruction("mov x10, x0");                                 // retain the verification result while restoring host state
             emitter.instruction("mov x0, x19");                                 // restore the pooled context pointer
@@ -680,9 +687,11 @@ pub fn emit_rt_ctx_pool(emitter: &mut Emitter) {
             emitter.instruction("push r14");                                    // preserve the foreign context register
             emitter.instruction("mov r12, rdi");                                // retain the pooled context across cleanup calls
             emitter.instruction("mov r14, rdi");                                // publish the context its cleanup helpers must address
-            emitter.instruction("call __rt_stream_owner_drain");                // close any descriptor owners left by normal or fatal flow
-            emitter.instruction("call __rt_buffer_registry_drain");             // release any active Buffer payload owners
-            emitter.instruction("call __rt_gc_collect_cycles");                 // reclaim cycles exposed by the final resource releases
+            request_state::drain(emitter, features);
+            request_state::cleanup(emitter, "__rt_stream_owner_drain");
+            request_state::cleanup(emitter, "__rt_buffer_registry_drain");
+            request_state::cleanup(emitter, "__rt_gc_collect_cycles");
+            request_state::cleanup(emitter, "__rt_resource_inventory_drain");
             emitter.instruction("call __rt_ctx_verify_drained");                // require every owner-bearing table to be empty
             emitter.instruction("mov r10, rax");                                // retain the verification result while restoring host state
             emitter.instruction("mov rdi, r12");                                // restore the pooled context pointer
@@ -711,6 +720,7 @@ pub fn emit_rt_ctx_pool(emitter: &mut Emitter) {
     emit_parallel_worker_entry(emitter);
 }
 
+/// Emits the read-only owner verifier used before publishing a pooled slot as free.
 fn emit_ctx_verify_drained(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ctx_verify_drained ---");
@@ -721,7 +731,9 @@ fn emit_ctx_verify_drained(emitter: &mut Emitter) {
     }
 }
 
+/// Checks ARM64 request owners, resource tables and Buffer descriptors without erasing live state.
 fn emit_ctx_verify_drained_aarch64(emitter: &mut Emitter) {
+    request_state::verify_drained(emitter, "__rt_ctx_verify_drained_dirty");
     for offset in [CTX_GC_LIVE_OFFSET, CTX_EXC_VALUE_OFFSET, CTX_EXC_CALL_FRAME_TOP_OFFSET, CTX_OB_LEVEL_OFFSET] {
         emitter.instruction(&format!("ldr x9, [x28, #{}]", offset));            // inspect one scalar owner count or pointer
         emitter.instruction("cbnz x9, __rt_ctx_verify_drained_dirty");          // any surviving scalar owner keeps the slot claimed
@@ -777,6 +789,7 @@ fn emit_ctx_verify_drained_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return failure without publishing pool availability
 }
 
+/// Scans valid ARM64 Buffer slots and branches to quarantine if any active marker remains.
 fn emit_ctx_verify_buffer_descriptors_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_buffer_registry");
     emitter.instruction("mov x10, #1");                                         // Buffer descriptor zero is invalid
@@ -792,7 +805,9 @@ fn emit_ctx_verify_buffer_descriptors_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_ctx_verify_buffer_done");
 }
 
+/// Checks SysV request/resource owners and returns whether the worker's backing arena may be freed.
 fn emit_ctx_verify_drained_x86_64(emitter: &mut Emitter) {
+    request_state::verify_drained(emitter, "__rt_ctx_verify_drained_dirty_x86");
     for offset in [
         CTX_GC_LIVE_OFFSET,
         CTX_EXC_VALUE_OFFSET,
@@ -869,6 +884,7 @@ fn emit_ctx_verify_drained_x86_64(emitter: &mut Emitter) {
 /// `callback(job)` returns the status and `stack_size` is the exact size configured for this
 /// worker. It releases the context while its fatal boundary is installed and reports whether
 /// Rust may free the arena backing storage.
+/// Only a currently acquired pooled context may enter; released/main contexts are rejected.
 fn emit_parallel_worker_entry(emitter: &mut Emitter) {
     use crate::codegen_support::runtime::system::{
         STACK_BUDGET_CAP_BYTES, STACK_BUDGET_MIN_BYTES, STACK_GUARD_RESERVE_BYTES,
@@ -881,6 +897,8 @@ fn emit_parallel_worker_entry(emitter: &mut Emitter) {
             emitter.instruction("cbz x0, __rt_parallel_worker_entry_invalid");  // reject a missing worker context
             emitter.instruction("cbz x1, __rt_parallel_worker_entry_invalid");  // reject a missing worker callback
             emitter.instruction("cbz x4, __rt_parallel_worker_entry_invalid");  // reject a missing release-status output slot
+            emitter.instruction(&format!("ldr x9, [x0, #{}]", CTX_POOL_STATE_PTR_OFFSET)); // inspect the acquisition lease before publishing the context
+            emitter.instruction("cbz x9, __rt_parallel_worker_entry_invalid");  // a released or main context cannot own worker execution
             abi::emit_load_int_immediate(emitter, "x9", STACK_BUDGET_MIN_BYTES);
             emitter.instruction("cmp x3, x9");                                  // require a stack large enough for the runtime reserve
             emitter.instruction("b.lo __rt_parallel_worker_entry_invalid");     // reject an unsafe worker stack size
@@ -982,6 +1000,9 @@ fn emit_parallel_worker_entry(emitter: &mut Emitter) {
             emitter.instruction("jz __rt_parallel_worker_entry_invalid_x86");   // reject a missing worker callback
             emitter.instruction("test r8, r8");                                 // require Rust's context-release status slot
             emitter.instruction("jz __rt_parallel_worker_entry_invalid_x86");   // reject a missing release-status output pointer
+            emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CTX_POOL_STATE_PTR_OFFSET)); // inspect the acquisition lease before publishing the context
+            emitter.instruction("test r10, r10");                               // only a currently acquired pooled slot can enter a worker
+            emitter.instruction("jz __rt_parallel_worker_entry_invalid_x86");   // never silently execute on a previously released context
             emitter.instruction(&format!("cmp rcx, {}", STACK_BUDGET_MIN_BYTES)); // require enough worker stack for the runtime reserve
             emitter.instruction("jb __rt_parallel_worker_entry_invalid_x86");   // reject an unsafe worker stack size
             emitter.instruction(&format!("cmp rcx, {}", STACK_BUDGET_CAP_BYTES)); // keep floor arithmetic inside the reviewed maximum
@@ -1242,6 +1263,10 @@ fn emit_ctx_install_default_handle_metadata(emitter: &mut Emitter) {
 /// `exception_state_is_only_reached_through_the_abi_accessors` enforces at the source
 /// level — fifteen sites had to be converted before this table could be trusted.
 const PER_CONTEXT_SYMBOLS: &[(&str, usize)] = &[
+    // Incoming serializer/key-conversion helpers use ordinary ABI symbol accessors.
+    // They must address the same scratch as the dedicated concat helpers.
+    ("_concat_off", CTX_CONCAT_OFF_OFFSET),
+    ("_concat_buf", CTX_CONCAT_BUF_OFFSET),
     ("_exc_value", CTX_EXC_VALUE_OFFSET),
     ("_exc_handler_top", CTX_EXC_HANDLER_TOP_OFFSET),
     ("_exc_call_frame_top", CTX_EXC_CALL_FRAME_TOP_OFFSET),
@@ -1322,6 +1347,9 @@ const PER_CONTEXT_POINTER_SYMBOLS: &[(&str, usize)] = &[
 pub fn per_context_symbol_offset(emitter: &Emitter, symbol: &str) -> Option<usize> {
     if !emitter.ctx_register {
         return None;
+    }
+    if let Some(offset) = request_state::offset(symbol) {
+        return Some(offset);
     }
     PER_CONTEXT_SYMBOLS
         .iter()
@@ -1654,6 +1682,29 @@ mod tests {
     use crate::codegen_support::emit::Emitter;
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
+    /// Ordinary ABI accesses and dedicated helpers share concat storage on every target/PIC mode.
+    #[test]
+    fn concat_symbols_use_context_storage_in_pic_and_nonpic_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for pic in [false, true] {
+                let target = Target::parse(name).unwrap();
+                let mut emitter = if pic { Emitter::new_pic(target) } else { Emitter::new(target) };
+                emitter.ctx_register = true;
+                let (value, address, load, store) = if target.arch == Arch::AArch64 {
+                    ("x10", "x11", "ldr x10, [x28, #0]", "str x10, [x28, #0]")
+                } else {
+                    ("r10", "r11", "mov r10, QWORD PTR [r14 + 0]", "mov QWORD PTR [r14 + 0], r10")
+                };
+                abi::emit_load_symbol_to_reg(&mut emitter, value, "_concat_off", 0);
+                abi::emit_store_reg_to_symbol(&mut emitter, value, "_concat_off", 0);
+                abi::emit_symbol_address(&mut emitter, address, "_concat_buf");
+                let asm = emitter.output();
+                assert!(asm.contains(load) && asm.contains(store), "{name}: pic={pic}: {asm}");
+                assert!(!asm.contains("_concat_off") && !asm.contains("_concat_buf"), "{name}: pic={pic}: {asm}");
+            }
+        }
+    }
+
     /// `ctx_reg` resolves to the reserved callee-saved register on each target.
     #[test]
     fn ctx_register_is_reserved_callee_saved_per_target() {
@@ -1716,7 +1767,7 @@ mod tests {
         assert_eq!(CTX_UNSER_COUNT_OFFSET, CTX_UNSER_CONTEXT_OFFSET + 8);
         assert_eq!(CTX_PRINT_R_MODE_OFFSET, CTX_UNSER_COUNT_OFFSET + 8);
         assert_eq!(CTX_OB_LEVEL_OFFSET, CTX_PRINT_R_OFF_OFFSET + 8);
-        assert_eq!(CTX_OB_PTRS_OFFSET, CTX_OB_LEVEL_OFFSET + 8);
+        assert_eq!(CTX_OB_PTRS_OFFSET, request_state::END);
         assert_eq!(CTX_OB_NAME_PTRS_OFFSET, CTX_OB_HANDLER_ENVS_OFFSET + CTX_OB_TABLE_SIZE);
         assert_eq!(CTX_OB_STARTED_OFFSET, CTX_OB_FLAGS_OFFSET + CTX_OB_TABLE_SIZE);
         // Descriptor and handle tables do not fit under 4 KiB beside the scalars. That is fine:
@@ -1762,7 +1813,7 @@ mod tests {
             CTX_TLS_SESSIONS_OFFSET + CTX_HANDLE_TABLE_SIZE
         );
         assert_eq!(
-            CTX_USER_WRAPPER_HANDLES_OFFSET, 20_616,
+            CTX_USER_WRAPPER_HANDLES_OFFSET, 20_976,
             "update the C-host dirty-slot probe when this offset moves"
         );
         assert_eq!(
@@ -1937,6 +1988,7 @@ mod tests {
     }
 
     #[test]
+    /// Large metadata tables resolve through the active context's pointers on both ABIs.
     fn external_side_table_addresses_load_context_owned_pointers() {
         for (symbol, offset) in [
             ("_obj_handle_index", CTX_OBJ_HANDLE_INDEX_PTR_OFFSET),
@@ -1970,6 +2022,7 @@ mod tests {
     }
 
     #[test]
+    /// Descriptor/resource tables use disjoint context addresses instead of process-global symbols.
     fn descriptor_resource_tables_route_through_each_runtime_context() {
         for (symbol, offset) in [
             ("_zstream_handles", CTX_ZSTREAM_HANDLES_OFFSET),
@@ -2008,6 +2061,7 @@ mod tests {
     }
 
     #[test]
+    /// Serializer counters and object-identity tables resolve from the active context on both ABIs.
     fn serializer_state_is_context_routed_on_both_abis() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
@@ -2039,6 +2093,7 @@ mod tests {
     }
 
     #[test]
+    /// Unserialization modes, temporary state and value tables avoid legacy globals on both ABIs.
     fn unserializer_state_is_context_routed_on_both_abis() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
@@ -2077,6 +2132,7 @@ mod tests {
     }
 
     #[test]
+    /// Worker entry preserves the host register, installs its context and contains fatal cleanup.
     fn parallel_worker_entry_installs_and_restores_the_context_on_both_abis() {
         for (target, install, save, restore, call) in [
             (
@@ -2138,6 +2194,7 @@ mod tests {
     }
 
     #[test]
+    /// Context owners drain under a live boundary before a clean slot is published for reuse.
     fn context_release_verifies_every_owner_family_before_pool_publication() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
@@ -2145,7 +2202,7 @@ mod tests {
         ] {
             let mut emitter = Emitter::new(target);
             emitter.ctx_register = true;
-            emit_rt_ctx_pool(&mut emitter);
+            emit_rt_ctx_pool(&mut emitter, crate::codegen_support::RuntimeFeatures::none());
             let asm = emitter.output();
             let release = asm.find("__rt_ctx_release:").expect("ctx release");
             let verify = asm[release..]
@@ -2164,6 +2221,14 @@ mod tests {
                     .expect("atomic slot release")
             };
             assert!(verify < publish, "{target:?}:\n{}", &asm[release..]);
+            let mut preceding = release;
+            for helper in ["__rt_stream_owner_drain", "__rt_buffer_registry_drain", "__rt_gc_collect_cycles", "__rt_resource_inventory_drain"] {
+                let cleanup = asm[preceding..verify].find(helper).map(|offset| preceding + offset)
+                    .unwrap_or_else(|| panic!("{target:?}: missing ordered cleanup {helper}"));
+                preceding = cleanup + helper.len();
+            }
+            assert_eq!(asm[release..verify].matches("__rt_cleanup_preserve_exception").count(), 4, "{target:?}: cleanup throws must not skip sibling families");
+            assert!(!asm[release..verify].contains("__rt_resource_inventory_reset"), "{target:?}: worker teardown must not reset the global id cursor");
             for family in [
                 "verify_owned_fd_loop",
                 "verify_popen_loop",
@@ -2264,59 +2329,7 @@ mod tests {
                 ..RuntimeFeatures::all()
             },
         );
-        let mut offenders: Vec<String> = Vec::new();
-        for raw in asm.lines() {
-            let line = raw.trim();
-            // INSTRUCTIONS only: skip blanks, comments, directives and labels.
-            // Reading the instruction stream is the whole point of the audit —
-            // an earlier version filtered lines on the comment prefix and so
-            // scanned nothing but comment text, which made it always green.
-            if line.is_empty() || line.starts_with(comment) || line.starts_with('.') {
-                continue;
-            }
-            let line = line.split(comment).next().unwrap_or(line).trim();
-            if line.is_empty() || line.ends_with(':') {
-                continue;
-            }
-            if !mentions_register(line, ctx_reg) {
-                continue;
-            }
-            let sanctioned = match arch {
-                Arch::AArch64 => {
-                    line.starts_with("stp x27, x28,")
-                        || line.starts_with("ldp x27, x28,")
-                        || line.starts_with("stp x21, x28,")
-                        || line.starts_with("ldp x21, x28,")
-                        || line.starts_with("adrp x28, _rt_ctx")
-                        || line.starts_with("add x28, x28, _rt_ctx")
-                        || line == "mov x28, x0"
-                        || ((line.starts_with("ldr ") || line.starts_with("str "))
-                            && line.contains("[x28, #")
-                            && !line.starts_with("ldr x28"))
-                        || line.starts_with("str x28, [sp")
-                        || line.starts_with("ldr x28, [sp")
-                        || (line.starts_with("mov x") && line.ends_with(", x28"))
-                        || (line.starts_with("add x") && line.contains(", x28, #"))
-                }
-                Arch::X86_64 => {
-                    line == "push r14"
-                        || line == "pop r14"
-                        || line == "mov r14, rdi"
-                        || line.starts_with("lea r14, [rip + _rt_ctx]")
-                        // whole-register save/restore (fiber switch context block)
-                        || line.starts_with("mov r14, QWORD PTR [")
-                        || line.ends_with(", r14")
-                        // Any ordinary memory operand may use r14 as its immutable base. This
-                        // includes memory-only arithmetic such as `dec [r14 + field]`; unlike a
-                        // register destination it cannot overwrite the reserved context pointer.
-                        || line.contains("[r14 +")
-                }
-            };
-            if !sanctioned {
-                offenders.push(line.to_string());
-            }
-        }
-        offenders
+        register_audit::offenders(&asm, arch, ctx_reg, comment)
     }
 
     /// A NON-ZERO concat-offset reset must emit a real store on both targets.
@@ -2502,7 +2515,7 @@ mod tests {
     /// True when `line` names `reg` as a register operand rather than as a
     /// substring of another token (`x28` inside a symbol like `_probe_x280`).
     /// Sub-register writes clobber the full register, so `r14d`/`r14w` count.
-    fn mentions_register(line: &str, reg: &str) -> bool {
+    pub(super) fn mentions_register(line: &str, reg: &str) -> bool {
         let bytes = line.as_bytes();
         let mut from = 0usize;
         while let Some(found) = line[from..].find(reg) {
@@ -2844,15 +2857,8 @@ mod tests {
                 "_concat_off",
                 "_concat_buf",
             ] {
-                assert!(
-                    !asm.contains(&format!("adrp x9, {legacy}"))
-                        && !asm.contains(&format!("rip + {legacy}")),
-                    "{arch:?} ctx runtime (all features) still references {legacy}"
-                );
-                assert!(
-                    !asm.contains(&format!(".comm {legacy}")),
-                    "{arch:?} ctx runtime (all features) must not declare {legacy}"
-                );
+                let references = register_audit::symbol_references(&asm, legacy, Target::new(platform, arch).line_comment_prefix());
+                assert!(references.is_empty(), "{arch:?} ctx runtime (all features) still references or declares {legacy}:\n{}", references.join("\n"));
             }
         }
     }

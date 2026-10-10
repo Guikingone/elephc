@@ -2,7 +2,7 @@
 title: "putenv()"
 description: "Sets an environment variable, or removes it when the argument has no equals sign."
 sidebar:
-  order: 291
+  order: 292
 ---
 
 ## putenv()
@@ -21,9 +21,16 @@ Sets an environment variable, or removes it when the argument has no equals sign
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/putenv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/putenv.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/putenv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/putenv.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+**Examples**:
+
+```php
+putenv("APP_ENV=production");
+echo getenv("APP_ENV") . "\n";
+putenv("APP_ENV");
+echo getenv("APP_ENV") === false ? "unset\n" : "still set\n";
+```
 
 ## Internals
 

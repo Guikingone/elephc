@@ -151,6 +151,23 @@ pub(super) fn resolve_expr(
                 })
                 .collect::<Result<Vec<_>, CompileError>>()?,
         ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries
+                .iter()
+                .map(|entry| {
+                    entry.try_map_exprs(|expr| {
+                        resolve_expr(
+                            expr.clone(),
+                            base_dir,
+                            declared_once,
+                            include_chain,
+                            state,
+                            function_variants,
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, CompileError>>()?,
+        ),
         ExprKind::Match {
             subject,
             arms,
@@ -281,6 +298,10 @@ pub(super) fn resolve_expr(
         },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type,
             args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
@@ -635,6 +656,8 @@ fn resolve_instanceof_target(
 ) -> Result<InstanceOfTarget, CompileError> {
     match target {
         InstanceOfTarget::Name(name) => Ok(InstanceOfTarget::Name(name)),
+        // Include resolution runs before instantiation, so the arguments pass through it.
+        InstanceOfTarget::Generic(class_type) => Ok(InstanceOfTarget::Generic(class_type)),
         InstanceOfTarget::Expr(expr) => Ok(InstanceOfTarget::Expr(Box::new(resolve_expr(
             *expr,
             base_dir,

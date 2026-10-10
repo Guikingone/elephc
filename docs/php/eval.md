@@ -76,17 +76,24 @@ elephc example.php
 See [`examples/eval/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval)
 for the broad feature showcase and
 [`examples/eval-globals/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval-globals)
-for global-scope synchronization. Dynamic regex opt-in is shown in
+for global-scope synchronization. Throwing a class declared by an earlier
+`eval()` is shown in
+[`examples/eval-throw/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval-throw).
+Dynamic regex opt-in is shown in
 [`examples/eval_regex/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval_regex).
 The implementation boundary is documented in
 [Eval Runtime Architecture](../internals/eval-runtime.md).
 
 ## Optional regex capability
 
-Dynamic eval source is opaque to compile-time feature detection. Merely linking
-Magician therefore does not link PCRE2 or expose `preg_*` inside evaluated code.
-A program without the capability still compiles; `function_exists("preg_match")`
-returns `false` inside dynamic eval and a call fails at runtime.
+Dynamic eval source is opaque to compile-time feature detection. Its shared
+mbstring output support handles the contract-owned default MIME expression
+without PCRE2. A custom `mbstring.http_output_conv_mimetypes` expression inside
+opaque eval requires the complete `--with-mbstring` capability and its managed
+PCRE2 package. That dependency does not expose `preg_*` inside evaluated code.
+Without the regex capability,
+`function_exists("preg_match")` returns `false` inside dynamic eval and a call
+fails at runtime.
 
 If evaluated source may use regex, declare the managed package and explicitly
 enable the capability:
@@ -98,9 +105,11 @@ elephc --with-regex example.php
 
 The compiler prints a post-compilation reminder when a binary contains dynamic
 eval without regex support. Static source that visibly uses `preg_*`,
-`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` continues to
-auto-detect regex and makes the same provider available to dynamic eval. Merely
-declaring PCRE2 in `elephc.toml` never forces it into a binary.
+`RegexIterator`, or `RecursiveRegexIterator` continues to auto-detect regex and
+makes that capability available to dynamic eval. Mbstring regex functions use
+the separate managed Oniguruma provider; `--with-mbstring` enables those calls
+for opaque eval. Merely declaring a package in `elephc.toml` does not enable its
+PHP call surfaces.
 
 ## Scope behavior
 
@@ -134,6 +143,24 @@ alias compiler-known program-global storage, and `global $argc` / `global
 $argv` inside function eval fragments alias the CLI argument globals. Unsetting
 such a local alias removes the alias without unsetting the global value.
 
+Superglobals (`$_SERVER`, `$_ENV`, `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
+`$_REQUEST`, `$_SESSION`) resolve through the global scope from every fragment,
+with no `global` statement, so a fragment running inside a function reads and
+writes the values the compiled program holds, and `unset()` removes the global
+one: it stays undefined for every later read, and eval never creates it again. When a fragment names a CLI
+superglobal that the compiled program never created, eval creates it as the
+fragment starts, the way PHP's `auto_globals_jit` does, with the contents a
+compiled CLI program gives it (see
+[System & I/O](system-and-io.md)): the environment in `$_ENV`, the environment
+plus the CLI keys in `$_SERVER`, and empty request arrays; `$_SESSION` is never
+created. Two differences remain for such an eval-created superglobal. It is
+created when first named rather than at startup, so it includes variables that
+`putenv()` set before that point. And it belongs to the eval global scope of
+the call that created it: top-level fragments share one, but a fragment inside
+a later function call starts from a fresh copy and does not see writes made
+through another call. Naming the superglobal anywhere in the compiled program
+makes it one shared value everywhere.
+
 ## Supported statements
 
 | Construct | Support |
@@ -145,7 +172,7 @@ such a local alias removes the alias without unsetting the global value.
 | Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, and `continue` are supported. |
 | Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
 | Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
-| Classes | Eval fragments can declare classes and traits with properties including comma-separated simple property declarations, PHP's legacy `var` public-property marker, asymmetric property write visibility (`private(set)` / `protected(set)`), constructor property promotion including by-reference promotion for variable, array-element, object-property, static-property, property-array-element, static-property-array-element, and default-value targets, concrete property get/set hooks including by-reference get-hook syntax and PHP-compatible explicit set-hook parameter typing, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations and PHP-compatible property/constant conflict checks, interface implementations, static members, class/interface/trait comma-separated constants including `final` constants, and class-level attributes. Duplicate eval class-like names and PHP-reserved bare class-like declaration/reference names are rejected. |
+| Classes | Eval fragments can declare classes and traits with properties including comma-separated simple property declarations, PHP's legacy `var` public-property marker, asymmetric property write visibility (`private(set)` / `protected(set)`, on declared and promoted properties), constructor property promotion including by-reference promotion for variable, array-element, object-property, static-property, property-array-element, static-property-array-element, and default-value targets, concrete property get/set hooks including by-reference get-hook syntax and PHP-compatible explicit set-hook parameter typing, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations and PHP-compatible property/constant conflict checks, interface implementations, static members, class/interface/trait comma-separated constants including `final` constants, and class-level attributes. Duplicate eval class-like names and PHP-reserved bare class-like declaration/reference names are rejected. |
 | Enums | Eval fragments can declare pure and `int` / `string` backed enums with cases, comma-separated constants including `final` constants, methods, interface implementations, `::cases()`, `::from()`, `::tryFrom()`, `->name`, and backed `->value`. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
@@ -157,10 +184,28 @@ order for iteration.
 
 Includes follow PHP's cwd-first lookup and then fall back to the eval call-site
 directory. Included PHP files may contain normal `<?php ... ?>` blocks, raw text
-outside PHP tags is echoed, a `return` inside the included file becomes the
+outside PHP tags is echoed byte for byte, a `return` inside the included file becomes the
 include expression value, successful includes without `return` evaluate to `1`,
 repeated `*_once` includes evaluate to `true`, missing `include` returns
 `false` with warnings, and missing `require` aborts the eval fragment.
+
+An included file is parsed as one script, as PHP compiles it, so a template's
+blocks may span the tags: `<?php foreach ($rows as $r) { ?><li><?= $r ?></li><?php } ?>`,
+the alternative syntax (`<?php if ($x): ?>…<?php endif; ?>`) and a function whose
+body spans blocks all run. `<?=` echoes, `?>` swallows the one newline after it,
+`__LINE__` counts from the top of the file, and `<?php` opens code only before
+whitespace or the end of the file (the short `<?` stays text). A parse error
+anywhere in the file stops the include before any of it runs. The file's PHP
+blocks must be UTF-8; the text outside them may hold any bytes. Heredoc and
+nowdoc are not parsed in eval code, in an included file either.
+
+In eval, `get_included_files()` preserves first-inclusion order, with the first
+nonempty native call-site path retained as the main entry. A query inside a
+nested include does not promote that included file ahead of main.
+`get_required_files()` is an alias and reports the same inventory, not a
+separate require history. Standalone contexts without a file path start empty.
+The AOT inventory remains a closed-world resolved-file manifest rather than a
+runtime include-execution history.
 
 ## Supported expressions
 
@@ -175,7 +220,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, variadic tails, dynamic static receivers (`$class::method()`, `$class::$method()`, and `($expr)::method()`), variable static method names on named receivers (`ClassName::$method()`), braced dynamic static method names (`ClassName::{$method}()` / `$class::{$method}()` / `($expr)::{$method}()`), and by-reference parameters for direct variable, array-element, object-property including dynamic property names, object-property array-element, static-property, and static-property array-element arguments including dynamic receivers and dynamic property names. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same fixed-parameter binding plus positional variadic tails, registered by-reference lvalue validation and writeback target preservation, plus representable scalar/string constant expressions, resolved global/named class-like constants, null, empty-array, supported array-valued, or supported object-valued default arguments for public/protected/private parameters when the current eval class scope satisfies PHP visibility; scalar, nullable, callable, Mixed, array, iterable, object, union, and intersection-object return values are checked and boxed back to eval. Generated AOT method bridge dispatch can invoke visibility-checked non-by-reference signatures plus `mixed`/untyped, scalar including string, nullable scalar, array, iterable, object, and supported union/intersection object shapes, with by-reference parameters limited to the staged scalar/nullable scalar/Mixed/array/iterable/object slice. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty top-level eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, eval-declared-function `__FUNCTION__` / `__METHOD__`, eval-declared-method `__FUNCTION__` / `__METHOD__` / `__CLASS__` / `__TRAIT__`, eval class-like constant/property initializers for `__CLASS__` / `__TRAIT__`, and reflected parameter defaults using the declaring callable scope, including trait-origin names for imported trait members. |
-| Constants | Predefined eval-visible constants, dynamic constants from `define()`, namespaced constant fallback, bare constant fetches, `$class::CONST`, expression-valued static receivers for `($expr)::CONST`, braced dynamic class constant names (`ClassName::{$constant}` / `$class::{$constant}` / `($expr)::{$constant}`), and `$object::class` are supported. |
+| Constants | Predefined eval-visible constants, AOT user-declared `const` / `define()` constants seeded under PHP's `user` category including recursively nested array values, dynamic constants from `define()`, namespaced constant fallback, bare constant fetches, `$class::CONST`, expression-valued static receivers for `($expr)::CONST`, braced dynamic class constant names (`ClassName::{$constant}` / `$class::{$constant}` / `($expr)::{$constant}`), and `$object::class` are supported. |
 | Ternaries | Full ternary and short ternary (`?:`). |
 | Match | Strict pattern comparison, comma-separated patterns, lazy result-arm evaluation, and `default`. A miss without `default` is reported as an eval runtime fatal. |
 
@@ -455,9 +500,15 @@ name. `ReflectionMethod::getShortName()` reports the reflected method name,
 while `ReflectionMethod::getNamespaceName()` reports an empty string and
 `inNamespace()` reports `false`, matching PHP's method reflection behavior.
 `ReflectionFunction` and `ReflectionMethod` report eval user-symbol defaults
-through `isInternal()`, `isUserDefined()`, `isClosure()`, `returnsReference()`,
+through `isInternal()`, `isUserDefined()`, `isClosure()`,
 `isGenerator()`, `isVariadic()`, `isStatic()`,
-`hasTentativeReturnType()`, and `getTentativeReturnType()`. `hasReturnType()`
+`hasTentativeReturnType()`, and `getTentativeReturnType()`.
+`returnsReference()` reports the reflected declaration: `true` for a compiled
+`function &f()` or `function &m()`, for an eval-declared `&get` property
+hook, and for an abstract or interface `&get` hook contract, whether eval or
+compiled code declares it. Eval code itself cannot declare a by-reference
+function, method, or closure (the fragment is rejected), so those report
+`false`. `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.
@@ -829,6 +880,23 @@ generated AOT class/interface metadata and eval-created object metadata.
 `interface_exists()`, `trait_exists()`, and `enum_exists()` can probe generated
 AOT metadata. `class_implements()` and `class_parents()` materialize
 generated/AOT interface and parent metadata when the bridge exposes it.
+For an enum declared in the compiled program, the generated interface metadata
+contains only its directly declared interfaces: `class_implements()` called
+from `eval()` still omits their transitive parents and the implicit `UnitEnum`
+and `BackedEnum` interfaces. Relation probes such as `is_a()` and
+`is_subclass_of()` use the same incomplete metadata for those compiled enums.
+Enums declared inside `eval()` do report transitive interface parents and
+`UnitEnum`, plus `BackedEnum` for backed enums, to probes executed inside `eval()`, like PHP.
+Compiled `class_implements()` also reports these interfaces for eval-declared enums.
+Compiled `is_a()` and `is_subclass_of()` calls with a class-name string still return
+`false` for an enum declared only inside `eval()`, because those calls consult the
+AOT class table. A case of an enum declared inside `eval()` uses the dynamic
+object bridge instead: compiled `is_a($case, "UnitEnum")` and
+`is_subclass_of($case, "UnitEnum")` report the implicit enum interface, including
+`BackedEnum` for a backed case. Returning a compiled enum case through `eval()`
+does not add those interfaces: it retains the incomplete AOT metadata, so these
+object probes still return `false` for its implicit `UnitEnum`/`BackedEnum`
+interfaces. Its explicitly declared interfaces remain visible.
 `class_uses()` reports direct trait uses for eval-declared and generated/AOT
 classes, traits, and enums. `class_alias()` can
 alias eval-declared and generated/AOT
@@ -903,6 +971,37 @@ Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
 optional leading `\`, and `define()` cannot replace them.
 
+Constants the compiled program itself declares with `const` or a literal
+`define()` are seeded into the eval context too, under PHP's `user` category
+rather than `Core`. Bare and namespaced constant fetches, `constant()`,
+`defined()`, and both the flat and categorized forms of
+`get_defined_constants()` see them, and `define()` inside a fragment reports the
+usual duplicate-constant warning and returns `false` for one of these names.
+Seeded values cover the scalar and compound shapes native
+`get_defined_constants()` materializes: `null`, booleans, integers, floats,
+strings, negated numeric literals, and nested indexed or associative arrays
+whose keys are integer, boolean, negated-integer, `null`, or string literals.
+PHP's numeric-string key collapsing and last-wins duplicate-key behavior are
+applied exactly as the native inventory applies them, and each array fetch
+materializes a fresh value, so writing to a fetched constant array never writes
+back into the seeded metadata.
+
+Array nesting is bounded rather than unlimited: the eval bridge encodes at most
+16 levels of nested array metadata, while the native inventory materializes an
+array literal to whatever depth the source declares. A constant nested deeper
+than that limit is therefore seeded natively but stays invisible inside eval.
+The same applies to any value that is not one of the forms above: an expression
+the constant folder could not reduce, an object, or a float array key. Such a
+constant is simply skipped, not a compile error and not a new fatal for an
+otherwise unrelated `eval()`; native `get_defined_constants()` rejects the
+object and float-key cases outright as well.
+
+Resource-typed values never appear in AOT-seeded user metadata: the compiler
+declares resource-typed predefined names such as `STDOUT` under `Core`, so a
+seeded `user` entry is always a scalar or an array. A fragment's own
+`define()` can still place a resource into the eval context's dynamic registry,
+and `get_defined_constants(true)` reports that under `user` as PHP does.
+
 The eval interpreter is a separate crate that cannot read `--php-version`
 itself, so the compiler forwards the profile to it: generated code sets it
 before every eval dispatch, exactly as it forwards `--strict-php`. A binary
@@ -952,6 +1051,20 @@ where listed below unless a note says otherwise.
 | Constants | `define()`, `defined()` |
 
 ## Builtin notes
+
+A builtin called with an argument count PHP refuses throws a catchable
+`ArgumentCountError` with PHP's message (`strlen() expects exactly 1 argument,
+0 given`) on every spelling: direct calls, `call_user_func()`,
+`call_user_func_array()`, variable calls, spreads, and callbacks. The arguments
+are evaluated first, as PHP sends them before the callee checks the count. A
+count PHP accepts but an eval handler does not implement yet, such as
+`array_keys()` with a filter value, is still an eval runtime fatal. Eval-declared
+functions, methods, and closures, and compiled functions called from eval, throw
+`ArgumentCountError` when a required argument is missing (`Too few arguments to
+function f(), 0 passed and exactly 1 expected`). PHP's positional message also
+names the calling file and line (`0 passed in ... on line 1 and ...`); eval does
+not track the line of a running statement, so that clause is omitted. A compiled
+function is named by its lowercase registered name.
 
 Eval `settype()` mutates direct variables, array elements, object properties
 including dynamic property names, and static properties including dynamic
@@ -1032,6 +1145,14 @@ ids, bridge-visible properties, eval-declared private/protected/public property
 labels, and eval property references when alias metadata is available.
 
 ## Current limitations
+
+Runtime introspection does not imply one process-global declaration registry.
+Native `get_defined_constants()` and `get_defined_functions()` append declarations
+from the current function's eval context, not from unrelated eval contexts.
+`get_resources()` shares the native inventory, including resource type and close
+updates, but eval `fclose()` still closes only eval-managed streams. Native locals
+synchronized into eval remain retained until the next synchronization or context
+release, which can delay last-owner resource retirement.
 
 Dynamic fragments and literal fragments outside the current AOT eligibility
 rules execute through the `elephc_magician` interpreter bridge. Eligible

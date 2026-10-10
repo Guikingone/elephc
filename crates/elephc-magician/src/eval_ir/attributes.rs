@@ -8,9 +8,11 @@
 //! - Attribute arguments remain syntax values until explicitly materialized by the interpreter.
 
 /// Literal attribute argument metadata retained by eval declarations.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalAttributeArg {
     String(String),
+    /// A PHP string attribute argument containing non-UTF-8 bytes.
+    Bytes(Vec<u8>),
     Int(i64),
     Float(u64),
     Bool(bool),
@@ -55,7 +57,7 @@ impl EvalAttributeArg {
 }
 
 /// Attribute metadata retained for eval class-like declarations.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalAttribute {
     name: String,
     args: Option<Vec<EvalAttributeArg>>,

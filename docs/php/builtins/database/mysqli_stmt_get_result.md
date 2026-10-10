@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_get_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns a prepared statement's result as a mysqli_result."
 sidebar:
-  order: 168
+  order: 169
 ---
 
 ## mysqli_stmt_get_result()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_get_result(mixed $statement): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns a prepared statement's result as a mysqli_result.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

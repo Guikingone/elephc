@@ -125,6 +125,24 @@ fn test_parse_typed_closure_param() {
 }
 
 #[test]
+/// Verifies that `$this(...)` parses as an invocation of the current object, an `ExprCall` whose
+/// callee is `$this`, and not as a method call that could fall back to `__call`.
+fn test_parse_invoke_this() {
+    let stmts = parse_source("<?php $r = $this(1, x: 2);");
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        match &value.kind {
+            ExprKind::ExprCall { callee, args } => {
+                assert!(matches!(callee.kind, ExprKind::This));
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected ExprCall, got {:?}", other),
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
 /// Verifies that the result of a static method call can itself be invoked
 /// (`Closure::bind(...)()`), parsing as an `ExprCall` whose callee is the `StaticMethodCall`.
 fn test_parse_invoke_static_method_call_result() {

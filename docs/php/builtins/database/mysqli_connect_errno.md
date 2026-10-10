@@ -1,8 +1,8 @@
 ---
 title: "mysqli_connect_errno()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the error code of the last connection attempt."
 sidebar:
-  order: 105
+  order: 106
 ---
 
 ## mysqli_connect_errno()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_connect_errno(): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the error code of the last connection attempt.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

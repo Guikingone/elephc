@@ -1,8 +1,8 @@
 ---
 title: "session_reset()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reloads the session data from storage, discarding this request's changes."
 sidebar:
-  order: 901
+  order: 996
 ---
 
 ## session_reset()
@@ -11,7 +11,7 @@ sidebar:
 function session_reset(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Reloads the session data from storage, discarding this request's changes.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

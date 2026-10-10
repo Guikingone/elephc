@@ -33,6 +33,7 @@ unsafe impl Send for OwnedBlob {}
 unsafe impl Sync for OwnedBlob {}
 
 impl Drop for OwnedBlob {
+    /// Releases the native transfer allocation exactly when its owning record drops the blob.
     fn drop(&mut self) {
         unsafe { release_transfer_blob(self.0) };
     }
@@ -64,6 +65,7 @@ static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 static JOBS: OnceLock<Mutex<HashMap<u64, Arc<JobRecord>>>> = OnceLock::new();
 static COMPLETIONS: OnceLock<CompletionSignal> = OnceLock::new();
 
+/// Initializes the process-wide generation/condition-variable pair for terminal transitions.
 fn completions() -> &'static CompletionSignal {
     COMPLETIONS.get_or_init(|| CompletionSignal {
         generation: Mutex::new(0),
@@ -71,6 +73,7 @@ fn completions() -> &'static CompletionSignal {
     })
 }
 
+/// Advances the completion generation under its mutex and wakes every group-level waiter.
 fn notify_completion() {
     let signal = completions();
     let mut generation = signal
@@ -107,10 +110,12 @@ pub extern "C" fn elephc_parallel_completion_wait(observed: u64) -> u64 {
     *generation
 }
 
+/// Initializes the registry that owns job records until terminal release.
 fn jobs() -> &'static Mutex<HashMap<u64, Arc<JobRecord>>> {
     JOBS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Clones a record lease under the registry lock so later state operations cannot use freed storage.
 fn job(id: u64) -> Option<Arc<JobRecord>> {
     jobs()
         .lock()
@@ -119,6 +124,7 @@ fn job(id: u64) -> Option<Arc<JobRecord>> {
         .cloned()
 }
 
+/// Allocates a never-reused nonzero id, failing rather than wrapping after exhaustion.
 fn next_job_id() -> Option<u64> {
     NEXT_JOB_ID
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
@@ -127,6 +133,7 @@ fn next_job_id() -> Option<u64> {
         .ok()
 }
 
+/// Identifies states ready for joining/release, including cancellation before worker start.
 fn terminal(phase: i32) -> bool {
     matches!(
         phase,
@@ -170,6 +177,7 @@ pub extern "C" fn elephc_parallel_job_create(input: ParallelTransferBlob) -> u64
     id
 }
 
+/// Transitions only a queued job to Running, leaving cancelled/terminal records unchanged.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_job_mark_running(id: u64) -> i32 {
     let Some(job) = job(id) else {
@@ -185,6 +193,7 @@ pub extern "C" fn elephc_parallel_job_mark_running(id: u64) -> i32 {
     1
 }
 
+/// Cancels queued jobs immediately or requests cooperative cancellation from a running worker.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_job_cancel(id: u64) -> i32 {
     let Some(job) = job(id) else {
@@ -209,6 +218,7 @@ pub extern "C" fn elephc_parallel_job_cancel(id: u64) -> i32 {
     }
 }
 
+/// Reads the cancellation request flag without treating a running request as terminal completion.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_job_cancellation_requested(id: u64) -> i32 {
     let Some(job) = job(id) else {
@@ -221,6 +231,7 @@ pub extern "C" fn elephc_parallel_job_cancellation_requested(id: u64) -> i32 {
     status
 }
 
+/// Publishes a structurally valid value result, transferring its blob only on a successful transition.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_job_complete(
     id: u64,
@@ -229,6 +240,7 @@ pub extern "C" fn elephc_parallel_job_complete(
     finish_job(id, PARALLEL_JOB_COMPLETED, 0, result)
 }
 
+/// Publishes a validated failure envelope/kind, transferring ownership only when the running job settles.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_job_fail(
     id: u64,
@@ -240,6 +252,8 @@ pub extern "C" fn elephc_parallel_job_fail(
     finish_job(id, PARALLEL_JOB_FAILED, failure_kind, failure)
 }
 
+/// Validates and atomically settles a running record, then wakes job/group waiters.
+/// Rejected transitions leave ownership of the incoming blob with its caller.
 fn finish_job(id: u64, phase: i32, failure_kind: i32, blob: ParallelTransferBlob) -> i32 {
     if (phase == PARALLEL_JOB_COMPLETED && !value_envelope_is_valid(blob))
         || (phase == PARALLEL_JOB_FAILED && failure_envelope_kind(blob).is_none())
@@ -268,6 +282,7 @@ fn finish_job(id: u64, phase: i32, failure_kind: i32, blob: ParallelTransferBlob
     1
 }
 
+/// Reads the synchronized phase or reports an invalid id/poisoned record.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_job_phase(id: u64) -> i32 {
     let Some(job) = job(id) else {
@@ -280,6 +295,7 @@ pub extern "C" fn elephc_parallel_job_phase(id: u64) -> i32 {
     phase
 }
 
+/// Waits for a terminal phase and joins the worker before returning that phase to the parent.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_job_wait(id: u64) -> i32 {
     let Some(job) = job(id) else {
@@ -303,6 +319,10 @@ pub extern "C" fn elephc_parallel_job_wait(id: u64) -> i32 {
 }
 
 /// Returns a borrowed input payload while the job is queued or running.
+///
+/// # Safety
+/// Nonnull output slots must be writable. Returned bytes remain owned by the job;
+/// the caller must prevent job release while it accesses that borrowed payload.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_job_input(
     id: u64,
@@ -332,6 +352,10 @@ pub unsafe extern "C" fn elephc_parallel_job_input(
 }
 
 /// Copies the queued/running input into worker-owned storage suitable for value decoding.
+///
+/// # Safety
+/// Nonnull output must be writable for one blob; a published copy is independently owned
+/// and must be released by its receiving caller.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_job_input_copy(
     id: u64,
@@ -370,6 +394,10 @@ pub unsafe extern "C" fn elephc_parallel_job_input_copy(
 }
 
 /// Copies the terminal result (`which=1`) or failure (`which=2`) into caller-owned storage.
+///
+/// # Safety
+/// Nonnull output must be writable for one blob; successful copies do not borrow the
+/// job's allocation and must be released independently by the caller.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_job_output_copy(
     id: u64,
@@ -409,6 +437,7 @@ pub unsafe extern "C" fn elephc_parallel_job_output_copy(
     }
 }
 
+/// Reads a record's retained failure category without consuming its envelope or marking it observed.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_job_failure_kind(id: u64) -> i32 {
     let Some(job) = job(id) else {
@@ -482,6 +511,7 @@ pub extern "C" fn elephc_parallel_job_release(id: u64) -> i32 {
     1
 }
 
+/// Grants one executor submission for a queued job, preventing duplicate native worker starts.
 pub(crate) fn reserve_submission(id: u64) -> bool {
     let Some(job) = job(id) else {
         return false;
@@ -496,6 +526,7 @@ pub(crate) fn reserve_submission(id: u64) -> bool {
     true
 }
 
+/// Rolls back a failed submission reservation only while the record is still queued.
 pub(crate) fn unreserve_submission(id: u64) {
     let Some(job) = job(id) else {
         return;
@@ -507,6 +538,7 @@ pub(crate) fn unreserve_submission(id: u64) {
     };
 }
 
+/// Terminalizes a cancellation request after its running worker has actually exited.
 pub(crate) fn cancel_running_after_worker_exit(id: u64) -> bool {
     let Some(job) = job(id) else {
         return false;
@@ -523,6 +555,7 @@ pub(crate) fn cancel_running_after_worker_exit(id: u64) -> bool {
     true
 }
 
+/// Settles a running job with its preallocated failure envelope when ordinary failure allocation fails.
 pub(crate) fn fail_with_emergency_envelope(id: u64) -> bool {
     let Some(job) = job(id) else {
         return false;
@@ -557,6 +590,7 @@ mod tests {
         PARALLEL_FAILURE_CONTEXT_UNAVAILABLE,
     };
 
+    /// Creates an owned EPV string envelope for job-state fixtures.
     fn blob(bytes: &[u8]) -> ParallelTransferBlob {
         let writer = elephc_parallel_value_writer_new();
         assert!(!writer.is_null());
@@ -575,6 +609,7 @@ mod tests {
         blob
     }
 
+    /// Creates an outer transfer blob without EPV validation for malformed-input controls.
     fn raw_blob(bytes: &[u8]) -> ParallelTransferBlob {
         let mut blob = ParallelTransferBlob {
             ptr: ptr::null_mut(),
@@ -587,6 +622,7 @@ mod tests {
         blob
     }
 
+    /// Encodes an owned minimal EPFL fixture with the requested category and message.
     fn failure_blob(kind: i32, message: &[u8]) -> ParallelTransferBlob {
         let absent = ParallelBytes {
             ptr: ptr::null(),
@@ -616,6 +652,7 @@ mod tests {
         blob
     }
 
+    /// Copies and decodes a live record's input without retaining a borrowed job pointer.
     fn input(id: u64) -> Vec<u8> {
         let mut copy = ParallelTransferBlob {
             ptr: ptr::null_mut(),
@@ -628,6 +665,7 @@ mod tests {
         decode_string(copy)
     }
 
+    /// Copies and decodes a selected terminal value while leaving its cached job allocation intact.
     fn output(id: u64, which: i32) -> Vec<u8> {
         let mut copy = ParallelTransferBlob {
             ptr: ptr::null_mut(),
@@ -640,6 +678,7 @@ mod tests {
         decode_string(copy)
     }
 
+    /// Copies a string view into test-owned bytes before freeing its source envelope.
     fn decode_string(blob: ParallelTransferBlob) -> Vec<u8> {
         let mut cursor = 0;
         assert_eq!(
@@ -666,6 +705,7 @@ mod tests {
         bytes
     }
 
+    /// Completed jobs retain input and repeatable copied results until terminal release removes the id.
     #[test]
     fn completed_job_keeps_input_and_result_until_release() {
         let id = elephc_parallel_job_create(blob(b"input"));
@@ -682,6 +722,7 @@ mod tests {
         assert_eq!(elephc_parallel_job_phase(id), PARALLEL_JOB_ERROR);
     }
 
+    /// Raw non-EPV payloads cannot become job inputs/results and remain caller-owned on rejection.
     #[test]
     fn jobs_reject_raw_transfer_blobs_for_php_values() {
         let invalid_input = raw_blob(b"not EPV1");
@@ -700,6 +741,7 @@ mod tests {
         assert_eq!(elephc_parallel_job_release(id), 1);
     }
 
+    /// Queued cancellation is terminal, whereas a running request remains cooperative until exit.
     #[test]
     fn queued_and_running_cancellation_have_distinct_lifecycles() {
         let queued = elephc_parallel_job_create(blob(b"queued"));
@@ -716,6 +758,7 @@ mod tests {
         assert_eq!(elephc_parallel_job_release(running), 1);
     }
 
+    /// Failure kind/data remain copyable and observation is explicit rather than consuming the envelope.
     #[test]
     fn failure_kind_and_payload_are_retained() {
         let id = elephc_parallel_job_create(blob(b"input"));
@@ -779,6 +822,7 @@ mod tests {
         assert_eq!(elephc_parallel_job_release(id), 1);
     }
 
+    /// A preallocated failure envelope lets allocation failure settle instead of stranding a running job.
     #[test]
     fn emergency_failure_envelope_prevents_a_running_job_from_stalling() {
         let id = elephc_parallel_job_create(blob(b"input"));
@@ -824,6 +868,7 @@ mod tests {
         assert_eq!(elephc_parallel_job_release(id), 1);
     }
 
+    /// A per-job condition-variable waiter wakes after completion from another thread.
     #[test]
     fn wait_unblocks_after_another_thread_completes() {
         let id = elephc_parallel_job_create(blob(b"input"));
@@ -834,6 +879,7 @@ mod tests {
         assert_eq!(elephc_parallel_job_release(id), 1);
     }
 
+    /// Releasing a terminal record never makes its id available to another job.
     #[test]
     fn job_ids_are_monotonic_and_never_reused_after_release() {
         let first = elephc_parallel_job_create(blob(b"first"));
@@ -845,6 +891,7 @@ mod tests {
         assert_eq!(elephc_parallel_job_release(second), 1);
     }
 
+    /// Generation-based group waiting observes completion without losing a racing terminal transition.
     #[test]
     fn completion_generation_wakes_group_waiters_without_lost_transitions() {
         let id = elephc_parallel_job_create(blob(b"input"));

@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
+
 jobs:
   verify-ci:
     name: Verify CI for tagged commit
@@ -30,7 +35,7 @@ jobs:
       # bump commit that `prepare` pushes to protected main.
       sha: ${{ steps.tag.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.ref }}
@@ -94,12 +99,12 @@ jobs:
       # bot token pins the same SHA; bump them together.
       - name: Mint Illegal Bot token
         id: app-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
           private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The SHA `verify-ci` resolved and checked, never the tag itself.
           ref: ${{ needs.verify-ci.outputs.sha }}
@@ -167,7 +172,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14  # Apple Silicon runner
+            runner: macos-15  # Apple Silicon runner
           # Linux release builds run on ubuntu-22.04 (glibc 2.35) rather than
           # the ubuntu-24.04 generation CI tests on, so the published binaries
           # also run on older distros (Ubuntu 22.04, Debian 12, RHEL 9, ...).
@@ -176,12 +181,14 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Build release binary
         run: cargo build --release
@@ -201,7 +208,7 @@ jobs:
       # `every_bridge_staticlib_ships_in_the_release_tarball` fails the build
       # rather than letting the two lists drift again.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-parallel -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-parallel -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
 
       - name: Build curl-aware Magician staticlib
         run: |
@@ -213,6 +220,13 @@ jobs:
       - name: Strip binary
         run: strip target/release/elephc
 
+      - name: Copy mbstring data notices
+        run: |
+          mkdir -p target/release/mbstring-notices
+          cp crates/elephc-mbstring/NOTICE.md target/release/mbstring-notices/
+          cp crates/elephc-mbstring/src/unicode/data/LICENSE-UNICODE target/release/mbstring-notices/
+          cp crates/elephc-mbstring/src/detect/data/LICENSE-PHP target/release/mbstring-notices/
+
       - name: Create tarball
         run: |
           cd target/release
@@ -223,6 +237,7 @@ jobs:
             libelephc_pdo.a \
             libelephc_crypto.a \
             libelephc_bcmath.a \
+            libelephc_mbstring.a \
             libelephc_iconv.a \
             libelephc_phar.a \
             libelephc_tz.a \
@@ -235,7 +250,8 @@ jobs:
             libelephc_xml.a \
             libelephc_magician.a \
             libelephc_curl.a \
-            libelephc_magician_curl.a
+            libelephc_magician_curl.a \
+            mbstring-notices
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else
@@ -243,7 +259,7 @@ jobs:
           fi
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: |
@@ -283,13 +299,13 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
@@ -310,23 +326,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
 
-      # The probe native-adds curl in its empty WORKDIR before
-      # --with-curl, and libxml2 before --with-xml, then compile-probes the
-      # packed archives. This cache is the default root that add writes
-      # (`~/.cache/elephc/native`), keyed like curl-codegen-tests (plus the
-      # libxml2 lock and recipe) so a warm runner skips the from-source
-      # openssl/libcurl/libxml2 rebuild. The compiler itself stays
-      # fail-closed for real projects.
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib/libxml2
-        uses: actions/cache@v4
+      # The probe prepares curl, Oniguruma, PCRE2, and libxml2 in its empty
+      # WORKDIR before force-enabling their packed bridges. This cache is the
+      # default root that native add writes (`~/.cache/elephc/native`), so a
+      # warm runner skips the from-source native rebuilds.
+      - name: Cache managed native curl, mbstring, and XML dependencies
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             verify-native-${{ matrix.target }}-
 
       - name: Download the built tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-${{ matrix.target }}
           path: dist
@@ -346,7 +359,7 @@ jobs:
       - verify-artifact
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-*
           merge-multiple: true
@@ -359,7 +372,7 @@ jobs:
         # code authorised to rewrite this repository's releases, tags and
         # published artifacts without any diff to review here. Both publish
         # paths pin the same SHA; bump them together.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           generate_release_notes: true
           files: dist/*
@@ -369,7 +382,7 @@ jobs:
       # full commit SHA for the same reason as the other bot-token steps.
       - name: Mint Illegal Bot token for the tap
         id: tap-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
           private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
@@ -411,6 +424,7 @@ jobs:
               lib.install "libelephc_pdo.a"
               lib.install "libelephc_crypto.a"
               lib.install "libelephc_bcmath.a"
+              lib.install "libelephc_mbstring.a"
               lib.install "libelephc_iconv.a"
               lib.install "libelephc_phar.a"
               lib.install "libelephc_tz.a"
@@ -424,6 +438,7 @@ jobs:
               lib.install "libelephc_magician.a"
               lib.install "libelephc_curl.a"
               lib.install "libelephc_magician_curl.a"
+              pkgshare.install "mbstring-notices"
             end
 
             test do

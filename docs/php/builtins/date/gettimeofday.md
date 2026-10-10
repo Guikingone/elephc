@@ -1,8 +1,8 @@
 ---
 title: "gettimeofday()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the current time as an array of parts, or as a float."
 sidebar:
-  order: 220
+  order: 221
 ---
 
 ## gettimeofday()
@@ -11,7 +11,7 @@ sidebar:
 function gettimeofday(bool $as_float = false): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the current time as an array of parts, or as a float.
 
 **Parameters**:
 - `$as_float` (`bool`), default `false`, optional
@@ -23,7 +23,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

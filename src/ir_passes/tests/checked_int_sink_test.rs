@@ -104,6 +104,34 @@ fn specializes_all_checked_integer_opcodes_at_cast_sinks() {
     }
 }
 
+/// Boolean casts share I64 storage but are normalization operations, not integer sinks.
+#[test]
+fn boolean_cast_is_not_an_integer_sink() {
+    for op in [Op::ICheckedAdd, Op::ICheckedSub, Op::ICheckedMul] {
+        let mut function = Function::new("bool_sink".to_string(), IrType::I64, PhpType::Bool);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let lhs = builder.emit_const_i64(7);
+            let rhs = builder.emit_const_i64(2);
+            let checked = emit_checked(&mut builder, op, lhs, rhs);
+            let boolean = builder.emit(
+                Op::Cast, vec![checked], Some(Immediate::CastTarget(IrType::I64)),
+                IrType::I64, PhpType::Bool, Ownership::NonHeap,
+            ).expect("boolean cast");
+            builder.terminate(Terminator::Return { value: Some(boolean) });
+        }
+        assert!(validate_function(&function).is_ok());
+        assert!(!CheckedIntSink.is_applicable(&function));
+        assert!(!specialize(&mut function));
+        assert_eq!(function.instructions[2].op, op);
+        assert_eq!(function.instructions[3].op, Op::Cast);
+        assert!(validate_function(&function).is_ok());
+    }
+}
+
 /// Acquire/release scaffolding around a checked value is removed before an integer store.
 #[test]
 fn specializes_typed_local_store_through_acquire_release() {
@@ -342,6 +370,67 @@ fn narrows_mixed_local_store_without_boxed_readers() {
         "narrowed store fixture invalid: {:?}",
         validate_function(&function)
     );
+}
+
+/// Builds numeric slot retirement with an optional read before its replacement store.
+fn retiring_integer_slot(observe_retired: bool) -> Function {
+    let mut function = Function::new("retiring_integer".to_string(), IrType::Void, PhpType::Void);
+    let mut builder = Builder::new(&mut function);
+    let entry = builder.create_named_block("entry", vec![]);
+    builder.set_entry(entry);
+    builder.position_at_end(entry);
+    let slot = builder.add_local(
+        Some("counter".to_string()), IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed, LocalKind::PhpLocal,
+    );
+    let initial = builder.emit_const_i64(0);
+    builder.emit_store_local(slot, initial);
+    let lhs = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+    let rhs = builder.emit_const_i64(1);
+    let checked = emit_checked(&mut builder, Op::ICheckedAdd, lhs, rhs);
+    let acquired = builder.emit(
+        Op::Acquire, vec![checked], None, IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed, Ownership::Owned,
+    ).expect("acquired numeric result");
+    builder.emit(
+        Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(slot)),
+        IrType::Void, PhpType::Void, Ownership::NonHeap,
+    );
+    if observe_retired {
+        let retired = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+        builder.emit(
+            Op::EchoValue, vec![retired], None, IrType::Void, PhpType::Void, Ownership::NonHeap,
+        );
+    }
+    builder.emit_store_local(slot, acquired);
+    builder.emit(
+        Op::Release, vec![checked], None, IrType::Void, PhpType::Void, Ownership::NonHeap,
+    );
+    builder.terminate(Terminator::Return { value: None });
+    function
+}
+
+/// Numeric retirement immediately before overwrite does not prevent allocation-free counters.
+#[test]
+fn narrows_integer_slot_with_atomic_retirement_before_overwrite() {
+    let mut function = retiring_integer_slot(false);
+    assert!(validate_function(&function).is_ok());
+    assert!(specialize(&mut function));
+    assert_eq!(function.locals[0].php_type, PhpType::Int);
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::ICheckedAddToInt));
+    assert!(!function.instructions.iter().any(|inst| inst.op == Op::ReleaseLocalSlot));
+    assert!(validate_function(&function).is_ok());
+}
+
+/// Reading a retired slot before overwriting it forbids removing the observable clear.
+#[test]
+fn rejects_integer_slot_with_observable_retirement() {
+    let mut function = retiring_integer_slot(true);
+    assert!(validate_function(&function).is_ok());
+    assert!(!specialize(&mut function));
+    assert_eq!(function.locals[0].php_type, PhpType::Mixed);
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::ReleaseLocalSlot));
+    assert!(validate_function(&function).is_ok());
 }
 
 /// A Mixed slot whose boxed value still escapes keeps its boxed frame storage.

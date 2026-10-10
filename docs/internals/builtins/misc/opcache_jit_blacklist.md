@@ -1,16 +1,16 @@
 ---
-title: "opcache_jit_blacklist() — internals"
+title: "opcache_jit_blacklist() - internals"
 description: "Compiler internals for opcache_jit_blacklist(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 619
+  order: 644
 ---
 
-## `opcache_jit_blacklist()` — internals
+## `opcache_jit_blacklist()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L540) (`opcache_jit_blacklist`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:1037](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L1037) (`opcache_jit_blacklist`)
 - **Function symbol**: `opcache_jit_blacklist()`
 
 
@@ -38,7 +38,7 @@ function opcache_jit_blacklist(mixed $closure): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+Calls prefer the program's native OPcache prelude declarations, which carry the configured directives, live cache, and API restrictions. Dedicated interpreter handlers cover programs without those declarations ([`crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs)). This route does not use an `eval_builtin!` binding.
 
 ## Cross-references
 

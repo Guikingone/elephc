@@ -1,8 +1,8 @@
 ---
 title: "cairo_matrix_init_identity()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an identity transformation matrix."
 sidebar:
-  order: 412
+  order: 413
 ---
 
 ## cairo_matrix_init_identity()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_matrix_init_identity(): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an identity transformation matrix.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

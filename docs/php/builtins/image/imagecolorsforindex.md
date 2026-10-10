@@ -1,8 +1,8 @@
 ---
 title: "imagecolorsforindex()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the red, green, blue, and alpha channels of a palette index."
 sidebar:
-  order: 476
+  order: 477
 ---
 
 ## imagecolorsforindex()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorsforindex(mixed $image, int $color): array
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the red, green, blue, and alpha channels of a palette index.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

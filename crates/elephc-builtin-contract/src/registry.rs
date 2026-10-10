@@ -36,12 +36,14 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
+                    + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
                     + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
@@ -106,6 +108,12 @@ fn build_registry() -> Registry {
             "builtin contract ID does not match canonical name: {}",
             contract.name
         );
+        contract.returns.validate().unwrap_or_else(|error|
+            panic!("invalid return type for {}: {error}", contract.name));
+        for parameter in contract.params {
+            parameter.ty.validate().unwrap_or_else(|error|
+                panic!("invalid parameter type for {}::${}: {error}", contract.name, parameter.name));
+        }
         let mut callback_names = HashSet::new();
         for callback_name in contract.callback_parameter_names() {
             assert!(
@@ -148,9 +156,31 @@ mod tests {
         // The PHP-visible `curl_*` surface is published only with the `curl`
         // feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(contracts().len(), 1043 + curl_surface);
+        // Four internal Async helpers and the public prelude entry extend incoming main.
+        assert_eq!(contracts().len(), 1151 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
+    }
+
+    /// Verifies the PHP 8.5 clone function keeps its object and override-array contract.
+    #[test]
+    fn clone_contract_matches_php_85() {
+        let contract = lookup("clone").expect("clone contract");
+        assert_eq!(contract.module, crate::PhpModule::Core);
+        assert_eq!(contract.since, Some(crate::PhpVersion::Php85));
+        assert_eq!(contract.kind, crate::BuiltinKind::Function);
+        assert_eq!(contract.params.len(), 2);
+        assert_eq!(contract.params[0].name, "object");
+        assert_eq!(contract.params[0].ty, crate::TypeSpec::Object);
+        assert_eq!(contract.params[1].name, "withProperties");
+        assert_eq!(contract.params[1].ty, crate::TypeSpec::Array);
+        assert_eq!(
+            contract.params[1].default,
+            Some(crate::DefaultSpec::EmptyArray)
+        );
+        assert_eq!(contract.returns, crate::TypeSpec::Object);
+        assert_eq!(contract.signature().required_param_count(), 1);
+        assert_eq!(contract.signature().params.len(), 2);
     }
 
     /// Verifies stable IDs resolve to the same contracts as PHP names.

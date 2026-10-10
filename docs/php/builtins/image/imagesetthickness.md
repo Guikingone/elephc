@@ -1,8 +1,8 @@
 ---
 title: "imagesetthickness()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Sets the line thickness used by subsequent drawing."
 sidebar:
-  order: 529
+  order: 530
 ---
 
 ## imagesetthickness()
@@ -11,7 +11,7 @@ sidebar:
 function imagesetthickness(mixed $image, int $thickness): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Sets the line thickness used by subsequent drawing.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

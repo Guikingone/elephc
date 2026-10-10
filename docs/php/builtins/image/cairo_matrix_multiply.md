@@ -1,8 +1,8 @@
 ---
 title: "cairo_matrix_multiply()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the product of two transformation matrices."
 sidebar:
-  order: 416
+  order: 417
 ---
 
 ## cairo_matrix_multiply()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_matrix_multiply(mixed $m1, mixed $m2): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the product of two transformation matrices.
 
 **Parameters**:
 - `$m1` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

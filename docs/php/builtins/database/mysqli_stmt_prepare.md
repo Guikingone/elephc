@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_prepare()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Prepares SQL on a statement created by mysqli_stmt_init()."
 sidebar:
-  order: 173
+  order: 174
 ---
 
 ## mysqli_stmt_prepare()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_prepare(mixed $statement, string $query): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Prepares SQL on a statement created by mysqli_stmt_init().
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

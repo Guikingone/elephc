@@ -8,7 +8,7 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
-6. Backend availability and all 445 non-registry contract routes remain coherent.
+6. Backend availability and all 444 non-registry contract routes remain coherent.
 7. User-facing pages contain no runs of multiple blank lines.
 8. No override table in ``registry.py`` declares the same builtin twice.
 
@@ -139,14 +139,15 @@ def _check_backend_contracts(
         "dedicated-syntax": 1,
         # Four hash_*, the 34 PHP-visible curl_* (published only by the canonical
         # `--features curl` documentation configuration, see elephc_builtins/extract.py),
-        # the 54 xml_* / xmlwriter_* functions the xml prelude declares, and the 289
+        # the 54 xml_* / xmlwriter_* functions the xml prelude declares, and the 288
         # functions the mysqli, PDO, web, image, OPcache, tz, var_export and version
-        # preludes declare, plus Elephc\\Async\\run — all injected-prelude routes.
-        "prelude": 382,
+        # preludes declare, plus Elephc\\Async\\run, all injected-prelude routes.
+        "prelude": 381,
+        # Calls rewritten from their enclosing lexical function frame.
+        "compiler-transform": 3,
         # The date/calendar procedural families the name resolver rewrites onto the
         # DateTime and calendar classes.
         "name-resolver-rewrite": 54,
-        "none": 3,
     }
     expected_total = sum(expected_counts.values())
     if len(non_registry) != expected_total:
@@ -188,6 +189,15 @@ def _check_backend_contracts(
         if (record.get("eval") or {}).get("kind") != "registry":
             errors.append(f"{name} must be eval-supported by a Magician registry binding")
 
+    # OPcache's existing native-prelude/fallback route has no eval_builtin! home.
+    # Generated availability must still reflect that the APIs are callable in eval.
+    for record in by_name.values():
+        if record.get("module") != "zend opcache":
+            continue
+        support = record.get("eval") or {}
+        if not support.get("supported") or support.get("kind") != "opcache-dispatch":
+            errors.append(f"{record['name']} must document its dedicated OPcache eval route")
+
     hash_init = by_name.get("hash_init") or {}
     if (hash_init.get("aot") or {}).get("signature_override_reason") != "prelude-signature-subset":
         errors.append("hash_init must document its narrower AOT prelude signature")
@@ -198,7 +208,8 @@ def _check_backend_contracts(
 
     for record in raw:
         supported = bool((record.get("aot") or {}).get("supported"))
-        if bool(record.get("eval_only")) == supported:
+        expected_eval_only = not supported and bool((record.get("eval") or {}).get("supported"))
+        if bool(record.get("eval_only")) != expected_eval_only:
             errors.append(f"{record['name']} has an inconsistent eval_only flag")
     stats["backend_contract_checks"] = len(non_registry)
 

@@ -11,6 +11,7 @@
 
 use super::*;
 
+/// Accepts in-range decimal integer spellings directly, preserving exact signed-i64 boundary values.
 pub(super) fn accept_exact_integer_spelling(
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -116,16 +117,19 @@ pub(super) fn accept_exact_integer_spelling(
     emitter.label(&next);
 }
 
+/// Branches when no borrowed string bytes remain before the next lexical read.
 fn compare_zero(emitter: &mut Emitter, register: &str, label: &str) {
     compare_immediate(emitter, register, 0);
     conditional(emitter, "eq", label);
 }
 
+/// Compares a scanned byte/count with a small immediate using the target's assembly spelling.
 fn compare_immediate(emitter: &mut Emitter, register: &str, value: u8) {
     let immediate = if emitter.target.arch == Arch::AArch64 { format!("#{value}") } else { value.to_string() };
     emitter.instruction(&format!("cmp {register}, {immediate}"));               // compare one bounded lexical value without reading past the string
 }
 
+/// Maps decimal-scan equality/unsigned-bound conditions to the corresponding target branch.
 fn conditional(emitter: &mut Emitter, condition: &str, label: &str) {
     let branch = match (emitter.target.arch, condition) {
         (Arch::AArch64, "eq") => "b.eq", (Arch::AArch64, "lo") => "b.lo",
@@ -135,6 +139,7 @@ fn conditional(emitter: &mut Emitter, condition: &str, label: &str) {
     emitter.instruction(&format!("{branch} {label}"));                          // retain the correct unsigned decimal-bound comparison on each target
 }
 
+/// Reads one borrowed byte after the caller has checked the remaining length.
 fn load_byte(emitter: &mut Emitter, byte: &str, pointer: &str) {
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("ldrb {byte}, [{pointer}]")), // read exactly one byte after checking the remaining length
@@ -142,6 +147,7 @@ fn load_byte(emitter: &mut Emitter, byte: &str, pointer: &str) {
     }
 }
 
+/// Advances the borrowed pointer and consumes one byte without allocating or calling libc.
 fn advance(emitter: &mut Emitter, pointer: &str, remaining: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {

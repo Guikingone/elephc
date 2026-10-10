@@ -1,8 +1,8 @@
 ---
 title: "mysqli_release_savepoint()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Removes a named savepoint from the open transaction."
 sidebar:
-  order: 150
+  order: 151
 ---
 
 ## mysqli_release_savepoint()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_release_savepoint(mixed $mysql, string $name): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Removes a named savepoint from the open transaction.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

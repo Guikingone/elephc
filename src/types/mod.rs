@@ -14,6 +14,9 @@ pub mod checker;
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// Whether an un-hinted declaration returns one of its untyped parameters; shared so the
+/// checker and EIR lowering cannot disagree about the recorded return type (issue #576).
+pub mod dynamic_params;
 /// Array storage-representation conversions shared by checking and lowering.
 mod array_storage;
 /// Call argument planning: named, positional, and spread semantics.
@@ -36,41 +39,58 @@ mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
 /// Function signature representation and builtin signature helpers.
-mod signatures;
+///
+/// Crate-visible because the descriptor variadic storage contract
+/// (`signatures::descriptor_variadic_container` and its predicates) has to be asked the SAME
+/// question by the checker, by EIR lowering, and by the runtime callable invoker. A contract
+/// three layers must agree on cannot be re-spelled behind a narrow re-export in each of them.
+pub(crate) mod signatures;
 /// Target-dependent values of `ICONV_IMPL` / `ICONV_VERSION`.
 pub(crate) mod iconv_constants;
 /// The compiler's view over the shared builtin class catalog.
 pub(crate) mod builtin_classes;
 /// The compiler's view over the shared global-constant catalog.
 pub(crate) mod predefined_constants;
+/// `defined('Class::CONST')` existence lookup over class/interface/enum metadata.
+mod defined;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
 pub(crate) use array_keys::{
-    array_key_type_from_value_type, is_php_integer_array_key, merge_array_key_types,
-    normalized_array_key_type, parse_php_string_offset_literal,
+    array_key_contiguity_is_unproven, array_key_type_from_value_type, is_php_integer_array_key,
+    merge_array_key_types, normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
-    collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
+    collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
+    ReturnArgAlias,
 };
 pub(crate) use result::LoopStorageTypes;
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.
 #[allow(unused_imports)]
-pub use result::check_with_target;
+pub use result::{check_with_options_and_bounds, check_with_target, check_with_target_and_bounds};
 pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
+pub use schema::{
+    class_declares_private_property, class_inherits_from,
+    property_name_shadows_ancestor_private_slot, resolve_property_name,
+    scope_shares_class_hierarchy, PropertyNameResolution,
+};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
     PackedFieldInfo, PropertyHookContract,
 };
 pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
+pub(crate) use defined::{
+    class_like_constant_is_defined, class_like_constant_scope_error,
+    defined_late_static_member,
+};
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };

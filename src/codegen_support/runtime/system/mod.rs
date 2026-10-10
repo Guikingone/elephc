@@ -40,7 +40,6 @@ mod json_pretty;
 mod json_throw_error;
 mod match_unhandled;
 mod mktime;
-mod mb_ereg_match;
 mod pcre_to_posix;
 mod pcntl;
 mod pcntl_data;
@@ -101,7 +100,6 @@ pub(crate) use microtime::emit_microtime_str;
 pub(crate) use microtime::emit_microtime_mixed;
 pub(crate) use mktime::emit_mktime;
 pub(crate) use php_uname::emit_php_uname;
-pub(crate) use mb_ereg_match::emit_mb_ereg_match;
 pub(crate) use pcre_to_posix::emit_pcre_to_posix;
 pub(crate) use pcntl::{
     emit_pcntl_rusage_array, emit_pcntl_siginfo_array, emit_pcntl_signal_dispatch,
@@ -118,5 +116,6 @@ pub(crate) use serialize::emit_serialize;
 pub(crate) use shell_exec::emit_shell_exec;
 pub(crate) use strtotime::emit_strtotime;
 pub(crate) use strtotime::emit_strtotime_data;
+pub(crate) use strtotime::STRTOTIME_ISO_PAD_BUF_LEN;
 pub(crate) use time::emit_time;
 pub(crate) use unserialize::emit_unserialize;

@@ -1157,6 +1157,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
         assert!(html.contains("Net wait"), "{html}");
     }
 
+    /// Renders task/scope lineage, state durations, wake counts and trace identity from scheduler dumps.
     #[test]
     fn renders_scheduler_state_accounting_and_lineage() {
         let dump = "elephc-instr-scheduler: domain=async scope=3 task=4294967297 parent=-1 group_task=4294967297 state=completed transitions=7 runnable_ns=40000 running_ns=50000 blocked_ns=60000 cancellation_ns=0 wake_spawn=1 wake_yield=0 wake_dependency=0 wake_timer=1 wake_io_ready=0 wake_io_timeout=0 wake_cancellation=0 ctx=0xabc worker=7 trace=trace-id span=span-id\n";
@@ -1219,12 +1220,31 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
 
     #[test]
     /// Emitted symbol names map back to what the programmer wrote.
+    ///
+    /// The symbols come from the compiler's own builders, so both of
+    /// `names::join_symbol_fragments`' shapes are covered: the compact
+    /// `_method_Engine_step` and the escaped `_method___My_u_Class___run` that
+    /// any `_`, `\` or non-ASCII name produces. Only the compact shape used to
+    /// demangle (#922): the escaped one printed `::_My_Class___run`.
     fn demangles_php_symbols() {
+        use elephc::names::{function_symbol, method_symbol, static_method_symbol};
         assert_eq!(demangle("main"), "{main}");
-        assert_eq!(demangle("fn_hot_u_leaf"), "hot_leaf");
-        assert_eq!(demangle("method_Engine_step"), "Engine::step");
-        // `_u_` inside the class name survives the class/method split.
-        assert_eq!(demangle("method_My_u_Class_run"), "My_Class::run");
+        assert_eq!(demangle(&function_symbol("hot_leaf")), "hot_leaf");
+        assert_eq!(demangle(&function_symbol("App\\run")), "App\\run");
+        assert_eq!(demangle(&method_symbol("Engine", "step")), "Engine::step");
+        assert_eq!(demangle(&static_method_symbol("Engine", "tick")), "Engine::tick");
+        for (class, method) in [
+            ("My_Class", "run"),
+            ("App\\Foo", "bar"),
+            ("Engine", "hot_step"),
+            ("App\\My_Class", "__construct"),
+            ("App\\\u{c9}ngine", "run"),
+            ("_", "_"),
+        ] {
+            let expected = format!("{class}::{method}");
+            assert_eq!(demangle(&method_symbol(class, method)), expected);
+            assert_eq!(demangle(&static_method_symbol(class, method)), expected);
+        }
         assert_eq!(demangle("_rt_heap_alloc"), "_rt_heap_alloc");
     }
 

@@ -66,13 +66,14 @@ fn curl_file_writes_the_body_to_a_stream() {
 /// fixture means PHP_CURL_STDOUT, and shows up as a bare `hello-curl` in the program's
 /// own output just before the `-`.
 ///
-/// STDOUT IS DETECTED BY ELIMINATION RATHER THAN BY `ob_start()`, because elephc's curl
-/// bridge writes the default sink straight to fd 1 (`write_all_stdout` in
-/// `crates/elephc-curl/src/php_layer.rs`) instead of through PHP's output layer, so an
-/// output buffer does not capture it the way php's does. That divergence predates the
-/// stream options — it is how `CURLOPT_RETURNTRANSFER => false` has always behaved — and
-/// is recorded in `docs/php/curl.md`; this fixture is written not to depend on it either
-/// way, and the interleaved `hello-curl` in the expectation is that raw fd-1 write.
+/// STDOUT IS DETECTED BY ELIMINATION RATHER THAN BY `ob_start()`, and deliberately stays
+/// that way. The default sink now travels PHP's own output funnel — `write_all_stdout` in
+/// `crates/elephc-curl/src/php_layer.rs` calls the published `__rt_stdout_write`, so an
+/// output buffer captures the body exactly as php's does (issue #875, covered by
+/// `easy_http.rs::curl_exec_default_output_is_captured_by_ob_start`). Detecting the sink by
+/// elimination keeps THIS fixture about the last-set-wins MODE rather than about where the
+/// bytes land, so it cannot break when the output path changes again; the interleaved
+/// `hello-curl` in the expectation is that unbuffered terminal write.
 #[test]
 fn curl_file_returntransfer_and_writefunction_share_one_last_set_wins_mode() {
     if skip_without_curl_native("curl_file_returntransfer_and_writefunction_share_one_last_set_wins_mode")
@@ -150,7 +151,7 @@ fn curl_file_returntransfer_and_writefunction_share_one_last_set_wins_mode() {
         out,
         // FILE=f / FILE+RT=r / RT+FILE=f / FILE+CB=c / CB+FILE=f /
         // FILE+RT=false, FILE+CB=null and FILE+FILE=null all fall back to STDOUT, each
-        // leaking its body to fd 1 just before the `-` / FILE+RT+FILE=f.
+        // writing its body to the terminal just before the `-` / FILE+RT+FILE=f.
         "f\nr\nf\nc\nf\nhello-curl-\nhello-curl-\nhello-curl-\nf\n"
     );
 }
@@ -558,9 +559,9 @@ fn curl_reset_clears_stream_options_and_copy_carries_them() {
         curl_setopt($ch, CURLOPT_FILE, $sink);
         curl_reset($ch);
         curl_setopt($ch, CURLOPT_URL, "{url}");
-        // The body now goes to the default stdout sink, which the bridge writes straight
-        // to fd 1 — so it appears in this program's output right here, before the two
-        // markers below. That raw write is why this fixture does not use ob_start().
+        // The body now goes to the default stdout sink, so it appears in this program's
+        // output right here, before the two markers below. No buffer is active, so it
+        // reaches the terminal; this fixture asserts the ORDER rather than capturing it.
         curl_exec($ch);
         curl_close($ch);
         fclose($sink);
@@ -615,7 +616,7 @@ fn curl_reset_clears_stream_options_and_copy_carries_them() {
     ));
     assert_eq!(
         out,
-        // `hello-curl` first: the reset handle's body reaching fd 1 directly.
+        // `hello-curl` first: the reset handle's body reaching the terminal.
         "hello-curl\nreset-file-empty\nbool(true)\nhello-curl\ncopy-headers\ncopy-upload\n"
     );
 }

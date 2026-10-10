@@ -10,12 +10,14 @@
 use super::*;
 use crate::{elephc_parallel_transfer_copy, elephc_parallel_transfer_free};
 
+/// Creates an owned test writer and refuses a null allocation before any raw-pointer call.
 fn writer() -> *mut ParallelValueWriter {
     let writer = elephc_parallel_value_writer_new();
     assert!(!writer.is_null());
     writer
 }
 
+/// Consumes a complete test writer into an owned blob, asserting the ABI success status.
 fn finish(writer: *mut ParallelValueWriter) -> ParallelTransferBlob {
     let mut blob = ParallelTransferBlob::EMPTY;
     assert_eq!(
@@ -25,6 +27,7 @@ fn finish(writer: *mut ParallelValueWriter) -> ParallelTransferBlob {
     blob
 }
 
+/// Reads one borrowed test view from a live blob and advances its caller-owned cursor.
 fn read(blob: ParallelTransferBlob, cursor: &mut usize) -> ParallelValueView {
     let mut view = ParallelValueView::EMPTY;
     assert_eq!(
@@ -34,10 +37,12 @@ fn read(blob: ParallelTransferBlob, cursor: &mut usize) -> ParallelValueView {
     view
 }
 
+/// Exposes test view bytes only while their source blob remains alive.
 fn view_bytes(value: ParallelBytes) -> &'static [u8] {
     unsafe { std::slice::from_raw_parts(value.ptr, value.len) }
 }
 
+/// Nested key/value, scalar and cancellation records preserve source order and exact payloads.
 #[test]
 fn nested_transferable_values_round_trip_in_source_order() {
     let writer = writer();
@@ -99,6 +104,7 @@ fn nested_transferable_values_round_trip_in_source_order() {
     unsafe { elephc_parallel_transfer_free(blob) };
 }
 
+/// Writers reject incomplete children and extra roots without publishing a partial transfer blob.
 #[test]
 fn incomplete_or_overfull_writers_fail_closed() {
     let incomplete = writer();
@@ -125,6 +131,7 @@ fn incomplete_or_overfull_writers_fail_closed() {
     unsafe { elephc_parallel_value_writer_free(overfull) };
 }
 
+/// Unknown tags, trailing records and zero cancellation ids fail envelope validation.
 #[test]
 fn malformed_tags_trailing_bytes_and_zero_cancellation_ids_are_rejected() {
     for payload in [

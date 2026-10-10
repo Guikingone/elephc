@@ -82,9 +82,15 @@ pub(super) fn check_types_impl(
     program: &Program,
     target: Target,
     options: CheckOptions,
+    generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target);
     checker.strict_locals = options.strict_locals;
+    // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
+    // Empty on every path that does not run `generics::monomorphize`, which is what makes those
+    // paths behave exactly as they did before this feature.
+    checker.class_templates = generics.class_templates.clone();
+    checker.method_templates = generics.method_templates.clone();
     // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
     // consult it can sit textually above the `function w() { global $a; }` that makes the name
     // program-global. Shared with EIR lowering's `all_global_var_names` so the two sides cannot
@@ -99,6 +105,16 @@ pub(super) fn check_types_impl(
 
     let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
+    // A prelude parsed from PHP text gives its classes real spans, so the statement's source
+    // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
+    checker.internal_class_decls = program
+        .iter()
+        .filter(|stmt| stmt.source_mode == crate::source::SourceMode::Internal)
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::ClassDecl { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
     // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
     // now that inheritance and trait flattening have settled the concrete enclosing class. This
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
@@ -125,6 +141,7 @@ pub(super) fn check_types_impl(
     checker.declared_classes = class_map.keys().cloned().collect();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
+            generics: _,
             name,
             extends,
             properties,
@@ -354,7 +371,9 @@ pub(super) fn check_types_impl(
                 constants,
                 enum_used_traits,
                 enum_trait_aliases,
+                &stmt.attributes,
                 stmt.span,
+                stmt.source_mode == crate::source::SourceMode::Internal,
                 &mut checker,
                 &mut next_class_id,
             ) {
@@ -362,6 +381,7 @@ pub(super) fn check_types_impl(
             }
         }
     }
+    checker.box_untyped_interface_method_params();
     report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(
         &mut checker,
@@ -406,10 +426,27 @@ pub(super) fn check_types_impl(
         program,
         extern_callback_functions,
     ));
+    // Every class, interface and enum is registered, and no body has been checked: a violated
+    // bound is reported now, alone, instead of as whatever the instantiated body trips over.
+    if let Err(error) =
+        checker.verify_class_type_argument_bounds_before_bodies(&generics.class_type_argument_bounds)
+    {
+        errors.extend(error.flatten());
+        return Err(CompileError::from_many(errors));
+    }
 
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
+    if checker.eval_native_callables_reachable {
+        if let Err(error) = checker.promote_eval_native_variadic_containers() {
+            errors.extend(error.flatten());
+        }
+    }
+    // After every function has a signature and every direct call has been seen, so the pass can
+    // tell a function the program only ever reaches dynamically from one a call site taught real
+    // parameter types to (issue #576).
+    checker.widen_dynamic_only_passthrough_returns();
     // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
     // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
     // into method-checkable units here — their signatures already live in `checker.classes`.
@@ -433,6 +470,7 @@ pub(super) fn check_types_impl(
         }
     }
 
+    checker.deduplicate_variant_signature_errors(&mut errors);
     if !errors.is_empty() {
         return Err(CompileError::from_many(errors));
     }
@@ -464,6 +502,58 @@ fn report_class_id_inventory(checker: &Checker) {
 
 #[cfg(test)]
 mod tests {
+    /// Abstract enum method declarations retain their status in parallel class metadata.
+    #[test]
+    fn enum_metadata_records_abstract_instance_and_static_methods() {
+        use crate::codegen_support::platform::{Arch, Platform, Target};
+        use crate::parser::ast::{ClassMethod, Visibility};
+        use crate::span::Span;
+
+        let mut checker = super::Checker::new(Target::new(Platform::MacOS, Arch::AArch64));
+        let method = |name: &str, is_static: bool| ClassMethod {
+            name: name.to_string(),
+            visibility: Visibility::Public,
+            is_static,
+            is_abstract: true,
+            is_final: false,
+            has_body: false,
+            type_params: Vec::new(),
+            params: Vec::new(),
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: Vec::new(),
+            span: Span::dummy(),
+            attributes: Vec::new(),
+        };
+        let mut next_class_id = 1;
+        crate::types::checker::schema::insert_enum_metadata(
+            "State",
+            None,
+            Vec::new(),
+            &[],
+            &[method("instance", false), method("statik", true)],
+            &[],
+            &[],
+            &[],
+            Span::dummy(),
+            false,
+            &mut checker,
+            &mut next_class_id,
+        )
+        .expect("record enum metadata");
+        let class = checker.classes.get("State").expect("enum class metadata");
+        assert!(class.abstract_methods.contains("instance"));
+        assert!(class.abstract_static_methods.contains("statik"));
+        assert!(!class.method_impl_classes.contains_key("instance"));
+        assert!(!class.static_method_impl_classes.contains_key("statik"));
+        assert_eq!(class.method_declaring_classes.get("instance").map(String::as_str), Some("State"));
+        assert_eq!(class.static_method_declaring_classes.get("statik").map(String::as_str), Some("State"));
+    }
+
     /// Class ids must not depend on HashMap iteration order.
     ///
     /// THIS TEST CANNOT BE WRITTEN AS "check the same source twice and compare". Rust seeds its

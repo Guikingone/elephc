@@ -2,13 +2,13 @@
 title: "file_put_contents()"
 description: "Writes data to a file."
 sidebar:
-  order: 318
+  order: 319
 ---
 
 ## file_put_contents()
 
 ```php
-function file_put_contents(string $filename, string $data): int
+function file_put_contents(string $filename, string $data, int $flags = 0): int
 ```
 
 Writes data to a file.
@@ -16,15 +16,16 @@ Writes data to a file.
 **Parameters**:
 - `$filename` (`string`)
 - `$data` (`string`)
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `int`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

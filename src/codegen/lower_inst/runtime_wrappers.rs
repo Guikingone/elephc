@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Descriptor invokers bind raw user arguments; the hidden argc/count prefixes are
+//!   synthesized inside the invoker body, never passed by the caller.
 
 use super::*;
 
@@ -15,40 +17,135 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    emit_runtime_callable_invoker_inline_with_return_ownership(ctx, sig, captures, false)
+    emit_runtime_callable_invoker_with_string_owner(ctx, sig, captures, false, false)
 }
 
-/// Emits a descriptor invoker whose boxed result may consume a proven owned return.
-pub(super) fn emit_runtime_callable_invoker_inline_with_return_ownership(
+/// Emits a builtin invoker with mbstring's runtime argument boundary when required.
+pub(super) fn emit_runtime_builtin_invoker_inline(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    sig: &FunctionSig,
+) -> String {
+    let operation = crate::builtins::registry::lookup(name).and_then(|definition| {
+        if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(target) =
+            definition.spec.semantics.runtime_functions
+        {
+            target.mbstring_operation()
+        } else {
+            None
+        }
+    });
+    let Some(operation) = operation else {
+        // A transform that persists its result (`strtoupper`) must not be copied again here.
+        let owns_string_return = sig.return_type.codegen_repr() == PhpType::Str
+            && super::builtin_returns_owned_string(name);
+        return emit_runtime_callable_invoker_with_string_owner(ctx, sig, &[], owns_string_return, false);
+    };
+    if operation == elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables {
+        let label = ctx.next_global_label("callable_invoker");
+        let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
+            ctx.module, None, sig,
+        );
+        let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+            label: &label,
+            sig,
+            captures: &[],
+            mbstring_operation: None,
+            mbstring_variable_ref_warnings: true,
+            parallel_fiber_suspend_guard: parallel_fiber_suspend_guard(ctx),
+            owns_string_return: false,
+            php_return_status: false,
+            defaults: &defaults,
+        };
+        // Out of line, not spliced into the function that first needed it: see
+        // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+        let scope = ctx.emitter.begin_out_of_line();
+        super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
+            ctx.emitter, ctx.data, &invoker,
+        );
+        ctx.emitter.end_out_of_line(scope);
+        return label;
+    }
+    let label = ctx.next_global_label("callable_invoker");
+    let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
+        ctx.module, None, sig,
+    );
+    let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        label: &label,
+        sig,
+        captures: &[],
+        mbstring_operation: Some(operation),
+        parallel_fiber_suspend_guard: parallel_fiber_suspend_guard(ctx),
+        mbstring_variable_ref_warnings: false,
+        owns_string_return: sig.return_type.codegen_repr() == PhpType::Str,
+        php_return_status: false,
+        defaults: &defaults,
+    };
+    // Out of line, not spliced into the function that first needed it: see
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
+    super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
+        ctx.emitter, ctx.data, &invoker,
+    );
+    ctx.emitter.end_out_of_line(scope);
+    label
+}
+
+/// Emits an invoker whose result-copy policy follows the concrete callee's string ownership.
+pub(super) fn emit_runtime_callable_invoker_with_string_owner(
     ctx: &mut FunctionContext<'_>,
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
-    return_is_owned: bool,
+    owns_string_return: bool,
+    php_return_status: bool,
 ) -> String {
-    if let Some(label) = ctx
-        .shared
-        .runtime_callable_invoker(sig, captures, return_is_owned)
+    emit_runtime_callable_invoker_in_class(ctx, sig, captures, owns_string_return, php_return_status, None)
+}
+
+/// Emits a descriptor invoker whose defaults resolve in the DECLARING class's constant scope.
+///
+/// `self::`, `static::` and `parent::` in a parameter default answer to the class that declares
+/// the callee, so a method invoker must name it. A free function passes `None`.
+pub(super) fn emit_runtime_callable_invoker_in_class(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    owns_string_return: bool,
+    php_return_status: bool,
+    current_class: Option<&str>,
+) -> String {
+    ctx.shared.callable_argument_normalizer |=
+        crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
+    let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
+        ctx.module,
+        current_class,
+        sig,
+    );
+    if let Some(label) =
+        ctx.shared
+            .runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults)
     {
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
-    let done_label = ctx.next_label("callable_invoker_done");
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
         label: &label,
         sig,
         captures,
-        return_is_owned,
+        mbstring_operation: None,
+        mbstring_variable_ref_warnings: false,
+        owns_string_return,
+        php_return_status,
+        defaults: &defaults,
         parallel_fiber_suspend_guard: parallel_fiber_suspend_guard(ctx),
     };
-    // The thunk's global entry opens its own `.text` section on ELF; put the
-    // enclosing function back before continuing it, or its tail lands in there.
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line, not spliced into the function that first needed it: see
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
     super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, return_is_owned, &label);
+        .cache_runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults, &label);
     label
 }
 
@@ -155,22 +252,10 @@ fn emit_runtime_call_wrapper_inline(
         RuntimeCallWrapperKind::Extern => "callable_extern",
     };
     let label = ctx.next_global_label(label_prefix);
-    let done_label = ctx.next_label(&format!("{}_done", label_prefix));
-    let mut wrapper_module = ctx.module.clone();
-    let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
-    super::super::block_emit::emit_synthetic_function_with_label(
-        &wrapper_module,
-        &wrapper,
-        &label,
-        ctx.emitter,
-        ctx.data,
-        ctx.shared,
-        false,
-    )?;
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    // Reserve the label before lowering the synthetic body. A callable-taking builtin
+    // can itself require the open runtime callable table while its wrapper is being
+    // emitted. Publishing the reservation here makes that recursion reuse this entry
+    // instead of recursively cloning and lowering the same wrapper forever.
     match kind {
         RuntimeCallWrapperKind::Builtin { strict_php } => {
             ctx.shared
@@ -180,6 +265,25 @@ fn emit_runtime_call_wrapper_inline(
             ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
         }
     }
+    let mut wrapper_module = ctx.module.clone();
+    let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
+    ctx.shared.record_generated_runtime_features(&wrapper);
+    // Out of line, not spliced into the function that first needed it: see
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
+    let emitted = super::super::block_emit::emit_synthetic_function_with_label(
+        &wrapper_module,
+        &wrapper,
+        &label,
+        ctx.emitter,
+        ctx.data,
+        ctx.shared,
+        false,
+    );
+    // Closed on the error path too: the scope holds the caller's text, and returning early with
+    // it would drop everything the caller had emitted so far.
+    ctx.emitter.end_out_of_line(scope);
+    emitted?;
     Ok(label)
 }
 
@@ -191,6 +295,43 @@ fn build_runtime_call_wrapper_function(
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
+    if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
+        let packed_merge = crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::ArrayMerge)
+        }) && sig.variadic.is_some();
+        if packed_merge {
+            // Keep the public variadic signature, but validate and unpack it before
+            // crossing the two-operand backend boundary. Full body lowering owns the pack.
+            let function = crate::ir_lower::lower_array_merge_callable(module, label, sig, strict_php);
+            crate::ir::validate_function(&function).map_err(|error| {
+                CodegenIrError::invalid_module(format!("array merge callable wrapper: {error:?}"))
+            })?;
+            return Ok(function);
+        }
+        let boxed_user_sort = crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::Usort)
+        }) && sig.params.first().is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed);
+        if boxed_user_sort {
+            // The graph owns reference capture and normal/exceptional publication. A raw
+            // RuntimeCall would bypass that graph and treat a Mixed cell as an array header.
+            let function = crate::ir_lower::lower_boxed_usort_callable(module, label, sig, strict_php);
+            crate::ir::validate_function(&function).map_err(|error| {
+                CodegenIrError::invalid_module(format!("boxed sort callable wrapper: {error:?}"))
+            })?;
+            return Ok(function);
+        }
+    }
+    let carries_invocation_scope = matches!(
+        kind,
+        RuntimeCallWrapperKind::Builtin { .. }
+    ) && crate::builtins::registry::lookup(name).is_some_and(|def| {
+        def.spec.semantics.runtime_functions
+            == crate::builtins::semantics::BuiltinRuntimeFunctions::One(
+                crate::ir::RuntimeFnId::CloneWith,
+            )
+    });
     let return_php_type = wrapper_return_php_type(&sig.return_type);
     let mut function = Function::new(
         label.to_string(),
@@ -198,7 +339,16 @@ fn build_runtime_call_wrapper_function(
         return_php_type.clone(),
     );
     function.signature = Some(sig.clone());
-    let params = wrapper_function_params(sig);
+    let mut params = wrapper_function_params(sig);
+    if carries_invocation_scope {
+        params.push(FunctionParam {
+            name: "__elephc_invocation_scope".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+    }
     function.params = params.clone();
     for param in params {
         function.add_local(
@@ -214,7 +364,14 @@ fn build_runtime_call_wrapper_function(
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
     builder.position_at_end(entry);
-    let operands = wrapper_param_operands(&mut builder, sig);
+    let mut operands = wrapper_param_operands(&mut builder, sig);
+    if carries_invocation_scope {
+        operands.push(builder.emit_load_local(
+            LocalSlotId::from_raw(sig.params.len() as u32),
+            IrType::I64,
+            PhpType::Int,
+        ));
+    }
     let result = match kind {
         RuntimeCallWrapperKind::Builtin { strict_php } => {
             let def = crate::builtins::registry::lookup(name).ok_or_else(|| {
@@ -225,9 +382,10 @@ fn build_runtime_call_wrapper_function(
             })?;
             let mut lowering = WrapperBuiltinLoweringContext {
                 builder: &mut builder,
+                data: &mut module.data,
                 strict_php,
             };
-            Some(crate::builtins::semantics::lower_registry_call(
+            let result = crate::builtins::semantics::lower_registry_call(
                 &mut lowering,
                 def,
                 &operands,
@@ -240,24 +398,79 @@ fn build_runtime_call_wrapper_function(
                     name, error,
                 ))
             })?
-            .value)
+            .value;
+            let ownership = wrapper_result_ownership(
+                def.spec.semantics.result_ownership,
+                &return_php_type,
+                name,
+            )?;
+            builder.set_value_ownership(result, ownership);
+            Some(result)
         }
-        RuntimeCallWrapperKind::Extern => builder.emit(
-            Op::ExternCall,
-            operands,
-            Some(Immediate::Data(data)),
-            wrapper_return_ir_type(&return_php_type),
-            return_php_type.clone(),
-            Ownership::for_php_type(&return_php_type),
-        ),
+        RuntimeCallWrapperKind::Extern => {
+            let result = builder.emit(
+                Op::ExternCall,
+                operands,
+                Some(Immediate::Data(data)),
+                wrapper_return_ir_type(&return_php_type),
+                return_php_type.clone(),
+                if Ownership::php_type_needs_lifetime_tracking(&return_php_type) {
+                    Ownership::Borrowed
+                } else {
+                    Ownership::NonHeap
+                },
+            );
+            result
+        }
     };
     builder.terminate(Terminator::Return { value: result });
     Ok(function)
 }
 
+/// Maps a builtin's shared ownership contract onto its synthetic wrapper result.
+fn wrapper_result_ownership(
+    contract: crate::builtins::semantics::BuiltinResultOwnership,
+    return_ty: &PhpType,
+    name: &str,
+) -> Result<Ownership> {
+    use crate::builtins::semantics::BuiltinResultOwnership;
+    if !Ownership::php_type_needs_lifetime_tracking(return_ty) {
+        return Ok(Ownership::NonHeap);
+    }
+    match contract {
+        BuiltinResultOwnership::Fresh => Ok(Ownership::Owned),
+        BuiltinResultOwnership::Borrowed | BuiltinResultOwnership::Aliases(_) => {
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::MayAliasArguments
+            if return_ty.codegen_repr() == PhpType::Str =>
+        {
+            // String wrapper returns are persisted before the native C boundary,
+            // so aliasing and fresh scratch paths share one borrowed EIR convention.
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::MayAliasArguments => {
+            Err(CodegenIrError::invalid_module(format!(
+                "callable wrapper {} needs a runtime marker for path-dependent ownership of {:?}",
+                name, return_ty
+            )))
+        }
+        BuiltinResultOwnership::Independent if return_ty.codegen_repr() == PhpType::Str => {
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::Independent | BuiltinResultOwnership::NonHeap => {
+            Err(CodegenIrError::invalid_module(format!(
+                "callable wrapper {} has ambiguous {:?} ownership for {:?}",
+                name, contract, return_ty
+            )))
+        }
+    }
+}
+
 /// EIR construction adapter used by synthetic builtin callable wrappers.
 struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
+    data: &'a mut crate::ir::DataPool,
     strict_php: bool,
 }
 
@@ -267,6 +480,16 @@ impl crate::builtins::semantics::BuiltinLoweringContext
     /// Returns PHP metadata attached to one synthetic-wrapper operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
         self.builder.value_php_type(value)
+    }
+
+    /// Rejects class-name interning because synthetic wrappers do not own the module data pool.
+    fn intern_class_name(&mut self, _value: &str) -> crate::ir::DataId {
+        panic!("static-only builtin lowering cannot intern class names in a callable wrapper")
+    }
+
+    /// Interns an ordinary string into the synthetic wrapper module's data pool.
+    fn intern_string(&mut self, value: &str) -> crate::ir::DataId {
+        self.data.intern_string(value)
     }
 
     /// Emits one backend-neutral operation into the synthetic wrapper body.
@@ -279,6 +502,13 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         effects: crate::ir::Effects,
         span: Option<crate::span::Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        // Synthetic wrappers bypass AST lowering's final ownership analysis.
+        // Allocation primitives still transfer their fresh owner to their consumer.
+        let ownership = if matches!(op, Op::MixedBox | Op::ArrayNew | Op::HashNew) {
+            Ownership::Owned
+        } else {
+            Ownership::for_php_type(&php_type)
+        };
         let value = self
             .builder
             .emit_with_effects(
@@ -287,12 +517,33 @@ impl crate::builtins::semantics::BuiltinLoweringContext
                 immediate,
                 wrapper_value_ir_type(&php_type),
                 php_type.clone(),
-                Ownership::for_php_type(&php_type),
+                ownership,
                 effects,
                 span,
             )
             .expect("builtin wrapper operation produces a value");
         crate::builtins::semantics::LoweredBuiltinValue { value }
+    }
+
+    /// Emits one void operation into the synthetic wrapper body.
+    fn emit_void(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        effects: crate::ir::Effects,
+        span: Option<crate::span::Span>,
+    ) {
+        self.builder.emit_with_effects(
+            op,
+            operands,
+            immediate,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            effects,
+            span,
+        );
     }
 
     /// Emits one typed runtime operation into the synthetic wrapper body.
@@ -308,7 +559,9 @@ impl crate::builtins::semantics::BuiltinLoweringContext
             crate::ir::RuntimeCallTarget::Function(target) => {
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
+                    arguments: crate::ir::RuntimeArgumentLayout::Values,
                     strict_php: self.strict_php,
+                    strict_types: None,
                 }
             }
             target => target,
@@ -409,5 +662,114 @@ pub(super) fn wrapper_value_ir_type(php_type: &PhpType) -> IrType {
     match php_type.codegen_repr() {
         PhpType::Void | PhpType::Never => IrType::I64,
         other => IrType::from_php(&other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The public callable signature stays at two PHP arguments while the clone wrapper alone
+    /// consumes the descriptor invoker's trailing invocation-scope id.
+    #[test]
+    fn clone_callable_wrapper_consumes_hidden_invocation_scope_on_all_targets() {
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let sig = crate::builtins::registry::first_class_callable_sig("clone").unwrap();
+            let wrapper = build_runtime_call_wrapper_function(
+                &mut module,
+                "clone_scope_probe",
+                "clone",
+                &sig,
+                RuntimeCallWrapperKind::Builtin { strict_php: false },
+            )
+            .unwrap();
+            assert_eq!(sig.params.len(), 2, "{target}");
+            assert_eq!(wrapper.signature.as_ref().unwrap().params.len(), 2, "{target}");
+            assert_eq!(wrapper.params.len(), 3, "{target}");
+            assert_eq!(wrapper.params[2].name, "__elephc_invocation_scope", "{target}");
+            let call = wrapper
+                .instructions
+                .iter()
+                .find(|inst| {
+                    matches!(
+                        inst.immediate,
+                        Some(Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::ProfiledFunction {
+                                target: crate::ir::RuntimeFnId::CloneWith,
+                                ..
+                            }
+                        ))
+                    )
+                })
+                .expect("clone wrapper RuntimeCall");
+            assert_eq!(call.operands.len(), 3, "{target}");
+            assert_eq!(wrapper.value(call.operands[2]).unwrap().php_type, PhpType::Int);
+        }
+    }
+
+    /// The callable signature and wrapper keep `debug_backtrace()` as a raw PHP array.
+    #[test]
+    fn debug_backtrace_callable_wrapper_preserves_array_storage() {
+        let expected = PhpType::Array(Box::new(PhpType::Mixed));
+        let sig = crate::builtins::registry::first_class_callable_sig("debug_backtrace").unwrap();
+        assert_eq!(sig.return_type, expected);
+
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let wrapper = build_runtime_call_wrapper_function(
+                &mut module,
+                "debug_backtrace_array_probe",
+                "debug_backtrace",
+                &sig,
+                RuntimeCallWrapperKind::Builtin { strict_php: false },
+            ).unwrap();
+            assert_eq!(wrapper.return_php_type, expected, "{target}");
+            assert_eq!(
+                wrapper.return_type,
+                IrType::Heap(crate::ir::IrHeapKind::Array),
+                "{target}",
+            );
+
+            let result = wrapper.instructions.iter()
+                .find(|inst| inst.op == Op::CoreBuiltin)
+                .and_then(|inst| inst.result)
+                .expect("debug_backtrace wrapper must emit one Core builtin result");
+            let value = wrapper.value(result).expect("Core builtin result value");
+            assert_eq!(value.php_type, expected, "{target}");
+            assert_eq!(
+                value.ir_type,
+                IrType::Heap(crate::ir::IrHeapKind::Array),
+                "{target}",
+            );
+        }
+    }
+
+    /// GC wrappers transfer all fresh cells instead of retaining them again at each hash insert.
+    #[test]
+    fn gc_status_callable_wrapper_marks_all_allocations_owned() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let sig = crate::builtins::registry::first_class_callable_sig("gc_status").unwrap();
+            let wrapper = build_runtime_call_wrapper_function(
+                &mut module, "gc_status_owner_probe", "gc_status", &sig,
+                RuntimeCallWrapperKind::Builtin { strict_php: false },
+            ).unwrap();
+            let allocations: Vec<_> = wrapper.instructions.iter()
+                .filter(|inst| matches!(inst.op, Op::HashNew | Op::MixedBox))
+                .collect();
+            assert_eq!(allocations.len(), 14, "{target}");
+            for allocation in allocations {
+                assert_eq!(allocation.result_ownership, Ownership::Owned, "{target}: {:?}", allocation.op);
+                assert_eq!(wrapper.value(allocation.result.unwrap()).unwrap().ownership, Ownership::Owned);
+            }
+            assert!(wrapper.instructions.iter().any(|inst| inst.op == Op::Release), "{target}");
+        }
     }
 }

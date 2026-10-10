@@ -174,6 +174,12 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::Bool(value) => {
             let _ = write!(out, " {}", if *value { "true" } else { "false" });
         }
+        Immediate::FloatKeyDiagnostic => {
+            let _ = write!(out, " float_key_diagnostic");
+        }
+        Immediate::StringOffsetCast => {
+            let _ = write!(out, " string_offset_cast");
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }
@@ -213,6 +219,15 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::RuntimeCall(target) => {
             let _ = write!(out, " runtime.{}", target.as_eir());
+            if let crate::ir::RuntimeCallTarget::ProfiledFunction { target, strict_types, arguments, .. } = target {
+                if *arguments == crate::ir::RuntimeArgumentLayout::IndexedArray {
+                    let _ = write!(out, " arguments=indexed-array");
+                }
+                if target.uses_mbstring_runtime() {
+                    let mode = match strict_types { Some(true) => "1", Some(false) => "0", None => "caller" };
+                    let _ = write!(out, " strict_types={mode}");
+                }
+            }
         }
         Immediate::ExternRef(id) => {
             let _ = write!(out, " extern#{}", id);
@@ -228,6 +243,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::PropertyRef { class, property } => {
             let _ = write!(out, " property#{}::{}", class, property);
+        }
+        Immediate::ReflectionPropertyRef { class, property } => {
+            let _ = write!(out, " reflection-property#{}::{}", class, property);
         }
         Immediate::FieldRef { layout, field } => {
             let _ = write!(out, " field#{}::{}", layout, field);
@@ -270,6 +288,23 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::WidthBytes(width) => {
             let _ = write!(out, " width={}", width);
+        }
+        Immediate::PropertyFetchMode(mode) => {
+            let _ = write!(out, " fetch={}", mode.as_eir());
+        }
+        Immediate::IterStart(metadata) => {
+            let _ = write!(
+                out,
+                " by_ref={} state=slot[{}]",
+                if metadata.is_by_ref() { "true" } else { "false" },
+                metadata.state().as_raw(),
+            );
+            if let Some(slot) = metadata.owner() {
+                let _ = write!(out, " owner=slot[{}]", slot.as_raw());
+            }
+            if let Some(slot) = metadata.origin() {
+                let _ = write!(out, " origin=slot[{}]", slot.as_raw());
+            }
         }
     }
 }
@@ -392,4 +427,54 @@ fn function_flags(function: &Function) -> Vec<&'static str> {
         flags.push("static");
     }
     flags
+}
+
+#[cfg(test)]
+mod iter_start_immediate_tests {
+    use super::*;
+    use crate::ir::{IterStartMetadata, LocalSlotId};
+
+    /// Prints one `IterStart` immediate with the default data pool.
+    fn printed(by_ref: bool, owner: Option<u32>, origin: Option<u32>) -> String {
+        let mut out = String::new();
+        print_immediate(
+            &mut out,
+            &DataPool::default(),
+            &Immediate::IterStart(IterStartMetadata::new(
+                LocalSlotId::from_raw(1),
+                by_ref,
+                owner.map(LocalSlotId::from_raw),
+                origin.map(LocalSlotId::from_raw),
+            )),
+        );
+        out
+    }
+
+    /// The origin slot has to appear in the textual format, or EIR dumps hide the reload source.
+    #[test]
+    fn iter_start_prints_its_origin_slot() {
+        assert_eq!(
+            printed(true, None, Some(4)),
+            " by_ref=true state=slot[1] origin=slot[4]"
+        );
+    }
+
+    /// Owner and origin print side by side and in a stable order.
+    #[test]
+    fn iter_start_prints_owner_and_origin_together() {
+        assert_eq!(
+            printed(true, Some(2), Some(4)),
+            " by_ref=true state=slot[1] owner=slot[2] origin=slot[4]"
+        );
+    }
+
+    /// An absent origin still prints the mandatory iterator-state slot.
+    #[test]
+    fn iter_start_without_origin_is_unchanged() {
+        assert_eq!(printed(false, None, None), " by_ref=false state=slot[1]");
+        assert_eq!(
+            printed(false, Some(2), None),
+            " by_ref=false state=slot[1] owner=slot[2]"
+        );
+    }
 }

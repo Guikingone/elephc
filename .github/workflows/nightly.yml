@@ -32,6 +32,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
 
 jobs:
   gate:
@@ -50,7 +53,7 @@ jobs:
       version: ${{ steps.pick.outputs.version }}
       dated_tag: ${{ steps.pick.outputs.dated_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: main
@@ -140,7 +143,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14  # Apple Silicon runner
+            runner: macos-15  # Apple Silicon runner
           # Same glibc 2.35 generation as `release.yml`, so a nightly runs
           # wherever a release does (Ubuntu 22.04, Debian 12, RHEL 9, ...).
           - target: x86_64-unknown-linux-gnu
@@ -148,12 +151,14 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       # Patched in the runner's working tree and never committed: `main` keeps
       # the version `release.yml` owns, and a nightly binary still identifies
@@ -209,7 +214,7 @@ jobs:
       # list is guarded by `every_bridge_crate_is_in_the_build_lists`; a bridge
       # missing here ships a compiler that refuses the flag it advertises.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-parallel -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-parallel -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -222,11 +227,18 @@ jobs:
       # not fold at compile time, with a linker error. A nightly has no formula,
       # so deriving the shipping list from the build output removes the second
       # list instead of adding a third.
+      - name: Copy mbstring data notices
+        run: |
+          mkdir -p target/release/mbstring-notices
+          cp crates/elephc-mbstring/NOTICE.md target/release/mbstring-notices/
+          cp crates/elephc-mbstring/src/unicode/data/LICENSE-UNICODE target/release/mbstring-notices/
+          cp crates/elephc-mbstring/src/detect/data/LICENSE-PHP target/release/mbstring-notices/
+
       - name: Create tarball
         run: |
           cd target/release
           TARBALL="elephc-nightly-${{ matrix.target }}.tar.gz"
-          tar czf "$TARBALL" elephc libelephc_*.a
+          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else
@@ -235,7 +247,7 @@ jobs:
           tar tzf "$TARBALL"
 
       - name: Upload nightly artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-${{ matrix.target }}
           path: |
@@ -266,13 +278,13 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
 
@@ -293,23 +305,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
 
-      # The probe native-adds curl in its empty WORKDIR before
-      # --with-curl, and libxml2 before --with-xml, then compile-probes the
-      # packed archives. This cache is the default root that add writes
-      # (`~/.cache/elephc/native`), keyed like curl-codegen-tests (plus the
-      # libxml2 lock and recipe) so a warm runner skips the from-source
-      # openssl/libcurl/libxml2 rebuild. The compiler itself stays
-      # fail-closed for real projects.
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib/libxml2
-        uses: actions/cache@v4
+      # The probe prepares curl, Oniguruma, PCRE2, and libxml2 in its empty
+      # WORKDIR before force-enabling their packed bridges. This cache is the
+      # default root that native add writes (`~/.cache/elephc/native`), so a
+      # warm runner skips the from-source native rebuilds.
+      - name: Cache managed native curl, mbstring, and XML dependencies
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             verify-native-${{ matrix.target }}-
 
       - name: Download the built tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nightly-${{ matrix.target }}
           path: dist
@@ -331,7 +340,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download nightly artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: nightly-*
           merge-multiple: true
@@ -379,7 +388,7 @@ jobs:
         # code authorised to rewrite this repository's releases, tags and
         # published artifacts without any diff to review here. Both publish
         # paths pin the same SHA; bump them together.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           tag_name: ${{ needs.gate.outputs.dated_tag }}
           target_commitish: ${{ needs.gate.outputs.sha }}
@@ -432,7 +441,7 @@ jobs:
         # code authorised to rewrite this repository's releases, tags and
         # published artifacts without any diff to review here. Both publish
         # paths pin the same SHA; bump them together.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           tag_name: nightly
           target_commitish: ${{ needs.gate.outputs.sha }}

@@ -9,6 +9,7 @@
 //! Key details:
 //! - Ownership and semantic value copies use explicit EIR opcodes consumed
 //!   by the active backend; lifetime pins are not PHP value assignments.
+//! - Explicit EIR ownership operations preserve distinct value boxes across PHP assignments.
 
 #![allow(dead_code)]
 
@@ -16,32 +17,35 @@ use crate::ir::{Immediate, Op, Ownership};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::span::Span;
 
-/// Gives an ordinary PHP value binding its own value-cell owner.
-///
-/// Retaining a boxed array cell shares the mutable zval itself, defeating payload COW.
-/// `MixedClone` detaches that cell while retaining its payload. Resource clones deliberately
-/// retain the original cell, and object payload identity is preserved. Compiler spills and
-/// reference bindings must use their separate ownership operations instead.
-pub(crate) fn copy_for_php_value_binding(
+/// Detaches a mutable Mixed value box for a by-value assignment and consumes an owned RHS.
+/// Array payloads retain COW sharing, while objects and resources preserve their PHP identity.
+pub(crate) fn copy_assignment_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
     let php_type = ctx.builder.value_php_type(value.value);
-    if matches!(
-        php_type.codegen_repr(),
-        crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)
-    ) {
-        return ctx.emit_value(
-            Op::MixedClone,
-            vec![value.value],
-            None,
-            php_type,
-            Op::MixedClone.default_effects(),
-            span,
-        );
+    if !matches!(php_type.codegen_repr(), crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)) {
+        return value;
     }
-    acquire_if_refcounted(ctx, value, span)
+    let copied = ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, php_type,
+        Op::MixedClone.default_effects(), span);
+    if ctx.value_is_owning_temporary(value) { release_if_owned(ctx, value, span); }
+    copied
+}
+
+/// Gives a call snapshot one independent lease without consuming the source expression's owner.
+/// Mixed cells detach while container payloads keep PHP COW and object/resource identity.
+pub(crate) fn copy_for_php_value_binding(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Option<Span>,
+) -> LoweredValue {
+    let php_type = ctx.builder.value_php_type(value.value);
+    if matches!(php_type.codegen_repr(), crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)) {
+        ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, php_type,
+            Op::MixedClone.default_effects(), span)
+    } else {
+        acquire_if_refcounted(ctx, value, span)
+    }
 }
 
 /// Emits an acquire operation when the value can carry runtime lifetime state.

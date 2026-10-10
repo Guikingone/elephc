@@ -11,6 +11,7 @@
 
 use super::*;
 
+/// Adds conservative string-return verification effects beyond the source expression's own effects.
 pub(super) fn effect(
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     return_type: &Option<TypeExpr>, body: &[Stmt],
@@ -31,6 +32,7 @@ pub(super) fn effect(
     effect_analysis::string_binding_effect()
 }
 
+/// Reports whether implicit declared-string return verification can throw for this callable body.
 pub(super) fn may_throw(
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     return_type: &Option<TypeExpr>, body: &[Stmt],

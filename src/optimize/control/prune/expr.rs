@@ -9,7 +9,7 @@
 //! - Loop exits, empty bodies, and effectful conditions must be handled before removing structural statements.
 
 use super::super::*;
-use super::statements::{prune_block, prune_stmt};
+use super::statements::prune_stmt;
 
 /// Recursively rewrites an expression tree, pruning constant subexpressions while
 /// preserving side effects. Applies to all expression variants including literals,
@@ -82,6 +82,11 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
                 .map(|(key, value)| (prune_expr(key), prune_expr(value)))
                 .collect(),
         ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries.into_iter()
+                .map(|entry| entry.map_exprs(prune_expr))
+                .collect(),
+        ),
         ExprKind::Match {
             subject,
             arms,
@@ -139,7 +144,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             variadic_by_ref,
             variadic_type,
             return_type,
-            body: prune_block(body),
+            body: crate::optimize::generator_bodies::rewrite_preserving_yield(
+                body,
+                prune_block,
+            ),
             is_arrow,
             is_static,
             captures,
@@ -162,6 +170,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type,
             args: args.into_iter().map(prune_expr).collect(),
         },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
@@ -281,6 +293,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
 fn prune_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(class_type),
         InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(prune_expr(*expr))),
     }
 }

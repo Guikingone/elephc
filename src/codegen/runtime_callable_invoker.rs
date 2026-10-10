@@ -1,20 +1,53 @@
 //! Purpose:
 //! Emits descriptor-based runtime callable invokers for the active EIR backend.
-//! Adapts ABI v3 `(descriptor, boxed argument container, strict_types: u64) -> boxed Mixed` to typed entries.
+//! Adapts ABI v4 `(descriptor, boxed arguments, lexical scope, binding policy) -> boxed Mixed` to typed entries.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::emit_runtime_callable_invoker_inline()`.
 //!
 //! Key details:
-//! - The invoker accepts only normalized boxed Mixed argument containers.
+//! - The invoker accepts a descriptor, a normalized boxed Mixed argument container and the
+//!   invocation-site lexical class id. It forwards the scope as a trailing hidden ABI argument.
 //! - Capture values are loaded from the callable descriptor, not caller frame state.
 //! - Argument materialization supports indexed arrays, associative arrays, defaults, variadics,
 //!   by-reference marker cells, and target-aware ABI calls without depending on `Context`.
+//! - Every descriptor invoker binds ONE container contract: the container holds exactly the
+//!   arguments PHP supplied, and the hidden argc / collector-count prefixes `crate::func_args`
+//!   relies on are synthesized here rather than expected from the caller. Public callers
+//!   (`call_user_func*`, first-class callables) and eval-registered native free functions
+//!   therefore share one physical layout.
 //! - The trampoline preserves the callee-saved registers it scratches (issue #487), including on
 //!   the eval exception-boundary escape path, so allocator-parked caller values survive the invoke.
 //! - Exception-boundary slots use ABI frame helpers because the expanded save area pushes ARM64
 //!   offsets beyond the signed 9-bit `ldur`/`stur` immediate range.
+//! - Reference-returning descriptors copy the pointee into an owned Mixed result before retiring
+//!   the returned cell lease.
+//! - An associative container is VALIDATED before a single argument is staged, by one
+//!   walk in container order: a position after a name, a name colliding with a position already
+//!   walked, and a name no parameter can accept are all catchable `Error`s, each reported at the
+//!   entry that causes it so the message matches PHP's precedence. Validating first is what makes
+//!   them catchable: once arguments are on the temporary stack and in the owner slots, there is
+//!   no safe point to unwind from. The collision rule re-reads the container prefix instead of
+//!   remembering positions in a bitset, so no signature length silently escapes the check.
 
+mod argument_owners;
+mod defaults;
+mod mbstring;
+mod owned_value_args;
+mod public_args;
+mod reference_args;
+mod reference_return;
+mod string_return;
+
+pub(crate) use string_return::function_returns_owned_string;
+pub(super) use string_return::method_returns_owned_string;
+
+use public_args::InvokerParamShape;
+
+use argument_owners::InvokerArgumentOwners;
+pub(in crate::codegen) use defaults::{
+    resolve_invoker_defaults, InvokerDefaultValue, InvokerDefaults,
+};
 use crate::codegen::callable_descriptor;
 use crate::codegen::callable_invoker_args::{
     emit_branch_if_mixed_arg_tag, emit_call_user_func_array_invalid_mixed_args_abort,
@@ -22,56 +55,67 @@ use crate::codegen::callable_invoker_args::{
 };
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed,
 };
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
-use crate::parser::ast::{Expr, ExprKind, TypeExpr};
+use crate::parser::ast::TypeExpr;
 use crate::types::{FunctionSig, PhpType};
 
 mod param_validation;
+mod parallel_guard;
 
 /// Shares descriptor preflight with direct EIR string parameter boundaries.
 pub(in crate::codegen) fn emit_string_argument_validation(
     emitter: &mut Emitter, data: &mut DataSection, label: &str,
     source: &PhpType, name: &str, strict: bool,
 ) {
-    let mut context = InvokerEmitContext::new(label);
+    let mut context = validation_context(label, emitter.target);
     param_validation::validate_string_argument(emitter, data, &mut context, source, name, strict);
 }
 
+/// Queries declared string-return acceptance without allocating or invoking conversion.
 pub(in crate::codegen) fn emit_string_binding_predicate(
     emitter: &mut Emitter, data: &mut DataSection, label: &str,
     source: &PhpType, strict: bool,
 ) {
-    let mut context = InvokerEmitContext::new(label);
+    let mut context = validation_context(label, emitter.target);
     param_validation::string_binding_predicate(emitter, data, &mut context, source, strict);
 }
-mod pending_owners;
+/// Standalone validators do not read invoker-only frame fields or own argument slots.
+fn validation_context(label: &str, target: Target) -> InvokerEmitContext {
+    InvokerEmitContext::new(
+        label, InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 0),
+        false, false, Vec::new(), target,
+    )
+}
 mod container_storage;
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
 /// Spill slot for the boxed argument container across the eval exception-boundary `setjmp`.
 const INVOKER_ARG_ARRAY_OFFSET: usize = 24;
-/// Physical call-site binding policy, preserved across setjmp and parameter conversions.
-const INVOKER_BINDING_POLICY_OFFSET: usize = 32;
+/// Invocation-site lexical class id, with `-1` representing global scope.
+const INVOKER_SCOPE_OFFSET: usize = 32;
+/// Physical scalar-binding policy, independent of the invocation's lexical scope.
+const INVOKER_BINDING_POLICY_OFFSET: usize = 40;
 /// First frame slot of the callee-saved register save area (issue #487).
 /// Placed after descriptor/concat/arg-array so the eval boundary path can reuse those slots.
-const INVOKER_SAVED_REGS_OFFSET: usize = 40;
+const INVOKER_SAVED_REGS_OFFSET: usize = 48;
 /// AArch64 save-area width (8 callee-saved scratch regs × 8 bytes); sizes the shared frame.
 const INVOKER_CALLEE_SAVE_BYTES: usize = 8 * 8;
 /// Exclusive end of the callee-saved save area (`INVOKER_SAVED_REGS_OFFSET` … end-8).
 const INVOKER_SAVED_REGS_END: usize = INVOKER_SAVED_REGS_OFFSET + INVOKER_CALLEE_SAVE_BYTES;
-/// Frame size covering the footer plus every local slot through the save area.
-/// `frame_size - 16` must cover the last save offset; rounded up to 16 for ABI `sp` alignment.
-const INVOKER_FRAME_SIZE: usize = ((INVOKER_SAVED_REGS_END - 8) + 16 + 15) & !15;
+/// Guard records follow the saved registers and own conversions through native exception unwinding.
+const INVOKER_ARGUMENT_GUARD: usize = INVOKER_SAVED_REGS_END + EXCEPTION_GUARD_SLOT_SIZE - 8;
+const INVOKER_RESULT_GUARD: usize = INVOKER_ARGUMENT_GUARD + EXCEPTION_GUARD_SLOT_SIZE;
+/// The frame footer follows both guards with target-required stack alignment.
+const INVOKER_FRAME_SIZE: usize = (INVOKER_RESULT_GUARD + 16 + 15) & !15;
 const INVOKER_BOUNDARY_FRAME_SIZE: usize = INVOKER_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE + 16;
-#[cfg(test)]
 const INVOKER_BOUNDARY_BASE_OFFSET: usize = INVOKER_BOUNDARY_FRAME_SIZE - 16;
 
 /// Callee-saved registers the invoker body uses as scratch. Must stay in sync with the
@@ -107,37 +151,66 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) label: &'a str,
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
-    pub(super) return_is_owned: bool,
-    /// Optional userland backstop for Fiber::suspend invoked through any descriptor consumer.
+    /// Parallel backstop applied before any descriptor argument marshalling.
     pub(super) parallel_fiber_suspend_guard: Option<(u64, String)>,
+    pub(super) mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
+    pub(super) mbstring_variable_ref_warnings: bool,
+    pub(super) owns_string_return: bool,
+    pub(super) php_return_status: bool,
+    /// Parameter defaults ALREADY resolved against the module, indexed like `sig.params`.
+    /// A declared default that could not be folded into a materializable value stays `None`, and
+    /// the invoker keeps its fatal diagnostic for that slot rather than inventing a value.
+    pub(super) defaults: &'a [Option<InvokerDefaultValue>],
 }
 
-/// Defines how a descriptor invoker leaves its exception boundary.
-#[derive(Clone, Copy)]
-enum InvokerExceptionEscape {
-    /// Release the caller-owned argument container and resume ordinary PHP unwinding.
-    Rethrow,
-    /// Report an eval callback escape as a null result after releasing its argument container.
-    EvalNull,
+/// Reports whether regular or variadic callable parameters can require runtime normalization.
+pub(super) fn needs_callable_argument_normalizer(sig: &FunctionSig) -> bool {
+    sig.params.iter().any(|(_, ty)| {
+        ty.codegen_repr() == PhpType::Callable
+            || matches!(ty, PhpType::Array(element) if **element == PhpType::Callable)
+    })
 }
 
 /// Minimal state needed by the descriptor invoker emitter.
 struct InvokerEmitContext {
     label_prefix: String,
     label_counter: usize,
-    owner_slot_count: usize,
     has_binding_policy: bool,
+    mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
+    mbstring_variable_ref_warnings: bool,
+    argument_owners: InvokerArgumentOwners,
+    owns_string_return: bool,
+    php_return_status: bool,
+    /// Resolved parameter defaults for this body, indexed like `FunctionSig::params`.
+    defaults: InvokerDefaults,
 }
 
 impl InvokerEmitContext {
     /// Creates a fresh label context for one generated invoker body.
-    fn new(invoker_label: &str) -> Self {
+    fn new(
+        invoker_label: &str,
+        argument_owners: InvokerArgumentOwners,
+        owns_string_return: bool,
+        php_return_status: bool,
+        defaults: InvokerDefaults,
+        target: Target,
+    ) -> Self {
         Self {
-            label_prefix: local_label_prefix(invoker_label),
+            label_prefix: local_label_prefix(invoker_label, target),
             label_counter: 0,
-            owner_slot_count: 0,
             has_binding_policy: false,
+            argument_owners,
+            owns_string_return,
+            php_return_status,
+            defaults,
+            mbstring_operation: None,
+            mbstring_variable_ref_warnings: false,
         }
+    }
+
+    /// Returns the resolved default for one parameter index, if it was materializable.
+    fn resolved_default(&self, index: usize) -> Option<InvokerDefaultValue> {
+        self.defaults.get(index).cloned().flatten()
     }
 
     /// Allocates a deterministic local label for generated branches.
@@ -148,9 +221,9 @@ impl InvokerEmitContext {
     }
 }
 
-/// Converts an invoker's global assembly label into a safe prefix for its local labels.
-fn local_label_prefix(label: &str) -> String {
-    label
+/// Converts an invoker's global assembly label into a platform-local prefix for branch labels.
+fn local_label_prefix(label: &str, target: Target) -> String {
+    let sanitized: String = label
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch == '_' {
@@ -159,7 +232,8 @@ fn local_label_prefix(label: &str) -> String {
                 '_'
             }
         })
-        .collect()
+        .collect();
+    format!("{}{sanitized}", target.platform.local_label_prefix())
 }
 
 /// Emits a descriptor invoker wrapper for a runtime-callable signature.
@@ -168,7 +242,7 @@ pub(super) fn emit_runtime_callable_invoker(
     data: &mut DataSection,
     invoker: &RuntimeCallableInvoker<'_>,
 ) {
-    emit_runtime_callable_invoker_impl(emitter, data, invoker, Some(InvokerExceptionEscape::Rethrow));
+    emit_runtime_callable_invoker_impl(emitter, data, invoker, false);
 }
 
 /// Emits a descriptor invoker wrapper that catches native throws for eval callbacks.
@@ -177,28 +251,31 @@ pub(crate) fn emit_runtime_callable_invoker_with_exception_boundary(
     data: &mut DataSection,
     invoker: &RuntimeCallableInvoker<'_>,
 ) {
-    emit_runtime_callable_invoker_impl(emitter, data, invoker, Some(InvokerExceptionEscape::EvalNull));
+    emit_runtime_callable_invoker_impl(emitter, data, invoker, true);
 }
 
-/// Emits a descriptor invoker wrapper, optionally bounded by an exception handler.
+/// Bounds every invoker's owners; eval receives a pending throw while native callers rethrow it.
 fn emit_runtime_callable_invoker_impl(
     emitter: &mut Emitter,
     data: &mut DataSection,
     invoker: &RuntimeCallableInvoker<'_>,
-    exception_escape: Option<InvokerExceptionEscape>,
+    catch_native_throws: bool,
 ) {
-    let mut ctx = InvokerEmitContext::new(invoker.label);
-    ctx.has_binding_policy = true;
-    // The final slot protects a boxed result while argument cleanup invokes PHP destructors.
-    ctx.owner_slot_count = invoker.sig.params.len() + 1;
     let call_reg = abi::nested_call_reg(emitter);
     let escape_label = format!("{}_eval_escape", invoker.label);
-    let frame_size = ctx.owner_slot_count * 16 + if exception_escape.is_some() {
-        INVOKER_BOUNDARY_FRAME_SIZE
-    } else {
-        INVOKER_FRAME_SIZE
-    };
-    let boundary_base = frame_size - 16;
+    let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
+    let frame_size = argument_owners.frame_size();
+    let mut ctx = InvokerEmitContext::new(
+        invoker.label,
+        argument_owners,
+        invoker.owns_string_return,
+        invoker.php_return_status,
+        invoker.defaults.to_vec(),
+        emitter.target,
+    );
+    ctx.mbstring_operation = invoker.mbstring_operation;
+    ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
+    ctx.has_binding_policy = true;
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -209,54 +286,39 @@ fn emit_runtime_callable_invoker_impl(
     // register allocator keeps values live across the indirect invoke in these registers
     // (issue #487).
     emit_invoker_callee_saved_saves(emitter);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), INVOKER_BINDING_POLICY_OFFSET);
-    pending_owners::clear(emitter, &ctx);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 3), INVOKER_BINDING_POLICY_OFFSET);
     abi::store_at_offset(
         emitter,
         abi::int_arg_reg_name(emitter.target, 0),
         INVOKER_DESCRIPTOR_OFFSET,
     );
-    if exception_escape.is_some() {
-        abi::store_at_offset(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 1),
-            INVOKER_ARG_ARRAY_OFFSET,
-        );
-        emit_invoker_exception_boundary_push(
-            emitter,
-            boundary_base,
-            &escape_label,
-        );
-    }
-
+    ctx.argument_owners.initialize(emitter);
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        INVOKER_ARG_ARRAY_OFFSET,
+    );
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 2),
+        INVOKER_SCOPE_OFFSET,
+    );
+    emit_invoker_exception_boundary_push(
+        emitter,
+        INVOKER_BOUNDARY_BASE_OFFSET,
+        &escape_label,
+    );
     if let Some((task_group_id, assert_symbol)) = &invoker.parallel_fiber_suspend_guard {
-        emit_parallel_fiber_suspend_descriptor_guard(
-            emitter,
-            data,
-            &mut ctx,
-            *task_group_id,
-            assert_symbol,
+        parallel_guard::emit_parallel_fiber_suspend_descriptor_guard(
+            emitter, data, &mut ctx, *task_group_id, assert_symbol,
         );
     }
-
-    if exception_escape.is_some() {
-        // The callable guard uses ordinary argument registers; restore the boxed argument array
-        // only after it returns, then reload the descriptor entry into the shared call register.
-        abi::load_at_offset(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 1),
-            INVOKER_ARG_ARRAY_OFFSET,
-        );
-        emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
-    } else {
-        abi::load_at_offset(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 0),
-            INVOKER_DESCRIPTOR_OFFSET,
-        );
-        emit_descriptor_entry_to_call_reg(emitter, call_reg);
-    }
-
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        INVOKER_ARG_ARRAY_OFFSET,
+    );
+    emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
     let ret_ty = emit_loaded_array_callback_call(
         LoadedArraySource::ArgumentRegister(1),
         &PhpType::Mixed,
@@ -267,248 +329,54 @@ fn emit_runtime_callable_invoker_impl(
         &mut ctx,
         data,
     );
-    if ret_ty.codegen_repr() == PhpType::Mixed && !invoker.return_is_owned {
-        pending_owners::transfer_mixed_result_alias(emitter, &mut ctx);
+    if invoker.sig.by_ref_return {
+        reference_return::emit_boxed_reference_return(emitter, &ret_ty);
+    } else {
+        emit_boxed_invoker_return(emitter, &ret_ty);
     }
-    emit_boxed_invoker_return(emitter, &ret_ty, invoker.return_is_owned);
-    pending_owners::register_result(emitter, ctx.owner_slot_count - 1, &PhpType::Mixed);
-    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-    pending_owners::release_arguments(emitter, &mut ctx);
-    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
-    pending_owners::clear_slot(emitter, ctx.owner_slot_count - 1);
-    if exception_escape.is_some() {
-        emit_invoker_exception_boundary_pop(emitter, boundary_base);
-    }
+    ctx.argument_owners.finish_return(emitter);
+    emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     // Restore before tearing down the frame (and on the escape path below): the boxed
     // Mixed result travels in return registers, which these loads never touch.
     emit_invoker_callee_saved_restores(emitter);
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
-    if let Some(exception_escape) = exception_escape {
-        emitter.label(&escape_label);
-        emit_invoker_exception_boundary_pop(emitter, boundary_base);
-        pending_owners::release(emitter, &mut ctx);
-        emit_release_saved_invoker_arg(emitter);
-        emit_invoker_callee_saved_restores(emitter);
-        abi::emit_frame_restore(emitter, frame_size);
-        match exception_escape {
-            InvokerExceptionEscape::Rethrow => abi::emit_jump(emitter, "__rt_throw_current"),
-            InvokerExceptionEscape::EvalNull => {
-                emit_null_invoker_result(emitter);
-                abi::emit_return(emitter);
-            }
-        }
+    emitter.label(&escape_label);
+    emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+    ctx.argument_owners.release_all(emitter);
+    if catch_native_throws {
+        emit_null_invoker_result(emitter);
+    }
+    emit_invoker_callee_saved_restores(emitter);
+    abi::emit_frame_restore(emitter, frame_size);
+    if catch_native_throws {
+        abi::emit_return(emitter);
+    } else {
+        abi::emit_jump(emitter, "__rt_throw_current");
     }
 }
 
-/// Rejects Fiber::suspend descriptors at the final shared invocation boundary.
-///
-/// Higher-order builtins such as array_map invoke descriptors from native callback wrappers,
-/// after ordinary EIR call-site guards have already run. Keeping this check in the shared
-/// descriptor invoker closes those paths while leaving scheduler-owned direct Fiber yields alone.
-fn emit_parallel_fiber_suspend_descriptor_guard(
-    emitter: &mut Emitter,
-    data: &mut DataSection,
-    ctx: &mut InvokerEmitContext,
-    task_group_id: u64,
-    assert_symbol: &str,
-) {
-    let descriptor_reg = match emitter.target.arch {
-        Arch::AArch64 => "x19",
-        Arch::X86_64 => "r12",
-    };
-    let name_ptr = match emitter.target.arch {
-        Arch::AArch64 => "x20",
-        Arch::X86_64 => "r13",
-    };
-    let name_len = match emitter.target.arch {
-        Arch::AArch64 => "x21",
-        Arch::X86_64 => "r15",
-    };
-    abi::load_at_offset(emitter, descriptor_reg, INVOKER_DESCRIPTOR_OFFSET);
-    let done = ctx.next_label("parallel_fiber_suspend_guard_done");
-    let compare_name = ctx.next_label("parallel_fiber_suspend_compare_name");
-    let kind_reg = match emitter.target.arch {
-        Arch::AArch64 => "x9",
-        Arch::X86_64 => "r9",
-    };
-    abi::emit_load_from_address(emitter, kind_reg, descriptor_reg, 0);
-    for kind in [
-        callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
-        callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
-        callable_descriptor::CALLABLE_DESC_KIND_CALLBACK_ADAPTER,
-        callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
-        callable_descriptor::CALLABLE_DESC_KIND_INSTANCE_METHOD,
-    ] {
-        abi::emit_load_int_immediate(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 0),
-            kind as i64,
-        );
-        emitter.instruction(&format!("cmp {kind_reg}, {}", abi::int_arg_reg_name(emitter.target, 0)));
-        match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction(&format!("b.eq {compare_name}")),
-            Arch::X86_64 => emitter.instruction(&format!("je {compare_name}")),
-        }
-    }
-    abi::emit_jump(emitter, &done);
-    emitter.label(&compare_name);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!(
-                "ldr {name_ptr}, [{descriptor_reg}, #{}]",
-                callable_descriptor::CALLABLE_DESC_PHP_NAME_OFFSET
-            ));
-            emitter.instruction(&format!(
-                "ldr {name_len}, [{descriptor_reg}, #{}]",
-                callable_descriptor::CALLABLE_DESC_PHP_NAME_LEN_OFFSET
-            ));
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "mov {name_ptr}, QWORD PTR [{descriptor_reg} + {}]",
-                callable_descriptor::CALLABLE_DESC_PHP_NAME_OFFSET
-            ));
-            emitter.instruction(&format!(
-                "mov {name_len}, QWORD PTR [{descriptor_reg} + {}]",
-                callable_descriptor::CALLABLE_DESC_PHP_NAME_LEN_OFFSET
-            ));
-        }
-    }
-
-    for candidate in [b"Fiber::suspend".as_slice(), b"\\Fiber::suspend".as_slice()] {
-        let next = ctx.next_label("parallel_fiber_suspend_guard_next");
-        let (candidate_label, candidate_len) = data.add_string(candidate);
-        let scratch = match emitter.target.arch {
-            Arch::AArch64 => "x9",
-            Arch::X86_64 => "r9",
-        };
-        abi::emit_load_int_immediate(emitter, scratch, candidate_len as i64);
-        emitter.instruction(&format!("cmp {name_len}, {scratch}"));
-        match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction(&format!("b.ne {next}")),
-            Arch::X86_64 => emitter.instruction(&format!("jne {next}")),
-        }
-
-        abi::emit_push_reg_pair(emitter, name_ptr, name_len);
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                abi::emit_symbol_address(emitter, "x3", &candidate_label);
-                abi::emit_load_int_immediate(emitter, "x4", candidate_len as i64);
-                abi::emit_load_temporary_stack_slot(emitter, "x1", 0);
-                abi::emit_load_temporary_stack_slot(emitter, "x2", 8);
-            }
-            Arch::X86_64 => {
-                abi::emit_symbol_address(emitter, "rdx", &candidate_label);
-                abi::emit_load_int_immediate(emitter, "rcx", candidate_len as i64);
-                abi::emit_load_temporary_stack_slot(emitter, "rdi", 0);
-                abi::emit_load_temporary_stack_slot(emitter, "rsi", 8);
-            }
-        }
-        abi::emit_call_label(emitter, "__rt_strcasecmp");
-        let mismatch = ctx.next_label("parallel_fiber_suspend_guard_mismatch");
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction("cmp x0, #0");
-                emitter.instruction(&format!("b.ne {mismatch}"));
-            }
-            Arch::X86_64 => {
-                emitter.instruction("test rax, rax");
-                emitter.instruction(&format!("jne {mismatch}"));
-            }
-        }
-        abi::emit_release_temporary_stack(emitter, 16);
-        abi::emit_load_int_immediate(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 0),
-            task_group_id as i64,
-        );
-        abi::emit_call_label(emitter, assert_symbol);
-        abi::emit_jump(emitter, &done);
-
-        // The mismatch branch restores the temporary name pair before trying the next spelling.
-        emitter.label(&mismatch);
-        abi::emit_release_temporary_stack(emitter, 16);
-        abi::emit_jump(emitter, &next);
-        emitter.label(&next);
-    }
-    emitter.label(&done);
-}
-
-/// Releases the caller-owned boxed argument container after an invoker longjmp.
-///
-/// Normal calls release this value at the call site after receiving the result. A PHP throwable
-/// skips that post-call sequence, so the invoker boundary takes over the one pending owner before
-/// rethrowing into the caller's handler.
-fn emit_release_saved_invoker_arg(emitter: &mut Emitter) {
-    abi::load_at_offset(
-        emitter,
-        abi::int_result_reg(emitter),
-        INVOKER_ARG_ARRAY_OFFSET,
-    );
-    abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
-}
-
-/// Boxes the callable target's return value into the invoker's uniform Mixed result.
-///
-/// OWNERSHIP — a `Str` return is already OWNED by the time it reaches here, so the Mixed cell
-/// TAKES it rather than copying it. `call_target_with_pushed_args` runs
-/// `restore_concat_offset_after_nested_call`, which unconditionally calls `__rt_str_persist` for a
-/// `Str` return type, and every path that produces `ret_ty` returns `sig.return_type` — the same
-/// value that persist was keyed on (`emit_loaded_indexed_array_callback_call`,
-/// `emit_loaded_assoc_array_callback_call`, and `emit_loaded_mixed_array_callback_call`, which only
-/// forwards to those two). So `ret_ty == Str` here implies a fresh heap copy is live in the string
-/// return registers, owned by nobody.
-///
-/// Boxing that through `emit_box_current_value_as_mixed` used the BORROWED contract:
-/// `__rt_mixed_from_value` persists a SECOND copy for the cell
-/// (`src/codegen_support/runtime/arrays/mixed_from_value.rs`, `__rt_mixed_from_value_string`),
-/// leaving the first orphaned — one leaked heap block per invoked callable returning a string,
-/// which is what every closure / first-class-callable / `array_map` string-result call site was
-/// paying. `emit_box_current_owned_value_as_mixed` moves the pointer/length pair into a fresh cell
-/// instead.
-///
-/// This ELIDES AN ALLOCATION; it adds no release. The Mixed cell owned exactly one string payload
-/// before and owns exactly one now — the only change is WHICH copy it owns — so the number of
-/// frees `__rt_mixed_free_deep` performs is unchanged and no double free can be introduced.
-///
-/// Only `Str` is routed through the owning boxer ON PURPOSE. For a container or object return
-/// `emit_box_current_owned_value_as_mixed` would emit a decref of the original reference, and the
-/// invoker never took one — nothing persisted or retained a container on the way in, so releasing
-/// one here would free a reference the caller still holds.
-fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType, return_is_owned: bool) {
+/// Boxes the target result into the invoker's uniform Mixed return cell.
+/// Every refcounted representation TRANSFERS its owner into the box. A compiled callee
+/// hands its caller exactly one owned reference; `acquire_borrowed_return_value` retains a
+/// borrowed property/element/static source before returning, and a returned local's slot is
+/// excluded from epilogue cleanup; and nothing in this wrapper releases that reference after
+/// boxing. Retaining instead of transferring therefore stranded one reference on every object,
+/// callable, hash, iterable and non-Mixed array returned through a descriptor invoker, which is
+/// why a freshly returned object survived its caller with its destructor unrun. String results
+/// reach this point already normalized to one independent owner. Scalars own nothing and keep
+/// the plain boxing path.
+fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
     let repr = ret_ty.codegen_repr();
-    if repr == PhpType::Str {
-        emit_box_current_owned_value_as_mixed(emitter, &PhpType::Str);
-        return;
+    match &repr {
+        PhpType::Str
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Object(_)
+        | PhpType::Callable => emit_box_current_owned_value_as_mixed(emitter, &repr),
+        _ => emit_box_current_value_as_mixed(emitter, &repr),
     }
-    if return_is_owned
-        && matches!(
-            repr,
-            PhpType::Array(_)
-                | PhpType::AssocArray { .. }
-                | PhpType::Iterable
-                | PhpType::Object(_)
-                | PhpType::Callable
-        )
-    {
-        emit_box_current_owned_value_as_mixed(emitter, &repr);
-        return;
-    }
-    emit_box_current_value_as_mixed(emitter, &repr);
-}
-
-/// Loads the descriptor entry slot from the first invoker argument into `call_reg`.
-fn emit_descriptor_entry_to_call_reg(emitter: &mut Emitter, call_reg: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, x0", call_reg));              // keep descriptor while loading its native entry
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, rdi", call_reg));             // keep descriptor while loading its native entry
-        }
-    }
-    callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
 }
 
 /// Loads the saved descriptor entry slot into `call_reg` after a `setjmp` boundary.
@@ -538,33 +406,33 @@ fn emit_invoker_exception_boundary_push(
             );
             emitter.instruction(&format!("sub x10, x29, #{}", handler_base));   // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // pass the boundary jmp_buf to setjmp
                 "sub x0, x29, #{}",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
-            ));                                                                 // pass the boundary jmp_buf to setjmp
+            ));
             emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
             emitter.instruction(&format!("cbnz x0, {}", escape_label));         // non-zero setjmp result means a callable Throwable escaped
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(
+            emitter.instruction(                                                // save the previous native exception-handler head
                 &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
-            );                                                                  // save the previous native exception-handler head
+            );
             abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-            emitter.instruction(
+            emitter.instruction(                                                // preserve the caller activation frame across callable unwinding
                 &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-            );                                                                  // preserve the caller activation frame across callable unwinding
+            );
             abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // save diagnostic suppression depth for restoration
                 "mov QWORD PTR [rbp - {}], r10",
                 handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            ));                                                                 // save diagnostic suppression depth for restoration
+            ));
             emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base)); // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // pass the boundary jmp_buf to setjmp
                 "lea rdi, [rbp - {}]",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
-            ));                                                                 // pass the boundary jmp_buf to setjmp
+            ));
             emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
             emitter.instruction("test eax, eax");                               // did control arrive through longjmp?
             emitter.instruction(&format!("jne {}", escape_label));              // non-zero setjmp result means a callable Throwable escaped
@@ -587,14 +455,14 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
             abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
         }
         Arch::X86_64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // reload the previous native exception-handler head
                 &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
-            );                                                                  // reload the previous native exception-handler head
+            );
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // reload the saved diagnostic suppression depth
                 "mov r10, QWORD PTR [rbp - {}]",
                 handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            ));                                                                 // reload the saved diagnostic suppression depth
+            ));
             abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
         }
     }
@@ -760,7 +628,7 @@ fn emit_loaded_mixed_array_callback_call(
 
     emitter.label(&done_label);
     abi::emit_release_temporary_stack(emitter, 16); // discard preserved borrowed argument-container payload
-    sig.return_type.clone()
+    if ctx.mbstring_operation.is_some() { PhpType::Mixed } else { sig.return_type.clone() }
 }
 
 /// Emits callback dispatch for an indexed argument array.
@@ -775,6 +643,10 @@ fn emit_loaded_indexed_array_callback_call(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    if let Some(operation) = ctx.mbstring_operation {
+        mbstring::emit_indexed(emitter, ctx, array_source, operation);
+        return PhpType::Mixed;
+    }
     let (
         array_reg,
         len_reg,
@@ -806,12 +678,7 @@ fn emit_loaded_indexed_array_callback_call(
         _ => PhpType::Mixed,
     };
     let elem_size = array_element_stride(&elem_ty);
-    let visible_param_count = sig.params.len();
-    let regular_param_count = if sig.variadic.is_some() {
-        visible_param_count.saturating_sub(1)
-    } else {
-        visible_param_count
-    };
+    let shape = InvokerParamShape::of(sig);
 
     // -- load the argument array and validate the required argument count --
     emit_loaded_array_source_to_reg(array_source, array_reg, emitter);
@@ -828,29 +695,33 @@ fn emit_loaded_indexed_array_callback_call(
         abi::emit_load_from_address(emitter, len_reg, array_reg, 0);
     };
     reload_len(emitter);
-    emit_indexed_required_arg_count_check(sig, regular_param_count, len_reg, emitter, ctx, data);
+    emit_indexed_required_arg_count_check(sig, shape.visible_regular, len_reg, emitter, ctx, data);
+    if ctx.mbstring_variable_ref_warnings {
+        reload_len(emitter);
+        mbstring::warn_indexed_nonreference_roots(emitter, ctx, data, array_reg, len_reg, elem_size);
+    }
 
     let mut arg_types = Vec::new();
-    // -- marshal each fixed parameter from the indexed container --
-    for index in 0..regular_param_count {
+    // -- marshal each visible regular from the indexed container --
+    for index in 0..shape.visible_regular {
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
         if is_ref {
-            if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
+            if sig.defaults.get(index).and_then(Option::as_ref).is_some() {
                 let load_label = ctx.next_label("invoker_ref_load_arg");
                 let done_label = ctx.next_label("invoker_ref_arg_done");
                 reload_len(emitter);
                 emit_compare_len_ge(emitter, len_reg, index + 1, &load_label);
-                push_default_ref_arg(default_expr, target_ty, index, emitter, ctx, data);
+                push_default_ref_arg(index, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done_label);
                 emitter.label(&load_label);
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
-                push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 emitter.label(&done_label);
             } else {
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
-                push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
             }
             arg_types.push(PhpType::Int);
             continue;
@@ -859,12 +730,12 @@ fn emit_loaded_indexed_array_callback_call(
         let pushed_ty = target_ty
             .map(PhpType::codegen_repr)
             .unwrap_or_else(|| elem_ty.codegen_repr());
-        if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
+        if sig.defaults.get(index).and_then(Option::as_ref).is_some() {
             let load_label = ctx.next_label("invoker_load_arg");
             let done_label = ctx.next_label("invoker_arg_done");
             reload_len(emitter);
             emit_compare_len_ge(emitter, len_reg, index + 1, &load_label);
-            push_default_value_arg(default_expr, target_ty, emitter, ctx, data);
+            push_default_value_arg(index, target_ty, emitter, ctx, data);
             abi::emit_jump(emitter, &done_label);
             emitter.label(&load_label);
             load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
@@ -876,54 +747,79 @@ fn emit_loaded_indexed_array_callback_call(
             param_validation::validate_parameter_result(emitter, data, ctx, sig, index, &elem_ty);
             push_loaded_indexed_array_value_arg(&elem_ty, target_ty, emitter, ctx, data);
         }
-        pending_owners::register_pushed(emitter, index, &pushed_ty);
+        ctx.argument_owners.record_pushed(index, &pushed_ty, emitter);
         arg_types.push(pushed_ty);
     }
 
+    if shape.hidden_argc {
+        // The invoker synthesizes argc from the container length; it never consumes a user slot.
+        reload_len(emitter);
+        public_args::push_arg_count_from_reg(emitter, len_reg);
+        arg_types.push(PhpType::Int);
+    }
+
     if sig.variadic.is_some() {
-        let variadic_elem_ty = sig
-            .params
-            .get(visible_param_count.saturating_sub(1))
-            .and_then(|(_, ty)| match ty {
-                PhpType::Array(elem) => Some((**elem).clone()),
-                PhpType::AssocArray { value, .. } => Some((**value).clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| elem_ty.clone());
+        let variadic_elem_ty = invoker_variadic_elem_ty(sig, &elem_ty);
         let declared_variadic_elem_ty =
             variadic_declared_element_type(sig).unwrap_or_else(|| variadic_elem_ty.clone());
-        let build_label = ctx.next_label("invoker_build_variadic");
+        let source_base = shape.visible_regular;
+        let prefix = shape.collector_prefix();
+        let owner_index = shape.variadic_owner_index();
         let done_label = ctx.next_label("invoker_variadic_done");
-        // -- no tail arguments: pass an empty variadic array --
-        reload_len(emitter);
-        emit_compare_len_gt(emitter, len_reg, regular_param_count, &build_label);
-        emit_empty_indexed_array(emitter, &variadic_elem_ty);
-        pending_owners::register_result(emitter, regular_param_count, &PhpType::Array(Box::new(variadic_elem_ty.clone())));
-        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-        abi::emit_jump(emitter, &done_label);
+        if !shape.collector_needs_count {
+            let build_label = ctx.next_label("invoker_build_variadic");
+            // -- no tail arguments: pass an empty variadic array --
+            reload_len(emitter);
+            emit_compare_len_gt(emitter, len_reg, source_base, &build_label);
+            emit_empty_indexed_array(emitter, &variadic_elem_ty);
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+            abi::emit_jump(emitter, &done_label);
+            emitter.label(&build_label);
+        }
 
-        // -- allocate the variadic array sized to the argument tail --
-        emitter.label(&build_label);
+        // -- allocate the variadic array sized to the argument tail (plus a count prefix) --
         reload_len(emitter);
-        emit_tail_count(emitter, tail_count_reg, len_reg, regular_param_count);
-        emitter.instruction(&format!(
+        emit_tail_count(emitter, tail_count_reg, len_reg, source_base);
+        if shape.collector_needs_count {
+            public_args::clamp_tail_count_to_zero(emitter, ctx, tail_count_reg);
+        }
+        emitter.instruction(&format!(                                           // size the variadic array to the tail element count
             "mov {}, {}",
             array_new_capacity_reg, tail_count_reg
-        ));                                                                     // size the variadic array to the tail element count
+        ));
+        emit_add_usize_if_nonzero(emitter, array_new_capacity_reg, prefix);
         abi::emit_load_int_immediate(
             emitter,
             array_new_elem_size_reg,
             variadic_elem_ty.stack_size() as i64,
         );
         abi::emit_call_label(emitter, "__rt_array_new");
-        pending_owners::register_result(emitter, regular_param_count, &PhpType::Array(Box::new(variadic_elem_ty.clone())));
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-        emitter.instruction(&format!(
+        ctx.argument_owners.record_pushed(
+            owner_index, &PhpType::Array(Box::new(variadic_elem_ty.clone())), emitter,
+        );
+        emitter.instruction(&format!(                                           // keep the new array pointer for the type stamp and copy loop
             "mov {}, {}",
             peek_reg,
             abi::int_result_reg(emitter)
-        ));                                                                     // keep the new array pointer for the type stamp and copy loop
+        ));
         crate::codegen::emit_array_value_type_stamp(emitter, peek_reg, &variadic_elem_ty);
+        if prefix > 0 {
+            reload_len(emitter);
+            // `data_reg` is not the integer result: boxing the count occupies that register
+            // until the collector pointer is reloaded from the pushed slot.
+            public_args::store_indexed_count_prefix(
+                emitter,
+                ctx,
+                data,
+                len_reg,
+                data_reg,
+                len_store_reg,
+                offset_reg,
+                index_reg,
+                &variadic_elem_ty,
+            );
+        }
         abi::emit_load_int_immediate(emitter, tail_index_reg, 0);
         let loop_label = ctx.next_label("invoker_variadic_loop");
         let loop_done_label = ctx.next_label("invoker_variadic_loop_done");
@@ -931,13 +827,13 @@ fn emit_loaded_indexed_array_callback_call(
         emitter.label(&loop_label);
         emit_compare_reg_ge(emitter, tail_index_reg, tail_count_reg, &loop_done_label);
         emitter.instruction(&format!("mov {}, {}", index_reg, tail_index_reg)); // start the source index from the tail loop counter
-        emit_add_usize_if_nonzero(emitter, index_reg, regular_param_count);
+        emit_add_usize_if_nonzero(emitter, index_reg, source_base);
         emitter.instruction(&format!("mov {}, {}", data_reg, array_reg));       // start the source element address at the array header base
         emit_add_usize(emitter, data_reg, 24);
         emit_scale_index_to_offset(emitter, offset_reg, index_reg, elem_size);
         emit_add_reg(emitter, data_reg, offset_reg);
         load_array_element_to_result(emitter, &elem_ty, data_reg, 0);
-        param_validation::validate_parameter_result(emitter, data, ctx, sig, regular_param_count, &elem_ty);
+        param_validation::validate_parameter_result(emitter, data, ctx, sig, owner_index, &elem_ty);
         let (mut stored_ty, mut boxed_to_mixed) = coerce_current_value_to_target(
             emitter,
             ctx,
@@ -962,22 +858,26 @@ fn emit_loaded_indexed_array_callback_call(
             abi::emit_incref_if_refcounted(emitter, &stored_ty);
         }
         abi::emit_load_temporary_stack_slot(emitter, peek_reg, 0);
+        emitter.instruction(&format!("mov {}, {}", index_reg, tail_index_reg)); // dest index starts after the synthesized count prefix
+        emit_add_usize_if_nonzero(emitter, index_reg, prefix);
         emit_store_current_value_to_array_slot(
             emitter,
             &stored_ty,
             peek_reg,
             len_store_reg,
             offset_reg,
-            tail_index_reg,
+            index_reg,
         );
         emit_increment_reg(emitter, tail_index_reg);
-        abi::emit_store_to_address(emitter, tail_index_reg, peek_reg, 0);
+        emitter.instruction(&format!("mov {}, {}", len_store_reg, tail_index_reg)); // length is copied count plus the prefix
+        emit_add_usize_if_nonzero(emitter, len_store_reg, prefix);
+        abi::emit_store_to_address(emitter, len_store_reg, peek_reg, 0);
         abi::emit_jump(emitter, &loop_label);
         emitter.label(&loop_done_label);
         emitter.label(&done_label);
         let variadic_ty = PhpType::Array(Box::new(variadic_elem_ty.clone()));
         if variadic_param_is_by_ref(sig) {
-            wrap_pushed_value_in_ref_cell(emitter, &variadic_ty);
+            reference_args::push_owned_cell(emitter, ctx, owner_index, &variadic_ty);
             arg_types.push(PhpType::Int);
         } else if variadic_param_uses_associative_storage(sig) {
             let assoc_ty = PhpType::AssocArray {
@@ -990,18 +890,19 @@ fn emit_loaded_indexed_array_callback_call(
             box_pushed_owned_variadic_container_as_mixed(emitter, &variadic_ty);
             arg_types.push(PhpType::Mixed);
         } else {
+            ctx.argument_owners.record_pushed(owner_index, &variadic_ty, emitter);
             arg_types.push(variadic_ty);
         }
-        if variadic_param_is_by_ref(sig) {
-            pending_owners::register_pushed_ref_cell(emitter, regular_param_count);
-        } else if let Some(actual_type) = arg_types.last() {
-            pending_owners::register_pushed(emitter, regular_param_count, actual_type);
+        if !variadic_param_is_by_ref(sig) {
+            if let Some(actual_type) = arg_types.last() {
+                ctx.argument_owners.record_pushed(owner_index, actual_type, emitter);
+            }
         }
     }
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(ctx, call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -1017,6 +918,10 @@ fn emit_loaded_assoc_array_callback_call(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    if let Some(operation) = ctx.mbstring_operation {
+        mbstring::emit_assoc(emitter, ctx, data, array_source, operation);
+        return PhpType::Mixed;
+    }
     let hash_reg = match emitter.target.arch {
         Arch::AArch64 => "x20",
         Arch::X86_64 => "r13",
@@ -1027,16 +932,22 @@ fn emit_loaded_assoc_array_callback_call(
     };
     emit_loaded_array_source_to_reg(array_source, hash_reg, emitter);
 
-    let visible_param_count = sig.params.len();
-    let regular_param_count = if sig.variadic.is_some() {
-        visible_param_count.saturating_sub(1)
-    } else {
-        visible_param_count
-    };
+    let shape = InvokerParamShape::of(sig);
+    let count_reg = public_args::assoc_arg_count_reg(emitter);
+    if shape.needs_actual_count() {
+        public_args::emit_assoc_actual_arg_count(
+            hash_reg, sig, &shape, count_reg, emitter, ctx, data,
+        );
+    }
+    // -- reject an unbindable container before any argument is staged --
+    emit_reject_invalid_named_arguments(hash_reg, sig, &shape, emitter, ctx, data);
+    if ctx.mbstring_variable_ref_warnings {
+        mbstring::warn_assoc_nonreference_roots(emitter, ctx, data, hash_reg);
+    }
     let mut arg_types = Vec::new();
 
-    // -- marshal each fixed parameter via hash lookup --
-    for index in 0..regular_param_count {
+    // -- marshal each visible regular via hash lookup --
+    for index in 0..shape.visible_regular {
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let param_name = sig.params.get(index).map(|(name, _)| name.as_str());
@@ -1044,31 +955,30 @@ fn emit_loaded_assoc_array_callback_call(
 
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
         if is_ref {
-            if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
+            if sig.defaults.get(index).and_then(Option::as_ref).is_some() {
                 let use_default = ctx.next_label("invoker_assoc_ref_default");
                 let done = ctx.next_label("invoker_assoc_ref_done");
                 abi::emit_branch_if_int_result_zero(emitter, &use_default);
-                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&use_default);
-                push_default_ref_arg(default_expr, target_ty, index, emitter, ctx, data);
+                push_default_ref_arg(index, target_ty, index, emitter, ctx, data);
                 emitter.label(&done);
             } else {
                 let missing = ctx.next_label("invoker_assoc_ref_missing");
                 let done = ctx.next_label("invoker_assoc_ref_done");
                 abi::emit_branch_if_int_result_zero(emitter, &missing);
-                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&missing);
-                emit_call_user_func_array_missing_arg_abort(emitter, data);
+                emit_call_user_func_array_missing_arg_error(emitter, data);
                 emitter.label(&done);
             }
             arg_types.push(PhpType::Int);
             continue;
         }
 
-        let pushed_ty = if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref)
-        {
+        let pushed_ty = if sig.defaults.get(index).and_then(Option::as_ref).is_some() {
             let use_default = ctx.next_label("invoker_assoc_default");
             let done = ctx.next_label("invoker_assoc_done");
             abi::emit_branch_if_int_result_zero(emitter, &use_default);
@@ -1076,7 +986,7 @@ fn emit_loaded_assoc_array_callback_call(
             let loaded_ty = push_loaded_hash_value_arg(&elem_ty, target_ty, emitter, ctx, data);
             abi::emit_jump(emitter, &done);
             emitter.label(&use_default);
-            let default_ty = push_default_value_arg(default_expr, target_ty, emitter, ctx, data);
+            let default_ty = push_default_value_arg(index, target_ty, emitter, ctx, data);
             emitter.label(&done);
             widen_callback_arg_type(&loaded_ty, &default_ty)
         } else {
@@ -1087,12 +997,17 @@ fn emit_loaded_assoc_array_callback_call(
             let loaded_ty = push_loaded_hash_value_arg(&elem_ty, target_ty, emitter, ctx, data);
             abi::emit_jump(emitter, &done);
             emitter.label(&missing);
-            emit_call_user_func_array_missing_arg_abort(emitter, data);
+            emit_call_user_func_array_missing_arg_error(emitter, data);
             emitter.label(&done);
             loaded_ty
         };
-        pending_owners::register_pushed(emitter, index, &pushed_ty);
+        ctx.argument_owners.record_pushed(index, &pushed_ty, emitter);
         arg_types.push(pushed_ty);
+    }
+
+    if shape.hidden_argc {
+        public_args::push_arg_count_from_reg(emitter, count_reg);
+        arg_types.push(PhpType::Int);
     }
 
     if sig.variadic.is_some() {
@@ -1100,31 +1015,32 @@ fn emit_loaded_assoc_array_callback_call(
             hash_reg,
             &elem_ty,
             sig,
-            regular_param_count,
-            regular_param_count,
+            &shape,
+            count_reg,
             emitter,
             ctx,
             data,
         );
         if variadic_param_is_by_ref(sig) {
-            wrap_pushed_value_in_ref_cell(emitter, &variadic_ty);
+            reference_args::push_owned_cell(emitter, ctx, shape.variadic_owner_index(), &variadic_ty);
             arg_types.push(PhpType::Int);
         } else if variadic_param_uses_mixed_storage(sig) {
             box_pushed_owned_variadic_container_as_mixed(emitter, &variadic_ty);
             arg_types.push(PhpType::Mixed);
         } else {
+            ctx.argument_owners.record_pushed(shape.variadic_owner_index(), &variadic_ty, emitter);
             arg_types.push(variadic_ty);
         }
-        if variadic_param_is_by_ref(sig) {
-            pending_owners::register_pushed_ref_cell(emitter, regular_param_count);
-        } else if let Some(actual_type) = arg_types.last() {
-            pending_owners::register_pushed(emitter, regular_param_count, actual_type);
+        if !variadic_param_is_by_ref(sig) {
+            if let Some(actual_type) = arg_types.last() {
+                ctx.argument_owners.record_pushed(shape.variadic_owner_index(), actual_type, emitter);
+            }
         }
     }
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(ctx, call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -1147,12 +1063,10 @@ fn callback_arg_target_ty<'a>(
 
 /// Returns whether the visible variadic parameter is declared by-reference.
 fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
-    sig.variadic.is_some()
-        && sig
-            .ref_params
-            .get(sig.params.len().saturating_sub(1))
-            .copied()
-            .unwrap_or(false)
+    crate::types::signatures::variadic_param_index(sig)
+        .and_then(|index| sig.ref_params.get(index))
+        .copied()
+        .unwrap_or(false)
 }
 
 /// Returns whether the EIR callee receives its variadic capture as key-preserving Hash storage.
@@ -1168,13 +1082,14 @@ fn variadic_param_uses_associative_storage(sig: &FunctionSig) -> bool {
 
 /// Recovers a typed variadic element contract retained beside the Mixed EIR storage slot.
 fn variadic_declared_element_type(sig: &FunctionSig) -> Option<PhpType> {
-    let variadic_index = sig.params.len().checked_sub(1)?;
+    let variadic_index = crate::types::signatures::variadic_param_index(sig)?;
     sig.param_type_exprs
         .get(variadic_index)
         .and_then(Option::as_ref)
         .map(type_expr_to_php_type)
 }
 
+/// Recovers PHP declared contracts without narrowing unrestricted arrays to packed storage.
 fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
     match type_expr {
         TypeExpr::Int => PhpType::Int,
@@ -1186,6 +1101,12 @@ fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Never => PhpType::Never,
         TypeExpr::Iterable => PhpType::Iterable,
         TypeExpr::Array(inner) => PhpType::Array(Box::new(type_expr_to_php_type(inner))),
+        TypeExpr::AssocArray { key, value } => PhpType::AssocArray {
+            key: Box::new(type_expr_to_php_type(key)),
+            value: Box::new(type_expr_to_php_type(value)),
+        },
+        TypeExpr::CallableSig { .. } => PhpType::Callable,
+        TypeExpr::GenericClass { .. } => unreachable!("generic classes must be instantiated before callable emission"),
         TypeExpr::Ptr(name) => {
             PhpType::Pointer(name.as_ref().map(|name| name.as_str().to_string()))
         }
@@ -1196,11 +1117,11 @@ fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
             .to_ascii_lowercase()
             .as_str()
         {
-            "array" => PhpType::Array(Box::new(PhpType::Mixed)),
+            "array" => PhpType::php_array(),
             "callable" | "closure" => PhpType::Callable,
             "mixed" => PhpType::Mixed,
             "object" => PhpType::Object(String::new()),
-            name => PhpType::Object(name.to_string()),
+            _ => PhpType::Object(name.as_str().trim_start_matches('\\').to_string()),
         },
         TypeExpr::Nullable(inner) => {
             PhpType::Union(vec![PhpType::Void, type_expr_to_php_type(inner)])
@@ -1271,6 +1192,10 @@ fn emit_indexed_required_arg_count_check(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) {
+    if let Some(operation) = ctx.mbstring_operation {
+        emit_mbstring_argument_count_check(operation, len_reg, emitter, ctx);
+        return;
+    }
     let required_count = (0..regular_param_count)
         .filter(|idx| sig.defaults.get(*idx).and_then(Option::as_ref).is_none())
         .map(|idx| idx + 1)
@@ -1281,8 +1206,48 @@ fn emit_indexed_required_arg_count_check(
     }
     let ok_label = ctx.next_label("invoker_indexed_required_ok");
     emit_compare_len_ge(emitter, len_reg, required_count, &ok_label);
-    emit_call_user_func_array_missing_arg_abort(emitter, data);
+    emit_call_user_func_array_missing_arg_error(emitter, data);
     emitter.label(&ok_label);
+}
+
+/// Lets the shared mbstring coordinator report invalid arity before typed argument adaptation.
+fn emit_mbstring_argument_count_check(
+    operation: elephc_builtin_contract::RuntimeBuiltinId, len_reg: &str,
+    emitter: &mut Emitter, ctx: &mut InvokerEmitContext,
+) {
+    let parameters = elephc_builtin_contract::lookup_id(operation.builtin_id()).expect("mbstring contract").params.len();
+    let minimum = (0..=parameters).find(|&count| operation.supports_arity(count)).expect("mbstring minimum arity");
+    let maximum = (0..=parameters).rev().find(|&count| operation.supports_arity(count)).expect("mbstring maximum arity");
+    let fail = ctx.next_label("mbstring_arity_fail");
+    let done = ctx.next_label("mbstring_arity_ok");
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.instruction(&format!("cmp {len_reg}, #{minimum}"));             // compare actual indexed arguments with the shared minimum
+        emitter.instruction(&format!("b.lo {fail}"));                           // retain the actual short count for PHP error construction
+        emitter.instruction(&format!("cmp {len_reg}, #{maximum}"));             // compare actual indexed arguments with the shared maximum
+        emitter.instruction(&format!("b.ls {done}"));                           // adapt values only for an accepted argument count
+        emitter.label(&fail);
+        abi::emit_load_int_immediate(emitter, "x0", i64::from(operation.as_u32()));
+        emitter.instruction("mov x1, #0");                                      // arity rejection occurs before the coordinator reads argument pointers
+        emitter.instruction(&format!("mov x2, {len_reg}"));                     // preserve the supplied count in the PHP ArgumentCountError
+        emitter.instruction("mov x3, #0");                                      // caller strictness does not change arity diagnostics
+        emitter.instruction("mov x4, #0");                                      // this native adapter carries no eval context
+        emitter.instruction("bl __rt_mbstring_native");                         // construct and throw through the shared protected coordinator
+        emitter.instruction("brk #0");                                          // an invalid count cannot return a PHP value
+    } else {
+        emitter.instruction(&format!("cmp {len_reg}, {minimum}"));              // compare actual indexed arguments with the shared minimum
+        emitter.instruction(&format!("jb {fail}"));                             // preserve the actual short count for PHP error construction
+        emitter.instruction(&format!("cmp {len_reg}, {maximum}"));              // compare actual indexed arguments with the shared maximum
+        emitter.instruction(&format!("jbe {done}"));                            // adapt values only for an accepted argument count
+        emitter.label(&fail);
+        abi::emit_load_int_immediate(emitter, "rdi", i64::from(operation.as_u32()));
+        emitter.instruction("xor esi, esi");                                    // arity rejection occurs before any argument pointer access
+        emitter.instruction(&format!("mov rdx, {len_reg}"));                    // report the supplied count through PHP ArgumentCountError
+        emitter.instruction("xor ecx, ecx");                                    // strictness does not affect arity diagnostics
+        emitter.instruction("xor r8d, r8d");                                    // this native adapter carries no eval context
+        emitter.instruction("call __rt_mbstring_native");                       // finish Rust work before native throwable propagation
+        emitter.instruction("ud2");                                             // an invalid count cannot return a PHP value
+    }
+    emitter.label(&done);
 }
 
 /// Emits a length >= immediate branch.
@@ -1336,16 +1301,16 @@ fn emit_tail_count(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // tail count = argument count minus the fixed parameter prefix
                 "sub {}, {}, #{}",
                 dest_reg, len_reg, regular_param_count
-            ));                                                                 // tail count = argument count minus the fixed parameter prefix
+            ));
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov {}, {}", dest_reg, len_reg));     // start from the runtime argument count
-            emitter.instruction(
+            emitter.instruction(                                                // subtract the fixed parameter prefix to leave the tail count
                 &format!("sub {}, {}", dest_reg, regular_param_count)
-            );                                                                  // subtract the fixed parameter prefix to leave the tail count
+            );
         }
     }
 }
@@ -1353,9 +1318,9 @@ fn emit_tail_count(
 /// Adds an immediate to a register.
 fn emit_add_usize(emitter: &mut Emitter, reg: &str, value: usize) {
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(
+        Arch::AArch64 => emitter.instruction(                                   // add the compile-time immediate to the register in place
             &format!("add {}, {}, #{}", reg, reg, value)
-        ),                                                                      // add the compile-time immediate to the register in place
+        ),
         Arch::X86_64 => emitter.instruction(&format!("add {}, {}", reg, value)),// add the compile-time immediate to the register in place
     }
 }
@@ -1364,9 +1329,9 @@ fn emit_add_usize(emitter: &mut Emitter, reg: &str, value: usize) {
 fn emit_add_reg(emitter: &mut Emitter, dest_reg: &str, rhs_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // accumulate the scaled byte offset into the base register
                 &format!("add {}, {}, {}", dest_reg, dest_reg, rhs_reg)
-            );                                                                  // accumulate the scaled byte offset into the base register
+            );
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("add {}, {}", dest_reg, rhs_reg));     // accumulate the scaled byte offset into the base register
@@ -1396,44 +1361,44 @@ fn emit_scale_index_to_offset(
     match stride {
         0 => abi::emit_load_int_immediate(emitter, offset_reg, 0),
         8 => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction(
+            Arch::AArch64 => emitter.instruction(                               // offset = index * 8 (one-word elements)
                 &format!("lsl {}, {}, #3", offset_reg, index_reg)
-            ),                                                                  // offset = index * 8 (one-word elements)
+            ),
             Arch::X86_64 => {
-                emitter.instruction(
+                emitter.instruction(                                            // copy the index so scaling leaves the counter intact
                     &format!("mov {}, {}", offset_reg, index_reg)
-                );                                                              // copy the index so scaling leaves the counter intact
+                );
                 emitter.instruction(&format!("shl {}, 3", offset_reg));         // offset = index * 8 (one-word elements)
             }
         },
         16 => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction(
+            Arch::AArch64 => emitter.instruction(                               // offset = index * 16 (two-word string elements)
                 &format!("lsl {}, {}, #4", offset_reg, index_reg)
-            ),                                                                  // offset = index * 16 (two-word string elements)
+            ),
             Arch::X86_64 => {
-                emitter.instruction(
+                emitter.instruction(                                            // copy the index so scaling leaves the counter intact
                     &format!("mov {}, {}", offset_reg, index_reg)
-                );                                                              // copy the index so scaling leaves the counter intact
+                );
                 emitter.instruction(&format!("shl {}, 4", offset_reg));         // offset = index * 16 (two-word string elements)
             }
         },
         _ => match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(
+                emitter.instruction(                                            // load the element stride for the generic multiply
                     &format!("mov {}, #{}", offset_reg, stride)
-                );                                                              // load the element stride for the generic multiply
-                emitter.instruction(&format!(
+                );
+                emitter.instruction(&format!(                                   // offset = index * element stride
                     "mul {}, {}, {}",
                     offset_reg, index_reg, offset_reg
-                ));                                                             // offset = index * element stride
+                ));
             }
             Arch::X86_64 => {
-                emitter.instruction(
+                emitter.instruction(                                            // copy the index so scaling leaves the counter intact
                     &format!("mov {}, {}", offset_reg, index_reg)
-                );                                                              // copy the index so scaling leaves the counter intact
-                emitter.instruction(
+                );
+                emitter.instruction(                                            // offset = index * element stride
                     &format!("imul {}, {}", offset_reg, stride)
-                );                                                              // offset = index * element stride
+                );
             }
         },
     }
@@ -1485,6 +1450,7 @@ fn load_array_element_to_result(
 fn push_loaded_indexed_array_ref_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1493,9 +1459,10 @@ fn push_loaded_indexed_array_ref_arg(
         source_elem_ty.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return push_current_result_ref_arg_address(source_elem_ty, target_ty, emitter, ctx, data);
+        return push_current_result_ref_arg_address(source_elem_ty, target_ty, owner_index, emitter, ctx, data);
     }
     let special_label = ctx.next_label("invoker_ref_cell");
+    let php_reference_label = ctx.next_label("invoker_php_reference");
     let temp_label = ctx.next_label("invoker_ref_temp");
     let done_label = ctx.next_label("invoker_ref_done");
     let result_reg = abi::int_result_reg(emitter);
@@ -1503,18 +1470,111 @@ fn push_loaded_indexed_array_ref_arg(
 
     abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
     emit_branch_if_invoker_ref_cell_tag(tag_reg, &special_label, emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {tag_reg}, #11"));                // test for a managed PHP reference
+            emitter.instruction(&format!("b.eq {php_reference_label}"));        // forward its original cell
+            emitter.instruction(&format!("cmp {tag_reg}, #7"));                 // test for a persistent reference wrapper
+            emitter.instruction(&format!("b.ne {temp_label}"));                 // ordinary values require temporary cells
+            abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+            emitter.instruction(&format!("cmp {tag_reg}, #1"));                 // flag one identifies the persistent reference
+            emitter.instruction(&format!("b.eq {php_reference_label}"));        // preserve its writable target
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {tag_reg}, 11"));                 // test for a managed PHP reference
+            emitter.instruction(&format!("je {php_reference_label}"));          // forward its original cell
+            emitter.instruction(&format!("cmp {tag_reg}, 7"));                  // test for a persistent reference wrapper
+            emitter.instruction(&format!("jne {temp_label}"));                  // ordinary values require temporary cells
+            abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+            emitter.instruction(&format!("cmp {tag_reg}, 1"));                  // flag one identifies the persistent reference
+            emitter.instruction(&format!("je {php_reference_label}"));          // preserve its writable target
+        }
+    }
     abi::emit_jump(emitter, &temp_label);
 
     emitter.label(&special_label);
+    let storage_reg = abi::symbol_scratch_reg(emitter);
+    abi::emit_load_from_address(emitter, storage_reg, result_reg, 8);
+    abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+    push_invoker_ref_storage_address(storage_reg, tag_reg, target_ty, emitter, ctx);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&php_reference_label);
+    let dereference = ctx.next_label("invoker_php_reference_cell");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {tag_reg}, #11"));                // distinguish a direct PHP reference from a persistent wrapper
+            emitter.instruction(&format!("b.eq {dereference}"));                // load the managed cell pointer from the direct marker
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {tag_reg}, 11"));                 // distinguish a direct PHP reference from a persistent wrapper
+            emitter.instruction(&format!("je {dereference}"));                  // load the managed cell pointer from the direct marker
+        }
+    }
+    abi::emit_push_result_value(emitter, &PhpType::Int);
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&dereference);
     abi::emit_load_from_address(emitter, result_reg, result_reg, 8);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&temp_label);
-    push_current_result_ref_arg_address(source_elem_ty, target_ty, emitter, ctx, data);
+    push_current_result_ref_arg_address(source_elem_ty, target_ty, owner_index, emitter, ctx, data);
 
     emitter.label(&done_label);
     PhpType::Int
+}
+
+/// Pushes caller storage for an invoker ref marker, adapting a Mixed cell to a concrete target.
+///
+/// Signature-unknown calls canonicalize promotable caller locals as Mixed so an untyped or
+/// `mixed &$value` target can retype them safely. If runtime dispatch instead selects a concrete
+/// ref parameter, that callee needs the address of the payload inside the existing Mixed box,
+/// not the address of the frame/ref-cell slot that holds the box pointer.
+fn push_invoker_ref_storage_address(
+    storage_reg: &str,
+    source_tag_reg: &str,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+) {
+    let result_reg = abi::int_result_reg(emitter);
+    let target_is_mixed = target_ty.is_none_or(|ty| {
+        matches!(
+            ty.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
+        )
+    });
+    if target_is_mixed {
+        abi::emit_reg_move(emitter, result_reg, storage_reg);
+        abi::emit_push_result_value(emitter, &PhpType::Int);
+        return;
+    }
+
+    let direct_label = ctx.next_label("invoker_ref_storage_direct");
+    let done_label = ctx.next_label("invoker_ref_storage_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #7", source_tag_reg));        // is caller storage a boxed Mixed handle?
+            emitter.instruction(&format!("b.ne {}", direct_label));             // concrete source storage already has the target ABI shape
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, 7", source_tag_reg));         // is caller storage a boxed Mixed handle?
+            emitter.instruction(&format!("jne {}", direct_label));              // concrete source storage already has the target ABI shape
+        }
+    }
+    abi::emit_load_from_address(emitter, result_reg, storage_reg, 0);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("add {}, {}, #8", result_reg, result_reg)), // address the mutable payload inside the Mixed cell
+        Arch::X86_64 => emitter.instruction(&format!("add {}, 8", result_reg)), // address the mutable payload inside the Mixed cell
+    }
+    abi::emit_push_result_value(emitter, &PhpType::Int);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&direct_label);
+    abi::emit_reg_move(emitter, result_reg, storage_reg);
+    abi::emit_push_result_value(emitter, &PhpType::Int);
+    emitter.label(&done_label);
 }
 
 /// Pushes a loaded indexed-array element as a by-value callback argument.
@@ -1557,25 +1617,10 @@ fn push_loaded_invoker_ref_cell_value_arg(
     data: &mut DataSection,
 ) -> PhpType {
     emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter, ctx);
-    let release_mixed_after_coerce = target_ty.is_some_and(|target_ty| {
-        !matches!(target_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-            && can_coerce_result_to_type(&PhpType::Mixed, target_ty)
-    });
-    if release_mixed_after_coerce {
-        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-    }
-    let (pushed_ty, _boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
-    retain_coerced_argument_payload(emitter, &pushed_ty, true,
-        container_storage::needs_mixed_slot_normalization(&pushed_ty));
-    if release_mixed_after_coerce {
-        release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
-    }
-    abi::emit_push_result_value(emitter, &pushed_ty);
-    pushed_ty
+    push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data)
 }
 
-/// Boxes the value referenced by an invoker marker into an owned Mixed cell.
+/// Materializes the value referenced by a boxed invoker marker as one owned Mixed cell.
 fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -1583,49 +1628,38 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     let result_reg = abi::int_result_reg(emitter);
     let ref_cell_reg = abi::symbol_scratch_reg(emitter);
     let tag_reg = abi::secondary_scratch_reg(emitter);
-    let lo_reg = abi::tertiary_scratch_reg(emitter);
-    let hi_reg = match emitter.target.arch {
-        Arch::AArch64 => "x12",
-        Arch::X86_64 => "rdx",
-    };
-    let string_hi_label = ctx.next_label("invoker_ref_string_hi");
-    let box_label = ctx.next_label("invoker_ref_box");
 
-    // -- unpack the marker: ref-cell pointer, source value tag, and payload --
+    // -- unpack the marker and materialize its referenced value --
     abi::emit_load_from_address(emitter, ref_cell_reg, result_reg, 8);
     abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
-    abi::emit_load_from_address(emitter, lo_reg, ref_cell_reg, 0);
-    abi::emit_load_int_immediate(emitter, hi_reg, 0);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #1", tag_reg));               // is the referenced value a string (runtime tag 1)?
-            emitter.instruction(&format!("b.eq {}", string_hi_label));          // strings also need the high length word loaded
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, 1", tag_reg));                // is the referenced value a string (runtime tag 1)?
-            emitter.instruction(&format!("je {}", string_hi_label));            // strings also need the high length word loaded
-        }
-    }
-    abi::emit_jump(emitter, &box_label);
-    emitter.label(&string_hi_label);
-    abi::emit_load_from_address(emitter, hi_reg, ref_cell_reg, 8);
-    emitter.label(&box_label);
-    emit_box_runtime_payload_as_mixed(emitter, tag_reg, lo_reg, hi_reg);
+    emit_materialize_invoker_ref_cell_value_as_mixed(ref_cell_reg, tag_reg, emitter, ctx);
+}
+
+/// Retains an already boxed Mixed source or boxes one raw ref-cell payload.
+fn emit_materialize_invoker_ref_cell_value_as_mixed(
+    ref_cell_reg: &str,
+    source_tag_reg: &str,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+) {
+    crate::codegen_support::callable_invoker_args::emit_materialize_ref_cell_value_as_mixed(
+        ref_cell_reg, source_tag_reg, emitter, &mut |suffix| ctx.next_label(suffix),
+    );
 }
 
 /// Branches when a boxed Mixed argument is an invoker ref-cell marker.
 fn emit_branch_if_invoker_ref_cell_tag(tag_reg: &str, label: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // compare the value tag against the invoker ref-cell marker
                 &format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)
-            );                                                                  // compare the value tag against the invoker ref-cell marker
+            );
             emitter.instruction(&format!("b.eq {}", label));                    // take the ref-cell path when the marker tag matches
         }
         Arch::X86_64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // compare the value tag against the invoker ref-cell marker
                 &format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)
-            );                                                                  // compare the value tag against the invoker ref-cell marker
+            );
             emitter.instruction(&format!("je {}", label));                      // take the ref-cell path when the marker tag matches
         }
     }
@@ -1665,24 +1699,85 @@ fn emit_branch_if_boxed_invoker_ref_cell(
             emitter.instruction(&format!("cmp {}, #7", raw_tag_reg));           // is the hash value a boxed Mixed pointer (tag 7)?
             emitter.instruction(&format!("b.ne {}", not_boxed_label));          // only boxed values can hide a ref-cell marker
             abi::emit_load_from_address(emitter, marker_tag_reg, raw_lo_reg, 0);
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // does the boxed cell carry the invoker ref-cell marker tag?
                 "cmp {}, #{}",
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
-            ));                                                                 // does the boxed cell carry the invoker ref-cell marker tag?
+            ));
             emitter.instruction(&format!("b.eq {}", label));                    // take the ref-cell path when the marker tag matches
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {}, 7", raw_tag_reg));            // is the hash value a boxed Mixed pointer (tag 7)?
             emitter.instruction(&format!("jne {}", not_boxed_label));           // only boxed values can hide a ref-cell marker
             abi::emit_load_from_address(emitter, marker_tag_reg, raw_lo_reg, 0);
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // does the boxed cell carry the invoker ref-cell marker tag?
                 "cmp {}, {}",
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
-            ));                                                                 // does the boxed cell carry the invoker ref-cell marker tag?
+            ));
             emitter.instruction(&format!("je {}", label));                      // take the ref-cell path when the marker tag matches
         }
     }
     emitter.label(&not_boxed_label);
+}
+
+/// Recognizes an ordinary PHP reference held inside a boxed hash value.
+fn emit_branch_if_boxed_php_reference_cell(
+    raw_lo_reg: &str,
+    raw_tag_reg: &str,
+    label: &str,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+) {
+    let done = ctx.next_label("hash_php_reference_not_boxed");
+    let tag = abi::temp_int_reg(emitter.target);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));             // only boxed hash values can hide references
+            emitter.instruction(&format!("b.ne {done}"));                       // leave other values on the ordinary path
+            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            emitter.instruction(&format!("cmp {tag}, #11"));                    // check the inner boxed reference marker
+            emitter.instruction(&format!("b.eq {label}"));                      // forward the live managed cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));              // only boxed hash values can hide references
+            emitter.instruction(&format!("jne {done}"));                        // leave other values on the ordinary path
+            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            emitter.instruction(&format!("cmp {tag}, 11"));                     // check the inner boxed reference marker
+            emitter.instruction(&format!("je {label}"));                        // forward the live managed cell
+        }
+    }
+    emitter.label(&done);
+}
+
+/// Recognizes an indexed-style persistent reference wrapper held in a hash bucket.
+fn emit_branch_if_boxed_persistent_reference(
+    raw_lo_reg: &str, raw_tag_reg: &str, label: &str,
+    emitter: &mut Emitter, ctx: &mut InvokerEmitContext,
+) {
+    let done = ctx.next_label("hash_persistent_reference_not_boxed");
+    let tag = abi::temp_int_reg(emitter.target);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));             // only boxed hash values can hold a persistent wrapper
+            emitter.instruction(&format!("b.ne {done}"));                       // preserve ordinary hash value handling
+            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            emitter.instruction(&format!("cmp {tag}, #7"));                     // check the inner wrapper tag
+            emitter.instruction(&format!("b.ne {done}"));                       // leave unrelated boxes on the ordinary path
+            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 16);
+            emitter.instruction(&format!("cmp {tag}, #1"));                     // flag one denotes a persistent reference
+            emitter.instruction(&format!("b.eq {label}"));                      // forward its original writable storage
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));              // only boxed hash values can hold a persistent wrapper
+            emitter.instruction(&format!("jne {done}"));                        // preserve ordinary hash value handling
+            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            emitter.instruction(&format!("cmp {tag}, 7"));                      // check the inner wrapper tag
+            emitter.instruction(&format!("jne {done}"));                        // leave unrelated boxes on the ordinary path
+            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 16);
+            emitter.instruction(&format!("cmp {tag}, 1"));                      // flag one denotes a persistent reference
+            emitter.instruction(&format!("je {label}"));                        // forward its original writable storage
+        }
+    }
+    emitter.label(&done);
 }
 
 /// Extracts ref-cell pointer and source tag from a boxed Mixed invoker marker.
@@ -1698,6 +1793,7 @@ fn load_boxed_invoker_ref_cell_to_raw_regs(
 }
 
 /// Coerces and pushes a loaded indexed-array element as a call argument.
+/// Typed object parameters borrow the argument container's owner, just as native direct calls do.
 fn push_loaded_array_element_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
@@ -1706,11 +1802,8 @@ fn push_loaded_array_element_arg(
     data: &mut DataSection,
 ) -> PhpType {
     let (pushed_ty, boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, source_elem_ty, target_ty);
-    let target_borrows_object = target_ty.is_some_and(|ty| {
-        matches!(ty.codegen_repr(), PhpType::Object(_) | PhpType::Packed(_))
-    });
-    if !boxed_to_mixed && !target_borrows_object {
+        owned_value_args::coerce(emitter, ctx, data, source_elem_ty, target_ty);
+    if !boxed_to_mixed {
         abi::emit_incref_if_refcounted(emitter, &pushed_ty);
     }
     abi::emit_push_result_value(emitter, &pushed_ty);
@@ -1721,44 +1814,19 @@ fn push_loaded_array_element_arg(
 fn push_current_result_ref_arg_address(
     source_ty: &PhpType,
     target_ty: Option<&PhpType>,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let source_repr = source_ty.codegen_repr();
     let (pushed_ty, boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, source_ty, target_ty);
-    if !boxed_to_mixed {
-        abi::emit_incref_if_refcounted(emitter, &source_repr);
+        owned_value_args::coerce(emitter, ctx, data, source_ty, target_ty);
+    if !boxed_to_mixed && pushed_ty != PhpType::Str {
+        abi::emit_incref_if_refcounted(emitter, &pushed_ty);
     }
     abi::emit_push_result_value(emitter, &pushed_ty);
-    // -- allocate a 16-byte heap ref cell and move the pushed value into it --
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!(
-        "mov {}, {}",
-        cell_reg,
-        abi::int_result_reg(emitter)
-    ));                                                                         // keep the freshly allocated ref-cell address in a stable scratch
-    store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
-    abi::emit_push_reg(emitter, cell_reg);
+    reference_args::push_owned_cell(emitter, ctx, owner_index, &pushed_ty);
     PhpType::Int
-}
-
-/// Wraps the value currently on top of the invoker stack in a heap reference cell.
-fn wrap_pushed_value_in_ref_cell(emitter: &mut Emitter, val_ty: &PhpType) {
-    // -- allocate a 16-byte heap ref cell and move the pushed value into it --
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!(
-        "mov {}, {}",
-        cell_reg,
-        abi::int_result_reg(emitter)
-    ));                                                                         // keep the freshly allocated ref-cell address in a stable scratch
-    store_pushed_value_to_ref_cell(emitter, cell_reg, val_ty);
-    abi::emit_push_reg(emitter, cell_reg);
 }
 
 /// Stores a just-pushed value into a heap reference cell.
@@ -1835,7 +1903,439 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
     }
 }
 
+/// Rejects a raw argument container no signature binding can accept.
+///
+/// ONE walk, in the container's own insertion order, classifying every entry exactly once. The
+/// order is the whole point: PHP reports the FIRST entry it cannot bind, so a sweep that went
+/// parameter by parameter and probed the container reported the wrong one of two errors whenever
+/// both were present. Every rule is still checked BEFORE the first argument is staged, because a
+/// throw after that would have to unwind past half-filled argument owner slots and a temporary
+/// stack that already carries pushed values.
+///
+/// The three rules, each raised at the offending entry:
+/// - An integer key that follows any string key is
+///   `Cannot use positional argument after named argument`.
+/// - A string key naming a visible regular parameter whose own positional key ALREADY arrived is
+///   `Named parameter $<name> overwrites previous argument`. Binding takes the name and would
+///   otherwise drop the positional entry without a word. "Already arrived" is literal: a
+///   positional key that comes LATER is the ordering error above, and PHP reports that instead.
+/// - A string key no visible regular parameter declares is `Unknown named parameter $<name>`,
+///   unless the callee's variadic collector can actually take it. A collector whose storage is
+///   dynamic keeps those entries: its tail collector copies every unconsumed name into the
+///   variadic hash. A collector with static indexed storage cannot hold a string key at all, so
+///   the call FAILS CLOSED with the PHP-visible diagnostic rather than being handed a hash block
+///   its frame would read as an indexed array. See
+///   [`variadic_collector_accepts_named_entries`].
+///
+/// "Its own positional key already arrived" is answered by re-walking the container from the
+/// start up to the entry being classified and looking for that one integer key, not by a bitset:
+/// a bitset would have to fix a width, and a width is a semantic limit on how long a signature
+/// may be before the rule quietly stops applying. The rescan is quadratic in the number of
+/// entries and allocation-free, which is the right trade for a check that runs once per call,
+/// only for a container that actually carries a name, and only up to the first name that matches
+/// a declared parameter.
+///
+/// The container register (`x20`/`r13`) and the actual-argument count (`x21`/`r14`) are read but
+/// never written, so the marshalling that follows still sees exactly what it computed.
+fn emit_reject_invalid_named_arguments(
+    hash_base_reg: &str,
+    sig: &FunctionSig,
+    shape: &InvokerParamShape,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+    data: &mut DataSection,
+) {
+    // Scratch frame, 16-byte aligned so every call below keeps the stack ABI.
+    const SCRATCH_BYTES: usize = 64;
+    const CURSOR_OFF: usize = 0;
+    const KEY_PTR_OFF: usize = 8;
+    const KEY_LEN_OFF: usize = 16;
+    const NAMED_SEEN_OFF: usize = 24;
+    /// Cursor the CURRENT entry was fetched with, which bounds the prefix rescan.
+    const ENTRY_CURSOR_OFF: usize = 32;
+    /// Cursor of the prefix rescan itself, kept apart from the outer walk's own cursor.
+    const SCAN_CURSOR_OFF: usize = 40;
+    /// Visible regular parameter index the current name matched, the key the rescan looks for.
+    const MATCH_INDEX_OFF: usize = 48;
+
+    let loop_label = ctx.next_label("invoker_named_scan_loop");
+    let numeric_label = ctx.next_label("invoker_named_scan_numeric");
+    let ordered_label = ctx.next_label("invoker_named_scan_ordered");
+    let collision_label = ctx.next_label("invoker_named_scan_collision");
+    let rescan_label = ctx.next_label("invoker_named_scan_rescan");
+    let next_label = ctx.next_label("invoker_named_scan_next");
+    let done_label = ctx.next_label("invoker_named_scan_done");
+    let alias_labels: Vec<String> = (0..shape.visible_regular)
+        .map(|index| ctx.next_label(&format!("invoker_named_scan_alias_{index}")))
+        .collect();
+    let stack_reg = match emitter.target.arch {
+        Arch::AArch64 => "sp",
+        Arch::X86_64 => "rsp",
+    };
+
+    abi::emit_reserve_temporary_stack(emitter, SCRATCH_BYTES);
+    for offset in [CURSOR_OFF, NAMED_SEEN_OFF] {
+        abi::emit_store_zero_to_address(emitter, stack_reg, offset);
+    }
+
+    emitter.label(&loop_label);
+    emit_named_scan_fetch_entry(
+        hash_base_reg,
+        stack_reg,
+        NamedScanEntrySlots {
+            cursor_off: CURSOR_OFF,
+            entry_cursor_off: ENTRY_CURSOR_OFF,
+            key_ptr_off: KEY_PTR_OFF,
+            key_len_off: KEY_LEN_OFF,
+        },
+        &done_label,
+        &numeric_label,
+        emitter,
+    );
+
+    // -- string key: it binds a declared name, feeds the variadic tail, or is refused --
+    emit_named_scan_mark_named_seen(stack_reg, NAMED_SEEN_OFF, emitter);
+    for index in 0..shape.visible_regular {
+        let Some((param_name, _)) = sig.params.get(index) else { continue };
+        let Some(matched) = alias_labels.get(index) else { continue };
+        emit_branch_if_key_matches_param(
+            param_name, KEY_PTR_OFF, KEY_LEN_OFF, matched, emitter, data,
+        );
+    }
+    if !variadic_collector_accepts_named_entries(sig) {
+        emit_named_scan_key_pair_to_args(KEY_PTR_OFF, KEY_LEN_OFF, emitter);
+        abi::emit_call_label(emitter, "__rt_throw_unknown_named_parameter");
+    }
+    abi::emit_jump(emitter, &next_label);
+
+    // -- a matched name records WHICH parameter it named, then asks for its positional twin --
+    for (index, alias_label) in alias_labels.iter().enumerate() {
+        emitter.label(alias_label);
+        emit_named_scan_record_matched_index(
+            stack_reg, MATCH_INDEX_OFF, index, &collision_label, emitter,
+        );
+    }
+
+    // -- a declared name collides only with a positional key this walk already passed --
+    if !alias_labels.is_empty() {
+        emitter.label(&collision_label);
+        emit_named_scan_prefix_positional_probe(
+            hash_base_reg,
+            stack_reg,
+            NamedScanProbeSlots {
+                entry_cursor_off: ENTRY_CURSOR_OFF,
+                scan_cursor_off: SCAN_CURSOR_OFF,
+                match_index_off: MATCH_INDEX_OFF,
+                key_ptr_off: KEY_PTR_OFF,
+                key_len_off: KEY_LEN_OFF,
+            },
+            &rescan_label,
+            &next_label,
+            emitter,
+        );
+    }
+
+    // -- integer key: legal only before the first name, and nothing to remember when it is --
+    emitter.label(&numeric_label);
+    emit_named_scan_reject_positional_after_named(NAMED_SEEN_OFF, &ordered_label, emitter);
+
+    emitter.label(&next_label);
+    abi::emit_jump(emitter, &loop_label);
+    emitter.label(&done_label);
+    abi::emit_release_temporary_stack(emitter, SCRATCH_BYTES);
+}
+
+/// Scratch slots the per-entry fetch reads and writes.
+struct NamedScanEntrySlots {
+    /// Cursor the next fetch resumes from.
+    cursor_off: usize,
+    /// Cursor the current entry was fetched WITH, saved before the fetch overwrites it.
+    entry_cursor_off: usize,
+    /// Current entry key pointer, or its integer key value.
+    key_ptr_off: usize,
+    /// Current entry key byte length, `-1` for an integer key.
+    key_len_off: usize,
+}
+
+/// Scratch slots the prefix rescan reads and writes.
+struct NamedScanProbeSlots {
+    /// Upper bound of the rescan: the cursor the classified entry was fetched with.
+    entry_cursor_off: usize,
+    /// The rescan's own cursor.
+    scan_cursor_off: usize,
+    /// Integer key the rescan is looking for.
+    match_index_off: usize,
+    /// Classified entry key pointer, reloaded for the refusal message.
+    key_ptr_off: usize,
+    /// Classified entry key byte length, reloaded for the refusal message.
+    key_len_off: usize,
+}
+
+/// Advances the container walk by one entry and saves that entry's key in the scratch frame.
+///
+/// The cursor the fetch STARTS from is saved first, because that value is what bounds a later
+/// prefix rescan: re-walking from `0` and stopping once the rescan's own cursor reaches it visits
+/// exactly the entries before this one. `__rt_hash_iter_next_value` is a pure read, so the second walk
+/// over an unmodified container reproduces the first walk's cursor sequence exactly.
+///
+/// Leaves through `done_label` at the `-1` end sentinel and through `numeric_label` when the
+/// entry carries an integer key, which `__rt_hash_iter_next_value` marks with a `-1` key length and
+/// reports through the key-pointer register.
+fn emit_named_scan_fetch_entry(
+    hash_base_reg: &str,
+    stack_reg: &str,
+    slots: NamedScanEntrySlots,
+    done_label: &str,
+    numeric_label: &str,
+    emitter: &mut Emitter,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x0, {}", hash_base_reg));         // pass the argument hash to the entry walk
+            abi::emit_load_temporary_stack_slot(emitter, "x1", slots.cursor_off);
+            abi::emit_store_to_address(emitter, "x1", stack_reg, slots.entry_cursor_off);
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
+            emitter.instruction("cmn x0, #1");                                  // did the iterator return the -1 end sentinel?
+            emit_named_scan_branch(emitter, true, done_label);
+            abi::emit_store_to_address(emitter, "x0", stack_reg, slots.cursor_off);
+            abi::emit_store_to_address(emitter, "x1", stack_reg, slots.key_ptr_off);
+            abi::emit_store_to_address(emitter, "x2", stack_reg, slots.key_len_off);
+            emitter.instruction("cmn x2, #1");                                  // key length -1 marks a positional integer key
+            emit_named_scan_branch(emitter, true, numeric_label);
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rdi, {}", hash_base_reg));        // pass the argument hash to the entry walk
+            abi::emit_load_temporary_stack_slot(emitter, "rsi", slots.cursor_off);
+            abi::emit_store_to_address(emitter, "rsi", stack_reg, slots.entry_cursor_off);
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
+            emitter.instruction("cmp rax, -1");                                 // did the iterator return the -1 end sentinel?
+            emit_named_scan_branch(emitter, true, done_label);
+            abi::emit_store_to_address(emitter, "rax", stack_reg, slots.cursor_off);
+            abi::emit_store_to_address(emitter, "rdi", stack_reg, slots.key_ptr_off);
+            abi::emit_store_to_address(emitter, "rdx", stack_reg, slots.key_len_off);
+            emitter.instruction("cmp rdx, -1");                                 // key length -1 marks a positional integer key
+            emit_named_scan_branch(emitter, true, numeric_label);
+        }
+    }
+}
+
+/// Emits one conditional branch that reaches any label this walk can emit.
+///
+/// AArch64 `b.eq`/`b.ne` carry a +/-1 MiB displacement, and this walk emits a comparison and an
+/// alias block for every declared parameter, so a long enough signature moves its own labels out
+/// of that range. Inverting the condition over an unconditional `b` restores the +/-128 MiB
+/// range, the detour `abi::emit_branch_if_int_result_nonzero` takes for the same reason. An
+/// x86_64 `jcc` is already a rel32 branch and needs no detour.
+fn emit_named_scan_branch(emitter: &mut Emitter, on_equal: bool, label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let skip = if on_equal { "b.ne 1f" } else { "b.eq 1f" };
+            emitter.instruction(skip);                                          // fall through when this branch is not taken
+            emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range
+            emitter.label("1");
+        }
+        Arch::X86_64 => {
+            let taken = if on_equal { "je" } else { "jne" };
+            emitter.instruction(&format!("{} {}", taken, label));               // take the branch the compared flags select
+        }
+    }
+}
+
+/// Records that a name has been seen, which closes the container to further positional entries.
+fn emit_named_scan_mark_named_seen(stack_reg: &str, named_seen_off: usize, emitter: &mut Emitter) {
+    let flag_reg = match emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_load_int_immediate(emitter, flag_reg, 1);
+    abi::emit_store_to_address(emitter, flag_reg, stack_reg, named_seen_off);
+}
+
+/// Loads the saved key pointer and byte length into the two name-taking helpers' argument pair.
+fn emit_named_scan_key_pair_to_args(key_ptr_off: usize, key_len_off: usize, emitter: &mut Emitter) {
+    let name_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let len_reg = abi::int_arg_reg_name(emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(emitter, name_reg, key_ptr_off);
+    abi::emit_load_temporary_stack_slot(emitter, len_reg, key_len_off);
+}
+
+/// Saves the visible regular index a name matched, then hands over to the shared rescan.
+///
+/// One block per parameter, three instructions each, instead of one rescan per parameter: the
+/// index is the only thing the rescan needs from the match, so it travels through the frame.
+fn emit_named_scan_record_matched_index(
+    stack_reg: &str,
+    match_index_off: usize,
+    index: usize,
+    collision_label: &str,
+    emitter: &mut Emitter,
+) {
+    let index_reg = match emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_load_int_immediate(emitter, index_reg, index as i64);
+    abi::emit_store_to_address(emitter, index_reg, stack_reg, match_index_off);
+    abi::emit_jump(emitter, collision_label);
+}
+
+/// Refuses the matched name when its own positional key already arrived earlier in the container.
+///
+/// Re-walks the container from the start and stops as soon as its cursor reaches the one the
+/// classified entry was fetched with, so only STRICTLY EARLIER entries are examined. That bound
+/// is what keeps the precedence right: a positional key that arrives LATER is the ordering
+/// refusal, reported when the outer walk reaches it, not a collision reported here.
+///
+/// Falls through to `skip_label` when no earlier entry carries the matching integer key.
+fn emit_named_scan_prefix_positional_probe(
+    hash_base_reg: &str,
+    stack_reg: &str,
+    slots: NamedScanProbeSlots,
+    rescan_label: &str,
+    skip_label: &str,
+    emitter: &mut Emitter,
+) {
+    abi::emit_store_zero_to_address(emitter, stack_reg, slots.scan_cursor_off);
+    emitter.label(rescan_label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x1", slots.scan_cursor_off);
+            abi::emit_load_temporary_stack_slot(emitter, "x9", slots.entry_cursor_off);
+            emitter.instruction("cmp x1, x9");                                  // has the rescan reached the entry being classified?
+            emit_named_scan_branch(emitter, true, skip_label);
+            emitter.instruction(&format!("mov x0, {}", hash_base_reg));         // pass the argument hash to the prefix walk
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
+            emitter.instruction("cmn x0, #1");                                  // did the prefix walk end before that entry?
+            emit_named_scan_branch(emitter, true, skip_label);
+            abi::emit_store_to_address(emitter, "x0", stack_reg, slots.scan_cursor_off);
+            emitter.instruction("cmn x2, #1");                                  // key length -1 marks a positional integer key
+            emit_named_scan_branch(emitter, false, rescan_label);
+            abi::emit_load_temporary_stack_slot(emitter, "x9", slots.match_index_off);
+            emitter.instruction("cmp x1, x9");                                  // is this the position the matched name also binds?
+            emit_named_scan_branch(emitter, false, rescan_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "rsi", slots.scan_cursor_off);
+            abi::emit_load_temporary_stack_slot(emitter, "r10", slots.entry_cursor_off);
+            emitter.instruction("cmp rsi, r10");                                // has the rescan reached the entry being classified?
+            emit_named_scan_branch(emitter, true, skip_label);
+            emitter.instruction(&format!("mov rdi, {}", hash_base_reg));        // pass the argument hash to the prefix walk
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
+            emitter.instruction("cmp rax, -1");                                 // did the prefix walk end before that entry?
+            emit_named_scan_branch(emitter, true, skip_label);
+            abi::emit_store_to_address(emitter, "rax", stack_reg, slots.scan_cursor_off);
+            emitter.instruction("cmp rdx, -1");                                 // key length -1 marks a positional integer key
+            emit_named_scan_branch(emitter, false, rescan_label);
+            abi::emit_load_temporary_stack_slot(emitter, "r10", slots.match_index_off);
+            emitter.instruction("cmp rdi, r10");                                // is this the position the matched name also binds?
+            emit_named_scan_branch(emitter, false, rescan_label);
+        }
+    }
+    emit_named_scan_key_pair_to_args(slots.key_ptr_off, slots.key_len_off, emitter);
+    abi::emit_call_label(emitter, "__rt_throw_named_parameter_overwrite");
+    abi::emit_jump(emitter, skip_label);
+}
+
+/// Refuses an integer key that arrives after a name, the way PHP refuses it.
+///
+/// A legal integer key needs nothing recorded: the prefix rescan reads the container itself when
+/// a later name asks whether its own position already arrived.
+fn emit_named_scan_reject_positional_after_named(
+    named_seen_off: usize,
+    ordered_label: &str,
+    emitter: &mut Emitter,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x9", named_seen_off);
+            emitter.instruction("cmp x9, #0");                                  // has any name been seen in this container yet?
+            emit_named_scan_branch(emitter, true, ordered_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "r10", named_seen_off);
+            emitter.instruction("test r10, r10");                               // has any name been seen in this container yet?
+            emit_named_scan_branch(emitter, true, ordered_label);
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_throw_positional_after_named");
+    emitter.label(ordered_label);
+}
+
+/// Branches to `matched_label` when the saved string key spells one declared parameter name.
+///
+/// The sibling of `emit_skip_if_key_matches_param`, which reads the variadic collector's own
+/// fixed scratch offsets. This one takes them, because the two walks size their frames
+/// differently and a shared constant would tie them together for no reason.
+///
+/// The taken branch goes through `emit_named_scan_branch`: one of these is emitted per declared
+/// parameter, so the distance to `matched_label` grows with the signature and a bare AArch64
+/// `b.ne` would eventually not reach it.
+fn emit_branch_if_key_matches_param(
+    param_name: &str,
+    key_ptr_off: usize,
+    key_len_off: usize,
+    matched_label: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let (key_label, key_len) = data.add_string(param_name.as_bytes());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x1", key_ptr_off);
+            abi::emit_load_temporary_stack_slot(emitter, "x2", key_len_off);
+            abi::emit_symbol_address(emitter, "x3", &key_label);
+            abi::emit_load_int_immediate(emitter, "x4", key_len as i64);
+            abi::emit_call_label(emitter, "__rt_hash_key_eq");
+            emitter.instruction("cmp x0, #0");                                  // did __rt_hash_key_eq report a name match?
+            emit_named_scan_branch(emitter, false, matched_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "rdi", key_ptr_off);
+            abi::emit_load_temporary_stack_slot(emitter, "rsi", key_len_off);
+            abi::emit_symbol_address(emitter, "rdx", &key_label);
+            abi::emit_load_int_immediate(emitter, "rcx", key_len as i64);
+            abi::emit_call_label(emitter, "__rt_hash_key_eq");
+            emitter.instruction("test rax, rax");                               // did __rt_hash_key_eq report a name match?
+            emit_named_scan_branch(emitter, false, matched_label);
+        }
+    }
+}
+
+/// Probes the argument hash for one positional integer key, keeping only the found flag.
+fn emit_numeric_hash_probe(hash_base_reg: &str, numeric_idx: usize, emitter: &mut Emitter) {
+    let key_ptr_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let key_len_reg = abi::int_arg_reg_name(emitter.target, 2);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("mov x0, {}", hash_base_reg)), // pass the descriptor hash as the probe subject
+        Arch::X86_64 => emitter.instruction(&format!("mov rdi, {}", hash_base_reg)), // pass the descriptor hash as the probe subject
+    }
+    abi::emit_load_int_immediate(emitter, key_ptr_reg, numeric_idx as i64);
+    abi::emit_load_int_immediate(emitter, key_len_reg, -1);
+    abi::emit_call_label(emitter, "__rt_hash_get");
+}
+
+/// Probes the argument hash for one parameter name, keeping only the found flag.
+fn emit_named_hash_probe(
+    hash_base_reg: &str,
+    key_label: &str,
+    key_len: usize,
+    emitter: &mut Emitter,
+) {
+    let key_ptr_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let key_len_reg = abi::int_arg_reg_name(emitter.target, 2);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("mov x0, {}", hash_base_reg)), // pass the descriptor hash as the probe subject
+        Arch::X86_64 => emitter.instruction(&format!("mov rdi, {}", hash_base_reg)), // pass the descriptor hash as the probe subject
+    }
+    abi::emit_symbol_address(emitter, key_ptr_reg, key_label);
+    abi::emit_load_int_immediate(emitter, key_len_reg, key_len as i64);
+    abi::emit_call_label(emitter, "__rt_hash_get");
+}
+
 /// Looks up a named or numeric associative argument.
+///
+/// The name is probed first, although validation has already rejected containers that carry
+/// both the matching named key and its positional key as a catchable `Error`.
 fn emit_hash_lookup_for_param_or_index(
     hash_base_reg: &str,
     param_name: Option<&str>,
@@ -1844,43 +2344,19 @@ fn emit_hash_lookup_for_param_or_index(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) {
-    let key_ptr_reg = abi::int_arg_reg_name(emitter.target, 1);
-    let key_len_reg = abi::int_arg_reg_name(emitter.target, 2);
     let found_label = param_name.map(|_| ctx.next_label("invoker_assoc_key_found"));
 
     if let Some(name) = param_name {
         // -- try the declared parameter name as a string key --
         let (key_label, key_len) = data.add_string(name.as_bytes());
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!("mov x0, {}", hash_base_reg));     // pass the argument hash as the __rt_hash_get subject
-                abi::emit_symbol_address(emitter, key_ptr_reg, &key_label);
-                abi::emit_load_int_immediate(emitter, key_len_reg, key_len as i64);
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!("mov rdi, {}", hash_base_reg));    // pass the argument hash as the __rt_hash_get subject
-                abi::emit_symbol_address(emitter, key_ptr_reg, &key_label);
-                abi::emit_load_int_immediate(emitter, key_len_reg, key_len as i64);
-            }
-        }
-        abi::emit_call_label(emitter, "__rt_hash_get");
+        emit_named_hash_probe(hash_base_reg, &key_label, key_len, emitter);
         if let Some(found_label) = &found_label {
             abi::emit_branch_if_int_result_nonzero(emitter, found_label);
         }
     }
 
     // -- fall back to the positional numeric key --
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(
-            &format!("mov x0, {}", hash_base_reg)
-        ),                                                                      // pass the argument hash for the numeric-index lookup
-        Arch::X86_64 => emitter.instruction(
-            &format!("mov rdi, {}", hash_base_reg)
-        ),                                                                      // pass the argument hash for the numeric-index lookup
-    }
-    abi::emit_load_int_immediate(emitter, key_ptr_reg, numeric_idx as i64);
-    abi::emit_load_int_immediate(emitter, key_len_reg, -1);
-    abi::emit_call_label(emitter, "__rt_hash_get");
+    emit_numeric_hash_probe(hash_base_reg, numeric_idx, emitter);
     if let Some(found_label) = found_label {
         emitter.label(&found_label);
     }
@@ -1908,6 +2384,7 @@ fn push_loaded_hash_value_arg(
 fn push_loaded_hash_value_ref_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1916,10 +2393,10 @@ fn push_loaded_hash_value_ref_arg(
         source_elem_ty.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return push_loaded_mixed_hash_value_ref_arg(target_ty, emitter, ctx, data);
+        return push_loaded_mixed_hash_value_ref_arg(target_ty, owner_index, emitter, ctx, data);
     }
     materialize_hash_value_to_result(emitter, source_elem_ty);
-    push_current_result_ref_arg_address(source_elem_ty, target_ty, emitter, ctx, data)
+    push_current_result_ref_arg_address(source_elem_ty, target_ty, owner_index, emitter, ctx, data)
 }
 
 /// Pushes a Mixed hash value as a by-value argument, honoring invoker ref markers.
@@ -1981,10 +2458,12 @@ fn push_loaded_mixed_hash_value_arg(
 /// Pushes a Mixed hash value as a by-reference argument, honoring invoker ref markers.
 fn push_loaded_mixed_hash_value_ref_arg(
     target_ty: Option<&PhpType>,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    let entry_reference_label = ctx.next_label("hash_invoker_entry_reference");
     let direct_marker_label = ctx.next_label("hash_invoker_ref_direct");
     let boxed_marker_label = ctx.next_label("hash_invoker_ref_boxed");
     let ordinary_label = ctx.next_label("hash_invoker_ref_ordinary");
@@ -1993,6 +2472,17 @@ fn push_loaded_mixed_hash_value_ref_arg(
     let done_label = ctx.next_label("hash_invoker_ref_done");
     let (raw_lo_reg, raw_hi_reg, raw_tag_reg) = raw_hash_value_regs(emitter);
 
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [x4, #40]");                           // inspect the original entry before __rt_hash_get dereferencing
+            emitter.instruction("cmp x9, #11");                                 // a PHP reference owns a shared writable cell
+            emitter.instruction(&format!("b.eq {entry_reference_label}"));      // forward that cell to the by-reference callee
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                 // inspect the original entry before __rt_hash_get dereferencing
+            emitter.instruction(&format!("je {entry_reference_label}"));        // forward that cell to the by-reference callee
+        }
+    }
     emit_branch_if_invoker_ref_cell_tag(raw_tag_reg, &direct_marker_label, emitter);
     emit_branch_if_boxed_invoker_ref_cell(
         raw_lo_reg,
@@ -2001,7 +2491,21 @@ fn push_loaded_mixed_hash_value_ref_arg(
         emitter,
         ctx,
     );
+    emit_branch_if_boxed_php_reference_cell(
+        raw_lo_reg, raw_tag_reg, &boxed_marker_label, emitter, ctx,
+    );
+    emit_branch_if_boxed_persistent_reference(
+        raw_lo_reg, raw_tag_reg, &direct_marker_label, emitter, ctx,
+    );
     abi::emit_jump(emitter, &ordinary_label);
+
+    emitter.label(&entry_reference_label);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("ldr x0, [x4, #24]"),              // load the managed reference from its hash entry
+        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [r8 + 24]"),    // load the managed reference from its hash entry
+    }
+    abi::emit_push_result_value(emitter, &PhpType::Int);
+    abi::emit_jump(emitter, &done_label);
 
     emitter.label(&direct_marker_label);
     move_raw_hash_value_lo_to_result(emitter);
@@ -2010,8 +2514,7 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     emitter.label(&boxed_marker_label);
     load_boxed_invoker_ref_cell_to_raw_regs(raw_lo_reg, raw_hi_reg, emitter);
-    move_raw_hash_value_lo_to_result(emitter);
-    abi::emit_push_result_value(emitter, &PhpType::Int);
+    push_invoker_ref_storage_address(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&ordinary_label);
@@ -2020,12 +2523,12 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     emitter.label(&ordinary_boxed_label);
     materialize_hash_value_to_result(emitter, &PhpType::Mixed);
-    push_current_result_ref_arg_address(&PhpType::Mixed, target_ty, emitter, ctx, data);
+    push_current_result_ref_arg_address(&PhpType::Mixed, target_ty, owner_index, emitter, ctx, data);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&ordinary_raw_label);
     box_raw_hash_value_to_mixed_result(emitter);
-    push_current_result_ref_arg_address(&PhpType::Mixed, target_ty, emitter, ctx, data);
+    reference_args::push_owned_boxed_value(emitter, ctx, data, owner_index, target_ty);
 
     emitter.label(&done_label);
     PhpType::Int
@@ -2045,30 +2548,25 @@ fn push_materialized_mixed_hash_value_arg(
                 && can_coerce_result_to_type(&PhpType::Mixed, target_ty)
         });
     if release_mixed_after_coerce {
+        ctx.argument_owners.record_coercion_source(emitter);
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     }
-    let (pushed_ty, _boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
-    retain_coerced_argument_payload(emitter, &pushed_ty, release_source_mixed_after_coerce,
-        container_storage::needs_mixed_slot_normalization(&pushed_ty));
+    let (pushed_ty, owns_coerced) =
+        owned_value_args::coerce(emitter, ctx, data, &PhpType::Mixed, target_ty);
+    // A borrowed hash cell and every unboxed heap payload need their own invoker lease.
+    // Newly boxed Mixed results and normalized callable descriptors already carry that owner.
+    if !owns_coerced
+        && (pushed_ty.is_refcounted() || pushed_ty == PhpType::Callable)
+        && (!release_source_mixed_after_coerce || pushed_ty.codegen_repr() != PhpType::Mixed)
+    {
+        abi::emit_incref_if_refcounted(emitter, &pushed_ty);
+    }
     if release_mixed_after_coerce {
+        ctx.argument_owners.clear_coercion_source(emitter);
         release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
     }
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty
-}
-
-/// Gives an unboxed argument its callee lease while its source box remains independently owned.
-fn retain_coerced_argument_payload(emitter: &mut Emitter, pushed_ty: &PhpType, source_box_is_owned: bool, result_is_owned: bool) {
-    if result_is_owned { return; }
-    // Objects are borrowed by the typed user-call ABI. Fresh Mixed source boxes already transfer
-    // their owner; existing hash entries need a retain. Converted strings are freshly owned.
-    let repr = pushed_ty.codegen_repr();
-    if matches!(repr, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Iterable)
-        || (repr == PhpType::Mixed && !source_box_is_owned)
-    {
-        abi::emit_incref_if_refcounted(emitter, &repr);
-    }
 }
 
 /// Pushes the value referenced by a raw invoker ref-cell marker.
@@ -2084,37 +2582,19 @@ fn push_raw_invoker_ref_cell_value_arg(
     push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data)
 }
 
-/// Boxes a raw reference-cell value as Mixed.
+/// Materializes a raw reference-cell value as one owned Mixed cell.
 fn emit_box_raw_invoker_ref_cell_value_as_mixed(
     ref_cell_reg: &str,
     source_tag_reg: &str,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
 ) {
-    let lo_reg = abi::tertiary_scratch_reg(emitter);
-    let hi_reg = match emitter.target.arch {
-        Arch::AArch64 => "x12",
-        Arch::X86_64 => "rdx",
-    };
-    let string_hi_label = ctx.next_label("hash_invoker_ref_string_hi");
-    let box_label = ctx.next_label("hash_invoker_ref_box");
-    abi::emit_load_from_address(emitter, lo_reg, ref_cell_reg, 0);
-    abi::emit_load_int_immediate(emitter, hi_reg, 0);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #1", source_tag_reg));        // is the referenced value a string (runtime tag 1)?
-            emitter.instruction(&format!("b.eq {}", string_hi_label));          // strings also need the high length word loaded
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, 1", source_tag_reg));         // is the referenced value a string (runtime tag 1)?
-            emitter.instruction(&format!("je {}", string_hi_label));            // strings also need the high length word loaded
-        }
-    }
-    abi::emit_jump(emitter, &box_label);
-    emitter.label(&string_hi_label);
-    abi::emit_load_from_address(emitter, hi_reg, ref_cell_reg, 8);
-    emitter.label(&box_label);
-    emit_box_runtime_payload_as_mixed(emitter, source_tag_reg, lo_reg, hi_reg);
+    emit_materialize_invoker_ref_cell_value_as_mixed(
+        ref_cell_reg,
+        source_tag_reg,
+        emitter,
+        ctx,
+    );
 }
 
 /// Returns raw registers produced by `__rt_hash_get`.
@@ -2137,16 +2617,16 @@ fn materialize_hash_value_to_result(emitter: &mut Emitter, source_elem_ty: &PhpT
     let (raw_lo_reg, raw_hi_reg, _) = raw_hash_value_regs(emitter);
     match source_elem_ty.codegen_repr() {
         PhpType::Float => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction(&format!(
+            Arch::AArch64 => emitter.instruction(&format!(                      // bit-move the raw hash payload into the float result
                 "fmov {}, {}",
                 abi::float_result_reg(emitter),
                 raw_lo_reg
-            )),                                                                 // bit-move the raw hash payload into the float result
-            Arch::X86_64 => emitter.instruction(&format!(
+            )),
+            Arch::X86_64 => emitter.instruction(&format!(                       // bit-move the raw hash payload into the float result
                 "movq {}, {}",
                 abi::float_result_reg(emitter),
                 raw_lo_reg
-            )),                                                                 // bit-move the raw hash payload into the float result
+            )),
         },
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
@@ -2164,117 +2644,60 @@ fn box_raw_hash_value_to_mixed_result(emitter: &mut Emitter) {
     emit_box_runtime_payload_as_mixed(emitter, raw_tag_reg, raw_lo_reg, raw_hi_reg);
 }
 
-/// Emits and pushes a default value argument.
+/// Emits and pushes a default value argument from the descriptor's resolved default metadata.
 fn push_default_value_arg(
-    default: &Expr,
+    index: usize,
     target_ty: Option<&PhpType>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let source_ty = emit_default_to_result(default, target_ty, emitter, ctx, data);
-    let owned_array_default = matches!(&default.kind, ExprKind::ArrayLiteral(_));
-    // A boxed null default is freshly allocated too. It already carries the
-    // invoker's owner; acquiring it like a borrowed literal leaks one cell on
-    // both normal return and a later binding failure.
-    let owned_default = owned_array_default
-        || (matches!(&default.kind, ExprKind::Null)
-            && source_ty.codegen_repr() == PhpType::Mixed);
-    let (pushed_ty, boxed_to_mixed) = if owned_array_default
+    let source_ty = emit_default_to_result(index, target_ty, emitter, ctx, data);
+    let pushed_ty = if source_ty.is_refcounted()
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
+        && source_ty.codegen_repr() != PhpType::Mixed
     {
         emit_box_current_owned_value_as_mixed(emitter, &source_ty);
-        (PhpType::Mixed, true)
+        PhpType::Mixed
     } else {
-        coerce_current_value_to_target(emitter, ctx, data, &source_ty, target_ty)
+        // Heap defaults are newly allocated, not borrowed from the argument container.
+        owned_value_args::coerce(emitter, ctx, data, &source_ty, target_ty).0
     };
-    if !boxed_to_mixed && !owned_default {
-        abi::emit_incref_if_refcounted(emitter, &pushed_ty);
-    }
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty
 }
 
 /// Emits and pushes a default value by-reference cell.
 fn push_default_ref_arg(
-    default: &Expr,
+    index: usize,
     target_ty: Option<&PhpType>,
-    parameter_index: usize,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let pushed_ty = push_default_value_arg(default, target_ty, emitter, ctx, data);
-    // -- allocate a 16-byte heap ref cell and move the pushed default into it --
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!(
-        "mov {}, {}",
-        cell_reg,
-        abi::int_result_reg(emitter)
-    ));                                                                         // keep the freshly allocated ref-cell address in a stable scratch
-    store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
-    abi::emit_push_reg(emitter, cell_reg);
-    if matches!(pushed_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        // Keep the pointer-holder ABI used by the callee's Load/StoreRefCell.
-        // Only an omitted default is ours; supplied caller markers stay borrowed.
-        pending_owners::register_pushed_ref_cell(emitter, parameter_index);
-    }
+    let pushed_ty = push_default_value_arg(index, target_ty, emitter, ctx, data);
+    reference_args::push_owned_cell(emitter, ctx, owner_index, &pushed_ty);
     PhpType::Int
 }
 
-/// Emits a supported default expression into result registers.
+/// Emits one parameter's resolved default into result registers.
+///
+/// The descriptor metadata carries an ALREADY FOLDED constant value, so nothing here inspects a
+/// parser expression. A parameter whose declared default could not be folded into a materializable
+/// value arrives as `None` and keeps the fatal diagnostic; it is never quietly replaced by null.
 fn emit_default_to_result(
-    default: &Expr,
+    index: usize,
     target_ty: Option<&PhpType>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    match &default.kind {
-        ExprKind::IntLiteral(value) => {
-            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), *value);
-            PhpType::Int
+    match ctx.resolved_default(index) {
+        Some(default) => {
+            defaults::emit_const_default_to_result(&default, target_ty, emitter, ctx, data)
         }
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => {
-                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), -*value);
-                PhpType::Int
-            }
-            ExprKind::FloatLiteral(value) => {
-                emit_float_literal_to_result(emitter, data, -*value);
-                PhpType::Float
-            }
-            _ => emit_null_default_to_result(emitter, target_ty),
-        },
-        ExprKind::BoolLiteral(value) => {
-            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::from(*value));
-            PhpType::Bool
-        }
-        ExprKind::FloatLiteral(value) => {
-            emit_float_literal_to_result(emitter, data, *value);
-            PhpType::Float
-        }
-        ExprKind::StringLiteral(value) => {
-            let (label, len) = data.add_string(value.as_bytes());
-            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            abi::emit_symbol_address(emitter, ptr_reg, &label);
-            abi::emit_load_int_immediate(emitter, len_reg, len as i64);
-            PhpType::Str
-        }
-        ExprKind::ArrayLiteral(items) if items.is_empty() => {
-            let elem_ty = target_ty
-                .and_then(|ty| match ty.codegen_repr() {
-                    PhpType::Array(elem) => Some(*elem),
-                    _ => None,
-                })
-                .unwrap_or(PhpType::Mixed);
-            emit_empty_indexed_array(emitter, &elem_ty);
-            PhpType::Array(Box::new(elem_ty))
-        }
-        ExprKind::Null => emit_null_default_to_result(emitter, target_ty),
-        _ => {
+        None => {
             emit_unsupported_default_abort(emitter, data, ctx);
             PhpType::Void
         }
@@ -2292,9 +2715,9 @@ fn emit_float_literal_to_result(emitter: &mut Emitter, data: &mut DataSection, v
             emitter.instruction(&format!("ldr {}, [{}]", float_reg, scratch));  // load the float literal from its data-section slot
         }
         Arch::X86_64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // load the float literal from its data-section slot
                 &format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)
-            );                                                                  // load the float literal from its data-section slot
+            );
         }
     }
 }
@@ -2361,7 +2784,7 @@ fn emit_unsupported_default_abort(
     }
 }
 
-/// Coerces the current result to a target argument type.
+/// Coerces the current result, returning its ABI type and whether conversion acquired an owner.
 fn coerce_current_value_to_target(
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -2370,6 +2793,12 @@ fn coerce_current_value_to_target(
     target_ty: Option<&PhpType>,
 ) -> (PhpType, bool) {
     let source_repr = source_ty.codegen_repr();
+    if source_repr != PhpType::Callable
+        && target_ty.is_some_and(|target| target.codegen_repr() == PhpType::Callable)
+    {
+        owned_value_args::normalize_callable(emitter, ctx, source_ty);
+        return (PhpType::Callable, true);
+    }
     let pushed_ty = target_ty
         .filter(|target_ty| can_coerce_result_to_type(source_ty, target_ty))
         .map(PhpType::codegen_repr)
@@ -2415,7 +2844,9 @@ fn coerce_result_to_type(
                 abi::emit_call_label(emitter, "__rt_mixed_cast_float");
             }
             PhpType::Str => {
-                param_validation::coerce_mixed_to_string(emitter, ctx);
+                let string_label = ctx.next_label("coerce_owned_string_argument");
+                let persist_label = ctx.next_label("coerce_persist_string_argument");
+                abi::emit_owned_mixed_string(emitter, &string_label, &persist_label);
             }
             ref container if container_storage::needs_mixed_slot_normalization(container) => {
                 container_storage::normalize_owned_mixed_container(emitter, ctx, container);
@@ -2448,6 +2879,9 @@ fn coerce_result_to_type(
 
 /// Returns true if the invoker can coerce this source/target pair.
 fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
+    if target_ty.codegen_repr() == PhpType::Callable {
+        return true;
+    }
     if source_ty == target_ty {
         return true;
     }
@@ -2587,21 +3021,50 @@ fn push_descriptor_captures_as_hidden_args(
 
 /// Calls the target register with already-pushed ABI arguments.
 fn call_target_with_pushed_args(
-    ctx: &mut InvokerEmitContext,
     call_reg: &str,
     arg_types: &[PhpType],
     sig: &FunctionSig,
     emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
 ) {
-    let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
+    // Every descriptor entry receives one trailing native argument after its complete PHP ABI
+    // shape. Ordinary PHP functions ignore the extra register or stack word. The synthetic
+    // `clone()` wrapper alone declares the hidden parameter and consumes it for hook visibility.
+    abi::load_at_offset(
+        emitter,
+        abi::int_result_reg(emitter),
+        INVOKER_SCOPE_OFFSET,
+    );
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+    let mut abi_arg_types = arg_types.to_vec();
+    abi_arg_types.push(PhpType::Int);
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &abi_arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
+    emit_restore_invoker_php_frame_head(emitter);
     abi::emit_call_reg(emitter, call_reg);
-    if sig.return_type.codegen_repr() == PhpType::Str {
-        pending_owners::transfer_string_result_alias(emitter, ctx);
-    }
-    restore_concat_offset_after_nested_call(ctx, emitter, &sig.return_type);
+    emit_restore_invoker_php_frame_head(emitter);
+    let return_ty = if sig.by_ref_return { PhpType::Pointer(None) } else { sig.return_type.clone() };
+    let owned_label = ctx.next_label("invoker_string_owned");
+    restore_concat_offset_after_nested_call(
+        emitter, &return_ty, ctx.owns_string_return, ctx.php_return_status, &owned_label,
+    );
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
+}
+
+/// Republishes the real PHP caller activation around the synthetic descriptor target.
+///
+/// Argument normalization may enter runtime helpers before the indirect call. The invoker's
+/// exception record already snapshots the caller activation head, so reusing that stable slot
+/// prevents a helper or an invisible synthetic builtin wrapper from severing the reader chain
+/// consumed by `debug_backtrace()`. Repeating the store after a normal return also gives later
+/// invoker cleanup the same caller head without making the synthetic wrapper PHP-visible.
+fn emit_restore_invoker_php_frame_head(emitter: &mut Emitter) {
+    emitter.comment("republish descriptor invoker PHP caller frame");
+    let scratch = abi::temp_int_reg(emitter.target);
+    abi::load_at_offset(emitter, scratch, INVOKER_BOUNDARY_BASE_OFFSET - 8);
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
 /// Saves the current concat offset before the nested callable target runs.
@@ -2616,39 +3079,16 @@ fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
 
 /// Restores the concat offset after a nested callable target returns.
 fn restore_concat_offset_after_nested_call(
-    ctx: &mut InvokerEmitContext,
-    emitter: &mut Emitter,
-    return_ty: &PhpType,
+    emitter: &mut Emitter, return_ty: &PhpType, owns_string_return: bool,
+    php_return_status: bool, owned_label: &str,
 ) {
     if return_ty.codegen_repr() == PhpType::Str {
-        let same_allocation = ctx.next_label("invoker_persisted_string_alias");
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                abi::emit_push_reg_pair(emitter, "x1", "x2");                // preserve the owned callback string while persisting a stable copy
-                abi::emit_call_label(emitter, "__rt_str_persist");
-                abi::emit_push_reg_pair(emitter, "x1", "x2");                // preserve the persisted string while releasing the superseded callback owner
-                abi::emit_load_temporary_stack_slot(emitter, "x9", 16);        // load the original callback pointer retained below the persisted pair
-                emitter.instruction(&format!("cmp x1, x9"));                   // did persistence take over the concat-temporary allocation in place?
-                emitter.instruction(&format!("b.eq {same_allocation}"));       // an aliased in-place result must not be freed
-                abi::emit_load_temporary_stack_slot(emitter, "x0", 16);
-                abi::emit_call_label(emitter, "__rt_heap_free_safe");
-                emitter.label(&same_allocation);
-                abi::emit_pop_reg_pair(emitter, "x1", "x2");                 // restore the persisted caller-owned string result
-                abi::emit_release_temporary_stack(emitter, 16);                 // discard the superseded callback string pair
-            }
-            Arch::X86_64 => {
-                abi::emit_push_reg_pair(emitter, "rax", "rdx");              // preserve the owned callback string while persisting a stable copy
-                abi::emit_call_label(emitter, "__rt_str_persist");
-                abi::emit_push_reg_pair(emitter, "rax", "rdx");              // preserve the persisted string while releasing the superseded callback owner
-                abi::emit_load_temporary_stack_slot(emitter, "r10", 16);      // load the original callback pointer retained below the persisted pair
-                emitter.instruction(&format!("cmp rax, r10"));                 // did persistence take over the concat-temporary allocation in place?
-                emitter.instruction(&format!("je {same_allocation}"));         // an aliased in-place result must not be freed
-                abi::emit_load_temporary_stack_slot(emitter, "rax", 16);
-                abi::emit_call_label(emitter, "__rt_heap_free_safe");
-                emitter.label(&same_allocation);
-                abi::emit_pop_reg_pair(emitter, "rax", "rdx");               // restore the persisted caller-owned string result
-                abi::emit_release_temporary_stack(emitter, 16);                 // discard the superseded callback string pair
-            }
+        if php_return_status {
+            crate::codegen::return_ownership::emit_branch_if_owned(emitter, owned_label);
+            abi::emit_call_label(emitter, "__rt_str_persist");
+            emitter.label(owned_label);
+        } else if !owns_string_return {
+            abi::emit_call_label(emitter, "__rt_str_persist");
         }
     }
     let scratch = abi::temp_int_reg(emitter.target);
@@ -2659,34 +3099,66 @@ fn restore_concat_offset_after_nested_call(
     crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, scratch);
 }
 
+/// Returns whether this callee's variadic collector may receive a NAMED tail entry.
+///
+/// The last gate before an ABI mismatch. The associative argument builder allocates a HASH for
+/// the collector slot, so a callee whose collector is static indexed storage (`array<int>`, the
+/// untyped fallback, or the declared `array<T>` of an `int ...$xs` that no promotion reached)
+/// would read that hash's header as indexed storage: entry count as the length, insertion-order
+/// head slot as element 0, and an indexed release that never frees the persisted string keys.
+///
+/// Every callable the checker can see through a descriptor is promoted onto
+/// `crate::types::signatures::descriptor_variadic_container` before it is published, so this
+/// normally answers `true` for any callee a named argument can reach. It exists for the callee
+/// that promotion could NOT reach, an inherited or otherwise undeclarable signature above all:
+/// such a call raises `Unknown named parameter $<name>`, which is a PHP-visible diagnostic the
+/// program can catch, instead of corrupting the collector.
+pub(crate) fn variadic_collector_accepts_named_entries(sig: &FunctionSig) -> bool {
+    crate::types::signatures::variadic_storage_accepts_named_entries(sig)
+}
+
+/// Returns the element type a variadic collector's storage holds, for BOTH container shapes.
+///
+/// One decision, because the two argument builders fill the SAME callee slot: the indexed builder
+/// allocates `__rt_array_new` storage and the associative one a hash, and a callee compiled for
+/// one element representation cannot read the other. `PhpType::Iterable` is the checker's other
+/// dynamic container marker, installed for a variadic an unknown named argument reaches (see
+/// `crate::types::signatures::descriptor_variadic_container`): its elements are boxed `Mixed`,
+/// which is what the callee's heap-kind-dispatched iteration expects. Reading the marker as "not
+/// an array" and falling back to the CONTAINER's element type instead handed a dynamic callee raw
+/// scalar slots whenever that container was not itself Mixed-element.
+///
+/// The collector slot is addressed through
+/// `crate::types::signatures::variadic_param_index`, the same helper the checker's promotion uses,
+/// so the type this reads is by construction the type that promotion wrote. Taking
+/// `params.last()` instead would answer from whatever slot happens to sit at the end, which is a
+/// different question the moment a signature carries a hidden trailing parameter.
+///
+/// `container_elem_ty` remains the fallback for a signature with no typed variadic slot at all.
+fn invoker_variadic_elem_ty(sig: &FunctionSig, container_elem_ty: &PhpType) -> PhpType {
+    crate::types::signatures::variadic_param_index(sig)
+        .and_then(|index| match &sig.params[index].1 {
+            PhpType::Array(elem) => Some((**elem).clone()),
+            PhpType::AssocArray { value, .. } => Some((**value).clone()),
+            PhpType::Iterable | PhpType::Mixed => Some(PhpType::Mixed),
+            _ => None,
+        })
+        .unwrap_or_else(|| container_elem_ty.clone())
+}
+
 /// Emits an associative variadic array argument from remaining hash entries.
 #[allow(clippy::too_many_arguments)]
 fn emit_loaded_assoc_variadic_array_arg(
     source_hash_reg: &str,
     elem_ty: &PhpType,
     sig: &FunctionSig,
-    skip_numeric_before: usize,
-    skip_param_names_before: usize,
+    shape: &InvokerParamShape,
+    count_reg: &str,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let visible_param_count = sig.params.len();
-    let variadic_elem_ty = sig
-        .params
-        .get(visible_param_count.saturating_sub(1))
-        .and_then(|(_, ty)| match ty {
-            PhpType::Array(elem) => Some((**elem).clone()),
-            PhpType::AssocArray { value, .. } => Some((**value).clone()),
-            PhpType::Iterable => Some(PhpType::Mixed),
-            _ => None,
-        })
-        .unwrap_or_else(|| elem_ty.clone());
-    let declared_variadic_elem_ty =
-        variadic_declared_element_type(sig).unwrap_or_else(|| variadic_elem_ty.clone());
-    let coerce_variadic_values = variadic_elem_ty.codegen_repr() == PhpType::Mixed
-        && declared_variadic_elem_ty.codegen_repr() != PhpType::Mixed
-        && !variadic_param_is_by_ref(sig);
+    let variadic_elem_ty = invoker_variadic_elem_ty(sig, elem_ty);
     let variadic_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
         value: Box::new(variadic_elem_ty.clone()),
@@ -2701,15 +3173,18 @@ fn emit_loaded_assoc_variadic_array_arg(
         crate::codegen::runtime_value_tag(&variadic_elem_ty.codegen_repr()) as i64,
     );
     abi::emit_call_label(emitter, "__rt_hash_new");
-    pending_owners::register_result(emitter, visible_param_count.saturating_sub(1), &variadic_ty);
     abi::emit_push_result_value(emitter, &variadic_ty);
+    ctx.argument_owners.record_pushed(shape.variadic_owner_index(), &variadic_ty, emitter);
+    if shape.collector_needs_count {
+        public_args::insert_assoc_count_prefix(emitter, count_reg, &variadic_elem_ty);
+    }
     emit_loaded_assoc_variadic_entries(
         source_hash_reg,
         sig,
-        skip_numeric_before,
-        skip_param_names_before,
-        &declared_variadic_elem_ty,
-        coerce_variadic_values,
+        shape.visible_regular,
+        shape.visible_regular,
+        shape.collector_prefix(),
+        variadic_param_is_by_ref(sig),
         emitter,
         ctx,
         data,
@@ -2718,18 +3193,25 @@ fn emit_loaded_assoc_variadic_array_arg(
 }
 
 /// Copies unconsumed associative source entries into the variadic hash.
+#[allow(clippy::too_many_arguments)]
 fn emit_loaded_assoc_variadic_entries(
     source_hash_reg: &str,
     sig: &FunctionSig,
     skip_numeric_before: usize,
     skip_param_names_before: usize,
-    declared_variadic_elem_ty: &PhpType,
-    coerce_variadic_values: bool,
+    first_numeric_key: usize,
+    preserve_references: bool,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) {
     const SCRATCH_BYTES: usize = 96;
+    let stored_elem_ty = invoker_variadic_elem_ty(sig, &PhpType::Mixed);
+    let declared_variadic_elem_ty =
+        variadic_declared_element_type(sig).unwrap_or_else(|| stored_elem_ty.clone());
+    let coerce_variadic_values = stored_elem_ty.codegen_repr() == PhpType::Mixed
+        && declared_variadic_elem_ty.codegen_repr() != PhpType::Mixed
+        && !preserve_references;
     const CURSOR_OFF: usize = 0;
     const SOURCE_HASH_OFF: usize = 8;
     const KEY_PTR_OFF: usize = 16;
@@ -2752,12 +3234,22 @@ fn emit_loaded_assoc_variadic_entries(
         Arch::AArch64 => {
             abi::emit_store_to_address(emitter, source_hash_reg, "sp", SOURCE_HASH_OFF);
             abi::emit_store_zero_to_address(emitter, "sp", CURSOR_OFF);
-            abi::emit_store_zero_to_address(emitter, "sp", NUMERIC_KEY_OFF);
+            if first_numeric_key == 0 {
+                abi::emit_store_zero_to_address(emitter, "sp", NUMERIC_KEY_OFF);
+            } else {
+                abi::emit_load_int_immediate(emitter, "x8", first_numeric_key as i64);
+                abi::emit_store_to_address(emitter, "x8", "sp", NUMERIC_KEY_OFF);
+            }
         }
         Arch::X86_64 => {
             abi::emit_store_to_address(emitter, source_hash_reg, "rsp", SOURCE_HASH_OFF);
             abi::emit_store_zero_to_address(emitter, "rsp", CURSOR_OFF);
-            abi::emit_store_zero_to_address(emitter, "rsp", NUMERIC_KEY_OFF);
+            if first_numeric_key == 0 {
+                abi::emit_store_zero_to_address(emitter, "rsp", NUMERIC_KEY_OFF);
+            } else {
+                abi::emit_load_int_immediate(emitter, "r10", first_numeric_key as i64);
+                abi::emit_store_to_address(emitter, "r10", "rsp", NUMERIC_KEY_OFF);
+            }
         }
     }
 
@@ -2767,7 +3259,11 @@ fn emit_loaded_assoc_variadic_entries(
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(emitter, "x0", SOURCE_HASH_OFF);
             abi::emit_load_temporary_stack_slot(emitter, "x1", CURSOR_OFF);
-            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(emitter, if preserve_references {
+                "__rt_hash_iter_next"
+            } else {
+                "__rt_hash_iter_next_value"
+            });
             emitter.instruction("cmn x0, #1");                                  // did the iterator return the -1 end sentinel?
             emitter.instruction(&format!("b.eq {}", done_label));               // stop once the source hash is exhausted
             abi::emit_store_to_address(emitter, "x0", "sp", CURSOR_OFF);
@@ -2783,7 +3279,11 @@ fn emit_loaded_assoc_variadic_entries(
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(emitter, "rdi", SOURCE_HASH_OFF);
             abi::emit_load_temporary_stack_slot(emitter, "rsi", CURSOR_OFF);
-            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(emitter, if preserve_references {
+                "__rt_hash_iter_next"
+            } else {
+                "__rt_hash_iter_next_value"
+            });
             emitter.instruction("cmp rax, -1");                                 // did the iterator return the -1 end sentinel?
             emitter.instruction(&format!("je {}", done_label));                 // stop once the source hash is exhausted
             abi::emit_store_to_address(emitter, "rax", "rsp", CURSOR_OFF);
@@ -2817,7 +3317,7 @@ fn emit_loaded_assoc_variadic_entries(
             VALUE_LO_OFF,
             VALUE_HI_OFF,
             VALUE_TAG_OFF,
-            declared_variadic_elem_ty,
+            &declared_variadic_elem_ty,
             sig.variadic.as_deref().unwrap_or("args"),
             emitter,
             ctx,
@@ -3040,6 +3540,8 @@ fn emit_insert_assoc_variadic_entry(
             abi::emit_load_temporary_stack_slot(emitter, "x5", value_tag_off);
             emitter.instruction("cmp x5, #1");                                  // is the entry value a string (runtime tag 1)?
             emitter.instruction(&format!("b.eq {}", value_string_label));       // strings must be persisted before insertion
+            emitter.instruction("cmp x5, #11");                                 // managed PHP references must keep their shared cell
+            emitter.instruction(&format!("b.eq {}", value_ref_label));          // retain the cell for the variadic hash
             emitter.instruction("cmp x5, #4");                                  // tags below 4 are plain scalar payloads
             emitter.instruction(&format!("b.lo {}", value_scalar_label));       // scalars are inserted unchanged
             emitter.instruction("cmp x5, #7");                                  // check the refcounted tag range's upper bound
@@ -3079,6 +3581,7 @@ fn emit_insert_assoc_variadic_entry(
             abi::emit_load_temporary_stack_slot(emitter, "x1", key_ptr_off);
             abi::emit_load_temporary_stack_slot(emitter, "x2", key_len_off);
             abi::emit_call_label(emitter, "__rt_hash_set");
+            abi::emit_store_to_address(emitter, "x0", "sp", hash_slot_off);
             emitter.instruction(&format!("b {}", loop_label));                  // continue with the next source entry
         }
         Arch::X86_64 => {
@@ -3086,6 +3589,8 @@ fn emit_insert_assoc_variadic_entry(
             abi::emit_load_temporary_stack_slot(emitter, "r9", value_tag_off);
             emitter.instruction("cmp r9, 1");                                   // is the entry value a string (runtime tag 1)?
             emitter.instruction(&format!("je {}", value_string_label));         // strings must be persisted before insertion
+            emitter.instruction("cmp r9, 11");                                  // managed PHP references must keep their shared cell
+            emitter.instruction(&format!("je {}", value_ref_label));            // retain the cell for the variadic hash
             emitter.instruction("cmp r9, 4");                                   // tags below 4 are plain scalar payloads
             emitter.instruction(&format!("jl {}", value_scalar_label));         // scalars are inserted unchanged
             emitter.instruction("cmp r9, 7");                                   // check the refcounted tag range's upper bound
@@ -3125,6 +3630,7 @@ fn emit_insert_assoc_variadic_entry(
             abi::emit_load_temporary_stack_slot(emitter, "rsi", key_ptr_off);
             abi::emit_load_temporary_stack_slot(emitter, "rdx", key_len_off);
             abi::emit_call_label(emitter, "__rt_hash_set");
+            abi::emit_store_to_address(emitter, "rax", "rsp", hash_slot_off);
             emitter.instruction(&format!("jmp {}", loop_label));                // continue with the next source entry
         }
     }
@@ -3184,25 +3690,59 @@ fn widen_callback_arg_type(left: &PhpType, right: &PhpType) -> PhpType {
     left.clone()
 }
 
-/// Emits a fatal diagnostic for missing callback arguments.
-fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut DataSection) {
+/// Throws a catchable `ArgumentCountError` for a descriptor missing a required argument.
+fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) =
-        data.add_string(b"Fatal error: call_user_func_array(): missing required argument\n");
+        data.add_string(b"call_user_func_array(): missing required argument");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #2");                                  // write the missing-argument diagnostic to stderr
-            abi::emit_symbol_address(emitter, "x1", &message_label);
-            emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the missing-argument diagnostic byte length to write()
-            emitter.syscall(4);
-            abi::emit_exit(emitter, 1);
+            emitter.instruction("mov x0, #56");                                 // request the compact Throwable payload
+            emitter.instruction("bl __rt_heap_alloc");                          // allocate the ArgumentCountError object
+            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its PHP handle
+            emitter.instruction("bl __rt_object_handle_acquire");               // assign the object its runtime handle
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_argument_count_error_class_id", 0);
+            emitter.instruction("str x9, [x0]");                                // identify the catchable ArgumentCountError class
+            abi::emit_symbol_address(emitter, "x9", &message_label);
+            emitter.instruction("str x9, [x0, #8]");                            // store the immutable diagnostic bytes
+            abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
+            emitter.instruction("str x9, [x0, #16]");                           // store the diagnostic byte length
+            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
+                emitter, "x0",
+            );
+            emitter.instruction("str xzr, [x0, #40]");                          // previous exception defaults to null
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
+            emitter.instruction("b __rt_throw_current");                        // release argument guards and enter PHP exception handling
         }
         Arch::X86_64 => {
-            emitter.instruction("mov edi, 2");                                  // write the missing-argument diagnostic to stderr
-            abi::emit_symbol_address(emitter, "rsi", &message_label);
-            emitter.instruction(&format!("mov edx, {}", message_len));          // pass the missing-argument diagnostic byte length to write()
-            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
-            emitter.instruction("syscall");                                     // emit the missing-argument diagnostic
-            abi::emit_exit(emitter, 1);
+            emitter.instruction("mov eax, 56");                                 // request the compact Throwable payload
+            emitter.instruction("call __rt_heap_alloc");                        // allocate the ArgumentCountError object
+            abi::emit_load_int_immediate(
+                emitter,
+                "r10",
+                crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
+            );
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the canonical throwable heap kind
+            emitter.instruction("call __rt_object_handle_acquire");             // assign the object its runtime handle
+            abi::emit_load_symbol_to_reg(
+                emitter,
+                "r10",
+                "_spl_argument_count_error_class_id",
+                0,
+            );
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the catchable ArgumentCountError class
+            abi::emit_symbol_address(emitter, "r10", &message_label);
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the immutable diagnostic bytes
+            abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
+            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the diagnostic byte length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
+                emitter, "rax",
+            );
+            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous exception defaults to null
+            abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
+            emitter.instruction("jmp __rt_throw_current");                      // release argument guards and enter PHP exception handling
         }
     }
 }
@@ -3211,6 +3751,170 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
 mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
+
+    /// Identical signatures cannot share an invoker when their string-result owner contracts differ.
+    #[test]
+    fn invoker_cache_separates_owned_and_borrowed_string_returns() {
+        let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
+        let defaults: InvokerDefaults = vec![None; sig.params.len()];
+        let mut state = crate::codegen::shared_state::SharedCodegenState::default();
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &defaults, "borrowed_result");
+        assert!(state
+            .runtime_callable_invoker(&sig, &[], true, false, &defaults)
+            .is_none());
+        state.cache_runtime_callable_invoker(&sig, &[], true, false, &defaults, "owned_result");
+        assert_eq!(
+            state
+                .runtime_callable_invoker(&sig, &[], false, false, &defaults)
+                .as_deref(),
+            Some("borrowed_result")
+        );
+        assert_eq!(
+            state
+                .runtime_callable_invoker(&sig, &[], true, false, &defaults)
+                .as_deref(),
+            Some("owned_result")
+        );
+    }
+
+    /// The same ABI signature cannot share one body when its defaults resolve to different values.
+    ///
+    /// Two classes can declare the same method shape and fold `self::` constants differently, so
+    /// the RESOLVED defaults are part of the cache key, not just the signature.
+    #[test]
+    fn invoker_cache_separates_signatures_by_resolved_default_value() {
+        let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
+        let mut left: InvokerDefaults = vec![None; sig.params.len()];
+        let mut right = left.clone();
+        left[0] = Some(InvokerDefaultValue::String("left".to_string()));
+        right[0] = Some(InvokerDefaultValue::String("right".to_string()));
+        let mut state = crate::codegen::shared_state::SharedCodegenState::default();
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &left, "left_body");
+        assert!(state
+            .runtime_callable_invoker(&sig, &[], false, false, &right)
+            .is_none());
+        assert_eq!(
+            state
+                .runtime_callable_invoker(&sig, &[], false, false, &left)
+                .as_deref(),
+            Some("left_body")
+        );
+    }
+
+    /// Restoring concat state copies borrowed strings but leaves a transferred owner intact on every ABI.
+    #[test]
+    fn invoker_string_result_copy_respects_callee_ownership_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for owned in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                restore_concat_offset_after_nested_call(&mut emitter, &PhpType::Str, owned, false, "owned_result");
+                let asm = emitter.output();
+                assert_eq!(asm.contains("__rt_str_persist"), !owned, "{name}: {owned}");
+                let offset = crate::codegen_support::runtime::ctx::CTX_CONCAT_OFF_OFFSET;
+                let store = if name.ends_with("x86_64") {
+                    format!("mov QWORD PTR [r14 + {offset}],")
+                } else {
+                    format!("str x10, [x28, #{offset}]")
+                };
+                assert!(asm.contains(&store), "{name}: {owned}: {asm}");
+            }
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            restore_concat_offset_after_nested_call(&mut emitter, &PhpType::Str, false, true, "owned_result");
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_str_persist"), "{name}");
+            assert!(asm.contains("owned_result:"), "{name}");
+            assert!(asm.contains(if name.ends_with("x86_64") { "test r11, r11" } else { "cbnz x15" }), "{name}");
+        }
+    }
+
+    /// Mixed-element array invokers transfer the raw return owner into the result box.
+    #[test]
+    fn invoker_mixed_array_results_transfer_the_raw_owner_on_all_targets() {
+        let ty = PhpType::Array(Box::new(PhpType::Mixed));
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_boxed_invoker_return(&mut emitter, &ty);
+            let asm = emitter.output();
+            assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}");
+            assert_eq!(asm.matches("__rt_decref_array").count(), 1, "{name}");
+            assert!(
+                asm.find("__rt_mixed_from_value").unwrap()
+                    < asm.find("__rt_decref_array").unwrap(),
+                "{name}",
+            );
+        }
+    }
+
+    /// Refcounted invoker results transfer the callee's owner into their returned Mixed box.
+    #[test]
+    fn invoker_refcounted_results_transfer_the_callee_owner_on_all_targets() {
+        let cases = [
+            (PhpType::Object("Payload".to_string()), "__rt_decref_object"),
+            (
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Str),
+                    value: Box::new(PhpType::Mixed),
+                },
+                "__rt_decref_hash",
+            ),
+            (PhpType::Callable, "__rt_callable_descriptor_release"),
+        ];
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for (ty, release) in &cases {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emit_boxed_invoker_return(&mut emitter, ty);
+                let asm = emitter.output();
+                assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}: {ty:?}");
+                assert_eq!(asm.matches(release).count(), 1, "{name}: {ty:?}");
+                assert!(
+                    asm.find("__rt_mixed_from_value").unwrap() < asm.find(release).unwrap(),
+                    "{name}: {ty:?}",
+                );
+            }
+        }
+    }
+
+    /// Native and eval invokers both catch cleanup failures but preserve their distinct escape ABIs.
+    #[test]
+    fn invoker_exception_cleanup_covers_native_and_eval_calls_on_all_targets() {
+        let sig = FunctionSig {
+            params: vec![("value".to_string(), PhpType::Str)],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type: PhpType::Str,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        };
+        let invoker = RuntimeCallableInvoker {
+            label: "owned_invoker",
+            sig: &sig,
+            captures: &[],
+            parallel_fiber_suspend_guard: None,
+            mbstring_operation: None,
+            mbstring_variable_ref_warnings: false,
+            owns_string_return: false,
+            php_return_status: false,
+            defaults: &[None],
+        };
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for eval_boundary in [false, true] {
+                let mut emitter = Emitter::new(target);
+                emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, eval_boundary);
+                let asm = emitter.output();
+                assert!(asm.contains(&target.extern_symbol("setjmp")), "{name}: {eval_boundary}");
+                let escape = asm.split_once("owned_invoker_eval_escape:").unwrap().1;
+                assert_eq!(escape.matches("__rt_cleanup_invoke").count(), 2, "{name}: {eval_boundary}");
+                assert_eq!(escape.contains("__rt_throw_current"), !eval_boundary, "{name}: {eval_boundary}");
+            }
+        }
+    }
 
     /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
     #[test]
@@ -3237,6 +3941,319 @@ mod tests {
         assert!(output.contains("    ldr x10, [x9]\n"));
         assert!(!output.contains("stur x10, [x29, #-3"));
         assert!(!output.contains("ldur x10, [x29, #-3"));
+    }
+
+    /// Ref-cell markers retain source tag 7 directly instead of creating nested Mixed boxes.
+    #[test]
+    fn invoker_mixed_ref_cell_values_bypass_reboxing_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false, false, Vec::new(), target);
+            let label = format!("{}_invoker_ref_mixed_0", local_label_prefix("mixed_ref_cell", target));
+            let (ref_cell_reg, source_tag_reg, branch) = match target.arch {
+                Arch::AArch64 => ("x19", "x20", format!("b.eq {label}")),
+                Arch::X86_64 => ("r12", "r13", format!("je {label}")),
+            };
+
+            emit_materialize_invoker_ref_cell_value_as_mixed(
+                ref_cell_reg,
+                source_tag_reg,
+                &mut emitter,
+                &mut ctx,
+            );
+
+            let asm = emitter.output();
+            let boxed = asm.find("__rt_mixed_from_value").unwrap();
+            let mixed = asm.find(&format!("{label}:")).unwrap();
+            let retained = asm[mixed..].find("__rt_incref").unwrap() + mixed;
+            let done = asm.find(&format!("{}_invoker_ref_materialized_3:", local_label_prefix("mixed_ref_cell", target))).unwrap();
+            assert!(asm.contains(&branch), "{name}: {asm}");
+            assert!(boxed < mixed && mixed < retained && retained < done, "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+        }
+    }
+
+    /// Concrete ref targets mutate the payload inside promoted Mixed caller storage in place.
+    #[test]
+    fn invoker_ref_markers_adapt_promoted_mixed_storage_to_concrete_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let (storage_reg, source_tag_reg, mixed_compare, payload_address) = match target.arch {
+                Arch::AArch64 => ("x19", "x20", "cmp x20, #7", "add x0, x0, #8"),
+                Arch::X86_64 => ("r12", "r13", "cmp r13, 7", "add rax, 8"),
+            };
+
+            let mut concrete = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut concrete_ctx =
+                InvokerEmitContext::new("concrete_ref", owners, false, false, Vec::new(), target);
+            push_invoker_ref_storage_address(
+                storage_reg,
+                source_tag_reg,
+                Some(&PhpType::Int),
+                &mut concrete,
+                &mut concrete_ctx,
+            );
+            let concrete_asm = concrete.output();
+            assert!(concrete_asm.contains(mixed_compare), "{name}: {concrete_asm}");
+            assert!(concrete_asm.contains(payload_address), "{name}: {concrete_asm}");
+            assert!(concrete_asm.contains("concrete_ref_invoker_ref_storage_direct_0"), "{name}: {concrete_asm}");
+
+            let mut mixed = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut mixed_ctx = InvokerEmitContext::new("mixed_ref", owners, false, false, Vec::new(), target);
+            push_invoker_ref_storage_address(
+                storage_reg,
+                source_tag_reg,
+                Some(&PhpType::Mixed),
+                &mut mixed,
+                &mut mixed_ctx,
+            );
+            let mixed_asm = mixed.output();
+            assert!(!mixed_asm.contains(mixed_compare), "{name}: {mixed_asm}");
+            assert!(!mixed_asm.contains(payload_address), "{name}: {mixed_asm}");
+        }
+    }
+
+    /// Builds a source-variadic signature with a hidden `__elephc_func_argc` slot after `$a`.
+    fn hidden_argc_signature() -> FunctionSig {
+        let count = 3;
+        FunctionSig {
+            params: vec![
+                ("a".to_string(), PhpType::Int),
+                (crate::func_args::HIDDEN_ARGC_PARAM.to_string(), PhpType::Int),
+                ("rest".to_string(), PhpType::Array(Box::new(PhpType::Mixed))),
+            ],
+            param_type_exprs: vec![None; count],
+            param_attributes: vec![Vec::new(); count],
+            defaults: vec![
+                None,
+                Some(crate::parser::ast::Expr::new(
+                    crate::parser::ast::ExprKind::IntLiteral(0),
+                    crate::span::Span::dummy(),
+                )),
+                None,
+            ],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; count],
+            declared_params: vec![true, false, true],
+            variadic: Some("rest".to_string()),
+            deprecation: None,
+            is_generator: false,
+        }
+    }
+
+    /// Builds a hidden-collector signature whose first collector element is the actual count.
+    fn hidden_collector_signature() -> FunctionSig {
+        let count = 2;
+        FunctionSig {
+            params: vec![
+                ("a".to_string(), PhpType::Int),
+                (
+                    crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                ),
+            ],
+            param_type_exprs: vec![None; count],
+            param_attributes: vec![Vec::new(); count],
+            defaults: vec![
+                Some(crate::parser::ast::Expr::new(
+                    crate::parser::ast::ExprKind::IntLiteral(10),
+                    crate::span::Span::dummy(),
+                )),
+                None,
+            ],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; count],
+            declared_params: vec![true, false],
+            variadic: Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string()),
+            deprecation: None,
+            is_generator: false,
+        }
+    }
+
+    /// Emits one indexed invoker body for a signature.
+    fn emit_invoker_asm(target_name: &str, sig: &FunctionSig, label: &str) -> String {
+        let target = Target::parse(target_name).unwrap();
+        let mut emitter = Emitter::new(target);
+        // Resolve through the shared folder so the emitted body sees exactly what codegen ships.
+        let defaults = resolve_invoker_defaults(&crate::ir::Module::new(target), None, sig);
+        let invoker = RuntimeCallableInvoker {
+            label,
+            sig,
+            captures: &[],
+            parallel_fiber_suspend_guard: None,
+            mbstring_operation: None,
+            mbstring_variable_ref_warnings: false,
+            owns_string_return: false,
+            php_return_status: false,
+            defaults: &defaults,
+        };
+        emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
+        emitter.output()
+    }
+
+    /// Every target forwards the framed invocation scope after the complete PHP ABI shape.
+    #[test]
+    fn invoker_forwards_hidden_invocation_scope_on_all_targets() {
+        let sig = crate::types::first_class_callable_builtin_sig("clone").unwrap();
+        assert_eq!(sig.params.len(), 2);
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let asm = emit_invoker_asm(name, &sig, "clone_scope_invoker");
+            let store = match target.arch {
+                Arch::AArch64 => format!("stur x2, [x29, #-{INVOKER_SCOPE_OFFSET}]"),
+                Arch::X86_64 => {
+                    format!("mov QWORD PTR [rbp - {INVOKER_SCOPE_OFFSET}], rdx")
+                }
+            };
+            let load = match target.arch {
+                Arch::AArch64 => format!("ldur x0, [x29, #-{INVOKER_SCOPE_OFFSET}]"),
+                Arch::X86_64 => {
+                    format!("mov rax, QWORD PTR [rbp - {INVOKER_SCOPE_OFFSET}]")
+                }
+            };
+            let stored = asm
+                .find(&store)
+                .unwrap_or_else(|| panic!("{name}: missing scope input store: {asm}"));
+            let loaded = asm
+                .find(&load)
+                .unwrap_or_else(|| panic!("{name}: missing trailing scope load: {asm}"));
+            let invoked = asm[loaded..]
+                .find(match target.arch {
+                    Arch::AArch64 => "blr x19",
+                    Arch::X86_64 => "call r12",
+                })
+                .map(|offset| offset + loaded)
+                .unwrap_or_else(|| panic!("{name}: missing target invoke: {asm}"));
+            assert!(stored < loaded && loaded < invoked, "{name}: {asm}");
+            let policy_store = match target.arch {
+                Arch::AArch64 => format!("stur x3, [x29, #-{INVOKER_BINDING_POLICY_OFFSET}]"),
+                Arch::X86_64 => format!("mov QWORD PTR [rbp - {INVOKER_BINDING_POLICY_OFFSET}], rcx"),
+            };
+            let policy_stored = asm.find(&policy_store)
+                .unwrap_or_else(|| panic!("{name}: missing independent binding policy spill: {asm}"));
+            assert!(policy_stored < loaded, "{name}: policy must survive nested calls: {asm}");
+            assert_ne!(INVOKER_SCOPE_OFFSET, INVOKER_BINDING_POLICY_OFFSET);
+        }
+    }
+
+    /// Descriptor targets inherit the real PHP frame reader across their invisible wrapper.
+    #[test]
+    fn invokers_republish_the_php_frame_head_around_target_calls_on_all_targets() {
+        let sig = crate::types::first_class_callable_builtin_sig("debug_backtrace").unwrap();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let asm = emit_invoker_asm(name, &sig, "backtrace_invoker");
+            let indirect_call = match target.arch {
+                Arch::AArch64 => "blr x19",
+                Arch::X86_64 => "call r12",
+            };
+            let call = asm
+                .find(indirect_call)
+                .unwrap_or_else(|| panic!("{name}: missing descriptor target call\n{asm}"));
+            let before = &asm[..call];
+            let after = &asm[call + indirect_call.len()..];
+            let marker = "republish descriptor invoker PHP caller frame";
+            let before_restore = before
+                .rfind(marker)
+                .unwrap_or_else(|| panic!("{name}: missing frame restore before target\n{asm}"));
+            let after_restore = after
+                .find(marker)
+                .unwrap_or_else(|| panic!("{name}: missing frame restore after target\n{asm}"));
+            let offset = crate::codegen_support::runtime::ctx::CTX_EXC_CALL_FRAME_TOP_OFFSET;
+            let frame_store = match target.arch {
+                Arch::AArch64 => format!("str x10, [x28, #{offset}]"),
+                Arch::X86_64 => format!("mov QWORD PTR [r14 + {offset}],"),
+            };
+            assert!(
+                before[before_restore..].contains(&frame_store),
+                "{name}: pre-call restore does not publish the PHP frame head\n{asm}",
+            );
+            assert!(
+                after[after_restore..].contains(&frame_store),
+                "{name}: post-call restore does not publish the PHP frame head\n{asm}",
+            );
+        }
+    }
+
+    /// Every invoker keeps container slot 0 as the first user argument and synthesizes hidden argc.
+    #[test]
+    fn invokers_preserve_arg0_and_synthesize_hidden_argc_on_all_targets() {
+        let sig = hidden_argc_signature();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = emit_invoker_asm(name, &sig, "public_argc");
+            let (arg0, argc_slot, count_move) = if name == "linux-x86_64" {
+                (
+                    "mov rax, QWORD PTR [r13 + 24]",
+                    "mov rax, QWORD PTR [r13 + 32]",
+                    "mov rax, QWORD PTR [r13]",
+                )
+            } else {
+                (
+                    "ldr x0, [x20, #24]",
+                    "ldr x0, [x20, #32]",
+                    "mov x0, x21",
+                )
+            };
+            assert!(asm.contains(arg0), "{name}: public arg 0 must stay at container index 0\n{asm}");
+            assert!(
+                !asm.contains(argc_slot),
+                "{name}: the invoker must not consume container index 1 as hidden argc\n{asm}"
+            );
+            assert!(
+                asm.contains(count_move),
+                "{name}: the invoker must synthesize argc from the public argument count\n{asm}"
+            );
+        }
+    }
+
+    /// Hidden collectors store the synthesized count as their first element, indexed and assoc.
+    #[test]
+    fn invokers_synthesize_hidden_collector_count_prefix_on_all_targets() {
+        let sig = hidden_collector_signature();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = emit_invoker_asm(name, &sig, "public_collector");
+            assert!(
+                asm.contains("invoker_tail_count_ok"),
+                "{name}: the collector must clamp and prefix the actual count\n{asm}"
+            );
+
+            let assoc = &asm[asm
+                .rfind("cufa_mixed_assoc")
+                .expect("the Mixed invoker emits an associative branch")..];
+            let hash_new = assoc
+                .find("__rt_hash_new")
+                .expect("the associative variadic collector is allocated");
+            let tail_loop = assoc
+                .find("assoc_variadic_loop")
+                .expect("the associative tail walk is emitted");
+            let prefix = &assoc[hash_new..tail_loop];
+            assert!(
+                prefix.contains("__rt_mixed_from_value") && prefix.contains("__rt_hash_set"),
+                "{name}: the count must be boxed and inserted before the associative tail\n{asm}",
+            );
+
+        }
     }
 
     /// Verifies positional variadic-container conversion preserves the complete ABI stack slots.

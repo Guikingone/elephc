@@ -457,15 +457,63 @@ var_dump(empty($x));
 
 /// Compiles and runs the checked-in `examples/magic-methods/main.php` fixture,
 /// exercising every supported magic method end to end.
+///
+/// The expectation is the example's whole stdout, so editing the example without
+/// editing this string fails here. The last four lines are the `__toString()`
+/// contexts: `implode()` renders the object element through the same conversion
+/// the interpolation, concatenation and `(string)` cast beside it use, which is
+/// the shape the boxed-object cast fix restored. Verified byte-identical to host
+/// PHP 8.5.10.
 #[test]
 fn test_example_magic_methods_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/magic-methods/main.php"));
     assert_eq!(
         out,
-        "@nahime\n[missing]\nrole=admin;visits=3;\nnahime:active\nmissing displayName(short)\nactive\ninactive\nstatic create(nahime)\n"
+        concat!(
+            "@nahime\n",
+            "[missing]\n",
+            "role=admin;visits=3;\n",
+            "nahime:active\n",
+            "nahime:self\n",
+            "missing displayName(short)\n",
+            "active\n",
+            "inactive\n",
+            "static create(nahime)\n",
+            "implode: plain, 42, @ada, 2.5, 1\n",
+            "interp:  @ada\n",
+            "concat:  @ada\n",
+            "cast:    @ada\n",
+        )
     );
 }
 
 // =============================================================================
 // Non-class regression edge cases
 // =============================================================================
+
+/// `empty($o->p)` through `__isset`/`__get` releases the value `__get` returned once it has
+/// been tested. A `mixed` return is boxed, and that box used to leak on every call.
+#[test]
+fn test_empty_through_magic_get_releases_the_read_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class M {
+    public function __isset($n) { return true; }
+    public function __get($n): mixed { return $n === 'a' ? str_repeat('x', 3) : 0; }
+}
+$m = new M();
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    if (empty($m->a)) { $n++; }
+    if (empty($m->z)) { $n++; }
+}
+echo $n, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "20\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}

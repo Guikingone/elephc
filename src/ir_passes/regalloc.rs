@@ -16,17 +16,19 @@
 //! - The spill heuristic is use-weighted: under pressure the rarely-used,
 //!   furthest-reaching interval is evicted first, keeping hot values in
 //!   registers.
-//! - First cut: only single-word `NonHeap` scalars (`I64`, `F64`) are
-//!   register-eligible, and never block parameters or branch arguments, which
-//!   stay in stack slots so the existing block-parameter moves are unchanged.
-//!   Generators fall back to all-spilled; handler functions still allocate
-//!   scalar ranges, with call clobber analysis protecting exception edges.
+//! - Only single-word `NonHeap` scalars (`I64`, `F64`) are register-eligible.
+//!   Edge copies materialize branch arguments into block-parameter homes, so
+//!   promoted loop values can remain in registers across back edges.
+//!   Unused parameters stay spilled because edge copies still write their homes.
+//!   Generators and handler functions fall back to all-spilled: implicit
+//!   exception edges are absent from liveness and interval numbering.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::codegen::platform::{Arch, Target};
-use crate::ir::{Function, IrType, Ownership, Terminator, ValueId};
+use crate::ir::{Function, IrType, Ownership, ValueDef, ValueId};
 use crate::ir_passes::allocation::Allocation;
+use crate::ir_passes::cfg::has_exception_handlers;
 use crate::ir_passes::intervals::{build_intervals, LiveInterval};
 use crate::ir_passes::liveness::compute_liveness;
 
@@ -34,81 +36,38 @@ use crate::ir_passes::liveness::compute_liveness;
 ///
 /// Runs liveness and interval analysis, then a linear scan that assigns
 /// callee-saved registers to eligible intervals and spills the longest-lived
-/// interval when a pool is exhausted. Generators conservatively fall back to
-/// all-spilled, while handlers retain ordinary scalar allocation.
+/// interval when a pool is exhausted. Generators and functions with implicit
+/// exception-handler edges conservatively fall back to all-spilled.
 pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
-    if func.flags.is_generator {
+    if func.flags.is_generator || has_exception_handlers(func) {
         return Allocation::all_spilled();
     }
 
     let liveness = compute_liveness(func);
     let intervals = build_intervals(func, &liveness);
-    let ineligible = ineligible_values(func);
-
     let eligible: Vec<LiveInterval> = intervals
         .into_iter()
-        .filter(|iv| is_eligible(func, iv, &ineligible))
+        .filter(|iv| is_eligible(func, iv))
         .collect();
 
     scan(&eligible, target)
 }
 
-/// Collects values that must stay in stack slots regardless of their type:
-/// block parameters and values passed as branch arguments. These feed the
-/// slot-based block-parameter moves, which read them from their slots.
-fn ineligible_values(func: &Function) -> HashSet<ValueId> {
-    let mut ineligible = HashSet::new();
-    for block in &func.blocks {
-        for param in &block.params {
-            ineligible.insert(*param);
-        }
-        if let Some(term) = &block.terminator {
-            for arg in terminator_branch_args(term) {
-                ineligible.insert(arg);
-            }
-        }
-    }
-    ineligible
-}
-
-/// Returns the values a terminator passes as block-parameter arguments. These
-/// are distinct from condition/scrutinee/return uses, which are ordinary uses.
-fn terminator_branch_args(term: &Terminator) -> Vec<ValueId> {
-    match term {
-        Terminator::Br { args, .. } => args.clone(),
-        Terminator::CondBr {
-            then_args,
-            else_args,
-            ..
-        } => then_args.iter().chain(else_args).copied().collect(),
-        Terminator::Switch {
-            cases,
-            default_args,
-            ..
-        } => cases
-            .iter()
-            .flat_map(|case| case.args.iter().copied())
-            .chain(default_args.iter().copied())
-            .collect(),
-        Terminator::GeneratorSuspend { resume_args, .. } => resume_args.clone(),
-        Terminator::Return { .. }
-        | Terminator::Throw { .. }
-        | Terminator::Fatal { .. }
-        | Terminator::Unreachable => Vec::new(),
-    }
-}
-
 /// Returns true when an interval's value can live in a register: a single-word
-/// non-heap scalar that is not a block parameter or branch argument.
-fn is_eligible(func: &Function, iv: &LiveInterval, ineligible: &HashSet<ValueId>) -> bool {
-    if ineligible.contains(&iv.value) {
-        return false;
-    }
+/// non-heap scalar. Branch edge copies support register and stack homes, but
+/// unused parameters need distinct homes despite their zero-length intervals.
+fn is_eligible(func: &Function, iv: &LiveInterval) -> bool {
     if !matches!(iv.ir_type, IrType::I64 | IrType::F64) {
         return false;
     }
     func.value(iv.value)
-        .map(|value| value.ownership == Ownership::NonHeap)
+        .map(|value| {
+            // Edge copies still write dead parameters. Their interval expires at
+            // entry before a later parameter is allocated, so a shared register
+            // would let the dead destination overwrite the live one.
+            value.ownership == Ownership::NonHeap
+                && !(iv.weight == 0 && matches!(value.def, ValueDef::BlockParam { .. }))
+        })
         .unwrap_or(false)
 }
 

@@ -64,8 +64,14 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
 /// metadata (name, visibility, attributes, return type, etc.) is copied unchanged.
 pub(super) fn propagate_method(method: ClassMethod) -> ClassMethod {
     ClassMethod {
+        // A REBUILD. Constant propagation rewrites params and body, not the declaration.
+        type_params: method.type_params,
         params: propagate_params(method.params),
-        body: with_function_scope(|| propagate_block(method.body, HashMap::new()).0),
+        body: with_function_scope_mode(method.by_ref_return, || {
+            crate::optimize::generator_bodies::rewrite_preserving_yield(method.body, |body| {
+                propagate_block(body, HashMap::new()).0
+            })
+        }),
         ..method
     }
 }

@@ -1031,6 +1031,136 @@ fn web_post_superglobal_parsed() {
     assert!(resp.ends_with("alice:s@fe"), "body: {:?}", resp);
 }
 
+/// Issue #513: a urlencoded POST body far past the old ~73 KB ceiling reaches the handler.
+///
+/// The worker used to die with `heap memory exhausted` and an empty response (curl exit 52)
+/// somewhere past 73 KB, *before* the handler ran -- so an application-level size check never
+/// got the chance to reject the request itself. The threshold was fixed: identical at an 8 MB
+/// and a 64 MB heap, which is what made it a parser limit rather than a heap one.
+///
+/// 300 KB here is four times the old ceiling and still the default 8 MB heap, and the handler
+/// is what answers. Measured while revalidating: 74 KB, 100 KB, 200 KB and 300 KB all round-trip
+/// at 8 MB, and a 4 MB body round-trips at 64 MB -- so what is left scales with the heap the way
+/// the issue asked for.
+#[test]
+fn web_post_body_past_the_old_parser_ceiling_reaches_the_handler() {
+    let dir = make_test_dir("web_post_large");
+    let src = "<?php echo 'len=' . strlen((string) ($_POST['body'] ?? ''));";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let body = format!("body={}", "a".repeat(300_000));
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        &body,
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("len=300000"), "body: {:?}", resp);
+}
+
+/// Issue #510, raised in review on the CLI regression: the reported corruption was seen across
+/// repeated `--web` requests, so the `--web` lifecycle needs its own coverage.
+///
+/// `$x = substr($x, ...)` on a non-literal buffer returned eight bytes of allocator metadata in
+/// front of otherwise correct text, and they changed on every request -- which is what pointed
+/// at the worker's reused heap rather than at the expression. A one-shot native program
+/// repeats the operation but never repeats request setup, teardown, or worker reuse.
+///
+/// One worker, so every request lands on the same process and the same heap, and the response
+/// is compared byte for byte each time: the failure was never in the length.
+#[test]
+fn web_substr_self_reassignment_is_stable_across_requests() {
+    let dir = make_test_dir("web_substr_alias");
+    let src = r#"<?php
+function body(): string { return "private function foo() {}
+"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+$code = body();
+$code = substr($code, 0, -1);
+
+$p = new Paste("second body here
+");
+$t = $p->body;
+$t = substr($t, 0, -1);
+
+echo $code, "|", $t, "|", strlen($code);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        seen.push(http_request(&addr, "GET", "/", &[], ""));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    for (i, resp) in seen.iter().enumerate() {
+        assert!(
+            resp.ends_with("private function foo() {}|second body here|25"),
+            "request {i} came back corrupted: {resp:?}"
+        );
+    }
+}
+
+/// Follow-up for #1129: the same #510 shape under `--web-isolation=request`.
+///
+/// The fixture above serves every request from ONE long-lived worker, which is the lifecycle
+/// the corruption was reported on. `request` isolation is the opposite end: the broker hands
+/// each request to a handler process that exits when it is done, so the heap the self-aliasing
+/// store runs against is fresh every time and the request-teardown path runs eight times
+/// instead of once. Measured during #1017 and never added to the suite.
+///
+/// The response is compared byte for byte, leading token included: the failure was eight bytes
+/// of allocator metadata in front of correct text, never a wrong length.
+#[test]
+fn web_substr_self_reassignment_is_stable_under_request_isolation() {
+    let dir = make_test_dir("web_substr_alias_request");
+    let src = r#"<?php
+function body(): string { return "private function foo() {}
+"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+$code = body();
+$code = substr($code, 0, -1);
+
+$p = new Paste("second body here
+");
+$t = $p->body;
+$t = substr($t, 0, -1);
+
+echo $code, "|", $t, "|", strlen($code);
+"#;
+    let bin = compile_isolated_web(&dir, src, "app", "request");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--handler-concurrency", "2"]);
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        seen.push(http_request(&addr, "GET", "/", &[], ""));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    for (i, resp) in seen.iter().enumerate() {
+        assert!(
+            resp.ends_with("private function foo() {}|second body here|25"),
+            "request {i} came back corrupted: {resp:?}"
+        );
+    }
+}
+
 /// Verifies echoing a superglobal value directly (a boxed Mixed string) reaches
 /// the HTTP response body, not the worker's stdout. This is the output-capture
 /// completeness fix: `__rt_mixed_write_stdout` routes through `__rt_stdout_write`.
@@ -1287,6 +1417,148 @@ fn web_gc_stats_are_emitted_per_request() {
         assert!(allocs.parse::<u64>().is_ok(), "invalid allocation count: {}", line);
         assert!(frees.parse::<u64>().is_ok(), "invalid free count: {}", line);
     }
+}
+
+/// Reloading unchanged and unset typed superglobals must not grow retained storage across requests.
+#[test]
+fn web_eval_superglobal_reload_releases_replaced_owners() {
+    let dir = make_test_dir("web_eval_superglobal_owners");
+    let started = Instant::now();
+    eprintln!("web eval superglobal owners: compiling web and eval fixture");
+    let source = r#"<?php
+$snapshot = $_GET;
+$code = '$_GET = $_GET; // ' . $_GET['token'];
+$rounds = (int) $_GET['rounds'];
+for ($i = 0; $i < $rounds; $i++) { eval($code); }
+echo $_GET['token'], ":", $snapshot['token'], "|";
+$remove = 'unset($_GET); // ' . $snapshot['token'];
+eval($remove);
+unset($snapshot); unset($code); unset($remove);
+echo "cleared";
+"#;
+    let bin = compile_web_with_flags(&dir, source, "app", &["--gc-stats"]);
+    eprintln!("web eval superglobal owners: fixture compiled in {:?}", started.elapsed());
+    let addr = format!("127.0.0.1:{}", free_port());
+    let stderr_path = dir.join("server.stderr");
+    let stderr_file = fs::File::create(&stderr_path).expect("create server stderr capture");
+    let mut child = ServerGuard::new(Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .stderr(Stdio::from(stderr_file))
+        .spawn().expect("spawn eval superglobal server"));
+    wait_until_ready(&addr);
+    for rounds in [1, 2, 4, 8] {
+        let request_started = Instant::now();
+        let response = http_get_with_timeout(&addr, &format!("/?token=owned&rounds={rounds}"), Duration::from_secs(10))
+            .expect("superglobal reload request must complete");
+        assert!(response.ends_with("owned:owned|cleared"), "response: {response:?}");
+        eprintln!(
+            "web eval superglobal owners: rounds={rounds} completed in {:?}",
+            request_started.elapsed(),
+        );
+    }
+    child.kill().expect("stop eval superglobal server");
+    child.wait().expect("reap eval superglobal server");
+    let stderr = fs::read_to_string(stderr_path).expect("read allocation counters");
+    let live = stderr.lines().filter_map(|line| line.strip_prefix("GC: allocs="))
+        .map(|line| {
+            let (allocs, frees) = line.split_once(" frees=").expect("well-formed GC counters");
+            allocs.parse::<i64>().unwrap() - frees.parse::<i64>().unwrap()
+        }).collect::<Vec<_>>();
+    assert_eq!(live.len(), 4, "{stderr}");
+    // Warm up once, then require stable live storage despite increasing reload counts.
+    assert_eq!(live[1], live[2], "{stderr}");
+    assert_eq!(live[2], live[3], "{stderr}");
+}
+
+/// Native and eval handler owners, stacks, and reporting masks do not survive a request.
+#[test]
+fn web_resets_core_handlers_between_requests() {
+    let dir = make_test_dir("web_core_handler_reset");
+    let started = Instant::now();
+    eprintln!("web Core handler reset: compiling web and eval fixture");
+    let src = r#"<?php
+if (isset($_GET['first'])) {
+    $capture = 'old';
+    set_error_handler(function($level, $message) use ($capture) { echo $capture; return true; });
+    set_exception_handler(function($e) use ($capture) { echo $capture; });
+    $source = 'function webEvalError($level, $message) { echo "stale"; return true; }
+function webEvalException($e) { echo "stale"; }
+set_error_handler("webEvalError");
+set_exception_handler("webEvalException");' . ' // ' . $_GET['first'];
+    eval($source);
+    error_reporting(0);
+    echo 'registered';
+    return;
+}
+echo error_reporting() === E_ALL ? 'mask:' : 'bad:';
+echo set_error_handler(null) === null ? 'error:' : 'bad:';
+echo set_exception_handler(null) === null ? 'exception:' : 'bad:';
+restore_error_handler(); restore_error_handler(); restore_error_handler();
+restore_exception_handler(); restore_exception_handler(); restore_exception_handler();
+error_reporting(0);
+trigger_error('new request', E_USER_WARNING);
+echo 'clean';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    eprintln!("web Core handler reset: fixture compiled in {:?}", started.elapsed());
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get_with_timeout(&addr, "/?first=1", Duration::from_secs(10))
+        .expect("handler registration request must complete");
+    let second = http_get_with_timeout(&addr, "/", Duration::from_secs(10))
+        .expect("first handler-reset request must complete");
+    let third = http_get_with_timeout(&addr, "/", Duration::from_secs(10))
+        .expect("second handler-reset request must complete");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("registered"), "first response: {first:?}");
+    for response in [second, third] {
+        assert!(response.ends_with("mask:error:exception:clean"), "response: {response:?}");
+    }
+}
+
+/// Verifies each request starts with default GC controls and no leaked stream lock.
+#[test]
+fn web_resets_gc_state_and_closes_unreachable_resources_between_requests() {
+    let dir = make_test_dir("web_gc_resource_reset");
+    let src = r#"<?php
+class WebGcResourceCycle {
+    public $self = null;
+    public $handle = null;
+}
+$lockPath = __DIR__ . "/request.lock";
+if (isset($_GET["first"])) {
+    gc_disable();
+    $cycle = new WebGcResourceCycle();
+    $cycle->self = $cycle;
+    unset($cycle);
+    gc_collect_cycles();
+
+    $resourceCycle = new WebGcResourceCycle();
+    $resourceCycle->self = $resourceCycle;
+    $resourceCycle->handle = fopen($lockPath, "w+");
+    flock($resourceCycle->handle, LOCK_EX);
+    unset($resourceCycle);
+    $status = gc_status();
+    echo !gc_enabled() && $status["runs"] > 0 ? "dirty" : "bad";
+    return;
+}
+$handle = fopen($lockPath, "r+");
+$locked = flock($handle, LOCK_EX | LOCK_NB);
+$status = gc_status();
+echo gc_enabled() && $status["runs"] === 0 && $status["collected"] === 0 ? "clean:" : "bad:";
+echo $locked ? "unlocked" : "leaked";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?first=1", &[], "");
+    let second = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("dirty"), "first response: {first:?}");
+    assert!(second.ends_with("clean:unlocked"), "second response: {second:?}");
 }
 
 /// Verifies a request body over --max-body-size is rejected with 413, and a body
@@ -2397,4 +2669,182 @@ fn web_opcache_gate_ignores_enable_cli() {
 
         assert!(resp.ends_with(expected), "{why}; response was {resp:?}");
     }
+}
+
+/// Issue #887: a client that completes its headers and then STALLS on the declared body is
+/// terminated by `--body-read-timeout` in the DEFAULT worker isolation, answering 408.
+///
+/// The worker configured only a header-read timeout, so the body had no deadline: a size cap
+/// bounds the bytes that arrive, never the connection's lifetime, and enough such
+/// connections exhaust a worker's descriptors and task slots. The flag that would have set a
+/// deadline was itself rejected in this isolation mode.
+///
+/// THE REQUEST IS DELIBERATELY KEEP-ALIVE. A `Connection: close` in the REQUEST would make
+/// the client's own EOF indistinguishable from the server releasing the connection, so the
+/// half of the fix that matters for exhaustion — the 408 carrying `Connection: close`
+/// instead of leaving a timed-out connection parked in the pool — would go unproven.
+#[test]
+fn web_worker_body_read_timeout_terminates_a_stalled_body() {
+    let dir = make_test_dir("web_body_read_timeout_stall");
+    let bin = compile_web(&dir, "<?php echo \"never\";", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--body-read-timeout", "1"]);
+
+    // Headers announce a body that never arrives, on a connection the client never offers
+    // to close.
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    // A read deadline well past the server's: without it, a regression that never closes
+    // the connection would hang this test instead of failing it.
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let head = format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 1024\r\n\r\n",
+        addr
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream.flush().unwrap();
+
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_body_read_timeout_closed(&response, "a stalled body");
+}
+
+/// The same deadline covers a client that sends the body SLOWLY rather than not at all —
+/// partial frames keep arriving, so any per-frame idle check would be satisfied while the
+/// connection still never completes.
+#[test]
+fn web_worker_body_read_timeout_terminates_a_slow_trickle() {
+    let dir = make_test_dir("web_body_read_timeout_trickle");
+    let bin = compile_web(&dir, "<?php echo \"never\";", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--body-read-timeout", "1"]);
+
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    // Set before the trickle: once the server has closed, the socket no longer accepts the
+    // option at all (`EINVAL`), and the deadline is only useful if it is already in place.
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let head = format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 4096\r\n\r\n",
+        addr
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream.flush().unwrap();
+    // Trickle well past the deadline without ever reaching Content-Length.
+    for _ in 0..20 {
+        if stream.write_all(b"x").is_err() {
+            break;
+        }
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_body_read_timeout_closed(&response, "a trickled body");
+}
+
+/// Asserts the 408 a body-read timeout produces, INCLUDING the `Connection: close` that
+/// releases the connection.
+///
+/// Both halves are load-bearing and neither implies the other. The status line is what only
+/// the timeout produces — a client-side close cannot fabricate it. The header is the half
+/// that answers the exhaustion the issue is about: a 408 on a keep-alive connection that
+/// stays parked has freed nothing. `isolated_worker.rs` already did this for pool and
+/// request isolation, which is why the assertion is worth pinning rather than assuming.
+fn assert_body_read_timeout_closed(response: &str, what: &str) {
+    assert!(
+        response.starts_with("HTTP/1.1 408"),
+        "{what} must be answered with 408; response was {response:?}"
+    );
+    let headers = response
+        .split_once("\r\n\r\n")
+        .map(|(head, _)| head)
+        .unwrap_or(response)
+        .to_ascii_lowercase();
+    assert!(
+        headers.contains("connection: close"),
+        "{what} must be answered with a server-directed close, not left keep-alive; \
+         response was {response:?}"
+    );
+}
+
+/// A body that arrives WITHIN the deadline is unaffected: the timeout must bound the stalled
+/// case without truncating a legitimate upload.
+#[test]
+fn web_worker_body_read_timeout_leaves_a_prompt_body_alone() {
+    let dir = make_test_dir("web_body_read_timeout_ok");
+    let bin = compile_web(
+        &dir,
+        "<?php echo strlen(file_get_contents(\"php://input\"));",
+        "app",
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--body-read-timeout", "10"]);
+
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    let payload = "y".repeat(64);
+    let req = format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        addr,
+        payload.len(),
+        payload
+    );
+    stream.write_all(req.as_bytes()).unwrap();
+    stream.flush().unwrap();
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let response = normalize_complete_http_response(response);
+    assert!(
+        response.starts_with("HTTP/1.1 200") && response.ends_with("64"),
+        "a prompt body must be served normally; response was {response:?}"
+    );
+}
+
+/// Verifies a superglobal that is still aliased by a local survives the mutating builtins.
+///
+/// Under `--web` the superglobals are concrete hashes behind a global symbol. `ksort()`,
+/// `array_pop()`, `asort()` and `krsort()` split a shared hash through a CONSUMING copy-on-write
+/// helper, and the global write-back then retired the previous hash a second time, so
+/// `$copy = $_GET; ksort($_GET);` left `$copy` pointing at freed memory: its `count()` came
+/// back as a garbage integer. Each line below is real PHP output for the same program.
+#[test]
+fn aliased_superglobal_survives_mutating_builtins() {
+    let dir = make_test_dir("web_aliased_superglobal");
+    let src = r#"<?php
+$copy = $_GET; ksort($_GET);
+echo count($copy), "|", count($_GET), "|", implode(",", array_keys($_GET)), "\n";
+$c2 = $_GET; $last = array_pop($_GET);
+echo count($c2), "|", count($_GET), "|", $last, "\n";
+$c5 = $_GET; asort($_GET);
+echo count($c5), "|", count($_GET), "\n";
+$c6 = $_GET; krsort($_GET);
+echo count($c6), "|", implode(",", array_keys($_GET)), "\n";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?a=1&b=2&c=3");
+    let r2 = http_get(&addr, "/?a=1&b=2&c=3");
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected = "3|3|a,b,c\n3|2|3\n2|2\n2|b,a\n";
+    assert!(r1.ends_with(expected), "first response body: {:?}", r1);
+    assert!(r2.ends_with(expected), "second response body: {:?}", r2);
 }

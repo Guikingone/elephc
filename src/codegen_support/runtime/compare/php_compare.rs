@@ -323,7 +323,7 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #80]");                                   // reload the string pointer for the byte comparison
     emitter.instruction("ldr x4, [sp, #88]");                                   // reload the string length for the byte comparison
     emitter.instruction("bl __rt_strcmp");                                      // compare the rendered number with the string byte-wise
-        emitter.instruction("ldr x10, [sp, #96]");                                  // reload the saved concat scratch cursor
+        emitter.instruction("ldr x10, [sp, #96]");                              // reload the saved concat scratch cursor
     crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // release the scratch the rendered number occupied (ctx-relative in ctx mode)
     emitter.instruction("cmp x0, #0");                                          // normalize the byte difference into a three-way result
     emitter.instruction("b.lt __rt_pcmp_maybe_neg");                            // the rendered number sorts first, before any swap correction
@@ -652,7 +652,7 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 88]");                       // reload the string pointer for the byte comparison
     emitter.instruction("mov rcx, QWORD PTR [rbp - 96]");                       // reload the string length for the byte comparison
     emitter.instruction("call __rt_strcmp");                                    // compare the rendered number with the string byte-wise
-        emitter.instruction("mov r11, QWORD PTR [rbp - 104]");                      // reload the saved concat scratch cursor
+        emitter.instruction("mov r11, QWORD PTR [rbp - 104]");                  // reload the saved concat scratch cursor
     crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r11"); // release the scratch the rendered number occupied (ctx-relative in ctx mode)
     emitter.instruction("cmp rax, 0");                                          // normalize the byte difference into a three-way result
     emitter.instruction("jl __rt_pcmp_maybe_neg");                              // the rendered number sorts first, before any swap correction

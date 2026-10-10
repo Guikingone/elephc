@@ -1,8 +1,8 @@
 ---
 title: "imagefilltoborder()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Flood-fills from a point until it reaches a border color."
 sidebar:
-  order: 504
+  order: 505
 ---
 
 ## imagefilltoborder()
@@ -11,7 +11,7 @@ sidebar:
 function imagefilltoborder(mixed $image, int $x, int $y, int $border_color, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Flood-fills from a point until it reaches a border color.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -27,7 +27,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

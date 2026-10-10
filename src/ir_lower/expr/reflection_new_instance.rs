@@ -266,14 +266,18 @@ pub(super) fn resolve_known_class_method_name(
 }
 
 /// Returns constructor signature metadata for a known class name.
+///
+/// Resolved through [`crate::types::constructor_owner`] for the same reason
+/// `object_construction::constructor_signature` is: a descendant of a class with a private
+/// constructor carries no `__construct` entry of its own, and reading `methods` directly made
+/// `ReflectionClass::newInstance()` on it see no constructor at all (issue #868).
 pub(super) fn constructor_signature_for_class_name<'a>(
     ctx: &'a LoweringContext<'_, '_>,
     class_name: &str,
 ) -> Option<&'a FunctionSig> {
     let key = php_symbol_key("__construct");
-    ctx.classes
-        .get(class_name.trim_start_matches('\\'))
-        .and_then(|class_info| class_info.methods.get(&key))
+    crate::types::constructor_owner(ctx.classes, class_name.trim_start_matches('\\'))
+        .and_then(|(_, class_info)| class_info.methods.get(&key))
 }
 
 /// Emits a runtime fatal for ReflectionClass newInstance argument forms not yet lowered.

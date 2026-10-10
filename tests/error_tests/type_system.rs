@@ -9,6 +9,59 @@
 
 use super::*;
 
+/// A mixed literal spread unwraps its source once, preserving nested container element types.
+#[test]
+fn test_mixed_literal_spread_preserves_nested_element_type() {
+    use elephc::types::PhpType;
+    for source in [
+        "<?php $rows = [...[[1], [2]], 'last' => [3]];",
+        "<?php $source = ['first' => [1], 'second' => [2]]; $rows = [...$source, 'last' => [3]];",
+        "<?php $rows = [...[1, 2], 'last' => 3];",
+    ] {
+        let checked = check_source_full(source).expect("valid spread");
+        let expected_value = if source.contains("[3]") {
+            PhpType::Array(Box::new(PhpType::Int))
+        } else {
+            PhpType::Int
+        };
+        assert_eq!(checked.global_env.get("rows"), Some(&PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed), value: Box::new(expected_value),
+        }));
+    }
+}
+
+/// Direct scalar property references need writeback support distinct from nested array origins.
+#[test]
+fn test_error_by_ref_argument_rejects_direct_property_storage() {
+    for source in [
+        "<?php function setv(mixed &$value): void {} class Box { public mixed $value = 1; } $box = new Box(); setv($box->value);",
+        "<?php function setv(mixed &$value): void {} class Box { public static mixed $value = 1; } setv(Box::$value);",
+    ] {
+        expect_error(source, "must be passed a variable");
+    }
+}
+
+/// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.
+#[test]
+fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
+    for access in ["$box->items[0]", "$box->items[0][0]"] {
+        expect_error(
+            &format!(
+                "<?php function setv(mixed &$value): void {{}} class Box {{ public mixed $items = [[1]]; }} $box = new Box(); setv({access});"
+            ),
+            "must be passed a variable",
+        );
+    }
+}
+
+/// Builds the non-null PHP array contract without assuming indexed or associative storage.
+fn declared_array_contract() -> PhpType {
+    PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+    ])
+}
+
 /// Verifies that `??=` with no right-hand side expression produces an "Unexpected token" error.
 /// Input: `$x ??=;` — the semicolon terminates the expression with no RHS.
 #[test]
@@ -54,6 +107,38 @@ fn test_error_by_reference_foreach_rejects_iterable_type() {
         "<?php function f(iterable $items) { foreach ($items as &$value) {} }",
         "by-reference foreach over Iterator/IteratorAggregate objects",
     );
+}
+
+/// Builtin iterator-interface parameters are valid foreach sources in every canonical spelling.
+#[test]
+fn test_foreach_accepts_builtin_iterator_interface_parameter_types() {
+    let sources = [
+        "<?php function walk(Traversable $items): void { foreach ($items as $value) {} }",
+        "<?php function walk(Iterator $items): void { foreach ($items as $value) {} }",
+        "<?php function walk(IteratorAggregate $items): void { foreach ($items as $value) {} }",
+        r"<?php function walk(\tRaVeRsAbLe $items): void { foreach ($items as $value) {} }",
+        r"<?php namespace Domain; function walk(\TrAvErSaBlE $items): void { foreach ($items as $value) {} }",
+    ];
+    for source in sources {
+        assert!(
+            check_source(source).is_ok(),
+            "builtin iterator interface should be foreach-compatible: {source}",
+        );
+    }
+}
+
+/// Nominal objects and namespaced lookalikes do not inherit builtin Traversable behavior.
+#[test]
+fn test_foreach_rejects_non_iterable_objects_and_namespaced_traversable_lookalikes() {
+    for source in [
+        "<?php class Plain {} function walk(Plain $items): void { foreach ($items as $value) {} }",
+        r"<?php namespace Domain; interface Traversable {} function walk(Traversable $items): void { foreach ($items as $value) {} }",
+    ] {
+        expect_error(
+            source,
+            "to implement Iterator or IteratorAggregate",
+        );
+    }
 }
 
 /// Verifies that by-reference foreach over a parameter typed `Iterator` is rejected.
@@ -121,7 +206,7 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
 fn test_error_mixed_rejected_at_object_parameter_boundary() {
     expect_error(
         "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
-        "Function 'take' parameter $box expects Object(\"Box\"), got Mixed",
+        "Function 'take' parameter $box expects Box, got mixed",
     );
 }
 
@@ -130,7 +215,7 @@ fn test_error_mixed_rejected_at_object_parameter_boundary() {
 fn test_error_mixed_rejected_at_array_return_boundary() {
     expect_error(
         "<?php function relay(mixed $value): array { return $value; }",
-        "Function 'relay' return type expects Array(Mixed), got Mixed",
+        "Function 'relay' return type expects array, got mixed",
     );
 }
 
@@ -497,9 +582,9 @@ fn test_null_coalesce_merges_mismatched_arms_to_mixed_in_checker() {
 
 }
 
-/// Verifies generic array return hint keeps specific method and property types.
+/// Declared array method returns and inferred properties retain the boxed PHP array contract.
 #[test]
-fn test_generic_array_return_hint_keeps_specific_method_and_property_types() {
+fn test_declared_array_return_hint_preserves_method_and_property_contracts() {
     let result = check_source_full(
         r#"<?php
 class Entry {
@@ -537,24 +622,18 @@ class Wad {
         .find(|(name, _)| name == "entries")
         .map(|(_, ty)| ty.clone())
         .expect("missing entries property");
-    assert_eq!(
-        entries_ty,
-        PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))
-    );
+    assert_eq!(entries_ty, declared_array_contract());
 
     let load_entries = wad
         .methods
         .get(&elephc::names::php_symbol_key("loadEntries"))
         .expect("missing loadEntries");
-    assert_eq!(
-        load_entries.return_type,
-        PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))
-    );
+    assert_eq!(load_entries.return_type, declared_array_contract());
 }
 
-/// Verifies generic array param and return hints keep specific string array types.
+/// Array declarations do not specialize their ABI to the layout of one string-array call site.
 #[test]
-fn test_generic_array_param_and_return_hints_keep_specific_string_array_types() {
+fn test_declared_array_param_and_return_hints_preserve_layout_independent_contracts() {
     let result = check_source_full(
         r#"<?php
 function paint(string $name): string {
@@ -570,6 +649,7 @@ function loadNames(): array {
 }
 
 echo pickSecond(loadNames());
+echo pickSecond(["first" => "foo", 1 => "bar"]);
 "#,
     )
     .expect("expected source to type-check");
@@ -578,16 +658,13 @@ echo pickSecond(loadNames());
         .functions
         .get("pickSecond")
         .expect("missing pickSecond signature");
-    assert_eq!(
-        pick_second.params[0].1,
-        PhpType::Array(Box::new(PhpType::Str))
-    );
+    assert_eq!(pick_second.params[0].1, declared_array_contract());
 
     let load_names = result
         .functions
         .get("loadNames")
         .expect("missing loadNames signature");
-    assert_eq!(load_names.return_type, PhpType::Array(Box::new(PhpType::Str)));
+    assert_eq!(load_names.return_type, declared_array_contract());
 }
 
 // --- Include/Require errors ---
@@ -623,7 +700,7 @@ class Box {
 }
 $box = new Box("bad");
 "#,
-        "Constructor 'Box::__construct' parameter $value expects Int, got Str",
+        "Constructor 'Box::__construct' parameter $value expects int, got string",
     );
 }
 
@@ -638,7 +715,7 @@ class Box {
     public function __construct(public Expected $value = new Unrelated()) {}
 }
 "#,
-        "Method parameter $value expects Object(\"Expected\"), got Object(\"Unrelated\")",
+        "Method parameter $value expects Expected, got Unrelated",
     );
 }
 
@@ -666,14 +743,25 @@ class Foo {
 }
 function unused_class_constant_default(Foo $value = Foo::BAR): void {}
 "#,
-        "Function 'unused_class_constant_default' parameter $value expects Object(\"Foo\"), got Int",
+        "Function 'unused_class_constant_default' parameter $value expects Foo, got int",
     );
 }
 
-/// Verifies plain property enum case defaults remain outside the supported EIR surface.
+/// Issue #566: a directly declared property may take an enum case default, as PHP allows.
+///
+/// This replaces `test_error_plain_property_enum_case_default_remains_unsupported`, which
+/// pinned the rejection PR #565 left in place. The rejection was a SCHEMA-TIME artifact rather
+/// than a rule: enum cases do not exist while class schemas are being built, so
+/// `infer_expr_type_syntactic` answered `Str` for `Level::Low` and the declared `Object("Level")`
+/// slot refused it. Constructor promotion was already accepted only because its default is a
+/// parameter default, and parameters already deferred scoped constants to a pass that could
+/// resolve them.
+///
+/// The runtime half is in `codegen::enum_case_property_defaults`; this asserts the checker no
+/// longer rejects the form.
 #[test]
-fn test_error_plain_property_enum_case_default_remains_unsupported() {
-    expect_error(
+fn test_plain_property_enum_case_default_is_accepted() {
+    expect_no_error(
         r#"<?php
 enum Level {
     case Low;
@@ -682,7 +770,43 @@ class Config {
     public Level $level = Level::Low;
 }
 "#,
-        "Property Config::$level default expects Object(\"Level\"), got Str",
+    );
+}
+
+/// The deferral must not become an acceptance: an enum case that does not exist is still a
+/// hard error, now reported by the pass that can actually tell.
+#[test]
+fn test_error_property_default_names_a_missing_enum_case() {
+    expect_error(
+        r#"<?php
+enum Level {
+    case Low;
+}
+class Config {
+    public Level $level = Level::Missing;
+}
+"#,
+        "Undefined enum case: Level::Missing",
+    );
+}
+
+/// And a scoped constant that resolves to a SCALAR is still refused for an object slot — the
+/// deferral changes when the default is judged, not what counts as compatible.
+#[test]
+fn test_error_property_default_scalar_class_constant_in_object_slot() {
+    expect_error(
+        r#"<?php
+enum Level {
+    case Low;
+}
+class Holder {
+    const NAME = 'plain';
+}
+class Config {
+    public Level $level = Holder::NAME;
+}
+"#,
+        "Property Config::$level default expects Level, got string",
     );
 }
 
@@ -866,6 +990,19 @@ fn test_error_pointer_loose_comparison_is_rejected() {
 
 // --- FFI error tests ---
 
+/// Verifies `$this` inside a static closure is rejected when it sits in a MIXED array literal.
+///
+/// The check is a traversal, so a literal shape it does not visit lets forbidden PHP through.
+/// `[...$this->items, "k" => 1]` reached lowering instead of the diagnostic, and failed there
+/// with an EIR validation error rather than the message the user needs.
+#[test]
+fn test_error_static_closure_uses_this_inside_a_mixed_array_literal() {
+    expect_error(
+        "<?php class C { public array $items = [1, 2]; public function bad() { return static function () { return [...$this->items, \"k\" => 1]; }; } }",
+        "Cannot use $this inside a static closure",
+    );
+}
+
 /// Verifies that using `$this` inside a static closure via a short ternary expression is rejected.
 /// Input: `class C { public int $count = 5; public function bad() { $f = static fn($x) => $x ?: $this->count; } }`
 #[test]
@@ -1008,6 +1145,154 @@ fn test_heterogeneous_null_coalesce_array_merge_widens_element_type() {
     );
 }
 
+/// Classes shared by the `??` result-type tests below. `Repo` declares `Implementation|false`
+/// returns on an instance and a static method, and `Legacy` leaves its return undeclared.
+const NULL_COALESCE_CLASSES: &str = "interface Contract {} \
+    class Implementation implements Contract {} \
+    class Other implements Contract {} \
+    class Repo { \
+        public function find(): Implementation|false { return false; } \
+        public static function first(): Implementation|false { return false; } \
+    } \
+    class Legacy { \
+        public function find() { if (rand(0, 1) === 1) { return new Implementation(); } } \
+    } ";
+
+/// Returns the checker type of the top-level variable `$r` in a program built on
+/// [`NULL_COALESCE_CLASSES`].
+fn null_coalesce_result(body: &str) -> Option<PhpType> {
+    let result = check_source_full(&format!("<?php {NULL_COALESCE_CLASSES}{body}"))
+        .expect("expected source to type-check");
+    result.global_env.get("r").cloned()
+}
+
+/// `??` over an operand that can never be null keeps that operand's type: a call whose target
+/// declares `Implementation|false` never answers null, so the default is dead code and must not
+/// widen the result (issue #1462). Functions, instance methods, static methods and a fresh
+/// object all qualify.
+#[test]
+fn test_null_coalesce_drops_an_unreachable_default() {
+    let implementation_or_false = PhpType::Union(vec![
+        PhpType::Object("Implementation".to_string()),
+        PhpType::False,
+    ]);
+    for body in [
+        "function find(): Implementation|false { return false; } $r = find() ?? new Other();",
+        "$repo = new Repo(); $r = $repo->find() ?? new Other();",
+        "$r = Repo::first() ?? new Other();",
+    ] {
+        assert_eq!(
+            null_coalesce_result(body),
+            Some(implementation_or_false.clone()),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        null_coalesce_result("$r = new Implementation() ?? new Other();"),
+        Some(PhpType::Object("Implementation".to_string()))
+    );
+}
+
+/// Operands whose value may be absent keep the default in the join (issue #1462): a variable may
+/// be unassigned or unset on some path, which the checker does not model, a function or method
+/// without a declared return may fall off its end and answer null, and a builtin result type can
+/// omit the null it returns.
+#[test]
+fn test_null_coalesce_keeps_the_default_of_storage_and_undeclared_calls() {
+    let other = PhpType::Object("Other".to_string());
+    for body in [
+        "function find(): Implementation|false { return false; } \
+         if ($argc > 1) { $x = find(); } $r = $x ?? new Other();",
+        "function find() { if (rand(0, 1) === 1) { return new Implementation(); } } \
+         $r = find() ?? new Other();",
+        "$legacy = new Legacy(); $r = $legacy->find() ?? new Other();",
+        "$list = [new Implementation()]; $r = array_pop($list) ?? new Other();",
+    ] {
+        let result = null_coalesce_result(body);
+        assert!(
+            matches!(&result, Some(PhpType::Union(members)) if members.contains(&other)),
+            "{body}: {result:?}"
+        );
+    }
+}
+
+/// An arm that already mixes an object with a non-false scalar joins as a union instead of
+/// `mixed`: `?(Contract|int) ?? new Implementation()` is `Contract|int`, because `Contract`
+/// absorbs the `Implementation` it accepts, and `?(Contract|int) ?? 'none'` is
+/// `Contract|int|string` (issue #1463).
+#[test]
+fn test_null_coalesce_joins_object_and_scalar_arms_as_a_union() {
+    let program = format!(
+        "<?php {NULL_COALESCE_CLASSES}\
+         function pick(Contract|int|null $v) {{ return $v ?? new Implementation(); }} \
+         function label(Contract|int|null $v) {{ return $v ?? 'none'; }}"
+    );
+    let result = check_source_full(&program).expect("expected source to type-check");
+    assert_eq!(
+        result.functions.get("pick").map(|sig| sig.return_type.clone()),
+        Some(PhpType::Union(vec![
+            PhpType::Object("Contract".to_string()),
+            PhpType::Int,
+        ]))
+    );
+    assert_eq!(
+        result.functions.get("label").map(|sig| sig.return_type.clone()),
+        Some(PhpType::Union(vec![
+            PhpType::Object("Contract".to_string()),
+            PhpType::Int,
+            PhpType::Str,
+        ]))
+    );
+}
+
+/// `$this` is never null, so coalescing it cannot add the fallback object's type.
+#[test]
+fn test_null_coalesce_this_keeps_the_receiver_type() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} class SelfRepo {{ public function pick() {{ return $this ?? new Other(); }} }}"
+    )).expect("this coalesce must type-check");
+    assert_eq!(result.classes["SelfRepo"].methods["pick"].return_type,
+        PhpType::Object("SelfRepo".to_string()));
+}
+
+/// All lexical static-call spellings trust the same declared non-null return contract.
+#[test]
+fn test_null_coalesce_lexical_static_calls_drop_the_default() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} class ChildRepo extends Repo {{ \
+         public function pickSelf() {{ return self::first() ?? new Other(); }} \
+         public function pickParent() {{ return parent::first() ?? new Other(); }} \
+         public function pickStatic() {{ return static::first() ?? new Other(); }} }}"
+    )).expect("lexical static coalesces must type-check");
+    let expected = PhpType::Union(vec![PhpType::Object("Implementation".to_string()), PhpType::False]);
+    for method in ["pickself", "pickparent", "pickstatic"] {
+        assert_eq!(result.classes["ChildRepo"].methods[method].return_type, expected, "{method}");
+    }
+}
+
+/// An unset parameter and an absent array key cannot make their fallback unreachable.
+#[test]
+fn test_null_coalesce_unset_parameter_and_missing_key_keep_fallback_types() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} \
+         function replaced(Implementation $value) {{ unset($value); return $value ?? new Other(); }} \
+         $list = [new Implementation()]; $r = $list[99] ?? new Other();"
+    )).expect("absent storage coalesces must type-check");
+    assert_eq!(result.functions["replaced"].return_type, PhpType::Object("Other".to_string()));
+    assert_eq!(result.global_env.get("r"), Some(&PhpType::Union(vec![
+        PhpType::Object("Implementation".to_string()), PhpType::Object("Other".to_string()),
+    ])));
+}
+
+/// A pure nullable interface arm joined with a scalar remains Mixed rather than an object union.
+#[test]
+fn test_null_coalesce_nullable_contract_and_string_remains_mixed() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} function label(?Contract $value) {{ return $value ?? 'none'; }}"
+    )).expect("nullable interface coalesce must type-check");
+    assert_eq!(result.functions["label"].return_type, PhpType::Mixed);
+}
+
 /// An empty branch contributes no element values, so `[]` merged with
 /// `array<int>` retains `array<int>` instead of widening unnecessarily.
 #[test]
@@ -1037,15 +1322,15 @@ fn test_heterogeneous_match_assoc_merge_stays_array() {
     );
 }
 
-/// Guards issue #587's fix against over-widening: a merge of non-array scalar arms
-/// (`1` vs `"a"`) must still type as `mixed`, so an array-only use like `array_sum()`
-/// stays rejected.
+/// Scalar match arms remain Mixed, and aggregate use validates their actual tag at runtime.
 #[test]
-fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
-    expect_error(
+fn test_scalar_match_merge_stays_mixed_with_checked_array_use() {
+    let tokens = tokenize(
         "<?php $r = match($argc) { 1 => 1, default => \"a\" }; echo array_sum($r);",
-        "array_sum() argument must be array",
-    );
+    ).expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let result = types::check(&ast).expect("Mixed aggregates are validated at runtime");
+    assert_eq!(result.global_env.get("r"), Some(&PhpType::Mixed));
 }
 
 /// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
@@ -1156,7 +1441,34 @@ fn test_error_int_parameter_rejects_out_of_range_float_constant() {
 fn test_error_by_ref_parameter_is_not_coerced() {
     expect_error(
         "<?php function f(string &$s) { $s = $s . \"!\"; } $n = 42; f($n);",
-        "Function 'f' parameter $s expects Str, got Int",
+        "Function 'f' parameter $s expects string, got int",
+    );
+}
+
+/// A typed by-reference parameter cannot reinterpret an associative entry's boxed Mixed cell.
+#[test]
+fn test_error_typed_by_ref_parameter_rejects_associative_element_storage() {
+    expect_error(
+        "<?php function increment(int &$value): void {} $a = [\"k\" => 1]; increment($a[\"k\"]);",
+        "cannot bind typed by-reference storage from a mixed or hash-backed value",
+    );
+}
+
+/// A typed by-reference parameter cannot reinterpret a heterogeneous indexed element cell.
+#[test]
+fn test_error_typed_by_ref_parameter_rejects_mixed_indexed_element_storage() {
+    expect_error(
+        "<?php function suffix(string &$value): void {} $a = [1, \"s\"]; suffix($a[1]);",
+        "cannot bind typed by-reference storage from a mixed or hash-backed value",
+    );
+}
+
+/// A typed by-reference parameter cannot alias a local whose frame slot is boxed Mixed.
+#[test]
+fn test_error_typed_by_ref_parameter_rejects_mixed_local_storage() {
+    expect_error(
+        "<?php function increment(int &$value): void {} $value = $argc > 1 ? 1 : \"s\"; increment($value);",
+        "cannot bind typed by-reference storage from a mixed or hash-backed value",
     );
 }
 
@@ -1243,7 +1555,7 @@ fn test_error_strict_types_rejects_numeric_string_into_float_parameter() {
 fn test_error_strict_types_rejects_method_argument() {
     expect_error(
         "<?php declare(strict_types=1); class C { public function m(int $i) { return $i; } } $c = new C(); echo $c->m(true);",
-        "Method C::m parameter $i expects Int, got Bool",
+        "Method C::m parameter $i expects int, got bool",
     );
 }
 
@@ -1263,7 +1575,56 @@ fn test_error_strict_types_rejects_closure_argument() {
 fn test_error_strict_types_rejects_variadic_element() {
     expect_error(
         "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } echo f(true);",
-        "variadic parameter $xs expects Int, got Bool",
+        "variadic parameter $xs expects int, got bool",
+    );
+}
+
+/// Handing the same function out as a callable must not relax its declared element type.
+///
+/// A descriptor-reachable collector is STORED as `array<mixed>` so the invoker may hand it a
+/// named tail as a hash, and re-deriving the element contract from that storage would turn
+/// `int ...$xs` into an untyped tail. The declaration's element syntax survives the storage move,
+/// and this is the direct call that proves validation still resolves it. `f(...)` appears BEFORE
+/// the bad call so the promotion has already happened when it is checked.
+#[test]
+fn test_error_strict_types_rejects_variadic_element_after_callable_promotion() {
+    expect_error(
+        "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } $g = f(...); echo f(true);",
+        "variadic parameter $xs expects int, got bool",
+    );
+}
+
+/// The same rule on a METHOD collector, whose signature lives in the class table.
+#[test]
+fn test_error_strict_types_rejects_method_variadic_element_after_callable_promotion() {
+    expect_error(
+        "<?php declare(strict_types=1); class Adder { public function add(int ...$xs): int { return array_sum($xs); } } \
+         $adder = new Adder(); $call = $adder->add(...); echo $adder->add(true);",
+        "variadic parameter $xs expects int, got bool",
+    );
+}
+
+/// The same rule on a STATIC method collector, reached through a callable array rather than syntax.
+#[test]
+fn test_error_strict_types_rejects_static_variadic_element_after_callable_array_promotion() {
+    expect_error(
+        "<?php declare(strict_types=1); class Joiner { public static function join(int ...$xs): int { return array_sum($xs); } } \
+         $call = [Joiner::class, 'join']; echo Joiner::join(true);",
+        "variadic parameter $xs expects int, got bool",
+    );
+}
+
+/// A CLOSURE's declared variadic element type is a contract too, and used to be dropped entirely.
+///
+/// A closure value is always a descriptor, so its collector always takes the descriptor
+/// container; the declared `int` is kept beside that storage rather than instead of it. The
+/// signature builder used to push a bare `None`/`false` pair for a closure collector, which
+/// silently accepted anything here.
+#[test]
+fn test_error_strict_types_rejects_closure_variadic_element() {
+    expect_error(
+        "<?php declare(strict_types=1); $f = function (int ...$xs) { return count($xs); }; echo $f(true);",
+        "variadic parameter $xs expects int, got bool",
     );
 }
 
@@ -1317,10 +1678,10 @@ fn test_branch_created_binding_not_killable() {
     expect_error("<?php if ($argc > 1) { $a = 1; } unset($a); $a = \"x\"; echo $a;", "cannot reassign");
 }
 
-/// Reference-aliased locals are never killable.
+/// Unset detaches an ordinary local from aliases that retain the old cell.
 #[test]
-fn test_ref_aliased_local_not_killable() {
-    expect_error("<?php $a = 1; $r =& $a; unset($a); $a = \"x\";", "cannot reassign");
+fn test_ref_aliased_local_can_detach_and_rebind() {
+    expect_no_error("<?php $a = 1; $r =& $a; unset($a); $a = \"x\";");
 }
 
 /// Static locals are never killable.
@@ -1402,43 +1763,40 @@ fn test_a_function_local_sharing_a_global_name_stays_killable() {
     );
 }
 
-/// By-ref closure captures are never killable.
+/// Unset detaches a local name while a by-ref closure capture retains the old cell.
 #[test]
-fn test_by_ref_capture_not_killable() {
-    expect_error("<?php $a = 1; $f = function() use (&$a) { return $a; }; unset($a); $a = \"x\";", "cannot reassign");
-}
-
-/// A local passed to a by-ref parameter is aliased from that point on.
-#[test]
-fn test_by_ref_call_arg_not_killable() {
-    expect_error("<?php function f(&$x) { $x = 2; } $a = 1; f($a); unset($a); $a = \"s\";", "cannot reassign");
-}
-
-/// A BY-REF PARAMETER itself (`active_ref_params`, not an aliased caller-side local) is excluded
-/// from the kill: `unset($x)` on it is a checker no-op, exactly like the pre-feature behavior — a
-/// later read sees the still-bound param and a later incompatible assignment is the old hard
-/// error, not a fresh kill-then-rebind.
-#[test]
-fn test_by_ref_param_unset_is_not_a_kill() {
-    expect_no_error("<?php function f(&$x) { unset($x); echo $x; } $a = 1; f($a);");
-    expect_error(
-        "<?php function f(&$x) { unset($x); $x = \"s\"; } $a = 1; f($a);",
-        "cannot reassign $x from int to string",
+fn test_by_ref_capture_allows_local_detach_and_rebind() {
+    expect_no_error(
+        "<?php $a = 1; $f = function() use (&$a) { return $a; }; unset($a); $a = \"x\";",
     );
 }
 
-/// A BY-REF PARAMETER is also excluded from the straight-line retype: reassigning it to an
-/// incompatible type stays the old hard error in permissive mode, whether the param carries an
-/// explicit type hint or only the type the call site infers.
+/// A local passed to an untyped by-ref parameter is promoted to rebindable boxed Mixed storage.
 #[test]
-fn test_by_ref_param_retype_not_permitted() {
+fn test_untyped_by_ref_call_arg_uses_rebindable_boxed_storage() {
+    expect_no_error("<?php function f(&$x) { $x = 2; } $a = 1; f($a); unset($a); $a = \"s\";");
+}
+
+/// Unsetting an untyped by-ref parameter detaches its local name, so a later assignment may use
+/// fresh local storage without changing the caller's cell.
+#[test]
+fn test_untyped_by_ref_param_unset_and_rebind_detaches_local() {
+    expect_no_error("<?php function f(&$x) { unset($x); echo $x; } $a = 1; f($a);");
+    expect_no_error(
+        "<?php function f(&$x) { unset($x); $x = \"s\"; } $a = 1; f($a);",
+    );
+}
+
+/// A typed by-ref parameter keeps its declared cell ABI, while an untyped parameter uses boxed
+/// Mixed storage and can replace its payload with a value of another PHP type.
+#[test]
+fn test_by_ref_param_retype_follows_declared_storage() {
     expect_error(
         "<?php function f(int &$x) { $x = \"s\"; } $a = 1; f($a);",
         "cannot reassign $x from int to string",
     );
-    expect_error(
+    expect_no_error(
         "<?php function f(&$x) { $x = \"s\"; } $a = 1; f($a);",
-        "cannot reassign $x from int to string",
     );
 }
 
@@ -1449,53 +1807,43 @@ fn test_ref_alias_target_retype_not_permitted() {
     expect_error("<?php $a = 1; $r = &$a; $r = \"s\";", "cannot reassign $r from int to string");
 }
 
-/// A local handed to a callable whose signature the checker cannot resolve is aliased.
+/// A local handed to an unresolved callable is promoted to rebindable boxed Mixed storage.
 ///
-/// The plan's eligibility rule disqualifies a name "passed as an argument to a by-ref parameter
-/// anywhere in the body", and mandates conservatism "when the callee cannot be resolved
-/// statically". `$cb` here is a `callable` parameter with no signature attached, so nothing says
-/// whether its first parameter is by-reference — and if it is, the kill would abandon a slot the
-/// callee still holds a reference into. The branch-divergent pre-scan already disqualifies every
-/// `ClosureCall`/`ExprCall` argument for the same reason.
+/// The runtime descriptor may discover that the parameter is by-reference. Promoting the caller
+/// place preserves that possibility while still allowing PHP's ordinary type-changing assignment,
+/// and `unset()` detaches the local name before a fresh binding is created.
 #[test]
-fn test_unresolved_callable_arg_not_killable() {
-    expect_error(
+fn test_unresolved_callable_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php function g(callable $cb) { $a = 1; $cb($a); unset($a); $a = \"s\"; echo $a; }",
-        "cannot reassign",
     );
 }
 
-/// The same rule for a variable function (`$f = \"sort\"; $f($a);`), whose callee is a string
-/// resolved at runtime: `sort()` binds its argument by reference, and no signature reaches the
-/// call site. Both the `unset` kill and the straight-line retype must step aside.
+/// A string variable callee uses the same boxed caller place because its runtime target may bind
+/// the argument by-reference. Both local detachment and a direct type change remain valid PHP.
 #[test]
-fn test_string_variable_callee_arg_not_killable() {
-    expect_error(
+fn test_string_variable_callee_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php $f = \"sort\"; $a = 1; $f($a); unset($a); $a = \"s\"; echo $a;",
-        "cannot reassign",
     );
-    expect_error(
+    expect_no_error(
         "<?php $f = \"sort\"; $a = 1; $f($a); $a = \"s\"; echo $a;",
-        "cannot reassign",
     );
 }
 
-/// Sibling unknown-callee shapes reach the same rule: a dynamic class static call
-/// (`$c::m($a)`, which desugars to `call_user_func([$c, "m"], $a)`), a dynamic constructor
-/// (`new $c($a)`), and a method call on a `mixed` receiver dispatched over runtime candidates.
+/// Sibling unknown-callee shapes promote simple local arguments to the same rebindable boxed
+/// storage: a dynamic class static call, a dynamic constructor, and a method call on a `mixed`
+/// receiver. After `unset()` detaches the local name, each may create a fresh typed binding.
 #[test]
-fn test_unknown_callee_siblings_not_killable() {
-    expect_error(
+fn test_unknown_callee_siblings_use_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php class C { static function m(&$x) { $x = 2; } } function g() { $a = 1; $c = \"C\"; $c::m($a); unset($a); $a = \"s\"; echo $a; }",
-        "cannot reassign",
     );
-    expect_error(
+    expect_no_error(
         "<?php function g(string $c) { $a = 1; $x = new $c($a); unset($a); $a = \"s\"; echo $a, $x; }",
-        "cannot reassign",
     );
-    expect_error(
+    expect_no_error(
         "<?php class C { function m(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); unset($a); $a = \"s\"; echo $a; }",
-        "cannot reassign",
     );
 }
 
@@ -1523,15 +1871,14 @@ fn test_unknown_callee_does_not_over_reach() {
 /// is narrow — the RFC gives the pipe no by-ref
 /// parameters and the known-signature path rejects one outright — but the conservatism must not
 /// depend on which call syntax reached the callee.
+/// The promoted boxed place makes both subsequent assignment shapes valid.
 #[test]
-fn test_unresolved_pipe_target_arg_not_killable() {
-    expect_error(
+fn test_unresolved_pipe_target_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; unset($a); $a = \"s\"; echo $a, $r; }",
-        "cannot reassign",
     );
-    expect_error(
+    expect_no_error(
         "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; $a = \"s\"; echo $a, $r; }",
-        "cannot reassign",
     );
 }
 
@@ -1658,17 +2005,14 @@ fn test_retype_inside_try_with_throwing_rhs_stays_the_depth_gated_error() {
     );
 }
 
-/// A NAMED by-reference argument (`f(x: $a)`) aliases `$a` exactly like the positional form.
+/// A named untyped by-reference argument (`f(x: $a)`) promotes `$a` to boxed Mixed storage.
 ///
-/// `Checker::record_reference_alias_root` unwraps `ExprKind::NamedArg` on its way to the local, so
-/// the name is excluded from the kill and the `unset` degrades to the pre-feature typing no-op.
-/// The positional twin is `test_by_ref_call_arg_not_killable`; without the unwrap this shape would
-/// silently keep its eligibility while the callee holds a reference to the slot.
+/// The promoted slot remains safe to unset and rebind after the call, matching PHP. The checker
+/// must still keep it out of the ordinary local-kill path because aliases may retain the cell.
 #[test]
-fn test_named_by_ref_call_arg_not_killable() {
-    expect_error(
+fn test_named_untyped_by_ref_call_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php function f(&$x) { $x = 2; } $a = 1; f(x: $a); unset($a); $a = \"s\"; echo $a;",
-        "cannot reassign $a from int to string",
     );
     let result = check_source_full(
         "<?php function f(&$x) { $x = 2; } $a = 1; f(x: $a); echo $a;",
@@ -1687,12 +2031,37 @@ fn test_typed_local_not_killable() {
     expect_error("<?php int $a = 1; unset($a); $a = \"x\";", "cannot reassign");
 }
 
-/// Parameters with a declared type hint are a contract: never killable.
-/// (An untyped parameter stays killable — pin that too.)
+/// A PHP parameter type hint constrains the INCOMING ARGUMENT, not the local afterwards, so a
+/// type-hinted parameter is as killable and as retypable as an untyped one (issue #857).
+/// `function format(float $v): string { $v = (string) $v; return $v; }` is valid PHP that used
+/// to be rejected with `cannot reassign $v from float to string`.
 #[test]
-fn test_typed_param_not_killable() {
-    expect_error("<?php function f(int $a) { unset($a); $a = \"x\"; } f(1);", "cannot reassign");
+fn test_typed_param_is_killable() {
+    expect_no_error("<?php function f(int $a) { unset($a); $a = \"x\"; echo $a; } f(1);");
     expect_no_error("<?php function f($a) { unset($a); $a = \"x\"; echo $a; } f(1);");
+    expect_no_error(
+        "<?php function format(float $v): string { $v = (string) $v; return $v; } echo format(1.5);",
+    );
+}
+
+/// Retyping a type-hinted parameter still warns, exactly as retyping any other local does, and
+/// `--strict-locals` still turns that warning into the hard error.
+#[test]
+fn test_typed_param_retype_warns_and_is_strict_locals_error() {
+    expect_warning(
+        "<?php function format(float $v): string { $v = (string) $v; return $v; } echo format(1.5);",
+        "$v changes type from float to string",
+    );
+    expect_error_strict(
+        "<?php function format(float $v): string { $v = (string) $v; return $v; } echo format(1.5);",
+        "cannot reassign",
+    );
+}
+
+/// Unset detaches a typed by-reference parameter name before a fresh local rebind.
+#[test]
+fn test_typed_by_ref_param_can_detach_and_rebind() {
+    expect_no_error("<?php function f(int &$a) { unset($a); $a = \"x\"; } $n = 1; f($n);");
 }
 
 /// Class properties never reach the local retype paths: pin the declared-property error.
@@ -1700,27 +2069,24 @@ fn test_typed_param_not_killable() {
 fn test_typed_property_stays_strict() {
     expect_error(
         "<?php class C { public string $s = \"a\"; } $c = new C(); $c->s = 5;",
-        "Property C::$s expects Str, got Int",
+        "Property C::$s expects string, got int",
     );
 }
 
-/// A local passed to a METHOD's by-ref parameter is aliased too — that path validates its
-/// arguments from a `FunctionSig`, not from the `FnDecl` the plain-function test exercises.
+/// An untyped method by-ref parameter promotes its argument to rebindable boxed Mixed storage.
 #[test]
-fn test_method_by_ref_call_arg_not_killable() {
-    expect_error(
+fn test_untyped_method_by_ref_call_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php class C { function m(&$x) { $x = 2; } } $c = new C(); $a = 1; $c->m($a); unset($a); $a = \"s\";",
-        "cannot reassign",
     );
 }
 
-/// A local passed to a BUILTIN's by-ref parameter (`sort`, `preg_match`, …) is aliased: the
-/// builtin reaches the local through its storage.
+/// A local passed to a builtin by-reference parameter may still detach from that storage.
+/// After `unset()`, a fresh binding may have a different PHP type.
 #[test]
-fn test_builtin_by_ref_call_arg_not_killable() {
-    expect_error(
+fn test_builtin_by_ref_call_arg_can_detach_and_rebind() {
+    expect_no_error(
         "<?php $a = [3, 1]; sort($a); unset($a); $a = \"s\";",
-        "cannot reassign",
     );
 }
 
@@ -1744,13 +2110,11 @@ fn test_branch_created_list_unpack_target_not_killable() {
     );
 }
 
-/// A local passed to a by-REFERENCE variadic (`&...$xs`) is aliased just like one bound to a
-/// regular by-ref parameter: the callee can write back through the collected slot.
+/// An untyped by-reference variadic promotes each argument to rebindable boxed Mixed storage.
 #[test]
-fn test_by_ref_variadic_call_arg_not_killable() {
-    expect_error(
+fn test_untyped_by_ref_variadic_call_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php function f(&...$xs) { $xs[0] = 9; } $a = 1; f($a); unset($a); $a = \"s\";",
-        "cannot reassign",
     );
 }
 
@@ -1762,13 +2126,13 @@ fn test_by_value_variadic_call_arg_stays_killable() {
     );
 }
 
-/// `foreach ($arr as &$v)` takes references into `$arr`'s elements, so `$arr` is aliased and
-/// its binding can no longer be killed.
+/// `foreach ($arr as &$v)` may leave `$v` referring to an element cell, but `unset($arr)` still
+/// detaches the iterable's local name. The surviving element reference does not prevent `$arr`
+/// from receiving a fresh binding.
 #[test]
-fn test_by_ref_foreach_iterable_not_killable() {
-    expect_error(
+fn test_by_ref_foreach_iterable_can_detach_and_rebind() {
+    expect_no_error(
         "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } unset($arr); $arr = \"gone\";",
-        "cannot reassign",
     );
 }
 
@@ -1780,19 +2144,11 @@ fn test_by_value_foreach_iterable_stays_killable() {
     );
 }
 
-/// The by-ref foreach VALUE variable is reference-aliased too, so a name already bound at
-/// depth 0 before the loop cannot be killed by a later `unset`.
-///
-/// `foreach ($arr as &$v)` binds `$v` to each element's storage; lowering ref-binds `$v`'s slot
-/// (`mark_ref_bound_local`) and then refuses to abandon it, so a kill the checker approved would
-/// leave the checker believing the binding ended while the slot still aliases `$arr`'s element.
-/// The pre-loop binding is what makes the conditional-depth rule miss this: `$v` is at depth 0
-/// from the assignment ABOVE the loop, not from the loop.
+/// Unset after a by-reference foreach detaches the iteration variable from the final element.
 #[test]
-fn test_by_ref_foreach_value_var_not_killable() {
-    expect_error(
+fn test_by_ref_foreach_value_var_can_detach_and_rebind() {
+    expect_no_error(
         "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as &$v) { } unset($v); $v = \"s\"; echo $v;",
-        "cannot reassign $v from int to string",
     );
 }
 
@@ -1902,18 +2258,14 @@ fn test_by_value_foreach_value_var_retype_still_warns() {
     );
 }
 
-/// Control: a by-ref `foreach` value variable the LOOP itself binds was already excluded before
-/// this fix — it is bound at conditional depth 1, so it never had a depth-0 binding to re-type —
-/// and the permanent alias marking must leave that answer unchanged in both modes.
+/// A fresh by-reference loop binding uses the widened Mixed entry shape, so a later assignment
+/// can change the last referenced element's PHP type. Pre-bound typed references remain covered
+/// by `test_by_ref_foreach_value_var_retype_still_errors` above.
 #[test]
-fn test_loop_bound_by_ref_foreach_value_var_retype_still_errors() {
-    expect_error(
-        "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"s\"; echo $v;",
-        "cannot reassign $v from int to string",
-    );
-    expect_error_strict(
-        "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"s\"; echo $v;",
-        "cannot reassign $v from int to string",
+fn test_fresh_loop_bound_by_ref_foreach_value_var_can_change_type() {
+    assert!(
+        check_source("<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"s\"; echo $v;")
+            .is_ok()
     );
 }
 
@@ -1929,32 +2281,35 @@ fn test_by_ref_foreach_value_var_is_never_mixed_marked() {
     expect_error_strict(src, "cannot reassign $v from int to string");
 }
 
-/// A kill site a SUPERSEDED checker pass recorded must not survive into `CheckResult`.
+/// A late-discovered by-reference callable keeps the final pass's detach decision.
 ///
 /// The checker walks the top level twice (`check_types_impl`: an initial pass, then a final one
 /// after method bodies stabilize). Here the first pass cannot yet know that `$g` holds a closure
-/// with a BY-REFERENCE parameter — `make()`'s return type is only inferred by
-/// `type_check_methods_until_stable`, which runs between the two passes — so it records no
-/// reference alias for `$a`, judges `unset($a)` killable, and records a kill site. The final pass
-/// does know, refuses the kill, and leaves `$a` bound (which is why `$a = 5` merges silently
-/// instead of erroring). Only the final pass's decision may reach EIR lowering: acting on the
-/// stale one would abandon the frame slot the closure still holds a reference to.
+/// with a by-reference parameter. The final pass learns that signature, promotes `$a` to boxed
+/// Mixed storage, and retains the `unset()` binding kill. Lowering can therefore detach the local
+/// name while any escaped reference continues to point at the old cell.
 #[test]
-fn test_superseded_pass_kill_site_does_not_reach_the_result() {
+fn test_late_discovered_by_ref_callable_keeps_final_detach_site() {
     let result = check_source_full(
         "<?php class C { public function make() { return function (&$x) { $x = 2; }; } } \
          $o = new C(); $a = 1; $g = $o->make(); $g($a); unset($a); $a = 5; echo $a;",
     )
     .expect("fixture should type-check");
+    assert_eq!(
+        result.local_bind_kill_sites.len(),
+        1,
+        "the final pass must preserve the detach site for the promoted caller place"
+    );
     assert!(
-        result.local_bind_kill_sites.is_empty(),
-        "a superseded pass's kill site survived into CheckResult: {:?}",
-        result.local_bind_kill_sites
+        result
+            .boxed_reference_promotion_sites
+            .values()
+            .any(|names| names.contains("a")),
+        "the final pass must promote the late-discovered by-reference argument"
     );
 }
 
-/// The same program with the late-discovered alias REMOVED still records its kill site, so the
-/// test above is pinning cross-pass staleness rather than a checker that stopped killing.
+/// The by-value twin also records its detach site, but needs no caller-place promotion.
 #[test]
 fn test_final_pass_kill_site_still_reaches_the_result() {
     let result = check_source_full(
@@ -2828,32 +3183,13 @@ fn test_concatenation_evidence_does_not_survive_a_disqualifying_write() {
 /// mixed-storage path.
 ///
 /// A lowering fixture that quietly fell out of the marking would still compile and print the
-/// right answer for the branch the harness happens to take (`argc == 1`), so "it passes" proves
-/// nothing on its own. Each source below is the VERBATIM fixture text; the assertion is that the
-/// checker really marked it.
+/// right answer for the arms the harness runs, so "it passes" proves nothing on its own. The
+/// sources come from `locals_retype_fixtures`, the module the end-to-end fixtures compile, so
+/// a new fixture or an edited body cannot leave a stale copy here (issue #787); the assertion is
+/// that the checker really marked each one.
 #[test]
 fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
-    for source in [
-        "<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;",
-        "<?php $a = 41; if ($argc > 0) { $a = \"ciao\"; } echo $a;",
-        "<?php $a = 41; if ($argc > 5) { $a = \"ciao\"; } echo $a;",
-        "<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a = \"s\" . $i; } echo $a;",
-        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\"; } echo strlen($a);",
-        "<?php\nif ($argc > 1) { $a = 42; } else { $a = \"hello\"; }\necho strlen($a), \"|\", strtoupper($a), \"|\", gettype($a), \"|\";\nvar_dump(is_string($a));",
-        "<?php $a = 123456789; for ($i = 1; $i < $argc; $i++) { $a = \"s\"; } var_dump($a);",
-        "<?php\nfunction q() { global $a; $a = 42; }\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\necho $a, \"|\";\nq();\necho $a, \"|\";\nvar_dump($a);",
-        "<?php\nclass W { public function w() { global $a; $a = 42; } }\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\necho $a, \"|\";\n(new W())->w();\necho $a, \"|\";\nvar_dump($a);",
-        "<?php $a = 0; for ($i = 0; $i < $argc + 3; $i++) { $a = \"s\" . $i; } echo $a;",
-        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\" . $argc; } echo $a;",
-        "<?php\nif ($argc > 1) { $m = 1; } else { $m = \"z\"; }\n$f = function (int $n) use ($m) {\n    if ($n > 1) { $m = 0; } else { $m = \"s\"; }\n    return $m;\n};\nvar_dump($f($argc));\n$g = function () use ($m) { return $m; };\nvar_dump($g());",
-        "<?php\nfunction q() { global $a; var_dump($a); }\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\nq();\n$a = 42;\nq();",
-        "<?php\n$w = function () { global $a; $a = 42; };\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\necho $a, \"|\";\n$w();\necho $a, \"|\";",
-        "<?php\nif ($argc > 1) { $a = 42; } else { $a = \"hello\"; }\n$a = 99;\necho strlen($a);",
-        "<?php\nif ($argc > 1) { $a = 42; } else { $a = \"hello\"; }\n$a = 99;\necho str_repeat($a, 2), \"|\", strlen($a), \"|\", strtoupper($a), \"|\", gettype($a), \"|\";\nvar_dump($a);",
-        "<?php\n$a = 0;\nif ($argc > 1) { $a = \"s\" . $argc; }\n$a = 5;\necho strlen($a), \"|\", strtoupper($a), \"|\";\nvar_dump($a);",
-        "<?php\nfunction f(int $n) {\n    if ($n > 1) { $a = 42; } else { $a = \"hello\"; }\n    $a = 7;\n    return strlen($a) . \"|\" . strtoupper($a) . \"|\" . gettype($a);\n}\necho f($argc), \"\\n\";\nif ($argc > 1) { $c = 1; } else { $c = \"x\"; }\n$c = 3;\nswitch ($c) { case 3: echo \"three|\"; break; default: echo \"other|\"; }\necho ($c == 3 ? \"eq\" : \"ne\"), \"|\", $c + 1, \"|\";\nvar_dump($c);",
-        "<?php $a = 0; switch ($argc) { case 1: echo \"one|\"; default: $a = \"ciao\" . $argc; } echo $a, \"|\"; var_dump($a);",
-    ] {
+    for source in crate::locals_retype_fixtures::MIXED_STORAGE_FIXTURES.iter().copied() {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
         assert!(
@@ -2905,36 +3241,7 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
 ///   entry here.
 #[test]
 fn test_every_lowering_fixture_takes_the_retype_path() {
-    for source in [
-        "<?php $a = $argc; $a = \"ciao\"; echo $a;",
-        "<?php $a = \"ciao\" . $argc; $a = 7; echo $a;",
-        "<?php $a = $argc; $a = \"n=\" . $a; echo $a;",
-        "<?php $a = \"x\"; for ($i = 0; $i < $argc; $i++) { $a .= \"y\"; } $a = 7; echo $a;",
-        "<?php $a = $argc; $f = function() use ($a) { return $a; }; $a = \"x\"; echo $f() . $a;",
-        "<?php $a = 3; $a = \"ciao\"; echo $a;",
-        "<?php $a = \"s\" . $argc; if ($argc > 1) { unset($a); } $a = 7; echo $a;",
-        "<?php $x = $argc; $x .= \"a\"; echo $x;",
-        "<?php $a = [1, $argc]; $a = \"str\" . $argc; echo $a;",
-        "<?php\nclass Box {\n    public int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    public function __destruct() { echo \"bye|\"; }\n}\n$o = new Box($argc);\necho $o->v, \"|\";\n$o = \"gone\" . $argc;\necho $o;",
-        "<?php\nclass Box {\n    public int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    public function __destruct() { echo \"bye|\"; }\n}\n$x = $argc;\necho $x, \"|\";\n$x = new Box($argc);\necho $x->v;",
-        "<?php\nfunction probe(int $n): string {\n    $a = $n;\n    $a = \"ciao\" . $n;\n    return $a;\n}\necho probe($argc);",
-        "<?php\nclass Box {\n    public int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    public function __destruct() { echo \"bye|\"; }\n}\nfunction probe(int $n): string {\n    $o = new Box($n);\n    $arr = [1, $n];\n    echo $o->v, \"|\", $arr[1], \"|\";\n    $o = \"s\" . $n;\n    $arr = \"t\" . $n;\n    return $o . $arr;\n}\necho probe($argc);",
-        "<?php\nfunction probe($a, int $n): string {\n    $a = \"grown\" . $n;\n    return $a;\n}\necho probe([1, 2], $argc);",
-        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; $q = \"s\"; echo \"|\", $q;",
-        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; echo \"|\", $q;",
-        "<?php function w() { global $a; $a = 5; } $a = \"x\"; $a = 2; w(); echo $a;",
-        "<?php\n$a = [1, $argc];\n$b = $argc;\n$b = $argc > 0 ? \"yes\" : \"no\";\n$a[0] = \"s\";\necho $b, \"|\", $a[0], \"|\", $a[1];",
-        "<?php\nfunction probe(int $n): string {\n    $q = \"a\" . $n;\n    if ($n > 5) { echo \"x\"; }\n    $r = $q;\n    $q = 1;\n    return $r . \"|\" . $q;\n}\necho probe($argc);",
-        "<?php $a = $argc; $a = \"ciao\" . $argc; echo strlen($a), \"|\", $a;",
-        "<?php $a = \"n\" . $argc; $a = strlen($a); echo $a;",
-        "<?php $a = \"s\" . $argc; $a = [$a]; echo $a[0];",
-        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } else { echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;",
-        "<?php $q = \"a\" . $argc; switch ($argc) { case 9: echo \"x\"; break; default: echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;",
-        "<?php $q = \"a\" . $argc; try { echo \"t\"; } catch (Exception $e) { echo \"c\"; } echo $q; $q = 1; echo \"|\", $q;",
-        "<?php $n = $argc; if ($argc > 5) { echo \"x\"; } echo $n; $n = \"s\" . $argc; echo \"|\", $n;",
-        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } $q = 1; echo \"|\", $q;",
-        "<?php $v = $argc; $arr = [1, 2, 3]; foreach ($arr as $v) { } $v = \"ciao\" . $argc; echo $v;",
-    ] {
+    for &source in crate::locals_retype_fixtures::RETYPE_FIXTURES {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
         assert!(
@@ -2969,7 +3276,7 @@ fn test_every_lowering_fixture_takes_the_retype_path() {
 /// honest about still taking the boxed path.
 #[test]
 fn test_the_capture_only_lowering_fixture_is_marked_silently() {
-    let source = "<?php\n$m = $argc > 1 ? 1 : \"z\";\n$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = \"s\"; } return $m; };\nvar_dump($f($argc));\n$g = function () use ($m) { return $m; };\nvar_dump($g());";
+    let source = crate::locals_retype_fixtures::SILENT_MIXED_CAPTURE;
     let result = check_source_full(source).expect("fixture must type-check");
     assert!(
         result.mixed_storage_local_names().contains("m"),
@@ -3041,7 +3348,7 @@ fn test_unset_in_a_ternary_arm_records_no_kill() {
 fn test_unset_in_a_ternary_arm_keeps_the_callable_signature() {
     expect_error(
         "<?php $f = function (int $x) { return $x + 1; }; $c = $argc > 0 ? 1 : unset($f); echo $f(\"s\"), $c;",
-        "callable $f parameter $x expects Int, got Str",
+        "callable $f parameter $x expects int, got string",
     );
 }
 
@@ -3138,5 +3445,48 @@ fn test_branch_divergent_marking_survives_an_eval_body() {
         2,
         "both branch assignments must still be recorded in an eval body: {:?}",
         result.mixed_storage_store_sites
+    );
+}
+
+/// A DECLARED local's contract is its declaration, not whatever a guard narrowed it to.
+///
+/// `while ($c !== null)` inserts the narrowed `Node` into the environment for the loop body, so
+/// the reassignment inside was judged against `Node` and rejected the `?Node` the declaration
+/// always allowed. That rejected the cursor idiom every linked structure is written with.
+#[test]
+fn test_declared_nullable_local_accepts_the_cursor_idiom() {
+    expect_no_error(
+        "<?php \
+         class Node { public ?Node $next = null; public int $v = 1; } \
+         $head = new Node(); \
+         ?Node $c = $head; \
+         while ($c !== null) { $c = $c->next; } \
+         echo \"ok\";",
+    );
+}
+
+/// The declaration is still a contract in the other direction: a value it does NOT allow is
+/// rejected exactly as before, because the declared type is only consulted once the ordinary
+/// merge has already failed.
+#[test]
+fn test_error_declared_local_still_rejects_an_incompatible_value() {
+    expect_error(
+        "<?php int $x = 1; $x = \"s\"; echo $x;",
+        "cannot reassign $x from int to string",
+    );
+}
+
+/// The same, one narrowing deeper: an `instanceof` guard narrows a declared union, and the
+/// declaration still permits assigning the other member back.
+#[test]
+fn test_declared_union_local_accepts_the_other_member_after_a_guard() {
+    expect_no_error(
+        "<?php \
+         class A {} \
+         class B {} \
+         $a = new A(); \
+         A|B $x = $a; \
+         if ($x instanceof A) { $x = new B(); } \
+         echo \"ok\";",
     );
 }

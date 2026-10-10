@@ -1,8 +1,8 @@
 ---
 title: "mysqli_more_results()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Reports whether a multi-query has more results waiting."
 sidebar:
-  order: 138
+  order: 139
 ---
 
 ## mysqli_more_results()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_more_results(mixed $mysql): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Reports whether a multi-query has more results waiting.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

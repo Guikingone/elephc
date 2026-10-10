@@ -1,8 +1,8 @@
 ---
 title: "mysqli_select_db()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Selects the default database for the connection."
 sidebar:
-  order: 154
+  order: 155
 ---
 
 ## mysqli_select_db()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_select_db(mixed $mysql, string $database): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Selects the default database for the connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

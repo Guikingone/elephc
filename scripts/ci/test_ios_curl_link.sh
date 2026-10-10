@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 # Builds the pinned native curl chain and an exported curl-using PHP staticlib for one
-# iOS target, then performs the final application-host link. The binary is not run: the
-# device row needs signing/provisioning and the simulator runner need not have a runtime.
+# iOS target, then performs the final application-host link.
+#
+# By default the binary is NOT run: the device row needs signing/provisioning, and a
+# runner need not have a Simulator runtime installed.
+#
+# `--run` adds the live half (issue #873). Compile/link evidence proves libcurl carries
+# AppleSecTrust and that the Security framework resolves; it cannot prove a request
+# actually verifies against the iOS trust store, because default iOS HTTPS leaves
+# CURLOPT_CAINFO unset so SecTrust supplies the anchors. A regression that compiles,
+# links, and still fails TLS is invisible without a transfer. Simulator only.
 
 set -euo pipefail
 
-if [ "$#" -ne 4 ]; then
-  echo "usage: $0 <elephc-target> <rust-target> <sdk> <clang-target>" >&2
+if [ "$#" -lt 4 ] || [ "$#" -gt 5 ]; then
+  echo "usage: $0 <elephc-target> <rust-target> <sdk> <clang-target> [--run]" >&2
   exit 2
 fi
 
@@ -14,6 +22,18 @@ ELEPHC_TARGET="$1"
 RUST_TARGET="$2"
 APPLE_SDK="$3"
 CLANG_TARGET="$4"
+RUN_LIVE=0
+if [ "$#" -eq 5 ]; then
+  if [ "$5" != "--run" ]; then
+    echo "unknown option: $5 (expected --run)" >&2
+    exit 2
+  fi
+  if [ "$ELEPHC_TARGET" != "ios-sim-arm64" ]; then
+    echo "--run is Simulator-only: $ELEPHC_TARGET needs signing and a device to run on" >&2
+    exit 2
+  fi
+  RUN_LIVE=1
+fi
 
 case "$ELEPHC_TARGET:$RUST_TARGET:$APPLE_SDK:$CLANG_TARGET" in
   ios-arm64:aarch64-apple-ios:iphoneos:arm64-apple-ios13.0) ;;
@@ -105,6 +125,11 @@ nm -u "$CURL_ARCHIVE" > "$WORK_DIR/curl.undefined"
 grep -F "SecTrustCreateWithCertificates" "$WORK_DIR/curl.undefined"
 
 cp "$FIXTURE_DIR/main.php" "$FIXTURE_DIR/host.c" "$WORK_DIR/"
+
+# host.c includes <curl/curl.h> to drive the live transfer; the headers sit beside the
+# archive the recipe installed.
+CURL_INCLUDE_DIR="$(cd "$(dirname "$CURL_ARCHIVE")/../include" && pwd)"
+test -f "$CURL_INCLUDE_DIR/curl/curl.h"
 cp "$PROJECT_DIR/examples/curl-get/elephc.toml" "$WORK_DIR/elephc.toml"
 cp "$PROJECT_DIR/examples/curl-get/elephc.lock" "$WORK_DIR/elephc.lock"
 
@@ -118,6 +143,7 @@ xcrun --sdk "$APPLE_SDK" clang \
   -target "$CLANG_TARGET" \
   -isysroot "$SDK_PATH" \
   -I "$WORK_DIR" \
+  -I "$CURL_INCLUDE_DIR" \
   "$WORK_DIR/host.c" \
   "$WORK_DIR/libmain.a" \
   "-Wl,-force_load,$BRIDGE_ARCHIVE" \
@@ -136,3 +162,40 @@ xcrun --sdk "$APPLE_SDK" clang \
 test -s "$WORK_DIR/ios-curl-host"
 xcrun vtool -show-build "$WORK_DIR/ios-curl-host"
 echo "SecTrust curl compile/link succeeded for $ELEPHC_TARGET"
+
+if [ "$RUN_LIVE" -eq 0 ]; then
+  exit 0
+fi
+
+echo "==> running one live HTTPS GET inside the Simulator"
+command -v jq >/dev/null || { echo "jq is required to select a Simulator device" >&2; exit 1; }
+
+# Any available iOS device will do -- the transfer goes through the host's network stack.
+# Restricting to the iOS runtimes keeps a watchOS or tvOS device from being picked, which
+# cannot run an aarch64-apple-ios-sim binary.
+DEVICE_ID="$(xcrun simctl list devices available --json \
+  | jq -r '.devices
+           | to_entries
+           | map(select(.key | test("com\\.apple\\.CoreSimulator\\.SimRuntime\\.iOS")))
+           | map(.value[])
+           | map(select(.isAvailable))
+           | (.[0].udid // empty)')"
+if [ -z "$DEVICE_ID" ]; then
+  echo "no available iOS Simulator device on this runner" >&2
+  exit 1
+fi
+echo "Simulator device: $DEVICE_ID"
+
+# Leave the device as it was found: a runner image ships these pre-created, so booting one
+# is borrowing it rather than owning it.
+WAS_BOOTED="$(xcrun simctl list devices --json | jq -r --arg id "$DEVICE_ID" \
+  '[.devices[][] | select(.udid == $id) | .state] | (.[0] // "Unknown")')"
+if [ "$WAS_BOOTED" != "Booted" ]; then
+  xcrun simctl boot "$DEVICE_ID"
+  shutdown_device() { xcrun simctl shutdown "$DEVICE_ID" >/dev/null 2>&1 || true; cleanup; }
+  trap shutdown_device EXIT
+  xcrun simctl bootstatus "$DEVICE_ID" -b
+fi
+
+xcrun simctl spawn "$DEVICE_ID" "$WORK_DIR/ios-curl-host" --live
+echo "live SecTrust HTTPS transfer succeeded for $ELEPHC_TARGET"

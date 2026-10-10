@@ -43,12 +43,8 @@ pub fn emit_fiber_entry(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.comment("--- runtime: fiber_entry ---");
     emitter.label_global("__rt_fiber_entry");
 
-    // -- ctx mode: re-publish the per-context state pointer --
-    // The fake initial frame is deliberately zeroed, so the first switch into
-    // this fiber restores x28 = 0. Every heap/concat access inside the fiber
-    // goes through the ctx register, so it must be re-installed from the
-    // single _rt_ctx instance before any allocation can run.
-    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    // The initial switch frame already restores the creator's x28. Republishing
+    // main _rt_ctx here would move a worker-local Fiber into a foreign arena.
 
     // -- establish a tiny frame on this fiber's fresh stack --
     emitter.instruction("sub sp, sp, #16");                                     // reserve a minimal scratch frame on the fiber stack
@@ -79,8 +75,10 @@ pub fn emit_fiber_entry(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction(&format!("str x20, [x19, #{}]", FIBER_STATE_OFFSET));   // state = Running
 
     // -- call through the generated Fiber wrapper --
-    let wrapper_load = format!("ldr x10, [x19, #{}]", FIBER_CALLABLE_WRAPPER_OFFSET);
-    emitter.instruction(&wrapper_load);                                         // x10 = generated Fiber entry wrapper pointer
+    emitter.instruction(&format!(
+        "ldr x10, [x19, #{}]",
+        FIBER_CALLABLE_WRAPPER_OFFSET
+    ));                                                                         // x10 = generated Fiber entry wrapper pointer
     emitter.instruction("cbnz x10, __rt_fiber_entry_call_wrapper");             // proceed when the constructor stored a wrapper
     abi::emit_symbol_address(emitter, "x0", "_fiber_msg_unsupported_callable"); // x0 = pointer to the static unsupported-callable message
     emitter.instruction("mov x1, #48");                                         // x1 = error message length in bytes
@@ -92,12 +90,14 @@ pub fn emit_fiber_entry(emitter: &mut Emitter, features: RuntimeFeatures) {
     // -- store the return value into transfer_value (lo half) and mark Terminated --
     abi::emit_load_symbol_to_reg(emitter, "x19", "_fiber_current", 0); // reload x19 — registers were clobbered across the closure call
     emitter.instruction(&format!("str x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // transfer_value.lo = closure return value
-    let clear_transfer_high = format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8);
-    emitter.instruction(&clear_transfer_high);                                  // transfer_value.hi = 0 (raw integer/string default tag)
+    emitter.instruction(&format!(
+        "str xzr, [x19, #{}]",
+        FIBER_TRANSFER_VALUE_OFFSET + 8
+    ));                                                                         // transfer_value.hi = 0 (raw integer/string default tag)
     emitter.instruction(&format!("mov x20, #{}", FIBER_STATE_TERMINATED));      // FIBER_STATE_TERMINATED constant
     emitter.instruction(&format!("str x20, [x19, #{}]", FIBER_STATE_OFFSET));   // state = Terminated
     emit_release_start_args(emitter, "__rt_fiber_entry_return");
-    emit_release_descriptor_argbox(emitter, "__rt_fiber_entry_return");
+    emit_release_descriptor_argbox(emitter, "__rt_fiber_entry_return", false);
     emitter.instruction("mov x0, #0");                                          // no activation record survives a normally terminated Fiber
     emitter.instruction("bl __rt_exception_cleanup_frames");                    // release lingering Fiber-frame cleanup owners before switching back
     abi::emit_load_symbol_to_reg(emitter, "x19", "_fiber_current", 0); // reload Fiber after frame cleanup clobbered caller-saved registers
@@ -129,8 +129,10 @@ pub fn emit_fiber_entry(emitter: &mut Emitter, features: RuntimeFeatures) {
     abi::emit_load_symbol_to_reg(emitter, "x19", "_fiber_current", 0); // x19 = current fiber* (preserved through longjmp via the global)
     emitter.instruction(&format!("str x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // park the escaped Throwable so the caller's helper can re-raise it
     emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // wipe transfer_value.lo so callers do not see stale data
-    let clear_transfer_high = format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8);
-    emitter.instruction(&clear_transfer_high);                                  // wipe transfer_value.hi as well
+    emitter.instruction(&format!(
+        "str xzr, [x19, #{}]",
+        FIBER_TRANSFER_VALUE_OFFSET + 8
+    ));                                                                         // wipe transfer_value.hi as well
     emitter.instruction(&format!("mov x20, #{}", FIBER_STATE_TERMINATED));      // FIBER_STATE_TERMINATED constant — the fiber is done after an escape
     emitter.instruction(&format!("str x20, [x19, #{}]", FIBER_STATE_OFFSET));   // state = Terminated
     emit_release_start_args(emitter, "__rt_fiber_entry_escape");
@@ -144,6 +146,7 @@ pub fn emit_fiber_entry(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_CALLABLE_OFFSET)); // prevent object destruction from releasing the descriptor twice
 
     // -- pop the boundary handler from the chain (longjmp restored SP to setjmp time) --
+    emit_republish_fiber_pending_throw(emitter);
     // Use x10 — emit_store_reg_to_symbol uses x9 internally for the symbol address.
     emitter.instruction("ldr x10, [sp, #0]");                                   // x10 = handler.next
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // restore the previous handler chain head
@@ -168,10 +171,8 @@ fn emit_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.comment("--- runtime: fiber_entry ---");
     emitter.label_global("__rt_fiber_entry");
 
-    // -- ctx mode: re-publish the per-context state pointer (r14) --
-    // The zeroed fake initial frame restores r14 = 0 on the first switch, and
-    // every heap/concat access inside the fiber reads through r14.
-    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    // The initial switch frame already restores the creator's r14; never replace
+    // a worker context with the main context while entering its local coroutine.
 
     // -- establish a tiny frame on this fiber's fresh stack --
     emitter.instruction("push rbp");                                            // preserve a zero-equivalent caller frame pointer slot for walkers
@@ -194,10 +195,14 @@ fn emit_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     // -- mark the fiber Running and load its generated wrapper --
     abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // r12 = pointer to the fiber object that just started
-    let state_running = format!("mov QWORD PTR [r12 + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_RUNNING);
-    emitter.instruction(&state_running);                                        // state = Running
-    let wrapper_load = format!("mov r13, QWORD PTR [r12 + {}]", FIBER_CALLABLE_WRAPPER_OFFSET);
-    emitter.instruction(&wrapper_load);                                         // r13 = generated Fiber entry wrapper pointer
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r12 + {}], {}",
+        FIBER_STATE_OFFSET, FIBER_STATE_RUNNING
+    ));                                                                         // state = Running
+    emitter.instruction(&format!(
+        "mov r13, QWORD PTR [r12 + {}]",
+        FIBER_CALLABLE_WRAPPER_OFFSET
+    ));                                                                         // r13 = generated Fiber entry wrapper pointer
     emitter.instruction("test r13, r13");                                       // did construction provide a supported wrapper?
     emitter.instruction("jne __rt_fiber_entry_call_wrapper");                   // proceed when the constructor stored a wrapper
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_unsupported_callable"); // rdi = pointer to the unsupported-callable message
@@ -218,7 +223,7 @@ fn emit_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     let state_terminated = format!("mov QWORD PTR [r12 + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_TERMINATED);
     emitter.instruction(&state_terminated);                                     // state = Terminated
     emit_release_start_args(emitter, "__rt_fiber_entry_return_x");
-    emit_release_descriptor_argbox(emitter, "__rt_fiber_entry_return_x");
+    emit_release_descriptor_argbox(emitter, "__rt_fiber_entry_return_x", false);
     emitter.instruction("xor edi, edi");                                        // no activation record survives a normally terminated Fiber
     emitter.instruction("call __rt_exception_cleanup_frames");                  // release lingering Fiber-frame cleanup owners before switching back
     abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // reload Fiber after frame cleanup clobbered caller-saved registers
@@ -261,6 +266,8 @@ fn emit_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // reload Fiber after descriptor cleanup clobbered caller-saved registers
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_CALLABLE_OFFSET)); // prevent object destruction from releasing the descriptor twice
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // r10 = handler.next
+    emit_republish_fiber_pending_throw(emitter);
+    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // reload the enclosing handler after publishing the cleanup exception chain
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // restore the previous handler chain head
     emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // r10 = saved diagnostic suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore diagnostic suppression captured at setjmp time
@@ -272,7 +279,7 @@ fn emit_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
 }
 
 /// Releases a descriptor-invoker argument box left parked across a callback unwind.
-fn emit_release_descriptor_argbox(emitter: &mut Emitter, label_prefix: &str) {
+fn emit_release_descriptor_argbox(emitter: &mut Emitter, label_prefix: &str, preserve_exception: bool) {
     let skip = format!("{}_descriptor_argbox_skip", label_prefix);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -280,7 +287,11 @@ fn emit_release_descriptor_argbox(emitter: &mut Emitter, label_prefix: &str) {
             emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // load the dynamic-invoker argument container, if one escaped
             emitter.instruction(&format!("cbz x0, {}", skip));                  // direct wrappers have no descriptor argument container
             emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // clear ownership before the nested release call
-            emitter.instruction("bl __rt_decref_mixed");                        // release the escaped boxed argument array and its retained cells
+            if preserve_exception {
+                abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", "x0");
+            } else {
+                abi::emit_call_label(emitter, "__rt_decref_mixed");
+            }
             emitter.label(&skip);
         }
         Arch::X86_64 => {
@@ -289,19 +300,21 @@ fn emit_release_descriptor_argbox(emitter: &mut Emitter, label_prefix: &str) {
             emitter.instruction("test rax, rax");                               // did this Fiber run through the descriptor wrapper?
             emitter.instruction(&format!("jz {}", skip));                       // direct wrappers have no descriptor argument container
             emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // clear ownership before the nested release call
-            emitter.instruction("call __rt_decref_mixed");                      // release the escaped boxed argument array and its retained cells
+            if preserve_exception {
+                abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", "rax");
+            } else {
+                abi::emit_call_label(emitter, "__rt_decref_mixed");
+            }
             emitter.label(&skip);
         }
     }
 }
 
-/// Clears a descriptor-invoker argument box after that invoker rethrows.
+/// Retires the caller-owned argument box after the ABI-v4 invoker rethrows.
 ///
-/// The runtime callable invoker owns the one caller-owned Mixed argument container on its
-/// exception path and releases it before `longjmp`-ing to the Fiber boundary. The Fiber field
-/// is only a recovery handle for code that does not cross that boundary; releasing it here
-/// would decref the already-freed container. Clear the stale handle so Fiber destruction cannot
-/// attempt a second release.
+/// The invoker borrows its incoming box; the Fiber wrapper must retire it on escape too.
+/// A generator's same physical slot is its last key, so that payload stays with generator cleanup.
+/// Destructor throws join the current pending chain instead of recursively escaping this cleanup.
 fn emit_clear_descriptor_argbox_after_invoker_escape(emitter: &mut Emitter, has_generator: bool) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -312,12 +325,10 @@ fn emit_clear_descriptor_argbox_after_invoker_escape(emitter: &mut Emitter, has_
                 abi::emit_load_symbol_to_reg(emitter, "x10", "_generator_class_id", 0);
                 emitter.instruction("cmp x11, x10");                            // does this slot hold Generator::last_key instead?
                 emitter.instruction(&format!("b.eq {skip}"));                   // leave generator-owned last_key for Generator cleanup
-                let clear_argbox = format!("str xzr, [x19, #{}]", FIBER_DESCRIPTOR_ARGBOX_OFFSET);
-                emitter.instruction(&clear_argbox);                             // clear the stale descriptor-box recovery handle
+                emit_release_descriptor_argbox(emitter, "__rt_fiber_entry_escape_argbox", true);
                 emitter.label(skip);
             } else {
-                let clear_argbox = format!("str xzr, [x19, #{}]", FIBER_DESCRIPTOR_ARGBOX_OFFSET);
-                emitter.instruction(&clear_argbox);                             // clear the stale descriptor-box recovery handle
+                emit_release_descriptor_argbox(emitter, "__rt_fiber_entry_escape_argbox", true);
             }
         }
         Arch::X86_64 => {
@@ -328,15 +339,22 @@ fn emit_clear_descriptor_argbox_after_invoker_escape(emitter: &mut Emitter, has_
                 abi::emit_load_symbol_to_reg(emitter, "r11", "_generator_class_id", 0);
                 emitter.instruction("cmp r8, r11");                             // does this slot hold Generator::last_key instead?
                 emitter.instruction(&format!("je {skip}"));                     // leave generator-owned last_key for Generator cleanup
-                let clear_argbox = format!("mov QWORD PTR [r12 + {}], 0", FIBER_DESCRIPTOR_ARGBOX_OFFSET);
-                emitter.instruction(&clear_argbox);                             // clear the stale descriptor-box recovery handle
+                emit_release_descriptor_argbox(emitter, "__rt_fiber_entry_escape_argbox", true);
                 emitter.label(skip);
             } else {
-                let clear_argbox = format!("mov QWORD PTR [r12 + {}], 0", FIBER_DESCRIPTOR_ARGBOX_OFFSET);
-                emitter.instruction(&clear_argbox);                             // clear the stale descriptor-box recovery handle
+                emit_release_descriptor_argbox(emitter, "__rt_fiber_entry_escape_argbox", true);
             }
         }
     }
+}
+
+/// Moves the accumulated cleanup exception chain into the Fiber's caller-visible pending slot.
+fn emit_republish_fiber_pending_throw(emitter: &mut Emitter) {
+    let fiber = if emitter.target.arch == Arch::AArch64 { "x19" } else { "r12" };
+    let pending = if emitter.target.arch == Arch::AArch64 { "x10" } else { "r10" };
+    abi::emit_load_symbol_to_reg(emitter, fiber, "_fiber_current", 0);
+    abi::emit_load_symbol_to_reg(emitter, pending, "_exc_value", 0);
+    abi::emit_store_to_address(emitter, pending, fiber, FIBER_PENDING_THROW_OFFSET as usize);
 }
 
 /// Releases the start arguments retained at Fiber entry once the callback cannot resume again.

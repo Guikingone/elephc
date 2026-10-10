@@ -18,7 +18,24 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = constants::lower_static_constant_call(ctx, name, args, expr) {
         return value;
     }
-    let canonical = name.as_str();
+    // A generic call names its TEMPLATE in the source; the checker already decided which
+    // monomorphic instantiation this particular call resolves to, from argument types lowering
+    // cannot consult before it has a signature. Swap in that name before anything else looks at
+    // it, so every path below — the introspection shortcuts included — sees an ordinary user
+    // function.
+    // Keyed by the body's loop-storage scope, which the checker spells the same way; the EIR
+    // owner name differs from it inside a closure (`__eir_closure_…`).
+    let instantiated = ctx
+        .generic_call_sites
+        .get(&(ctx.loop_storage_scope.clone(), expr.span))
+        .cloned();
+    let canonical = instantiated.as_deref().unwrap_or_else(|| name.as_str());
+    if let Some(value) = lower_class_introspection(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_get_defined_vars(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
     }
@@ -37,6 +54,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_dynamic_call_user_func_array(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = boxed_user_sort::lower_boxed_usort(ctx, canonical, args, expr) {
+        return value;
+    }
     // A mutating builtin whose by-reference array argument is a property, static property, or
     // container element is rewritten to `$tmp = <place>; f($tmp, ...); <place> = $tmp;` before
     // any builtin fast path runs, so the rewritten call reaches the local-variable
@@ -44,10 +64,17 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = ref_place_args::lower_builtin_ref_place_call(ctx, name, args, expr) {
         return value;
     }
-    if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
-        return value;
+    if php_symbol_key(canonical.trim_start_matches('\\')) == "mb_convert_variables"
+        && args.iter().any(is_spread_arg)
+        && !ctx.functions.contains_key(canonical)
+        && !ctx.extern_functions.contains_key(canonical)
+    {
+        let callback = Expr::new(ExprKind::StringLiteral("mb_convert_variables".to_string()), expr.span);
+        let sig = crate::types::first_class_callable_builtin_sig("mb_convert_variables");
+        return lower_call_user_func_descriptor_invoke(ctx, &callback, args, sig.as_ref(), expr)
+            .expect("mb_convert_variables descriptor invocation");
     }
-    if let Some(value) = lower_static_array_reduce(ctx, canonical, args, expr) {
+    if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_array_walk(ctx, canonical, args, expr) {
@@ -92,8 +119,50 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let sig = call_signature(ctx, callee, extension_builtin);
     let is_extern = extern_name.is_some();
     let is_user_function = user_name.is_some();
-    let operands = if is_user_function {
-        lower_args_with_eir_user_function_signature(ctx, callee, sig.as_ref(), args)
+    if !is_extern && !is_user_function {
+        if let Some(call) = lower_packed_builtin_call(ctx, callee, sig.as_ref(), args, expr) {
+            return call;
+        }
+    }
+    // A by-reference-returning callee hands back a lease that has to survive this caller's own
+    // cleanup, so its staging is published before the arguments are evaluated. Only the direct
+    // user-call branch below transfers a cell; an extern, builtin or eval-dispatched call with
+    // the same name returns an ordinary value and must not publish a record nothing retires.
+    let reference_staging = if is_user_function && !is_extern {
+        begin_reference_return_call(ctx, sig.as_ref(), expr.span)
+    } else {
+        None
+    };
+    // A fresh owned result is owned by nothing the unwind chain can see while the argument
+    // roots, the evaluation intermediates and their PHP destructors retire, so its staging is
+    // published here too, OUTSIDE every root those steps publish. `call_return_type` reads the
+    // signature alone, so the type declared here is the exact type the call is emitted with.
+    let user_return_alias = is_user_function.then(|| {
+        ctx.return_alias_summaries
+            .function(callee)
+            .cloned()
+            .unwrap_or(ReturnArgAlias::Unknown)
+    });
+    let result_staging = match (is_user_function && !is_extern, user_return_alias.as_ref()) {
+        (true, Some(return_alias)) => prepublish_user_call_result(
+            ctx,
+            sig.as_ref(),
+            return_alias,
+            &call_return_type(ctx, callee, &[]),
+            expr.span,
+        ),
+        _ => None,
+    };
+    begin_call_argument_evaluation(ctx);
+    let mut operands = if is_user_function {
+        // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
+        // runtime keys and bind each boxed cell before entering the direct function ABI, just
+        // like the same fixed signature reached through a builtin descriptor surface.
+        sig.as_ref()
+            .and_then(|signature| {
+                dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, callee, false)
+            })
+            .unwrap_or_else(|| lower_args_with_eir_user_function_signature(ctx, callee, sig.as_ref(), args))
     } else if is_extern {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
@@ -109,6 +178,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         call_return_type(ctx, callee, &operands)
     };
     if is_extern {
+        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
         let data = ctx.intern_function_name(callee);
         let call = ctx.emit_value(
             Op::ExternCall,
@@ -128,25 +198,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             &ReturnArgAlias::Unknown,
             expr.span,
         );
+        retire_call_argument_intermediates(ctx, &evaluation_intermediates);
         return call;
     }
     if is_user_function {
-        if matches!(
-            php_symbol_key(canonical.trim_start_matches('\\')).as_str(),
-            "elephc\\async\\run" | "elephc\\parallel\\run"
-        ) {
-            return lower_exception_safe_user_call(
-                ctx,
-                callee,
-                operands,
-                php_type,
-                sig.as_ref(),
-                expr,
-            );
-        }
-        if call_has_owning_temporary_arg(ctx, &operands) {
-            return lower_exception_safe_user_call(ctx, callee, operands, php_type, sig.as_ref(), expr);
-        }
+        let return_alias = user_return_alias
+            .expect("a user function call resolved its return-alias summary before its arguments");
+        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+        let roots = root_user_call_operands(
+            ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
+        );
         let data = ctx.intern_function_name(callee);
         let call = ctx.emit_value(
             Op::Call,
@@ -156,31 +217,29 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             effects_lookup::user_call_effects(callee),
             Some(expr.span),
         );
+        ctx.invalidate_callable_user_function(callee, sig.as_ref(), &operands);
         // Plain user calls release owned argument temporaries the same way method and
         // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
         // that returns its own array argument typed `iterable`) from being freed.
-        let return_alias = ctx
-            .return_alias_summaries
-            .function(canonical)
-            .cloned()
-            .unwrap_or(ReturnArgAlias::Unknown);
-        release_owned_call_arg_temporaries_with_signature(
-            ctx,
-            &operands,
-            Some(call.value),
-            &return_alias,
-            sig.as_ref(),
-            expr.span,
+        let call = finish_reference_return_call(
+            ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
         );
-        return call;
+        stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+        release_owned_call_arg_temporaries_with_roots(
+            ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
+        );
+        retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+        let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
+        return finish_reference_return_value(ctx, call, reference_staging, expr.span);
     }
     if ctx.has_eval_barrier()
         && plain_positional_call_args(args)
         && canonical_builtin_function_name(canonical).is_none()
     {
+        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
         let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
         let data = ctx.intern_function_name(&dynamic_name);
-        return ctx.emit_value(
+        let call = ctx.emit_value(
             Op::EvalFunctionCall,
             operands,
             Some(Immediate::Data(data)),
@@ -188,203 +247,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             Op::EvalFunctionCall.default_effects(),
             Some(expr.span),
         );
+        retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+        return call;
     }
     let eval_literal = eval_literal_fragment(canonical, args);
-    emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
-}
-
-/// Returns whether a user call needs a cleanup handler for an owning argument temporary.
-pub(super) fn call_has_owning_temporary_arg(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> bool {
-    operands.iter().any(|value| {
-        let php_type = ctx.builder.value_php_type(*value);
-        ctx.value_is_owning_temporary(LoweredValue {
-            value: *value,
-            ir_type: value_ir_type(&php_type),
-        })
-    })
-}
-
-/// Lowers a user call with symmetric call-argument cleanup on throw.
-///
-/// A caller-owned closure, array, string, or Mixed box can be a temporary. Ordinary post-call
-/// cleanup cannot execute when a user callee throws through `longjmp`, so a tiny internal handler
-/// releases those argument owners before rethrowing the current exception. The successful path
-/// performs the same cleanup and moves non-void results through an owned hidden temporary so both
-/// control-flow edges preserve the ordinary call contract.
-pub(super) fn lower_exception_safe_user_call(
-    ctx: &mut LoweringContext<'_, '_>,
-    canonical: &str,
-    operands: Vec<crate::ir::ValueId>,
-    php_type: PhpType,
-    signature: Option<&FunctionSig>,
-    expr: &Expr,
-) -> LoweredValue {
-    if matches!(&php_type, PhpType::Void) {
-        return lower_exception_safe_void_user_call(ctx, canonical, operands, php_type, signature, expr);
-    }
-    let handler = ctx
-        .builder
-        .create_named_block("structured.run.call_cleanup", Vec::new());
-    let after = ctx
-        .builder
-        .create_named_block("structured.run.call_after", Vec::new());
-    let handler_token = handler.as_raw() as i64;
-    let result_temp = ctx.declare_owned_hidden_temp(php_type.clone());
-    let return_alias = ctx.return_alias_summaries.function(canonical).cloned()
-        .unwrap_or(ReturnArgAlias::Unknown);
-    ctx.emit_void(
-        Op::TryPushHandler,
-        Vec::new(),
-        Some(Immediate::I64(handler_token)),
-        Op::TryPushHandler.default_effects(),
-        Some(expr.span),
-    );
-    let data = ctx.intern_function_name(canonical);
-    let call = ctx.emit_value(
-        Op::Call,
-        operands.clone(),
-        Some(Immediate::Data(data)),
-        php_type.clone(),
-        effects_lookup::user_call_effects(canonical),
-        Some(expr.span),
-    );
-    store_value_into_temp(
-        ctx,
-        &result_temp,
-        php_type,
-        call,
-        expr.span,
-    );
-    release_owned_call_arg_temporaries_with_signature(
-        ctx,
-        &operands,
-        Some(call.value),
-        &return_alias,
-        signature,
-        expr.span,
-    );
-    emit_structured_run_call_handler_pop(ctx, handler_token, expr.span);
-    branch_to(ctx, after);
-
-    ctx.builder.position_at_end(handler);
-    ctx.clear_static_callable_locals();
-    emit_structured_run_call_handler_pop(ctx, handler_token, expr.span);
-    release_owned_call_arg_temporaries_with_signature(
-        ctx,
-        &operands,
-        None,
-        &ReturnArgAlias::None,
-        signature,
-        expr.span,
-    );
-    // The cleanup handler rethrows rather than observes the exception. Take the runtime slot's
-    // owner before transferring it into the terminator; borrowing with `CatchCurrent` leaves a
-    // second owner behind whenever a structured Async/Parallel root propagates a failure.
-    let current = ctx.emit_owned_value(
-        Op::CatchBind,
-        Vec::new(),
-        None,
-        PhpType::Object("Throwable".to_string()),
-        Op::CatchBind.default_effects(),
-        Some(expr.span),
-    );
-    ctx.builder.terminate(Terminator::Throw {
-        value: current.value,
-    });
-
-    ctx.builder.position_at_end(after);
-    ctx.clear_static_callable_locals();
-    take_owned_temp(ctx, &result_temp, expr.span)
-}
-
-/// Lowers a void user call with argument cleanup on both the return and throw paths.
-fn lower_exception_safe_void_user_call(
-    ctx: &mut LoweringContext<'_, '_>,
-    canonical: &str,
-    operands: Vec<crate::ir::ValueId>,
-    php_type: PhpType,
-    signature: Option<&FunctionSig>,
-    expr: &Expr,
-) -> LoweredValue {
-    let handler = ctx
-        .builder
-        .create_named_block("user.call_cleanup", Vec::new());
-    let after = ctx
-        .builder
-        .create_named_block("user.call_after", Vec::new());
-    let handler_token = handler.as_raw() as i64;
-    ctx.emit_void(
-        Op::TryPushHandler,
-        Vec::new(),
-        Some(Immediate::I64(handler_token)),
-        Op::TryPushHandler.default_effects(),
-        Some(expr.span),
-    );
-    let data = ctx.intern_function_name(canonical);
-    let call = ctx.emit_value(
-        Op::Call,
-        operands.clone(),
-        Some(Immediate::Data(data)),
-        php_type,
-        effects_lookup::user_call_effects(canonical),
-        Some(expr.span),
-    );
-    release_owned_call_arg_temporaries_with_signature(
-        ctx,
-        &operands,
-        Some(call.value),
-        &ReturnArgAlias::None,
-        signature,
-        expr.span,
-    );
-    emit_structured_run_call_handler_pop(ctx, handler_token, expr.span);
-    branch_to(ctx, after);
-
-    ctx.builder.position_at_end(handler);
-    ctx.clear_static_callable_locals();
-    emit_structured_run_call_handler_pop(ctx, handler_token, expr.span);
-    release_owned_call_arg_temporaries_with_signature(
-        ctx,
-        &operands,
-        None,
-        &ReturnArgAlias::None,
-        signature,
-        expr.span,
-    );
-    let current = ctx.emit_owned_value(
-        Op::CatchBind,
-        Vec::new(),
-        None,
-        PhpType::Object("Throwable".to_string()),
-        Op::CatchBind.default_effects(),
-        Some(expr.span),
-    );
-    ctx.builder.terminate(Terminator::Throw {
-        value: current.value,
-    });
-
-    ctx.builder.position_at_end(after);
-    ctx.clear_static_callable_locals();
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     call
 }
 
-/// Pops the synthetic handler installed around one structured `run()` call.
-fn emit_structured_run_call_handler_pop(
-    ctx: &mut LoweringContext<'_, '_>,
-    handler_token: i64,
-    span: Span,
-) {
-    ctx.emit_void(
-        Op::TryPopHandler,
-        Vec::new(),
-        Some(Immediate::I64(handler_token)),
-        Op::TryPopHandler.default_effects(),
-        Some(span),
-    );
-}
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 pub(super) fn emit_builtin_call_value(
@@ -397,17 +269,13 @@ pub(super) fn emit_builtin_call_value(
 ) -> LoweredValue {
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
-            let cleanup = if call_has_owning_temporary_arg(ctx, &operands) {
-                let handler = ctx.builder.create_named_block("builtin.arg_cleanup", Vec::new());
-                let after = ctx.builder.create_named_block("builtin.arg_after", Vec::new());
-                ctx.emit_void(
-                    Op::TryPushHandler, Vec::new(), Some(Immediate::I64(handler.as_raw() as i64)),
-                    Op::TryPushHandler.default_effects(), Some(span),
-                );
-                Some((handler, after))
-            } else {
-                None
-            };
+            let mut operands = operands;
+            let roots = root_non_aliasing_callback_operands(ctx, def, &mut operands, &php_type, span);
+            // A builtin whose effects carry MAY_THROW can reach a codegen guard that jumps
+            // straight to __rt_throw_current while these operands are still pure SSA. Pin them
+            // in the unwind chain for the duration of the call so a caught guard releases them
+            // exactly once instead of stranding them.
+            let pins = pin_throwing_builtin_operands(ctx, def, &operands, &roots, &php_type, span);
             let lowered = crate::builtins::semantics::lower_registry_call(
                 ctx,
                 def,
@@ -424,60 +292,102 @@ pub(super) fn emit_builtin_call_value(
                     error,
                 )
             });
-            let call = LoweredValue {
+            let raw_call = LoweredValue {
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
-            let result_temp = cleanup.and_then(|_| {
-                if call.ir_type == IrType::Void {
-                    None
-                } else {
-                    let result_type = ctx.builder.value_php_type(call.value);
-                    let temp = ctx.declare_owned_hidden_temp(result_type.clone());
-                    store_value_into_temp(ctx, &temp, result_type, call, span);
-                    Some(temp)
-                }
-            });
-            let return_alias = match def.spec.semantics.result_ownership {
-                crate::builtins::semantics::BuiltinResultOwnership::NonHeap
-                | crate::builtins::semantics::BuiltinResultOwnership::Fresh
-                | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
-                    ReturnArgAlias::None
-                }
-                crate::builtins::semantics::BuiltinResultOwnership::Aliases(indexes) => {
-                    ReturnArgAlias::Parameters(indexes.iter().copied().collect())
-                }
-                crate::builtins::semantics::BuiltinResultOwnership::Borrowed
-                | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
-                    ReturnArgAlias::Unknown
+            // `substr()` can return an interior view into its source string. When source-order
+            // evaluation transferred a pinned temporary into the final call operand, letting
+            // that pin flow through the result would either leak its base allocation forever
+            // or free an interior pointer. Persist the view before retiring the base owner so
+            // the result has an ordinary independent string lifetime.
+            let stabilizes_evaluation_pin = matches!(
+                def.spec.semantics.lowering,
+                crate::builtins::semantics::BuiltinLowering::Runtime(
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr)
+                        | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                            target: crate::ir::RuntimeFnId::Substr,
+                            ..
+                        },
+                ),
+            ) && matches!(
+                def.spec.semantics.result_ownership,
+                crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments,
+            ) && ctx.builder.value_php_type(raw_call.value).codegen_repr() == PhpType::Str
+                && operands.first().is_some_and(|operand| {
+                    value_is_call_argument_evaluation_pin(ctx, *operand)
+                });
+            let call = if stabilizes_evaluation_pin {
+                ctx.emit_owned_value(
+                    Op::StrPersist,
+                    vec![raw_call.value],
+                    None,
+                    PhpType::Str,
+                    Op::StrPersist.default_effects(),
+                    Some(span),
+                )
+            } else {
+                raw_call
+            };
+            // Consumers make lifetime decisions during lowering, before final
+            // ownership refinement. In particular, Fresh strings already own
+            // heap storage and must not be persisted again as concat scratch.
+            if matches!(
+                def.spec.semantics.result_ownership,
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh,
+            ) && Ownership::php_type_needs_lifetime_tracking(
+                &ctx.builder.value_php_type(call.value),
+            ) {
+                ctx.builder.set_value_ownership(call.value, Ownership::Owned);
+            }
+            let return_alias = if stabilizes_evaluation_pin {
+                ReturnArgAlias::None
+            } else {
+                match def.spec.semantics.result_ownership {
+                    crate::builtins::semantics::BuiltinResultOwnership::NonHeap
+                    | crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                    | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
+                        ReturnArgAlias::None
+                    }
+                    crate::builtins::semantics::BuiltinResultOwnership::Aliases(indexes) => {
+                        ReturnArgAlias::Parameters(indexes.iter().copied().collect())
+                    }
+                    crate::builtins::semantics::BuiltinResultOwnership::Borrowed
+                    | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
+                        ReturnArgAlias::Unknown
+                    }
                 }
             };
+            unpin_in_flight_owners(ctx, pins, span);
+            for (_, slot) in roots.iter().rev() {
+                retire_owned_call_operand(ctx, *slot, span);
+            }
+            let unrooted = operands.iter().enumerate()
+                .filter(|(index, _)| !roots.iter().any(|(root, _)| root == index))
+                .filter(|(index, _)| !builtin_consumes_mutating_ref_operand(def, *index))
+                .map(|(_, value)| *value).collect::<Vec<_>>();
             release_owned_call_arg_temporaries(
                 ctx,
-                &operands,
+                &unrooted,
                 Some(call.value),
                 &return_alias,
                 span,
             );
-            if let Some((handler, after)) = cleanup {
-                emit_structured_run_call_handler_pop(ctx, handler.as_raw() as i64, span);
-                branch_to(ctx, after);
-                ctx.builder.position_at_end(handler);
-                emit_structured_run_call_handler_pop(ctx, handler.as_raw() as i64, span);
-                release_owned_call_arg_temporaries(ctx, &operands, None, &ReturnArgAlias::None, span);
-                let current = ctx.emit_owned_value(
-                    Op::CatchBind, Vec::new(), None, PhpType::Object("Throwable".to_string()),
-                    Op::CatchBind.default_effects(), Some(span),
-                );
-                ctx.builder.terminate(Terminator::Throw { value: current.value });
-                ctx.builder.position_at_end(after);
-                if let Some(temp) = result_temp {
-                    return take_owned_temp(ctx, &temp, span);
-                }
-            }
             return call;
         }
     }
+    let is_eval = php_symbol_key(name.trim_start_matches('\\')) == "eval";
+    let mut operands = operands;
+    let eval_source_owner = if is_eval {
+        operands.first().copied().and_then(|code| {
+            let source = LoweredValue { value: code, ir_type: ctx.builder.value_type(code) };
+            let (source, owner) = root_owned_call_operand(ctx, source, span);
+            operands[0] = source.value;
+            owner
+        })
+    } else {
+        None
+    };
     let (op, immediate, effects) = if let Some(fragment) = eval_literal {
         (
             Op::EvalLiteralCall,
@@ -503,6 +413,25 @@ pub(super) fn emit_builtin_call_value(
             effects_lookup::language_construct_effects(name),
         )
     };
+    let eval_needs_barrier = match eval_literal {
+        Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
+        None => true,
+    };
+    if is_eval {
+        ctx.begin_argument_guard_scope();
+        for (parameter, value) in operands.iter().copied().enumerate() {
+            let source = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            if ctx.value_is_owning_temporary(source)
+                && !ctx.has_call_argument_guard(source.value)
+            {
+                ctx.guard_call_argument(source, parameter, span);
+            }
+        }
+        ctx.end_argument_guard_scope();
+    }
     let call = ctx.emit_value(
         op,
         operands.clone(),
@@ -511,18 +440,20 @@ pub(super) fn emit_builtin_call_value(
         effects,
         Some(span),
     );
-    release_owned_call_arg_temporaries(
-        ctx,
-        &operands,
-        Some(call.value),
-        &ReturnArgAlias::Unknown,
-        span,
-    );
-    let eval_needs_barrier = match eval_literal {
-        Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
-        None => true,
-    };
-    if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+    // Scope widening can make the already-lowered source load an owned string cast.
+    // Eval guards that owner through exceptional exits, then releases it normally here.
+    if let Some(slot) = eval_source_owner {
+        retire_owned_call_operand(ctx, slot, span);
+    } else {
+        release_owned_call_arg_temporaries(
+            ctx,
+            &operands,
+            Some(call.value),
+            if is_eval { &ReturnArgAlias::None } else { &ReturnArgAlias::Unknown },
+            span,
+        );
+    }
+    if is_eval {
         ctx.mark_eval_executed();
         if eval_needs_barrier {
             ctx.apply_eval_barrier();
@@ -533,6 +464,33 @@ pub(super) fn emit_builtin_call_value(
         }
     }
     call
+}
+
+/// Returns whether a typed builtin backend consumes one by-reference operand owner.
+///
+/// `array_multisort()` is unusual among the mutating builtins: its backend separates and
+/// republishes two receivers, and a concrete array read from widened Mixed local storage owns a
+/// detached payload lease. The backend consumes that lease during COW/storeback, including the
+/// explicit duplicate lease retirement when both arguments name the same place. Ordinary
+/// post-call cleanup must therefore leave those two owners to the backend while retaining the
+/// normal cleanup contract for every other builtin operand.
+fn builtin_consumes_mutating_ref_operand(
+    def: &crate::builtins::registry::BuiltinDef,
+    parameter_index: usize,
+) -> bool {
+    if !def.ref_params.get(parameter_index).copied().unwrap_or(false) {
+        return false;
+    }
+    matches!(
+        def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayMultisort)
+                | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                    target: crate::ir::RuntimeFnId::ArrayMultisort,
+                    ..
+                },
+        )
+    )
 }
 
 /// Resolves a migrated registry builtin's result type from the same descriptor as the checker.
@@ -574,6 +532,7 @@ fn declared_type_is_a_safe_fallback(declared: &PhpType, checked: Option<&PhpType
     let Some(checked) = checked else {
         return true;
     };
+    /// Distinguishes PHP value representations from extension-only raw descriptors.
     fn is_a_php_value(ty: &PhpType) -> bool {
         !matches!(
             ty,

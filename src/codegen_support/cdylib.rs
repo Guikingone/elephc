@@ -22,6 +22,7 @@ use crate::exports::{is_string_return_signature, ExportedFunction, ELEPHC_ABI_VE
 
 mod boundary;
 mod owned_string;
+mod lifecycle;
 
 pub(crate) const STATUS_OK: i32 = 0;
 pub(crate) const STATUS_INVALID_ARGUMENT: i32 = 1;
@@ -53,6 +54,7 @@ pub(crate) fn emit_cdylib_exports(
     target: Target,
     exports: &[&ExportedFunction],
     heap_debug: bool,
+    startup: Option<&str>,
 ) {
     reserve_boundary_data(data);
     let (invalid_ptr, invalid_len) = data.add_string(b"invalid string export arguments");
@@ -61,7 +63,7 @@ pub(crate) fn emit_cdylib_exports(
 
     emit_error_helpers(emitter, target);
     for export in exports {
-        if is_string_return_signature(&export.sig) {
+        if is_string_return_signature(&export.source_sig) {
             owned_string::emit_owned_string_export(
                 emitter,
                 target,
@@ -69,6 +71,7 @@ pub(crate) fn emit_cdylib_exports(
                 (&invalid_ptr, invalid_len),
                 (&allocation_ptr, allocation_len),
                 (&runtime_ptr, runtime_len),
+                startup,
             );
         } else {
             boundary::emit_scalar_export(
@@ -78,10 +81,24 @@ pub(crate) fn emit_cdylib_exports(
                 (&invalid_ptr, invalid_len),
                 (&allocation_ptr, allocation_len),
                 (&runtime_ptr, runtime_len),
+                startup,
             );
         }
     }
-    emit_lifecycle_exports(emitter, target, heap_debug);
+    lifecycle::emit(emitter, target, heap_debug, startup, (&runtime_ptr, runtime_len));
+}
+
+/// Runs optional non-PHP initialization after host inputs are saved and before installing the PHP handler.
+fn emit_startup_check(emitter: &mut Emitter, startup: Option<&str>, failed: &str) {
+    let Some(symbol) = startup else { return; };
+    abi::emit_call_label(emitter, symbol);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("cbnz w0, {failed}")),    // return an initialization failure through the existing host boundary
+        Arch::X86_64 => {
+            emitter.instruction("test eax, eax");                               // inspect non-unwinding initialization status
+            emitter.instruction(&format!("jnz {failed}"));                      // preserve the host process on initialization failure
+        }
+    }
 }
 
 /// Builds a deterministic local-label suffix from a public PHP export name.
@@ -244,133 +261,6 @@ fn emit_set_static_error_x86_64(emitter: &mut Emitter, error: (&str, usize)) {
     emitter.instruction("call __rt_cdylib_set_error");                          // copy the current diagnostic into stable boundary storage
 }
 
-/// Emits ABI version, lifecycle, last-status, last-error, and owned-buffer release exports.
-fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: bool) {
-    emitter.blank();
-    emitter.comment("cdylib ABI version");
-    emitter.label_global(&target.extern_symbol("elephc_abi_version"));
-    match target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("mov w0, #{ELEPHC_ABI_VERSION}")), // return the ABI version declared by the generated header
-        Arch::X86_64 => emitter.instruction(&format!("mov eax, {ELEPHC_ABI_VERSION}")), // return the ABI version declared by the generated header
-    }
-    emitter.instruction("ret");                                                 // return to the current C-ABI caller
-
-    for lifecycle in ["elephc_init", "elephc_shutdown"] {
-        emitter.blank();
-        emitter.comment(&format!("cdylib lifecycle: {lifecycle}"));
-        emitter.label_global(&target.extern_symbol(lifecycle));
-        if lifecycle == "elephc_init" && matches!(target.arch, Arch::AArch64) {
-            abi::emit_frame_prologue(emitter, 16);
-        }
-        // Foreign-entry publish, FIRST: both lifecycle entries are called by the
-        // host, whose ctx register holds ITS value (host data, or zero), and the
-        // concat reset below is already a ctx-relative store. Publishing after
-        // it wrote `str xzr, [x28]` through the host's register — a wild store
-        // that faulted at address 0 on the very first `elephc_init`.
-        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
-        emit_clear_error_inline(emitter);
-        emit_reset_concat_inline(emitter);
-        emit_store_immediate_to_symbol(emitter, BOUNDARY_ACTIVE, 0);
-        emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
-        if lifecycle == "elephc_init" {
-            // Library-mode context installation: `elephc_init` is where the
-            // host starts the library, so it plays the main-prologue role for
-            // the ctx-register mode — the pointer is already published above,
-            // so this only zeroes the allocator fields (publish-only entries
-            // like the exports below must never reach this reset).
-            crate::codegen_support::runtime::ctx::emit_ctx_zero_fields(emitter);
-            crate::codegen_support::runtime::ctx::emit_ctx_install_default_arena(emitter);
-            crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);
-            if heap_debug {
-                abi::emit_enable_heap_debug_flag(emitter);
-            }
-            match target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction(&format!("mov w0, #{STATUS_OK}"));      // return successful runtime initialization
-                }
-                Arch::X86_64 => emitter.instruction(&format!("mov eax, {STATUS_OK}")), // return successful runtime initialization
-            }
-        }
-        if lifecycle == "elephc_init" && matches!(target.arch, Arch::AArch64) {
-            abi::emit_frame_restore(emitter, 16);
-        }
-        emitter.instruction("ret");                                             // return to the current C-ABI caller
-    }
-
-    emitter.blank();
-    emitter.comment("cdylib status of the most recent exported call");
-    emitter.label_global(&target.extern_symbol("elephc_last_status"));
-    match target.arch {
-        Arch::AArch64 => abi::emit_load_symbol_to_reg(emitter, "x0", BOUNDARY_STATUS, 0),
-        Arch::X86_64 => abi::emit_load_symbol_to_reg(emitter, "rax", BOUNDARY_STATUS, 0),
-    }
-    emitter.instruction("ret");                                                 // return the most recent recoverable boundary status
-
-    emitter.blank();
-    emitter.comment("cdylib borrowed last-error pointer");
-    emitter.label_global(&target.extern_symbol("elephc_last_error"));
-    match target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x9", LAST_ERROR_PRESENT, 0);
-            emitter.instruction("cbz x9, L_cdylib_last_error_none_aarch64");    // return NULL only when no diagnostic is recorded
-            abi::emit_symbol_address(emitter, "x0", LAST_ERROR_BUFFER);
-            emitter.instruction("ret");                                         // return to the current C-ABI caller
-            emitter.label("L_cdylib_last_error_none_aarch64");
-            emitter.instruction("mov x0, #0");                                  // return a NULL last-error pointer
-            emitter.instruction("ret");                                         // return to the current C-ABI caller
-        }
-        Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "r10", LAST_ERROR_PRESENT, 0);
-            emitter.instruction("test r10, r10");                               // test whether a diagnostic is recorded
-            emitter.instruction("je L_cdylib_last_error_none_x86_64");          // return NULL only when no diagnostic is recorded
-            abi::emit_symbol_address(emitter, "rax", LAST_ERROR_BUFFER);
-            emitter.instruction("ret");                                         // return to the current C-ABI caller
-            emitter.label("L_cdylib_last_error_none_x86_64");
-            emitter.instruction("xor eax, eax");                                // return a NULL last-error pointer
-            emitter.instruction("ret");                                         // return to the current C-ABI caller
-        }
-    }
-
-    emitter.blank();
-    emitter.comment("cdylib release of caller-owned export storage");
-    emitter.label_global(&target.extern_symbol("elephc_free"));
-    // A FOREIGN ENTRY, and therefore a publishing one. This was a bare tail call into
-    // `__rt_heap_free_safe` — correct while the allocator reached its state through global
-    // symbols, and a wild read the moment that state moved into `_rt_ctx`: the free would
-    // walk the free list through whatever the HOST happened to keep in the ctx register.
-    // It faulted on the first `elephc_free` from a host that never called `elephc_init`.
-    //
-    // Every other entry from a host already does this (the lifecycle pair, every export
-    // wrapper, the callback trampolines); this one was missed because it needed nothing
-    // before. It costs a frame, which is why it is no longer a tail call.
-    match target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("sub sp, sp, #32");                             // frame for the return address and the host's ctx register
-            emitter.instruction("stp x29, x30, [sp, #16]");                     // preserve the caller frame pointer and return address
-            emitter.instruction("add x29, sp, #16");
-            emitter.instruction("str x28, [sp, #0]");                           // preserve the HOST's value: x28 is callee-saved
-            crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
-            emitter.instruction("bl __rt_heap_free_safe");                      // release non-borrowed runtime storage when present
-            emitter.instruction("ldr x28, [sp, #0]");                           // hand the host its register back
-            emitter.instruction("ldp x29, x30, [sp, #16]");
-            emitter.instruction("add sp, sp, #32");
-            emitter.instruction("ret");
-        }
-        Arch::X86_64 => {
-            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
-            emitter.instruction("mov rbp, rsp");
-            emitter.instruction("push r14");                                    // preserve the HOST's value: r14 is callee-saved
-            emitter.instruction("sub rsp, 8");                                  // pad to the SysV 16-byte call boundary
-            emitter.instruction("mov rax, rdi");                                // adapt the SysV pointer register to the runtime free ABI
-            crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
-            emitter.instruction("call __rt_heap_free_safe");                    // release non-borrowed runtime storage when present
-            emitter.instruction("add rsp, 8");                                  // drop the pad without touching rax
-            emitter.instruction("pop r14");                                     // hand the host its register back
-            emitter.instruction("pop rbp");
-            emitter.instruction("ret");
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -381,24 +271,41 @@ mod tests {
 
     /// Builds one single-string-input owned-result export fixture.
     fn string_export() -> ExportedFunction {
+        let source_sig = FunctionSig {
+            params: vec![("input".to_string(), PhpType::Str)],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type: PhpType::Str,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        };
         ExportedFunction {
             name: "roundtrip".to_string(),
             c_name: "roundtrip".to_string(),
-            sig: FunctionSig {
-                params: vec![("input".to_string(), PhpType::Str)],
-                param_type_exprs: vec![None],
-                param_attributes: vec![Vec::new()],
-                defaults: vec![None],
-                return_type: PhpType::Str,
-                declared_return: true,
-                by_ref_return: false,
-                ref_params: vec![false],
-                declared_params: vec![true],
-                variadic: None,
-                deprecation: None,
-            },
+            source_sig: source_sig.clone(),
+            internal_sig: source_sig,
             span: Span::dummy(),
         }
+    }
+
+    /// Adds the generated physical collector used when unrelated eval or backtrace code exists.
+    fn add_internal_collector(export: &mut ExportedFunction) {
+        export.internal_sig.params.push((
+            crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ));
+        export.internal_sig.param_type_exprs.push(None);
+        export.internal_sig.param_attributes.push(Vec::new());
+        export.internal_sig.defaults.push(None);
+        export.internal_sig.ref_params.push(false);
+        export.internal_sig.declared_params.push(false);
+        export.internal_sig.variadic = Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string());
     }
 
     /// Emits an AArch64 boundary with setjmp, owned copy, and lifecycle exports.
@@ -408,7 +315,7 @@ mod tests {
         let mut emitter = Emitter::new_cdylib(target);
         let mut data = DataSection::new();
         let export = string_export();
-        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
         let asm = emitter.output();
         assert!(asm.contains("_roundtrip:"));
         assert!(asm.contains("bl _setjmp"));
@@ -446,7 +353,7 @@ mod tests {
             let mut emitter = Emitter::new_cdylib(target);
             let mut data = DataSection::new();
             let export = string_export();
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
             let asm = emitter.output();
 
             assert!(
@@ -464,30 +371,36 @@ mod tests {
         }
     }
 
-    /// AArch64 lifecycle initialization preserves the host return address around
-    /// the stack-limit helper call instead of returning to its own post-call instruction.
+    /// Lifecycle initialization preserves linkage and aligns helper calls on every target.
     #[test]
-    fn aarch64_cdylib_init_preserves_the_host_return_address() {
+    fn cdylib_init_preserves_the_host_frame_on_all_targets() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
             Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
         ] {
             let mut emitter = Emitter::new_cdylib(target);
             let mut data = DataSection::new();
             let export = string_export();
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
             let asm = emitter.output();
             let init_label = format!("{}:", target.extern_symbol("elephc_init"));
             let shutdown_label = format!("{}:", target.extern_symbol("elephc_shutdown"));
             let init_start = asm.find(&init_label).unwrap();
             let init_end = asm[init_start..].find(&shutdown_label).unwrap() + init_start;
             let init = &asm[init_start..init_end];
-            let save = init.find("stp x29, x30, [sp, #0]").unwrap();
-            let call = init.find("bl __rt_stack_limit_init").unwrap();
-            let restore = init.find("ldp x29, x30, [x9]").unwrap();
+            let (save, call, restore) = match target.arch {
+                Arch::AArch64 => ("stp x29, x30, [sp, #16]", "bl __rt_stack_limit_init", "ldp x29, x30, [x9]"),
+                Arch::X86_64 => ("push rbp", "call __rt_stack_limit_init", "leave"),
+            };
+            let save = init.find(save).unwrap();
+            let call = init.find(call).unwrap();
+            let restore = init.find(restore).unwrap();
             assert!(
                 save < call && call < restore,
-                "{target:?} did not preserve x30 around cdylib initialization:\n{init}"
+                "{target:?} did not preserve the native frame around initialization:\n{init}"
             );
         }
     }
@@ -499,7 +412,7 @@ mod tests {
         let mut emitter = Emitter::new_cdylib(target);
         let mut data = DataSection::new();
         let export = string_export();
-        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
         let asm = emitter.output();
         assert!(asm.contains("roundtrip:"));
         assert!(asm.contains("call setjmp"));
@@ -517,8 +430,8 @@ mod tests {
         );
     }
 
-    /// Every supported target saves all four owned-string host arguments before the
-    /// lazy initializer and reloads output addresses from stable frame slots afterward.
+    /// Every target saves owned-string host arguments before stack/configuration startup
+    /// and installs the PHP exception handler only after the non-unwinding initializer.
     #[test]
     fn preserves_owned_string_host_arguments_across_lazy_stack_init_for_all_targets() {
         for target in [
@@ -531,9 +444,15 @@ mod tests {
             let mut emitter = Emitter::new_cdylib(target);
             let mut data = DataSection::new();
             let export = string_export();
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false,
+                Some("__rt_mbstring_startup_status"));
             let asm = emitter.output();
             let lazy_init = asm.find("__rt_stack_limit_init").unwrap();
+            let configure = asm.find("__rt_mbstring_startup_status").unwrap();
+            let call = if target.arch == Arch::AArch64 { "bl" } else { "call" };
+            let handler = asm.find(&format!("{call} {}", target.extern_symbol("setjmp"))).unwrap();
+            assert!(lazy_init < configure && configure < handler,
+                "{target:?} must initialize before installing the PHP handler:\n{asm}");
             let first_output_load = match target.arch {
                 Arch::AArch64 => asm[lazy_init..].find("ldur x9, [x29, #-24]").unwrap() + lazy_init,
                 Arch::X86_64 => {
@@ -568,6 +487,59 @@ mod tests {
                 lazy_init < first_output_load,
                 "{target:?} loaded an output address before lazy initialization completed:\n{asm}"
             );
+        }
+    }
+
+    /// Synthesizes and owns the hidden collector without adding a host parameter on any target.
+    #[test]
+    fn emits_internal_hidden_collector_for_all_supported_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let mut export = string_export();
+            add_internal_collector(&mut export);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
+            let asm = emitter.output();
+            let public_label = if matches!(target.platform, Platform::MacOS) {
+                "_roundtrip:"
+            } else {
+                "roundtrip:"
+            };
+            let boundary = &asm[asm.find(public_label).unwrap()..];
+            let setjmp = boundary.find("setjmp").unwrap();
+            let allocate = boundary.find("__rt_array_new").unwrap();
+            let publish = boundary.find("__rt_cleanup_call_operand_owner").unwrap();
+            let call_body = boundary.find("_fn_roundtrip").unwrap();
+            let detach = boundary[call_body..]
+                .find("_exc_call_frame_top")
+                .map(|offset| offset + call_body)
+                .unwrap();
+            let release = boundary[call_body..]
+                .find("__rt_decref_any")
+                .map(|offset| offset + call_body)
+                .unwrap();
+
+            assert!(setjmp < allocate && allocate < publish && publish < call_body);
+            assert!(call_body < detach && detach < release);
+            assert_eq!(boundary.matches("__rt_array_new").count(), 1);
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(boundary.contains("stur x0, [x29, #-8]"));
+                    assert!(boundary.contains("stur x1, [x29, #-16]"));
+                    assert!(!boundary.contains("stur x4, [x29"));
+                }
+                Arch::X86_64 => {
+                    assert!(boundary.contains("mov QWORD PTR [rbp - 8], rdi"));
+                    assert!(boundary.contains("mov QWORD PTR [rbp - 16], rsi"));
+                    assert!(!boundary.contains("mov QWORD PTR [rbp - 40], r8"));
+                }
+            }
         }
     }
 }

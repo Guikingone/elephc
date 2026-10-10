@@ -115,7 +115,7 @@ eval($code);
     )
     .unwrap();
 
-    let compile = elephc_cli_command(&dir)
+    let compile = elephc_cli_command_with_managed_pcre2(&dir)
         .args(["--quiet", "main.php"])
         .output()
         .expect("failed to invoke elephc CLI");
@@ -4401,7 +4401,7 @@ echo STRLEN("abcd");
 echo ":";
 echo \strlen("xy");
 echo ":";
-echo ChOp("value\f");
+echo ChOp("value\v");
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
@@ -5538,6 +5538,17 @@ eval('echo count($bag); echo ":"; echo count($bag, COUNT_RECURSIVE); echo ":"; e
     assert_eq!(out, "count:5:count:5:count:5");
 }
 
+/// Verifies eval `sizeof()` is PHP's `count()` alias, including named `$mode`.
+#[test]
+fn test_eval_sizeof_alias_of_count() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo sizeof([1, [2, 3], 4]); echo ":"; echo SIZEOF([1, [2, 3], 4], mode: COUNT_RECURSIVE); echo ":"; echo function_exists("sizeof");');
+"#,
+    );
+    assert_eq!(out, "3:5:1");
+}
+
 /// Verifies eval dispatches `ArrayAccess` reads, writes, append, probes, and unset on AOT objects.
 #[test]
 fn test_eval_dispatches_aot_array_access_objects() {
@@ -6203,6 +6214,56 @@ foreach ($dynamic as $key => $value) { echo $key, "=", $value, ";"; }');
     assert_eq!(
         out,
         "=f;2=e;9=b;10=a;Banana=d;apple=c;|apple=c;Banana=d;10=a;9=b;2=e;=f;"
+    );
+}
+
+/// Verifies eval key sorting applies PHP's `$flags` the way the compiled backend does.
+///
+/// The interpreter has its own Rust comparison, so the modes are covered here as behaviour
+/// rather than shared code: `10` before `9` under `SORT_STRING`, after it under
+/// `SORT_NUMERIC`, `img2` before `img10` only under `SORT_NATURAL`, and `A`/`a` equal under
+/// `SORT_FLAG_CASE` and therefore left in insertion order.
+#[test]
+fn test_eval_key_sort_applies_php_sort_flags() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = ["img12" => 1, "img10" => 1, "img2" => 1, "IMG1" => 1];
+echo ksort($a, SORT_NATURAL) . ":";
+foreach ($a as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+$b = [10 => 1, 9 => 1, "100" => 1];
+echo krsort($b, SORT_STRING) . ":";
+foreach ($b as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+$c = ["b" => 1, "A" => 1, "a" => 1, "B" => 1];
+echo ksort(flags: SORT_STRING | SORT_FLAG_CASE, array: $c) . ":";
+foreach ($c as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+$d = ["0x10" => 1, "1e2" => 1, "2" => 1];
+echo ksort(array: $d, flags: SORT_NUMERIC) . ":";
+foreach ($d as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+class EvalFlagBox { public array $items = ["img12" => 1, "img2" => 1, "img10" => 1]; }
+$box = new EvalFlagBox();
+echo ksort($box->items, SORT_NATURAL) . ":";
+foreach ($box->items as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+$mode = SORT_NATURAL;
+$e = ["x10" => 1, "x9" => 1];
+echo ksort($e, $mode) . ":";
+foreach ($e as $key => $value) { echo "[", $key, "]"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "1:[IMG1][img2][img10][img12]:",
+            "1:[9][100][10]:",
+            "1:[A][a][b][B]:",
+            "1:[0x10][2][1e2]:",
+            "1:[img2][img10][img12]:",
+            "1:[x9][x10]",
+        )
     );
 }
 
@@ -7527,6 +7588,24 @@ echo ":"; echo function_exists("microtime");');
     assert_eq!(out, "now:named:call:array:1");
 }
 
+/// Verifies eval GC builtins cross the live generated-runtime ABI on CI hosts.
+#[test]
+fn test_eval_dispatches_gc_builtins_through_runtime_hooks() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo gc_enabled() ? "on" : "bad"; echo ":";
+gc_disable(); echo gc_enabled() ? "bad" : "off"; echo ":";
+call_user_func("gc_enable"); echo gc_enabled() ? "on" : "bad"; echo ":";
+$status = call_user_func("gc_status");
+echo count($status) === 12 ? "shape" : "bad"; echo ":";
+echo $status["threshold"] === 0 && $status["buffer_size"] === 0 ? "unbuffered" : "bad"; echo ":";
+echo is_float($status["application_time"]) && $status["application_time"] >= 0.0 ? "timed" : "bad"; echo ":";
+echo call_user_func("gc_mem_caches") >= 0 ? "cache" : "bad";');
+"#,
+    );
+    assert_eq!(out, "on:off:on:shape:unbuffered:timed:cache");
+}
+
 /// Verifies eval realpath-cache builtins expose elephc's empty-cache convention.
 #[test]
 fn test_eval_dispatches_realpath_cache_builtin_calls() {
@@ -7563,6 +7642,24 @@ echo function_exists("putenv");');
 "#,
     );
     assert_eq!(out, "direct:named:named:set:spread:missing:11");
+}
+
+/// Verifies eval `putenv()` raises PHP's exact `ValueError` across direct and callable dispatch.
+#[test]
+fn test_eval_putenv_rejects_invalid_assignment_syntax() {
+    let out = compile_and_run(
+        r#"<?php
+eval('try { putenv(""); } catch (ValueError $error) { echo $error->getMessage(); }
+echo "|";
+try { putenv(assignment: "="); } catch (ValueError $error) { echo $error->getMessage(); }
+echo "|";
+try { call_user_func_array("putenv", ["assignment" => "=value"]); } catch (ValueError $error) { echo $error->getMessage(); }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "putenv(): Argument #1 ($assignment) must have a valid syntax|putenv(): Argument #1 ($assignment) must have a valid syntax|putenv(): Argument #1 ($assignment) must have a valid syntax"
+    );
 }
 
 /// Verifies eval `getenv()` with zero arguments and a null name answers the environment.
@@ -10970,6 +11067,24 @@ return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $it
 "#,
     );
     assert_eq!(out, "array:A:B:iter:R:start!:start!!");
+}
+
+/// Eval keeps an object reference alias when an AOT function changes the value type.
+#[test]
+fn test_eval_native_object_reference_can_retype_aliased_local() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalReferenceUser {}
+function change_eval_reference(EvalReferenceUser &$user): void {
+    $user = "changed";
+}
+echo eval('$user = new EvalReferenceUser();
+$alias =& $user;
+change_eval_reference($user);
+return $alias;');
+"#,
+    );
+    assert_eq!(out, "changed");
 }
 
 /// Verifies eval can dispatch generated/AOT variadic functions through the native bridge.
@@ -16453,7 +16568,7 @@ echo ":";
     );
     assert_eq!(
         out.stdout,
-        "basepublic,basestaticpublic,childpublic,childview,parentview:baseprotected,basepublic,basestaticpublic,childprivate,childprotectedstatic,childpublic,childview,parentview:baseprivate,baseprotected,basepublic,basestaticpublic,childprotectedstatic,childpublic,childview,parentview"
+        "basePublic,baseStaticPublic,childPublic,childView,parentView:baseProtected,basePublic,baseStaticPublic,childPrivate,childProtectedStatic,childPublic,childView,parentView:basePrivate,baseProtected,basePublic,baseStaticPublic,childProtectedStatic,childPublic,childView,parentView"
     );
 }
 
@@ -16889,6 +17004,126 @@ $box->dynamic = 8;');
     assert_eq!(magic.stdout, "dynamic:8");
 }
 
+/// Verifies eval updates an existing public dynamic entry before considering `__set`, for both
+/// AOT objects crossing the bridge and objects declared by eval itself.
+#[test]
+fn test_eval_existing_dynamic_property_update_does_not_repeat_magic_set() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AotEvalMagicUpdateBox {
+    public int $calls = 0;
+    public function __set($name, $value): void {
+        $this->calls++;
+        $this->{$name} = $value;
+    }
+}
+$aot = new AotEvalMagicUpdateBox();
+eval('$aot->dynamic = "first"; $aot->dynamic = "second";');
+echo $aot->calls, ":", $aot->dynamic, "|";
+$dynamic = eval('class EvalMagicUpdateBox {
+    public int $calls = 0;
+    public function __set($name, $value): void {
+        $this->calls++;
+        $this->{$name} = $value;
+    }
+}
+return new EvalMagicUpdateBox();');
+eval('$dynamic->dynamic = "first"; $dynamic->dynamic = "second";');
+echo $dynamic->calls, ":", $dynamic->dynamic;
+"#,
+    );
+    assert!(out.success, "fixture failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:second|1:second");
+}
+
+/// Verifies guarded eval `__set` reentry cannot create a dynamic entry over a private slot.
+#[test]
+fn test_eval_rejects_dynamic_property_named_like_private_slot() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_store_private_named_dynamic(mixed $object, string $name, mixed $value): void {
+    $object->{$name} = $value;
+}
+class AotEvalPrivateDynamicBox {
+    private string $hidden = "private";
+    public int $calls = 0;
+    public function __set($name, $value): void {
+        $this->calls++;
+        eval_store_private_named_dynamic($this, $name, $value);
+    }
+    public function privateValue(): string {
+        return $this->hidden;
+    }
+}
+$aot = new AotEvalPrivateDynamicBox();
+eval('try {
+    $aot->hidden = "first";
+    echo "missed";
+} catch (Error $error) {
+    echo $aot->calls, ":", $aot->privateValue(), ":caught";
+}');
+echo "|";
+$dynamic = eval('class EvalPrivateDynamicBox {
+    private string $hidden = "private";
+    public int $calls = 0;
+    public function __set($name, $value): void {
+        $this->calls++;
+        eval_store_private_named_dynamic($this, $name, $value);
+    }
+    public function privateValue(): string {
+        return $this->hidden;
+    }
+}
+return new EvalPrivateDynamicBox();');
+eval('try {
+    $dynamic->hidden = "first";
+    echo "missed";
+} catch (Error $error) {
+    echo $dynamic->calls, ":", $dynamic->privateValue(), ":caught";
+}');
+"#,
+    );
+    assert!(out.success, "fixture failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:private:caught|1:private:caught");
+}
+
+/// Verifies eval treats a native ancestor's private name as absent on its runtime child.
+#[test]
+fn test_eval_creates_dynamic_property_named_like_native_ancestor_private_slot() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AotPrivateDynamicAncestor {
+    private string $hidden = "ancestor";
+    public function privateValue(): string { return $this->hidden; }
+}
+class AotPrivateDynamicChild extends AotPrivateDynamicAncestor {
+    public int $calls = 0;
+    public function __set(string $name, mixed $value): void {
+        $this->calls++;
+        $this->{$name} = $value;
+    }
+}
+
+$aot = new AotPrivateDynamicChild();
+eval('$aot->hidden = "first"; $aot->hidden = "second";');
+echo $aot->calls, ":", $aot->hidden, ":", $aot->privateValue(), "|";
+
+$dynamic = eval('class EvalNativePrivateDynamicChild extends AotPrivateDynamicAncestor {
+    public int $calls = 0;
+    public function __set(string $name, mixed $value): void {
+        $this->calls++;
+        $this->{$name} = $value;
+    }
+}
+return new EvalNativePrivateDynamicChild();');
+eval('$dynamic->hidden = "first"; $dynamic->hidden = "second";');
+echo $dynamic->calls, ":", $dynamic->hidden, ":", $dynamic->privateValue();
+"#,
+    );
+    assert!(out.success, "fixture failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:second:ancestor|1:second:ancestor");
+}
+
 /// Verifies eval-declared readonly classes cannot extend non-readonly parents.
 #[test]
 fn test_eval_declared_readonly_class_rejects_non_readonly_parent() {
@@ -17317,52 +17552,79 @@ abstract class EvalIfaceInheritedPropertyChild extends EvalIfaceInheritedPropert
     );
 }
 
-/// Verifies eval rejects PHP-forbidden callable/static type atoms by declaration position.
-#[test]
-fn test_eval_rejects_invalid_property_and_parameter_type_atoms() {
-    for source in [
-        r#"<?php
+/// Keeps each forbidden declaration in its own compile/link/run budget and CI shard.
+macro_rules! eval_invalid_type_atom_case {
+    ($name:ident, $source:expr $(,)?) => {
+        /// Verifies one declaration-position rejection without batching native compiler runs.
+        #[test]
+        fn $name() {
+            let err = compile_and_run_expect_failure($source);
+            assert!(
+                err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+                "stderr did not contain eval unsupported-construct diagnostic: {err}"
+            );
+        }
+    };
+}
+
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_callable_property,
+    r#"<?php
 eval('class EvalBadCallableProperty {
     public callable $value;
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_callable_interface_property,
+    r#"<?php
 eval('interface EvalBadCallableInterfaceProperty {
     public callable $value { get; }
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_callable_promoted,
+    r#"<?php
 eval('class EvalBadCallablePromoted {
     public function __construct(public callable $value) {}
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_parameter,
+    r#"<?php
 eval('function eval_bad_static_parameter(static $value) {}');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_self_return,
+    r#"<?php
 eval('function eval_bad_self_return(): self {}');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_return,
+    r#"<?php
 eval('function eval_bad_static_return(): static {}');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_method_parameter,
+    r#"<?php
 eval('class EvalBadStaticMethodParam {
     public function read(static $value) {}
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_promoted,
+    r#"<?php
 eval('class EvalBadStaticPromoted {
     public function __construct(public static $value) {}
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-            "stderr did not contain eval unsupported-construct diagnostic: {err}"
-        );
-    }
-}
+);
 
 /// Verifies eval-declared plain abstract properties can be concretized by child storage.
 #[test]
@@ -19589,7 +19851,7 @@ echo count($r->getMethods()); echo ":";
 echo get_class_methods("EvalAotOnlyReflectableContract")[0] ?? "none";');
 "#,
     );
-    assert_eq!(out, "H:1:aotlabel");
+    assert_eq!(out, "H:1:aotLabel");
 }
 
 /// Verifies eval interface `#[Override]` can target a generated/AOT parent interface.
@@ -19955,6 +20217,102 @@ eval('class EvalAotAbstractMethodLeafSignature extends EvalAotAbstractMethodMidd
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
+
+/// Verifies concrete methods on a builtin parent are not reported abstract.
+///
+/// Codegen trims `method_impl_classes` down to the methods whose body symbol the backend
+/// actually emitted, so a concrete method nothing calls loses its entry. Deriving
+/// abstractness from that map made every uncalled builtin method look abstract (issue #1124).
+#[test]
+fn test_eval_reflection_reports_uncalled_builtin_parent_methods_as_concrete() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('
+$message = new ReflectionMethod("Exception", "getMessage");
+$construct = new ReflectionMethod("Exception", "__construct");
+$count = new ReflectionMethod("ArrayObject", "count");
+return ($message->isAbstract() ? "y" : "n")
+    . ($construct->isAbstract() ? "y" : "n")
+    . ($count->isAbstract() ? "y" : "n");');
+"#,
+    );
+    assert_eq!(out, "nnn");
+}
+
+/// Verifies an uncalled user method stays concrete while a declared abstract one stays abstract.
+///
+/// The #1124 defect was never specific to builtins: `StaticAbstractProbeMake` is never called
+/// from AOT code, so its body symbol is not emitted and its `method_impl_classes` entry is
+/// trimmed. Abstractness has to come from the declaration instead, in both directions.
+#[test]
+fn test_eval_reflection_separates_uncalled_methods_from_declared_abstract_ones() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAbstractnessProbe {
+    public static function make(): int { return 1; }
+    public static function used(): int { return 2; }
+    public function never(): int { return 3; }
+}
+abstract class EvalAbstractnessRequired {
+    abstract public static function requiredStatic(): int;
+    abstract public function requiredInstance(): int;
+}
+EvalAbstractnessProbe::used();
+echo eval('
+$probe = ["make", "used", "never"];
+$out = "";
+foreach ($probe as $name) {
+    $out .= (new ReflectionMethod("EvalAbstractnessProbe", $name))->isAbstract() ? "y" : "n";
+}
+$out .= "-";
+foreach (["requiredStatic", "requiredInstance"] as $name) {
+    $out .= (new ReflectionMethod("EvalAbstractnessRequired", $name))->isAbstract() ? "y" : "n";
+}
+return $out;');
+"#,
+    );
+    assert_eq!(out, "nnn-yy");
+}
+
+/// Verifies an eval class can extend a builtin exception class and be constructed.
+///
+/// This is the program from issue #1124. Every inherited method of `Exception` was counted
+/// as an unconcretized abstract requirement, so the DECLARATION fataled before the
+/// constructor the issue blames ever ran.
+#[test]
+fn test_eval_declared_class_extends_builtin_exception_parent() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalBuiltinExceptionChild extends Exception {
+    public function tag(): string { return "tagged"; }
+}
+$error = new EvalBuiltinExceptionChild("bad address", 422);
+return $error->getMessage() . "|" . $error->getCode() . "|" . $error->tag()
+    . "|" . (($error instanceof Exception) ? "exception" : "not")
+    . "|" . (($error instanceof Throwable) ? "throwable" : "not");');
+"#,
+    );
+    assert_eq!(out, "bad address|422|tagged|exception|throwable");
+}
+
+/// Verifies an eval class can extend builtin parents that are not exceptions.
+///
+/// The requirement scan reads reflection metadata for any runtime-backed parent, so the
+/// #1124 defect was never specific to throwables: `Error`, `ArrayObject` and `SplStack`
+/// refused to declare for the same reason.
+#[test]
+fn test_eval_declared_class_extends_non_throwable_builtin_parents() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalBuiltinErrorChild extends Error {}
+class EvalBuiltinArrayObjectChild extends ArrayObject {}
+class EvalBuiltinSplStackChild extends SplStack {}
+class EvalBuiltinRuntimeChild extends RuntimeException {}
+return "declared";');
+"#,
+    );
+    assert_eq!(out, "declared");
 }
 
 /// Verifies eval rejects overriding final generated/AOT parent properties.
@@ -22369,6 +22727,53 @@ Error:Cannot unset protected(set) property EvalDeclaredAsymErrorBox::$protectedV
     );
 }
 
+/// Verifies eval-declared promoted constructor properties accept PHP 8.4 asymmetric visibility
+/// (issue #823): owner and subclass writes follow the `set` visibility, Reflection reports the
+/// same flags as a declared property, and an outside write throws. Expected output from PHP 8.5.
+#[test]
+fn test_eval_declared_promoted_asymmetric_property_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalPromotedAsymBase {
+    public function __construct(
+        private(set) int $privateValue,
+        public protected(set) string $protectedName = "base",
+        protected(set) readonly int $id = 3
+    ) {}
+    public function ownerWrite($value) {
+        $this->privateValue = $value;
+    }
+}
+class EvalPromotedAsymChild extends EvalPromotedAsymBase {
+    public function childWrite($name) {
+        $this->protectedName = $name;
+    }
+}
+$box = new EvalPromotedAsymChild(1);
+echo $box->privateValue . ":" . $box->protectedName . ":" . $box->id . ":";
+$box->ownerWrite(7);
+$box->childWrite("child");
+echo $box->privateValue . ":" . $box->protectedName . ":";
+$private = new ReflectionProperty("EvalPromotedAsymBase", "privateValue");
+echo ($private->isPrivateSet() ? "P" : "p") . ($private->isPromoted() ? "R" : "r");
+echo $private->getModifiers() . ":";
+$id = new ReflectionProperty("EvalPromotedAsymBase", "id");
+echo ($id->isProtectedSet() ? "T" : "t") . $id->getModifiers() . ":";
+try {
+    $box->privateValue = 9;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:base:3:7:child:PR4129:T2177:Error:Cannot modify private(set) property \
+EvalPromotedAsymBase::$privateValue from global scope"
+    );
+}
+
 /// Verifies eval-declared inherited properties preserve PHP redeclaration invariants.
 #[test]
 fn test_eval_declared_inherited_property_redeclaration_contracts() {
@@ -23842,7 +24247,7 @@ echo $aotOwn->getDeclaringClass()->getName();');
     );
     assert_eq!(
         out.stdout,
-        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child|aotbase:EvalAotReflectMethodObjectBase:aotchild:EvalAotReflectMethodObjectChild"
+        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child|aotBase:EvalAotReflectMethodObjectBase:aotChild:EvalAotReflectMethodObjectChild"
     );
 }
 
@@ -23874,7 +24279,7 @@ echo $aot->invoke(new EvalAotReflectCreateMethodTarget());');
     );
     assert_eq!(
         out.stdout,
-        "EvalReflectCreateMethodTarget:MiXeDCase:ok|EvalAotReflectCreateMethodTarget:aotrun:aot"
+        "EvalReflectCreateMethodTarget:MiXeDCase:ok|EvalAotReflectCreateMethodTarget:aotRun:aot"
     );
 }
 
@@ -23906,7 +24311,7 @@ echo $ref->invoke(new EvalReflectCtorMethodTarget());');
     );
     assert_eq!(
         out.stdout,
-        "EvalAotReflectCtorMethodTarget:aotrun:aot|EvalReflectCtorMethodTarget:MiXeDCase:ok"
+        "EvalAotReflectCtorMethodTarget:aotRun:aot|EvalReflectCtorMethodTarget:MiXeDCase:ok"
     );
 }
 
@@ -25166,7 +25571,53 @@ echo $object->reveal();
     assert_eq!(out.stdout, "N:t:p:L:s:h:T:P:S:H:7,13");
 }
 
+/// Verifies eval distinguishes an AOT untyped removed slot from typed-uninitialized storage.
+///
+/// The unused native helper gives the untyped slot marker-capable storage; the actual removal,
+/// probe, warning-producing read, and recreation all happen through the eval bridge.
+#[test]
+fn test_eval_unset_aot_untyped_property_warns_null_and_reassigns() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotUntypedUnsetTarget { public $value = "start"; public int $typed = 1; }
+function reserveEvalAotUntypedUnsetStorage(EvalAotUntypedUnsetTarget $target): void {
+    unset($target->value);
+}
+$object = new EvalAotUntypedUnsetTarget();
+echo eval('unset($object->value);
+echo isset($object->value) ? "present:" : "absent:";
+var_dump($object->value);
+$object->value = "again";
+echo isset($object->value) ? "present:" : "absent:";
+echo $object->value;
+unset($object->typed);
+try { echo $object->typed; }
+catch (Error $error) { echo ":typed"; }');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "absent:NULL\npresent:again:typed");
+    assert_eq!(
+        out.stderr
+            .matches("Undefined property: EvalAotUntypedUnsetTarget::$value")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies eval ReflectionProperty getValue rejects uninitialized generated/AOT typed storage.
+///
+/// The generated property bridge reports the slot as uninitialized, then Magician throws a real
+/// `Error` through eval's normal Throwable channel. Left uncaught, that error reaches the native
+/// terminal handler and uses PHP's stdout fatal format rather than the stderr-only bridge-failure
+/// diagnostic reserved for `EvalStatus::RuntimeFatal`.
 #[test]
 fn test_eval_reflection_property_get_value_rejects_uninitialized_aot_storage() {
     let out = compile_and_run_capture(
@@ -25188,12 +25639,12 @@ echo $typed->getValue($object);
         "program unexpectedly succeeded: stdout={:?}",
         out.stdout
     );
-    assert_eq!(out.stdout, "Ada:");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
+    assert_eq!(
+        out.stdout,
+        "Ada:\nFatal error: Uncaught Error: Typed property \
+EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization\n"
     );
+    assert_eq!(out.stderr, "");
 }
 
 /// Verifies eval ReflectionProperty raw APIs bridge generated/AOT instance storage.
@@ -25841,6 +26292,85 @@ echo ($static->isStatic() ? "S" : "s");');
     );
 }
 
+/// Verifies eval ReflectionFunction/Method `returnsReference()` reads the reflected declaration
+/// instead of a baked `false` (#1260).
+///
+/// Eval cannot declare `function &f()` itself, so its functions, closures, and methods report
+/// `false`; the by-reference declarations it can see are a compiled `function &f()` or
+/// `function &m()`, and an eval-declared `&get` property hook. Expected output measured on
+/// PHP 8.5.10.
+#[test]
+fn test_eval_reflection_returns_reference_reads_declarations() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AotStore {
+    public $items = [];
+    public function &items() { return $this->items; }
+    public function count() { return count($this->items); }
+}
+class AotBox { public $v = 1; }
+function &aot_ref(AotBox $box) { return $box->v; }
+function aot_value(AotBox $box) { return $box->v; }
+eval('class EvalHooked {
+    public array $items = [] { &get { return $this->items; } }
+    public int $n { get => 1; }
+    public function plain() { return 1; }
+}
+function eval_value() { return 1; }
+echo (new ReflectionFunction("aot_ref"))->returnsReference() ? "R" : "r";
+echo (new ReflectionFunction("aot_value"))->returnsReference() ? "R" : "r";
+echo (new ReflectionFunction("eval_value"))->returnsReference() ? "R" : "r";
+echo (new ReflectionFunction(function () { return 1; }))->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionMethod("AotStore", "items"))->returnsReference() ? "R" : "r";
+echo (new ReflectionMethod("AotStore", "count"))->returnsReference() ? "R" : "r";
+echo (new ReflectionMethod("EvalHooked", "plain"))->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionProperty("EvalHooked", "items"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Rrrr:Rrr:Rr");
+}
+
+/// Verifies eval `returnsReference()` reads an abstract or interface `&get` hook contract, which
+/// has no accessor method to carry the flag: eval-declared abstract class and interface contracts
+/// keep it from their declaration, and a compiled interface contract from its registration. Plain
+/// `get` and `set` contracts stay `false`. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_eval_reflection_returns_reference_reads_get_hook_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface AotRefContract { public string $y { &get; } }
+interface AotPlainContract { public int $w { get; } }
+eval('abstract class EvalAbstract {
+    abstract public string $x { &get; }
+    abstract public int $plain { get; }
+}
+interface EvalContract { public string $y { &get; } public int $z { get; set; } }
+echo (new ReflectionProperty("EvalAbstract", "x"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalAbstract", "plain"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "y"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "z"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "z"))->getHook(PropertyHookType::Set)->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionProperty("AotRefContract", "y"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("AotPlainContract", "w"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "RrRrr:Rr");
+}
+
 /// Verifies eval ReflectionFunction/Method derive deprecation predicates from `#[Deprecated]`.
 #[test]
 fn test_eval_reflection_function_and_method_deprecated_attributes() {
@@ -26456,22 +26986,27 @@ echo "after";
     assert_eq!(out, "before:drop:A:after");
 }
 
-/// Verifies eval-declared object destructors run when cycle collection releases them.
+/// Explicit collection runs eval-declared destructors after their cyclic objects lose external roots.
 #[test]
 fn test_eval_dynamic_object_runs_destructor_after_cycle_collection() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalCycleDropBox {
     public function __construct($name) { $this->name = $name; }
     public function __destruct() { echo "drop:" . $this->name . ":"; }
 }
+gc_disable();
 $box = new EvalCycleDropBox("A");
 $box->self = $box;
 unset($box);
+$collected = gc_collect_cycles();
+gc_enable();
+echo $collected > 0 ? "collected:" : "uncollected:";
 echo "after";');
 "#,
     );
-    assert_eq!(out, "drop:A:after");
+    assert!(out.success, "stdout={:?} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop:A:collected:after", "{}", out.stderr);
 }
 
 /// Verifies eval-declared subclasses inherit generated/AOT destructors.
@@ -29431,4 +29966,541 @@ return ":" . ($quiet ?? "fallback");');
         out.stderr
     );
     assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
+}
+
+/// Verifies eval receives the complete typed AOT Core constant inventory.
+#[test]
+fn test_eval_get_defined_constants_matches_aot_core_inventory() {
+    let out = compile_and_run(
+        r#"<?php
+$native = get_defined_constants(true)["Core"];
+$evaluated = eval('return get_defined_constants(true)["Core"];');
+$missing = 0;
+foreach ($native as $name => $value) {
+    if (!array_key_exists($name, $evaluated)) {
+        $missing++;
+    }
+}
+foreach ($evaluated as $name => $value) {
+    if (!array_key_exists($name, $native)) {
+        $missing++;
+    }
+}
+echo count($native) === count($evaluated) ? "count:" : "bad-count:";
+echo $missing === 0 ? "keys:" : "bad-keys:";
+echo $native["FNM_CASEFOLD"] === $evaluated["FNM_CASEFOLD"] ? "value:" : "bad-value:";
+echo get_resource_type($evaluated["STDOUT"]);
+"#,
+    );
+    assert_eq!(out, "count:keys:value:stream");
+}
+
+/// Verifies eval method bridges preserve the physical collector ABI for instance and static
+/// methods, including a statically rooted zero-argument curl prelude getter.
+///
+/// Magician materializes every hidden collector before calling the bridge. The bridge must keep
+/// that physical slot and call the raw method symbol. Entering a source adapter would append a
+/// second collector, while validating visible arity would reject the physical argument array.
+#[test]
+fn test_eval_method_bridge_enters_physical_collector_methods_through_raw_symbols() {
+    /// Detects an exact AArch64 or x86_64 call to the requested symbol in generated assembly.
+    fn calls_symbol(assembly: &str, symbol: &str) -> bool {
+        assembly.lines().any(|line| {
+            let line = line.trim();
+            line.strip_prefix("bl ") == Some(symbol)
+                || line.strip_prefix("call ") == Some(symbol)
+        })
+    }
+
+    let dir = make_cli_test_dir("elephc_eval_method_physical_collector");
+    let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class EvalPhysicalCollector {
+    public function collect(string $label): string {
+        return $label . ":" . count(func_get_args());
+    }
+    public static function collectStatic(string $label): string {
+        return $label . ":" . count(func_get_args());
+    }
+}
+$file = new CURLFile("/tmp/a.txt");
+$file->getFilename();
+$object = new EvalPhysicalCollector();
+$code = 'return $file->getFilename() . $object->collect("instance") . EvalPhysicalCollector::collectStatic("static");';
+echo eval($code);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let instance_bridge = user_asm
+        .split("--- eval bridge: user method call ---")
+        .nth(1)
+        .and_then(|section| {
+            section
+                .split("--- eval bridge: user static method call ---")
+                .next()
+        })
+        .expect("the eval instance method bridge should be emitted");
+    for (class_name, source_method, symbol_method) in [
+        ("CURLFile", "getFilename", "getfilename"),
+        ("EvalPhysicalCollector", "collect", "collect"),
+    ] {
+        assert!(
+            instance_bridge.contains(&format!(
+                "__elephc_eval_method_{class_name}_{class_name}_{symbol_method}"
+            )),
+            "the eval bridge should own a physical body for {class_name}::{source_method}:\n{instance_bridge}"
+        );
+        let raw_symbol = format!("_method_{class_name}_{symbol_method}");
+        assert!(
+            calls_symbol(instance_bridge, &raw_symbol),
+            "the eval bridge should call the raw symbol for {class_name}::{source_method}:\n{instance_bridge}"
+        );
+        let source_adapter = format!("_method_source_abi_{class_name}_{symbol_method}");
+        assert!(
+            !calls_symbol(instance_bridge, &source_adapter),
+            "the eval bridge must not enter the source adapter for {class_name}::{source_method}:\n{instance_bridge}"
+        );
+    }
+    let static_bridge = user_asm
+        .split("--- eval bridge: user static method call ---")
+        .nth(1)
+        .expect("the eval static method bridge should be emitted");
+    assert!(
+        static_bridge.contains(
+            "__elephc_eval_static_method_body_EvalPhysicalCollector_EvalPhysicalCollector_collectstatic"
+        ),
+        "the eval bridge should own a body for the static collector twin:\n{static_bridge}"
+    );
+    assert!(
+        calls_symbol(
+            static_bridge,
+            "_static_EvalPhysicalCollector_collectstatic"
+        ),
+        "the eval bridge should call the raw static collector symbol:\n{static_bridge}"
+    );
+    assert!(
+        !calls_symbol(
+            static_bridge,
+            "_static_source_abi_EvalPhysicalCollector_collectstatic"
+        ),
+        "the eval bridge must not enter the static source adapter:\n{static_bridge}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies AOT `clone $object` clones an eval-declared object and runs its eval `__clone()`.
+///
+/// The object has no generated class layout at all, so this only passes when the generated
+/// `clone` hands the identity to Magician, which owns the dynamic-class metadata.
+#[test]
+fn test_aot_clone_eval_declared_object_with_clone_keyword() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotCloneKeywordBox {
+    public string $name;
+    public int $count;
+    public function __construct($name, $count) { $this->name = $name; $this->count = $count; }
+    public function __clone() { $this->name = $this->name . ":clone"; }
+    public function label() { return $this->name . "/" . $this->count; }
+}
+return new EvalAotCloneKeywordBox("A", 1);');
+$copy = clone $box;
+$copy->count = 9;
+echo $box->name; echo ":";
+echo $box->count; echo ":";
+echo $copy->name; echo ":";
+echo $copy->count; echo ":";
+echo get_class($copy); echo ":";
+echo $copy->label();
+"#,
+    );
+    assert_eq!(out, "A:1:A:clone:9:EvalAotCloneKeywordBox:A:clone/9");
+}
+
+/// Verifies `clone($object)` and `clone($object, $withProperties)` reach the same eval operation.
+///
+/// PHP 8.5 runs `__clone()` FIRST and applies the overrides afterwards, so the override wins
+/// over the hook's own write to the same property.
+#[test]
+fn test_aot_clone_eval_declared_object_through_clone_function() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotCloneFunctionBox {
+    public string $name;
+    public int $count;
+    public function __construct($name, $count) { $this->name = $name; $this->count = $count; }
+    public function __clone() { $this->count = $this->count + 100; }
+}
+return new EvalAotCloneFunctionBox("A", 1);');
+$plain = clone($box);
+$overridden = clone($box, ["name" => "B", "count" => 7]);
+echo $box->name; echo ":";
+echo $box->count; echo ":";
+echo $plain->name; echo ":";
+echo $plain->count; echo ":";
+echo $overridden->name; echo ":";
+echo $overridden->count; echo ":";
+echo get_class($overridden);
+"#,
+    );
+    assert_eq!(out, "A:1:A:101:B:7:EvalAotCloneFunctionBox");
+}
+
+/// Verifies a private eval `__clone()` is refused when AOT global scope clones the object.
+#[test]
+fn test_aot_clone_eval_declared_object_rejects_private_hook_from_global_scope() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotClonePrivateHookBox {
+    public string $name = "A";
+    private function __clone() { $this->name = "A:private"; }
+}
+return new EvalAotClonePrivateHookBox();');
+try {
+    $copy = clone $box;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo ":"; echo $box->name;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Call to private EvalAotClonePrivateHookBox::__clone() from global scope:A"
+    );
+}
+
+/// Verifies the AOT invocation scope, not global scope, decides protected eval `__clone()` access.
+///
+/// The eval class extends an emitted AOT class, so cloning from inside that AOT parent's own
+/// method IS allowed while the identical clone from global scope is refused. The same fixture
+/// proves a STATICALLY TYPED object parameter still reaches the eval clone callback.
+#[test]
+fn test_aot_clone_eval_declared_object_uses_aot_invocation_scope_for_protected_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotCloneScopeParent {
+    // Declared on the PARENT so the read below is statically valid through a parent-typed value.
+    // The eval subclass inherits this slot, which is also what the hook mutates.
+    public string $name = "A";
+
+    // The parameter is typed as the EMITTED parent, so the operand reaches `clone` as a concrete
+    // object slot. The value it actually holds is an eval-declared SUBCLASS, which is exactly the
+    // case a Mixed-only bridge would silently miss.
+    // The RETURN type is `mixed` on purpose: `get_class()` only consults Magician for a
+    // runtime-shaped value, so a statically typed result would report this parent rather than
+    // the eval subclass the object really is.
+    public static function copy(EvalAotCloneScopeParent $object): mixed { return clone $object; }
+}
+
+$box = eval('class EvalAotCloneScopeChild extends EvalAotCloneScopeParent {
+    protected function __clone() { $this->name = $this->name . ":hook"; }
+}
+return new EvalAotCloneScopeChild();');
+// The eval instance arrives as Mixed, which the checker will not pass to a typed parameter.
+// `instanceof` narrows it. The else arm exists so a FALSE result fails the assertion loudly
+// instead of silently skipping the case this fixture is here to prove.
+if ($box instanceof EvalAotCloneScopeParent) {
+    $copy = EvalAotCloneScopeParent::copy($box);
+    echo $copy->name; echo ":";
+    echo get_class($copy); echo ":";
+} else {
+    echo "not-an-instance:";
+}
+try {
+    clone $box;
+    echo "bad";
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "A:hook:EvalAotCloneScopeChild:Call to protected EvalAotCloneScopeChild::__clone() from global scope"
+    );
+}
+
+/// Verifies a throwing eval `__clone()` crosses back as a catchable AOT Throwable.
+#[test]
+fn test_aot_clone_eval_declared_object_propagates_throwing_hook() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotCloneThrowingBox {
+    public string $name = "A";
+    public function __clone() { throw new RuntimeException("clone failed"); }
+}
+return new EvalAotCloneThrowingBox();');
+try {
+    $copy = clone $box;
+    echo "bad";
+} catch (RuntimeException $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo ":"; echo $box->name;
+"#,
+    );
+    assert_eq!(out, "RuntimeException:clone failed:A");
+}
+
+/// Verifies the refused clone leaves no unfinished object behind and is not released twice.
+///
+/// `--heap-debug` is the authoritative allocator check: the unfinished clone is released exactly
+/// once inside Magician before the Throwable crosses back, so the summary must stay clean.
+#[test]
+fn test_aot_clone_eval_declared_object_throwing_hook_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$box = eval('class EvalAotCloneThrowingHeapBox {
+    public string $name = "A";
+    public function __destruct() { echo "drop:"; }
+    public function __clone() { throw new RuntimeException("clone failed"); }
+}
+return new EvalAotCloneThrowingHeapBox();');
+try {
+    clone $box;
+    echo "bad";
+} catch (RuntimeException $e) {
+    echo "caught:";
+}
+unset($box);
+echo "after";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "drop:caught:drop:after", "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies an ordinary emitted AOT object still takes the generated clone path.
+///
+/// The callback is installed here because the program links Magician, so a miss is the only
+/// thing that can keep the generated `__clone()` hook and the generated layout copy in play.
+#[test]
+fn test_aot_clone_eval_declared_object_callback_miss_keeps_aot_clone_path() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotCloneMissBox {
+    public string $name = "A";
+    public int $count = 1;
+
+    public function __clone(): void {
+        $this->name = $this->name . ":aot";
+    }
+}
+
+$box = eval('return new EvalAotCloneMissBox();');
+$copy = clone $box;
+$copy->count = 5;
+echo $box->name; echo ":";
+echo $box->count; echo ":";
+echo $copy->name; echo ":";
+echo $copy->count; echo ":";
+echo get_class($copy);
+"#,
+    );
+    assert_eq!(out, "A:1:A:aot:5:EvalAotCloneMissBox");
+}
+
+/// Verifies a by-reference entry in an AOT-built override array is refused in iteration order.
+///
+/// Magician's own alias table knows nothing about an array generated code built, so this only
+/// passes when the native hash-entry reference state is read too. The FIRST override reaches an
+/// undeclared property and fires the eval-declared `__set()`, which prints. The SECOND is the
+/// one the `foreach` by-reference alias is still attached to, so the printed side effect has to
+/// appear BEFORE the error: that ordering is what proves the refusal happened per entry rather
+/// than as an up-front scan of the whole array.
+#[test]
+fn test_aot_clone_eval_declared_object_rejects_aot_reference_override_entry() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotCloneRefOverrideBox {
+    public string $kept = "K";
+    public function __set($name, $value) { echo "set:" . $name . "=" . $value . ":"; }
+}
+return new EvalAotCloneRefOverrideBox();');
+$overrides = ["extra" => "E", "second" => "S"];
+foreach ($overrides as $key => &$slot) {}
+try {
+    clone($box, $overrides);
+    echo "bad";
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+echo ":"; echo $box->kept;
+"#,
+    );
+    assert_eq!(
+        out,
+        "set:extra=E:Cannot assign by reference when cloning with updated properties:K"
+    );
+}
+
+/// Verifies `get_class()` on a STATICALLY TYPED slot reports the eval-declared subclass.
+///
+/// `identity_parent()` returns the EMITTED parent type, so the operand reaches `get_class()` as a
+/// concrete object slot rather than a Mixed cell. The value it really holds is an eval-declared
+/// subclass, which owns no generated class id, so the generated class-name table can only answer
+/// `ParentBox`. This passes only when the typed operand consults Magician's dynamic-owner
+/// metadata first. The `else` arm exists so a FALSE `instanceof` fails loudly instead of silently
+/// skipping the case this fixture is here to prove.
+#[test]
+fn test_aot_get_class_reports_eval_declared_subclass_through_typed_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentBox {}
+function identity_parent(ParentBox $value): ParentBox { return $value; }
+$box = eval('class EvalChildBox extends ParentBox {} return new EvalChildBox();');
+if ($box instanceof ParentBox) {
+    $typed = identity_parent($box);
+    echo get_class($typed);
+} else {
+    echo "not-an-instance";
+}
+"#,
+    );
+    assert_eq!(out, "EvalChildBox");
+}
+
+/// Verifies `get_parent_class()` on the same typed slot reports the eval subclass's own parent.
+///
+/// Both builtins share one lowering, so the identical defect applies here: reading the generated
+/// class id would treat the value as `ParentBox` itself and report the PARENTLESS empty string.
+/// The eval-declared class really is a child of `ParentBox`, so that is the PHP answer.
+#[test]
+fn test_aot_get_parent_class_reports_eval_declared_subclass_parent_through_typed_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentBox {}
+function identity_parent(ParentBox $value): ParentBox { return $value; }
+$box = eval('class EvalChildBox extends ParentBox {} return new EvalChildBox();');
+if ($box instanceof ParentBox) {
+    $typed = identity_parent($box);
+    echo get_parent_class($typed);
+} else {
+    echo "not-an-instance";
+}
+"#,
+    );
+    assert_eq!(out, "ParentBox");
+}
+
+/// Verifies ordinary typed AOT objects keep their generated class names in an eval program.
+///
+/// The program links eval, so these typed operands take the Magician route too. Magician holds no
+/// dynamic owner for any of them, so every answer has to come from the SAME generated class-name
+/// metadata the pre-bridge lowering read: an emitted class, an emitted subclass, an emitted
+/// parent name, the empty string for a parentless class, `stdClass`, and an enum case.
+#[test]
+fn test_aot_get_class_typed_aot_object_keeps_generated_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+class AotNameBase {}
+class AotNameChild extends AotNameBase {}
+enum AotNameSuit { case Hearts; }
+function identity_aot_base(AotNameBase $value): AotNameBase { return $value; }
+eval('$evalLinked = 1;');
+$base = identity_aot_base(new AotNameBase());
+$child = identity_aot_base(new AotNameChild());
+echo get_class($base), ":";
+echo get_class($child), ":";
+echo get_parent_class($child), ":";
+echo get_parent_class($base), ":";
+echo get_class(new stdClass()), ":";
+echo get_class(AotNameSuit::Hearts);
+"#,
+    );
+    assert_eq!(out, "AotNameBase:AotNameChild:AotNameBase::stdClass:AotNameSuit");
+}
+
+/// Issue #506, raised in review: the eval backend must answer what the compiled one does for
+/// `mkdir()`'s `$permissions`/`$recursive` and `file_put_contents()`'s `$flags`.
+///
+/// Four separate divergences are pinned here, each of which the eval path got wrong:
+///
+/// - `mkdir()` on an EXISTING directory returns `false`. `create_dir_all` succeeds there, so
+///   the first implementation answered `true` and re-chmodded a directory it did not create.
+/// - `$permissions` reaches `mkdir(2)` rather than a follow-up `set_permissions`, so the
+///   process umask applies exactly as in PHP — and the parents get the mode too.
+/// - `LOCK_EX` actually locks. The first implementation looked only at `FILE_APPEND`.
+/// - `LOCK_EX` without `FILE_APPEND` truncates AFTER taking the lock, which is php-src's
+///   `'c'` mode. Writing a short line over a longer one is what catches a missing truncate:
+///   the file would keep the tail.
+///
+/// The octal literals are load-bearing in their own right — the eval lexer used to read
+/// `0700` as the decimal SEVEN HUNDRED, which `mkdir(2)` masked into the nonsense mode 0254.
+///
+/// Every expectation is the host PHP 8.5.10 value for the same fragment.
+#[test]
+fn test_eval_mkdir_and_file_put_contents_optional_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+$root = sys_get_temp_dir() . "/elephc_eval_i506";
+eval('$r = $root; if (is_dir($r . "/deep")) { rmdir($r . "/deep"); } if (is_dir($r)) { rmdir($r); }');
+
+echo eval('return mkdir("' . $root . '/deep", 0700, true);') ? "1" : "0";
+echo eval('return mkdir("' . $root . '/deep", 0700, true);') ? "1" : "0";
+printf(":%o:%o", fileperms($root . "/deep") & 0777, fileperms($root) & 0777);
+
+$f = $root . "/deep/log.txt";
+echo ":" . eval('return file_put_contents("' . $f . '", "one\n");');
+echo ":" . eval('return file_put_contents("' . $f . '", "two\n", FILE_APPEND);');
+echo ":" . eval('return file_put_contents("' . $f . '", "three\n", FILE_APPEND | LOCK_EX);');
+echo ":" . str_replace("\n", ",", file_get_contents($f));
+
+eval('return file_put_contents("' . $f . '", "a much longer previous line\n");');
+echo ":" . eval('return file_put_contents("' . $f . '", "short\n", LOCK_EX);');
+echo ":" . str_replace("\n", ",", file_get_contents($f));
+
+unlink($f);
+rmdir($root . "/deep");
+rmdir($root);
+"#,
+    );
+    assert_eq!(out, "10:700:700:4:4:6:one,two,three,:6:short,");
+}
+
+/// Follow-up for #1173: the #1061 narrowed-union shape, run through `eval()`.
+///
+/// #1061 pinned the AOT side: a value typed `Box|bool` that an `instanceof` guard narrowed,
+/// passed to a `Box` parameter, must arrive as the OBJECT and not as the Mixed cell holding
+/// it. The interpreter resolves the argument its own way, so nothing carried over — a missed
+/// unbox there prints a heap address, or a wrong field, rather than the object's own value.
+///
+/// The second half is the multi-union variant: `Wide|int|null` narrowed the same way, with
+/// two fields read so a wrong receiver cannot coincide with the first one at offset zero.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_eval_narrowed_union_argument_reaches_a_typed_object_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class Box { public int $n = 0; }
+function readnum(Box $b): int { return $b->n; }
+function mk(): Box|bool { $b = new Box(); $b->n = 2; return $b; }
+$v = mk();
+if ($v instanceof Box) { echo readnum($v); }
+echo "|";
+class Wide { public int $n = 7; public string $s = "s"; }
+function readwide(Wide $w): string { return $w->n . $w->s; }
+function mkw(int $k): Wide|int|null { return $k === 1 ? new Wide() : ($k === 2 ? 5 : null); }
+$w = mkw(1);
+if ($w instanceof Wide) { echo readwide($w); }
+');
+"#,
+    );
+    assert_eq!(out, "2|7s");
 }

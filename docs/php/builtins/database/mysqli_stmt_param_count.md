@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_param_count()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many placeholders a prepared statement has."
 sidebar:
-  order: 172
+  order: 173
 ---
 
 ## mysqli_stmt_param_count()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_param_count(mixed $statement): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many placeholders a prepared statement has.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

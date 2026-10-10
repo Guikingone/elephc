@@ -282,6 +282,24 @@ foreach ($a as $key => $value) { echo $key, "=", $value, ";"; }
     assert_eq!(out, "true:1:2=3;1=2;0=1;");
 }
 
+/// Keeps the promoted local's boxed owner alive when EIR subsequently releases its argument.
+#[test]
+fn test_krsort_promoted_local_keeps_boxed_owner_after_argument_cleanup() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1, 2, 3];
+echo krsort($a) ? "true:" : "false:";
+echo $a[0], ":";
+$copy = $a;
+$a[0] = 99;
+echo $copy[0], ":", $a[0], ":";
+foreach ($copy as $key => $value) { echo $key, "=", $value, ";"; }
+"#,
+    );
+    assert_eq!(out.stdout, "true:1:1:99:2=3;1=2;0=1;", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// `krsort()` on a statically empty indexed array stays accepted, because an empty receiver
 /// is trivially representable in either direction.
 #[test]
@@ -323,4 +341,236 @@ foreach ($b as $k => $v) { echo $k, $v; }
         "expected clean heap, got: {}",
         out.stderr
     );
+}
+
+// --- Issue #1072: the REINDEXING sorts, whose keys the static type stops describing -------
+//
+// `sort()`/`rsort()` renumber a hash to `0..n-1`, but the receiver keeps its declared key type
+// across the by-reference call: the checker pins a reference alias root there rather than
+// retyping it. Everything below is written at top level, or over a hash LITERAL inside a
+// function, on purpose -- promoting `[]` to a hash inside a function body is a separate
+// use-after-free, and a fixture that hit it would be exercising that bug instead of this one.
+
+/// Issue #1072 repro: `array_keys()` after `sort()` on a string-keyed hash SEGFAULTED.
+///
+/// The key materializer trusted the declared `Str` key type and persisted
+/// `__rt_hash_iter_next`'s `key_hi == -1` integer sentinel as a string length, which is a read
+/// at `ptr[-1]`. It now dispatches on the runtime key form, the way the `Mixed` key type
+/// already did, and the result type widens to `Array<Mixed>` so an integer key has somewhere
+/// to go.
+#[test]
+fn test_issue_1072_array_keys_after_sort_on_a_promoted_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$h = [];
+$h["b"] = 2; $h["a"] = 1;
+sort($h);
+var_dump(array_keys($h));
+echo implode(",", array_keys($h)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n}\n0,1\n"
+    );
+}
+
+/// `rsort()` is the same reindexing shape, and string VALUES reach it too -- the crash was
+/// about the keys, so the value type must not change the answer.
+#[test]
+fn test_issue_1072_array_keys_after_reindexing_sorts_of_a_literal_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function literal_sort(): string { $h = ["b" => 2, "a" => 1]; sort($h); return implode(",", array_keys($h)); }
+function literal_rsort(): string { $h = ["d" => 4, "c" => 3]; rsort($h); return implode(",", array_keys($h)); }
+function literal_strings(): string { $h = ["b" => "y", "a" => "x"]; sort($h); return implode(",", array_keys($h)); }
+echo literal_sort(), ";", literal_rsort(), ";", literal_strings();
+"#,
+    );
+    assert_eq!(out, "0,1;0,1;0,1");
+}
+
+/// Control: the sorts that KEEP their keys must still answer with the string keys.
+///
+/// `asort()`/`ksort()` only relink the chain, so their `array_keys()` answer is unchanged by
+/// the runtime dispatch. This is what pins the fix to *reading* the key form rather than
+/// assuming every hash key became an integer.
+#[test]
+fn test_array_keys_after_a_key_preserving_sort_stays_string_keyed() {
+    let out = compile_and_run(
+        r#"<?php
+function sorted_values(): string { $h = ["b" => 2, "a" => 1]; asort($h); return implode(",", array_keys($h)); }
+function sorted_keys(): string { $h = ["b" => 2, "a" => 1]; ksort($h); return implode(",", array_keys($h)); }
+function untouched(): string { $h = ["b" => 2, "a" => 1]; return implode(",", array_keys($h)); }
+echo sorted_values(), ";", sorted_keys(), ";", untouched();
+"#,
+    );
+    assert_eq!(out, "a,b;a,b;b,a");
+}
+
+/// Control: a hash carrying BOTH key forms renders each as itself, which only a runtime
+/// dispatch can do.
+#[test]
+fn test_array_keys_on_a_mixed_key_hash_keeps_each_key_form() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["b" => 2, 5 => 1];
+var_dump(array_keys($h));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  string(1) \"b\"\n  [1]=>\n  int(5)\n}\n"
+    );
+}
+
+/// The keys are boxed now, so they have to be released: repeating `array_keys()` over both a
+/// key-preserving and a reindexed hash must leave a clean heap, or the fix trades a crash for
+/// a leak.
+#[test]
+fn test_issue_1072_repeated_array_keys_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$kept = ["b" => 2, "a" => 1];
+$sorted = ["d" => 4, "c" => 3];
+sort($sorted);
+$n = 0;
+for ($i = 0; $i < 50; $i++) { $n = $n + count(array_keys($kept)) + count(array_keys($sorted)); }
+echo $n;
+"#,
+    );
+    assert_eq!(out.stdout, "200", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Review follow-up: `array_keys()` on a statically `array<mixed>` receiver was a hard codegen
+/// error, not a working program.
+///
+/// Same root cause as the sorts above, one step earlier: an `array<mixed>` value can be
+/// HASH-backed at run time -- `lower_dynamic_mixed_array_keys` exists to branch on that -- so
+/// its keys can be strings and an `Array<Int>` result has nowhere to put them. The backend
+/// refused the pair outright, which made `array_keys()` over an ordinary heterogeneous literal
+/// fail to compile with "array_keys associative key PHP type Mixed into result PHP type Int".
+#[test]
+fn test_array_keys_on_a_heterogeneous_indexed_literal() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, "b", 2.5];
+var_dump(array_keys($a));
+echo implode(",", array_keys($a)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n  [2]=>\n  int(2)\n}\n0,1,2\n"
+    );
+}
+
+/// Follow-up for #1187: `usort`, `natsort` and `array_multisort` cannot reach a hash at all.
+///
+/// #1099 made `array_keys()` read a hash key's RUNTIME form, and `sort`/`rsort` are covered
+/// above. The three sorts named in the follow-up were expected to ride the same materialization
+/// path, and they do not — every one of them refuses an associative receiver before codegen,
+/// so there is no reindexed hash for `array_keys()` to read:
+///
+/// - `usort` and `natsort` are backend refusals naming the `AssocArray` type, and are the two
+///   this test pins;
+/// - `array_multisort` is a CHECKER refusal ("arguments must be indexed arrays"), so it is
+///   pinned by `test_error_array_multisort_rejects_an_associative_receiver` in
+///   `tests/error_tests/array_builtins.rs` instead. It cannot share the table below: the
+///   codegen harness type-checks with `.expect("type check failed")` on its way to the
+///   backend, so a checker error aborts the fixture rather than being returned to it.
+///
+/// Pinning the three refusals is what makes this coverage question answerable. The day any of
+/// them accepts a hash, its own test fails and the `array_keys()` rows they stand in for have
+/// to be written.
+///
+/// PHP itself only renumbers for `usort`: `natsort` and `array_multisort` KEEP string keys, so
+/// two of the three would need key-preserving expectations rather than `0..n-1` ones.
+#[test]
+fn test_the_remaining_sorts_refuse_an_associative_receiver() {
+    for (source, message) in [
+        (
+            r#"<?php $h = ["b" => 2, "a" => 1]; usort($h, fn($x, $y) => $x <=> $y); echo implode(",", array_keys($h));"#,
+            "usort for PHP type AssocArray",
+        ),
+        (
+            r#"<?php $h = ["b" => "img10", "a" => "img2"]; natsort($h); echo implode(",", array_keys($h));"#,
+            "natsort for PHP type AssocArray",
+        ),
+    ] {
+        let error = compile_source_expect_backend_error(source);
+        assert!(
+            error.contains(message),
+            "expected `{message}` for this source, got: {error}"
+        );
+    }
+}
+
+
+/// Sorting a hash whose local slot widened to boxed `Mixed` must not free it mid-sort.
+///
+/// A local that starts as `[]` and becomes a hash INSIDE a loop has no single array storage
+/// shape, so its frame slot widens to `Mixed`. Loading the hash out of that slot unboxes it with
+/// its own reference; storing it back boxed it and released that reference, and the pending EIR
+/// `release` then dropped the same one again. The block went back to the allocator while
+/// `__rt_hash_ksort` was still relinking it, which left the entry COUNT intact and every key and
+/// value reading back as garbage — `{"\u0000":"`"}` for this one-entry fixture.
+///
+/// One entry is the point: there is nothing to reorder, so this cannot pass by accident.
+#[test]
+fn test_ksort_on_a_hash_from_a_loop_widened_slot_keeps_its_entry() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+foreach ([1] as $v) { $a["q"] = "y"; }
+ksort($a);
+echo json_encode($a), "|", count($a), "|", var_export(array_key_exists("q", $a), true);
+"#,
+    );
+    assert_eq!(out, "{\"q\":\"y\"}|1|true");
+}
+
+/// The same slot shape with several entries, so the relinking itself is exercised too, and
+/// through every one of the four helpers that share this lowering.
+#[test]
+fn test_every_hash_sort_survives_a_loop_widened_slot() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+foreach ([1] as $v) { $a["c"] = "3"; $a["a"] = "1"; $a["b"] = "2"; }
+ksort($a);
+echo json_encode($a), "|";
+krsort($a);
+echo json_encode($a), "|";
+asort($a);
+echo json_encode($a), "|";
+arsort($a);
+echo json_encode($a);
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":\"1\",\"b\":\"2\",\"c\":\"3\"}|{\"c\":\"3\",\"b\":\"2\",\"a\":\"1\"}|\
+{\"a\":\"1\",\"b\":\"2\",\"c\":\"3\"}|{\"c\":\"3\",\"b\":\"2\",\"a\":\"1\"}"
+    );
+}
+
+/// An integer-keyed hash reaches the same slot shape through a gapped variable index, which is
+/// the storage a write the checker cannot bound against the array's length now picks.
+#[test]
+fn test_ksort_on_a_gapped_integer_keyed_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+foreach ([30, 10, 20] as $k) { $a[$k] = $k * 2; }
+ksort($a);
+echo json_encode($a), "|", count($a);
+"#,
+    );
+    assert_eq!(out, "{\"10\":20,\"20\":40,\"30\":60}|3");
 }

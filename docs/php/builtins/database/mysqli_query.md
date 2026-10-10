@@ -1,8 +1,8 @@
 ---
 title: "mysqli_query()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Runs one statement and returns a result set or a success flag."
 sidebar:
-  order: 146
+  order: 147
 ---
 
 ## mysqli_query()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_query(mixed $mysql, string $query, int $result_mode = 0): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Runs one statement and returns a result set or a success flag.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

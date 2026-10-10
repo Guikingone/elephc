@@ -113,6 +113,7 @@ pub(super) fn discover_expr(
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             discover_exprs(args, base_dir, loaded_paths, include_chain, state, output)?;
         }
@@ -133,6 +134,13 @@ pub(super) fn discover_expr(
             for (key, value) in entries {
                 discover_expr(key, base_dir, loaded_paths, include_chain, state, output)?;
                 discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)?;
+                }
             }
         }
         ExprKind::Match { subject, arms, default } => {
@@ -268,6 +276,7 @@ fn discover_instanceof_target(
 ) -> Result<(), CompileError> {
     match target {
         InstanceOfTarget::Name(_) => Ok(()),
+        InstanceOfTarget::Generic(_) => Ok(()),
         InstanceOfTarget::Expr(expr) => {
             discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)
         }

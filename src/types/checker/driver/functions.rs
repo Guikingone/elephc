@@ -17,6 +17,10 @@ use crate::types::FunctionSig;
 
 use super::super::{Checker, FnDecl};
 
+#[cfg(test)]
+#[path = "function_variant_tests.rs"]
+mod tests;
+
 impl Checker {
     /// Collects top-level function declarations from the program, deduplicating by PHP case-insensitive
     /// symbol key. Emits `DuplicateFunction` for repeats and `CannotRedeclareBuiltin` when a user
@@ -59,6 +63,7 @@ impl Checker {
             }
             if let StmtKind::FunctionDecl {
                 name,
+                type_params,
                 params,
                 param_attributes,
                 variadic,
@@ -106,6 +111,7 @@ impl Checker {
                 self.fn_decls.insert(
                     name.clone(),
                     FnDecl {
+                        type_params: type_params.clone(),
                         params: param_names,
                         param_types: param_type_anns,
                         param_attributes: param_attributes.clone(),
@@ -164,9 +170,15 @@ impl Checker {
     pub(super) fn resolve_unchecked_functions(&mut self, errors: &mut Vec<CompileError>) {
         let unchecked: Vec<String> = self
             .fn_decls
-            .keys()
-            .filter(|name| !self.functions.contains_key(*name))
-            .cloned()
+            .iter()
+            // A TEMPLATE has no signature of its own: its parameter types name type parameters
+            // that only a call site can bind, so resolving it here would check the body against
+            // `T` and report `Unknown type: T`. Its instantiations are ordinary entries in
+            // `fn_decls` and are resolved by this same loop.
+            .filter(|(name, decl)| {
+                decl.type_params.is_empty() && !self.functions.contains_key(*name)
+            })
+            .map(|(name, _)| name.clone())
             .collect();
         for name in unchecked {
             if let Some(decl) = self.fn_decls.get(&name).cloned() {
@@ -185,15 +197,83 @@ impl Checker {
         self.resolve_function_variant_groups(errors);
     }
 
+    /// Reports whether a real call site ever invoked this declaration with an argument list.
+    ///
+    /// An include-variant declaration is registered under a GENERATED symbol
+    /// (`__elephc_include_variant_{hash}_{local}`) while the call site names the function the way
+    /// the source wrote it, so the two never match directly. The mapping is read back out of
+    /// `function_variant_groups`, whose key IS the public PHP name and whose values are exactly
+    /// the symbols the resolver generated for it — not parsed back out of the symbol's spelling,
+    /// which a user function named like a generated variant could imitate.
+    ///
+    /// A call to `append_item` reaches whichever variant of `append_item` is live, so any variant
+    /// of a called name counts as called. That is the conservative direction: the only effect is
+    /// to leave a return type alone. A variant reachable solely through a dynamic callable
+    /// therefore keeps the placeholder, exactly as it did before the widening existed.
+    fn function_was_called_directly(&self, name: &str) -> bool {
+        if self.functions_called_directly.contains(name) {
+            return true;
+        }
+        self.function_variant_groups
+            .iter()
+            .any(|(public_name, variants)| {
+                variants.iter().any(|variant| variant == name)
+                    && self.functions_called_directly.contains(public_name)
+            })
+    }
+
+    /// Records `mixed` for every function that returns one of its own untyped parameters and was
+    /// never called with an argument list.
+    ///
+    /// An untyped parameter starts as the `Int` PLACEHOLDER, which a real call site replaces with
+    /// the argument's type. A function no call site ever passed anything to keeps it — so a return
+    /// inferred from that parameter records `Int` for a value that is really whatever the caller
+    /// passes. Reached through `call_user_func`, `array_map` or a first-class callable, the
+    /// runtime-callable invoker then coerces through the recorded type and a returned string
+    /// arrives as `int(0)`, silently (issue #576).
+    ///
+    /// The gate is `functions_called_directly`, not membership in `functions`. Those differ for
+    /// exactly the shape that matters: `array_map(h(...), […])` RESOLVES `h` while checking the
+    /// callable expression, inserting a placeholder-based signature, without ever calling it.
+    ///
+    /// Gated at all ON PURPOSE. Widening every pass-through body instead feeds back:
+    /// `function grow($arr) { … ; return $arr; }` called as `$arr = grow($arr);` would record
+    /// `mixed`, the caller's local would become `mixed`, the next call would re-specialize the
+    /// parameter to `mixed`, and `array_push($arr, …)` inside the body would stop type-checking.
+    pub(super) fn widen_dynamic_only_passthrough_returns(&mut self) {
+        let candidates: Vec<String> = self
+            .fn_decls
+            .keys()
+            .filter(|name| !self.function_was_called_directly(name))
+            .cloned()
+            .collect();
+        for name in candidates {
+            let Some(decl) = self.fn_decls.get(&name).cloned() else {
+                continue;
+            };
+            let Some(signature) = self.functions.get(&name) else {
+                continue;
+            };
+            if !crate::types::dynamic_params::return_exposes_dynamic_param(
+                &decl.body,
+                signature,
+                &name,
+                &self.callable_param_sigs,
+            ) {
+                continue;
+            }
+            if let Some(signature) = self.functions.get_mut(&name) {
+                signature.return_type = crate::types::PhpType::Mixed;
+            }
+        }
+    }
+
     /// Iterates all variant groups that are not yet in `functions` and calls
     /// `ensure_function_variant_group_signature` to compute and insert their unified signatures.
     /// Appends errors to `errors`.
     fn resolve_function_variant_groups(&mut self, errors: &mut Vec<CompileError>) {
         let names: Vec<String> = self.function_variant_groups.keys().cloned().collect();
         for name in names {
-            if self.functions.contains_key(&name) {
-                continue;
-            }
             if let Err(error) =
                 self.ensure_function_variant_group_signature(&name, crate::span::Span::dummy())
             {
@@ -204,7 +284,8 @@ impl Checker {
 
     /// Ensures a unified signature exists for a variant group named `name`. If no unified signature
     /// is cached yet, computes a provisional signature from the first variant and inserts it into
-    /// `functions`. Then resolves each individual variant's signature and verifies all variants
+    /// `functions`, after checking declared contracts before any recursive body uses it.
+    /// Then resolves each individual variant's signature and verifies all variants
     /// share an identical signature. On mismatch, returns an error; on success, inserts the unified
     /// signature and returns `Ok`.
     pub(crate) fn ensure_function_variant_group_signature(
@@ -212,7 +293,15 @@ impl Checker {
         name: &str,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
-        if self.functions.contains_key(name) {
+        if let Some(error) = self.failed_variant_contracts.get(name) {
+            return Err(error.clone());
+        }
+        if self.completed_function_signatures.contains(name)
+            || (self.functions.contains_key(name)
+                && self.function_variant_groups.get(name).is_some_and(|variants| {
+                    variants.iter().any(|variant| self.resolving_functions.contains(variant))
+                }))
+        {
             return Ok(());
         }
         let variants = self
@@ -226,6 +315,21 @@ impl Checker {
             .clone();
 
         if let Some(provisional) = self.provisional_variant_group_sig(&first_variant)? {
+            let declared = self.declared_variant_signature(&first_variant)?;
+            for variant in variants.iter().skip(1) {
+                if let Some(candidate) = self.declared_variant_signature(variant)? {
+                    if Some(candidate) != declared {
+                        let conflict_span = self.fn_decls.get(variant)
+                            .map_or(span, |decl| decl.span);
+                        let error = CompileError::new(
+                            conflict_span,
+                            &format!("Function variants for '{}' must have identical signatures", name),
+                        );
+                        self.failed_variant_contracts.insert(name.to_string(), error.clone());
+                        return Err(error);
+                    }
+                }
+            }
             self.functions.insert(name.to_string(), provisional);
         }
 
@@ -246,6 +350,13 @@ impl Checker {
             self.resolve_function_signature(variant, &decl, param_types)?;
         }
 
+        // In-flight and failed bodies both leave placeholders. An in-flight group is
+        // revisited after unchecked function resolution, rather than cached as complete.
+        // Failed bodies must not invent a signature disagreement from those placeholders.
+        if variants.iter().any(|variant| !self.completed_function_signatures.contains(variant)) {
+            return Ok(());
+        }
+
         let mut sigs = variants.iter().map(|variant| {
             self.functions.get(variant).cloned().ok_or_else(|| {
                 CompileError::new(
@@ -261,11 +372,13 @@ impl Checker {
             .next()
             .transpose()?
             .ok_or_else(|| CompileError::new(span, &format!("Function '{}' has no variants", name)))?;
-        for sig in sigs {
+        for (index, sig) in sigs.enumerate() {
             let sig = sig?;
             if sig != first {
+                let conflict_span = self.fn_decls.get(&variants[index + 1])
+                    .map_or(span, |decl| decl.span);
                 return Err(CompileError::new(
-                    span,
+                    conflict_span,
                     &format!(
                         "Function variants for '{}' must have identical signatures",
                         name
@@ -274,6 +387,7 @@ impl Checker {
             }
         }
         self.functions.insert(name.to_string(), first);
+        self.completed_function_signatures.insert(name.to_string());
         Ok(())
     }
 
@@ -281,6 +395,11 @@ impl Checker {
     /// initial param types. Used as a placeholder when a unified variant-group signature is needed
     /// before individual variants are fully resolved. Returns `Ok(None)` if no declaration exists
     /// for the variant.
+    ///
+    /// A recursive call inside an include-loaded variant names the group, so this placeholder is
+    /// what types that self-call while the variant's body is walked. It is built by the same
+    /// `provisional_function_sig` the free-function path uses, so the declared return hint (or
+    /// `Generator` for a body with `yield`) seeds it instead of a blanket `Int` (issue #635).
     fn provisional_variant_group_sig(
         &mut self,
         first_variant: &str,
@@ -289,29 +408,43 @@ impl Checker {
             return Ok(None);
         };
         let param_types = self.initial_function_param_types(first_variant, &decl)?;
-        Ok(Some(FunctionSig {
-            params: param_types,
-            param_type_exprs: decl
-                .param_types
-                .iter()
-                .cloned()
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
-                .collect(),
-            param_attributes: decl.param_attributes.clone(),
-            defaults: decl.defaults,
-            return_type: crate::types::PhpType::Int,
-            declared_return: decl.return_type.is_some(),
-            by_ref_return: false,
-            ref_params: decl.ref_params,
-            declared_params: decl
-                .param_types
-                .iter()
-                .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
-                .collect(),
-            variadic: decl.variadic,
-            deprecation: None,
-        }))
+        Ok(Some(self.provisional_function_sig(&decl, param_types)))
+    }
+
+    /// Resolves actual annotations independently of body-driven Generator or Int placeholders.
+    fn declared_variant_signature(&mut self, variant: &str) -> Result<Option<FunctionSig>, CompileError> {
+        let Some(decl) = self.fn_decls.get(variant).cloned() else { return Ok(None); };
+        let params = self.initial_function_param_types(variant, &decl)?;
+        let mut sig = self.provisional_function_sig(&decl, params);
+        sig.return_type = match &decl.return_type {
+            Some(annotation) => self.resolve_declared_return_type_hint(annotation, decl.span, &format!("Function '{}'", variant))?,
+            None => crate::types::PhpType::Mixed,
+        };
+        for (index, (_, ty)) in sig.params.iter_mut().enumerate() {
+            *ty = match sig.param_type_exprs.get(index).and_then(Option::as_ref) {
+                Some(annotation) => {
+                    let resolved = self.resolve_declared_param_type_hint(annotation, decl.span, &format!("Function '{}' parameter", variant))?;
+                    if index == decl.params.len() { crate::types::PhpType::Array(Box::new(resolved)) } else { resolved }
+                }
+                None => crate::types::PhpType::Mixed,
+            };
+        }
+        Ok(Some(sig))
+    }
+
+    /// Emits one copy of each group or variant-declaration diagnosis in original error order.
+    pub(super) fn deduplicate_variant_signature_errors(&self, errors: &mut Vec<CompileError>) {
+        let messages: HashSet<_> = self.function_variant_groups.keys().map(|name| {
+            format!("Function variants for '{}' must have identical signatures", name)
+        }).collect();
+        let declaration_spans: HashSet<_> = self.function_variant_groups.values()
+            .flatten().filter_map(|variant| self.fn_decls.get(variant))
+            .map(|decl| decl.span).collect();
+        let mut seen = HashSet::new();
+        errors.retain(|error| {
+            (!messages.contains(&error.message) && !declaration_spans.contains(&error.span))
+                || seen.insert((error.span, error.file.clone(), error.message.clone()))
+        });
     }
 }
 

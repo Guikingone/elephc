@@ -1,8 +1,8 @@
 ---
 title: "cairo_rotate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Rotates the context's transformation by the given angle in radians."
 sidebar:
-  order: 430
+  order: 431
 ---
 
 ## cairo_rotate()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_rotate(mixed $context, float $angle): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Rotates the context's transformation by the given angle in radians.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

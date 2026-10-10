@@ -32,18 +32,107 @@ pub enum LinkError {
     MissingBridge {
         /// Authoritative bridge linker name that could not be materialized.
         name: String,
+        /// Archive filename or exact path this bridge resolves to, when known.
+        ///
+        /// An unknown named bridge has no archive path or discovery metadata and renders
+        /// only the first line. An unknown bridge with an exact archive path reports that
+        /// path in `needs:` without inventing fallback locations.
+        archive: Option<String>,
+        /// Per-bridge directory override that takes priority over every search location.
+        env_var: Option<String>,
+        /// Directories that were consulted, in the order they were tried.
+        searched: Vec<String>,
+        /// The `env_var` directory, when it is what short-circuited discovery.
+        ///
+        /// An override does not join the search — it REPLACES it, returning before any
+        /// fallback is consulted. So its presence changes what the message may claim: the
+        /// fallbacks were not tried, and the fix is to correct or unset the variable rather
+        /// than to place an archive next to the binary, which the override would ignore.
+        override_dir: Option<String>,
     },
 }
 
 impl std::fmt::Display for LinkError {
     /// Formats an actionable linker-preparation diagnostic.
+    ///
+    /// "Actionable" means naming the way out, which the bare first line never did: a binary
+    /// copied out of its build tree fails here with nothing to go on, and the archives simply
+    /// have to travel with it (issue #517). So the message reports the archive it wanted, the
+    /// directories it actually looked in, and the environment override — a resolution order
+    /// that is otherwise only discoverable by reading `linker::bridges`.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingBridge { name } => {
-                write!(formatter, "required Elephc bridge `{name}` could not be found")
+            Self::MissingBridge {
+                name,
+                archive,
+                env_var,
+                searched,
+                override_dir,
+            } => {
+                write!(formatter, "required Elephc bridge `{name}` could not be found")?;
+                let Some(archive) = archive else {
+                    return Ok(());
+                };
+                write!(formatter, "\n  needs: {archive}")?;
+                if !searched.is_empty() {
+                    write!(formatter, "\n  looked in:")?;
+                    for directory in searched {
+                        write!(formatter, "\n    {directory}")?;
+                    }
+                }
+                let Some(env_var) = env_var else {
+                    return Ok(());
+                };
+                // An override that short-circuited discovery gets the opposite advice: the
+                // fallbacks were never consulted, so telling the user to put the archive next
+                // to the binary would send them somewhere this run will not look.
+                let invalid_file = invalid_archive_filename(archive);
+                match (override_dir, invalid_file) {
+                    (Some(override_dir), Some(filename)) => write!(
+                        formatter,
+                        "\n\n{env_var} is set to {override_dir}, which takes priority over every \
+                         other location, so no other directory was consulted. Replace invalid \
+                         archive {archive} with a non-empty regular file, point {env_var} to a \
+                         directory containing a valid {filename}, or unset {env_var} to search \
+                         the other locations again. `elephc --print-capabilities` lists every \
+                         archive this binary can need."
+                    ),
+                    (Some(override_dir), None) => write!(
+                        formatter,
+                        "\n\n{env_var} is set to {override_dir}, which takes priority over every \
+                         other location — the elephc binary's own directory, a sibling lib/ and \
+                         the build tree were NOT consulted. Put {archive} in {override_dir}, \
+                         point {env_var} somewhere that has it, or unset {env_var} to search \
+                         those locations again. `elephc --print-capabilities` lists every \
+                         archive this binary can need."
+                    ),
+                    (None, Some(filename)) => write!(
+                        formatter,
+                        "\n\nReplace invalid archive {archive} with a non-empty regular \
+                         file, or set {env_var} to a directory containing a valid \
+                         {filename}. `elephc --print-capabilities` lists every archive \
+                         this binary can need."
+                    ),
+                    (None, None) => write!(
+                        formatter,
+                        "\n\nSet {env_var} to a directory containing {archive}, or keep the \
+                         bridge archives next to the elephc binary (or in a sibling lib/). \
+                         `elephc --print-capabilities` lists every archive this binary can need."
+                    ),
+                }
             }
         }
     }
+}
+
+/// Returns the filename of `archive` when it is a full path to an entry that exists but is
+/// not a usable archive, which is how the errors distinguish an invalid file from a missing
+/// one: a missing archive is reported by its bare filename.
+fn invalid_archive_filename(archive: &str) -> Option<&str> {
+    Path::new(archive)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| *name != archive)
 }
 
 impl std::error::Error for LinkError {}

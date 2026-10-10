@@ -1,8 +1,8 @@
 ---
 title: "cairo_curve_to()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Adds a cubic Bezier curve through two control points to the current path."
 sidebar:
-  order: 402
+  order: 403
 ---
 
 ## cairo_curve_to()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_curve_to(mixed $context, float $x1, float $y1, float $x2, float $y2, float $x3, float $y3): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Adds a cubic Bezier curve through two control points to the current path.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -29,7 +29,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

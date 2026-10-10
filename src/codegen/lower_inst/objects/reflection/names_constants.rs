@@ -9,6 +9,10 @@
 
 use super::*;
 
+#[cfg(test)]
+#[path = "interface_method_names_tests.rs"]
+mod interface_method_names_tests;
+
 /// Returns the `__construct` member object metadata when the reflected class-like symbol has one.
 pub(super) fn reflection_constructor_member(
     method_members: &[ReflectionListedMember],
@@ -17,6 +21,38 @@ pub(super) fn reflection_constructor_member(
         .iter()
         .find(|member| php_symbol_key(&member.name) == "__construct")
         .cloned()
+}
+
+/// Returns the `__construct` member a class inherits from an ancestor that declares it PRIVATE.
+///
+/// A private method is not inherited, so the descendant's own method list — which is what
+/// `getMethods()` and `method_exists()` answer from, and which PHP also reports as empty here —
+/// carries no `__construct`. PHP's `getConstructor()` nevertheless returns a `ReflectionMethod`
+/// on the DECLARING class, and `isInstantiable()` is `false` because that constructor is not
+/// public. Both were wrong without this fallback: `getConstructor()` answered `null` and
+/// `isInstantiable()` answered `true` (issue #869).
+///
+/// Built from the OWNER's `ClassInfo`, so the member's declaring class, visibility flags,
+/// parameters and source lines are the ancestor's, exactly as PHP reports them. Returns `None`
+/// for a class with no constructor anywhere in its chain, and for one whose own list already
+/// carried the entry — that caller checks first.
+pub(super) fn inherited_private_constructor_member(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Result<Option<ReflectionListedMember>> {
+    let Some((owner_name, owner_info)) =
+        crate::types::constructor_owner(&ctx.module.class_infos, class_name)
+    else {
+        return Ok(None);
+    };
+    if php_symbol_key(owner_name) == php_symbol_key(class_name) {
+        return Ok(None);
+    }
+    // The failure is PROPAGATED, not swallowed into `None`. Building a member resolves the
+    // owner's prototype and parameter defaults, and either can fail; answering "no constructor"
+    // instead would turn a real metadata error into a silently wrong `isInstantiable() == true`,
+    // where the ordinary method-member path reports it. `?` here matches that path.
+    reflection_class_method_member(ctx, owner_name, owner_info, "__construct")
 }
 
 /// Builds common ReflectionMethod/ReflectionProperty predicate flags.
@@ -41,7 +77,7 @@ pub(super) fn reflection_member_flags(
     }
 }
 
-/// Returns PHP case-insensitive method names declared by an interface and its parents.
+/// Returns interface method keys in PHP declaration order, followed by inherited methods.
 pub(super) fn reflection_interface_method_names(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
@@ -49,14 +85,39 @@ pub(super) fn reflection_interface_method_names(
     let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
         return Vec::new();
     };
-    let Some(info) = ctx.module.interface_infos.get(interface_name) else {
-        return Vec::new();
-    };
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
-    push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
+    let mut visited = std::collections::HashSet::new();
+    collect_reflection_interface_method_names(
+        &ctx.module.interface_infos, interface_name, &mut names, &mut seen, &mut visited,
+    );
     names
+}
+
+/// Visits each interface once, preserving depth-first declaration order across shared ancestors.
+fn collect_reflection_interface_method_names(
+    interfaces: &std::collections::HashMap<String, InterfaceInfo>,
+    interface_name: &str,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+    visited: &mut std::collections::HashSet<String>,
+) {
+    if !visited.insert(php_symbol_key(interface_name.trim_start_matches('\\'))) {
+        return;
+    }
+    let Some(info) = interfaces.get(interface_name) else {
+        return;
+    };
+    push_unique_method_names(info.method_decls.iter().map(|method| &method.name), names, seen);
+    for parent in &info.parents {
+        collect_reflection_interface_method_names(interfaces, parent, names, seen, visited);
+    }
+    // Injected interfaces can carry signatures without source declarations.
+    push_unique_method_names(info.method_order.iter(), names, seen);
+    push_unique_method_names(info.static_method_order.iter(), names, seen);
+    let mut remaining = info.methods.keys().chain(info.static_methods.keys()).collect::<Vec<_>>();
+    remaining.sort_unstable();
+    push_unique_method_names(remaining.into_iter(), names, seen);
 }
 
 /// Returns PHP case-sensitive property names declared by an interface and its parents.
@@ -91,7 +152,7 @@ pub(super) fn reflection_interface_constant_names(
     };
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for constant in info.constants.keys() {
+    for constant in declared_then_remaining(&info.constant_order, info.constants.keys()) {
         push_unique_constant_name(constant, &mut names, &mut seen);
     }
     names
@@ -415,7 +476,16 @@ pub(super) fn reflection_static_receiver_name(
     current_info: Option<&crate::types::ClassInfo>,
     receiver: &StaticReceiver,
 ) -> Result<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Ok(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static => Ok(current_class.to_string()),
         StaticReceiver::Parent => current_info
@@ -489,4 +559,3 @@ pub(super) fn reflection_enum_case_backing_value(case: &EnumCaseInfo) -> Option<
         EnumCaseValue::Str(value) => Some(ReflectionConstantValue::Str(value.clone())),
     }
 }
-

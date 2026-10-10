@@ -49,10 +49,12 @@ static GATE: OnceLock<(Mutex<GateState>, Condvar)> = OnceLock::new();
 static CALLBACK_EXITED: AtomicBool = AtomicBool::new(false);
 static RELEASED_CONTEXTS: AtomicUsize = AtomicUsize::new(0);
 
+/// Initializes the test gate used to observe admission before allowing callbacks to finish.
 fn gate() -> &'static (Mutex<GateState>, Condvar) {
     GATE.get_or_init(|| (Mutex::new(GateState::default()), Condvar::new()))
 }
 
+/// Encodes a test string into an owned EPV input/result blob.
 fn blob(bytes: &[u8]) -> ParallelTransferBlob {
     let writer = elephc_parallel_value_writer_new();
     assert!(!writer.is_null());
@@ -71,6 +73,7 @@ fn blob(bytes: &[u8]) -> ParallelTransferBlob {
     blob
 }
 
+/// Test-only acquisition returns a non-dereferenced context sentinel, not a real runtime slot.
 unsafe extern "C" fn acquire_context(
     _arena: *mut u8,
     _heap_size: usize,
@@ -84,11 +87,13 @@ unsafe extern "C" fn acquire_context(
     1usize as *mut c_void
 }
 
+/// Counts test context releases and permits backing cleanup without operating on runtime memory.
 unsafe extern "C" fn release_context(_context: *mut c_void) -> i64 {
     RELEASED_CONTEXTS.fetch_add(1, Ordering::Release);
     1
 }
 
+/// Test entry forwards the callback and leaves release acknowledgment to bridge fallback cleanup.
 unsafe extern "C" fn worker_entry(
     _context: *mut c_void,
     callback: crate::WorkerCallback,
@@ -101,6 +106,7 @@ unsafe extern "C" fn worker_entry(
 
 const _: crate::WorkerEntry = worker_entry;
 
+/// Records its real OS-thread id, waits behind the admission gate, then settles an owned result.
 unsafe extern "C" fn gated_callback(job: *mut c_void) -> i64 {
     let id = job as usize as u64;
     let thread = format!("{:?}", thread::current().id());
@@ -118,22 +124,27 @@ unsafe extern "C" fn gated_callback(job: *mut c_void) -> i64 {
     0
 }
 
+/// Returns success without settling a record to exercise the executor's missing-outcome failure.
 unsafe extern "C" fn incomplete_callback(_job: *mut c_void) -> i64 {
     0
 }
 
+/// Injects the typed transfer-decode status without emulating a PHP decoder.
 unsafe extern "C" fn transfer_decode_callback(_job: *mut c_void) -> i64 {
     PARALLEL_WORKER_TRANSFER_DECODE
 }
 
+/// Injects the typed transfer-encode status without producing a terminal value blob.
 unsafe extern "C" fn transfer_encode_callback(_job: *mut c_void) -> i64 {
     PARALLEL_WORKER_TRANSFER_ENCODE
 }
 
+/// Injects the worker arena/transfer allocation failure status for category preservation.
 unsafe extern "C" fn arena_exhausted_callback(_job: *mut c_void) -> i64 {
     PARALLEL_WORKER_ARENA_EXHAUSTED
 }
 
+/// Settles before sleeping briefly so waiters must join the owned thread rather than just its phase.
 unsafe extern "C" fn complete_before_exit_callback(job: *mut c_void) -> i64 {
     let id = job as usize as u64;
     assert_eq!(elephc_parallel_job_complete(id, blob(b"done")), 1);
@@ -142,6 +153,7 @@ unsafe extern "C" fn complete_before_exit_callback(job: *mut c_void) -> i64 {
     0
 }
 
+/// Settles a PHP serialized string through the real terminal-payload adapter.
 unsafe extern "C" fn complete_php_serialized_callback(job: *mut c_void) -> i64 {
     let id = job as usize as u64;
     let value = b"s:4:\"done\";";
@@ -152,6 +164,7 @@ unsafe extern "C" fn complete_php_serialized_callback(job: *mut c_void) -> i64 {
     }
 }
 
+/// Settles a PHP failure-field array through the real failure-envelope adapter.
 unsafe extern "C" fn fail_php_serialized_callback(job: *mut c_void) -> i64 {
     let id = job as usize as u64;
     let failure = b"a:7:{i:0;i:1;i:1;s:11:\"DomainError\";i:2;s:4:\"boom\";i:3;i:7;i:4;s:8:\"task.php\";i:5;i:41;i:6;a:0:{}}";
@@ -162,6 +175,7 @@ unsafe extern "C" fn fail_php_serialized_callback(job: *mut c_void) -> i64 {
     }
 }
 
+/// Copies a test terminal payload before releasing its native transfer allocation.
 fn php_payload(blob: ParallelTransferBlob) -> Vec<u8> {
     assert!(!blob.ptr.is_null());
     assert!(blob.len >= crate::TRANSFER_HEADER_LEN);
@@ -176,6 +190,7 @@ fn php_payload(blob: ParallelTransferBlob) -> Vec<u8> {
     bytes
 }
 
+/// Waits with a bounded deadline for admission observations and returns their ordered snapshot.
 fn wait_for_started(count: usize) -> Vec<(u64, String)> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let (state, changed) = gate();
@@ -193,6 +208,7 @@ fn wait_for_started(count: usize) -> Vec<(u64, String)> {
     state.started.clone()
 }
 
+/// Opens selected callback gates while leaving other admitted workers blocked.
 fn release(ids: impl IntoIterator<Item = u64>) {
     let (state, changed) = gate();
     let mut state = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -200,14 +216,17 @@ fn release(ids: impl IntoIterator<Item = u64>) {
     changed.notify_all();
 }
 
+/// Submits a fixture job with the observable gated callback.
 fn submit(id: u64) -> i32 {
     submit_with(id, gated_callback)
 }
 
+/// Submits a typed fixture callback using its reviewed native entry address.
 fn submit_with(id: u64, callback: crate::WorkerCallback) -> i32 {
     submit_with_addr(id, callback as *const () as usize)
 }
 
+/// Uses the test context/entry callbacks and default stack size for one executor submission.
 fn submit_with_addr(id: u64, callback_addr: usize) -> i32 {
     elephc_parallel_job_submit_v1(
         id,
@@ -220,6 +239,7 @@ fn submit_with_addr(id: u64, callback_addr: usize) -> i32 {
     )
 }
 
+/// FIFO admission obeys capacity, keeps queued jobs threadless and joins owned threads before release.
 #[test]
 fn admission_is_bounded_fifo_thread_owned_and_joined_before_release() {
     let _serial = TEST_LOCK
@@ -280,6 +300,7 @@ fn admission_is_bounded_fifo_thread_owned_and_joined_before_release() {
     assert_eq!(elephc_parallel_job_release(cancelled), 1);
 }
 
+/// Concurrent waiters join actual callback exit, while a missing terminal payload becomes failure.
 #[test]
 fn wait_joins_the_owned_thread_and_missing_outcomes_fail_closed() {
     let _serial = TEST_LOCK
@@ -318,6 +339,7 @@ fn wait_joins_the_owned_thread_and_missing_outcomes_fail_closed() {
     assert_eq!(elephc_parallel_job_release(incomplete), 1);
 }
 
+/// Parent copies of PHP result/failure payloads remain valid after test worker context release.
 #[test]
 fn php_terminal_payloads_outlive_worker_context_release() {
     let _serial = TEST_LOCK
@@ -368,6 +390,7 @@ fn php_terminal_payloads_outlive_worker_context_release() {
     assert_eq!(elephc_parallel_job_release(failed), 1);
 }
 
+/// Decode, encode and arena statuses preserve distinct machine-visible failure categories.
 #[test]
 fn worker_transfer_statuses_preserve_machine_visible_failure_kinds() {
     let _serial = TEST_LOCK
@@ -388,6 +411,7 @@ fn worker_transfer_statuses_preserve_machine_visible_failure_kinds() {
     }
 }
 
+/// A controlled bridge panic settles, wakes, joins and releases its test context instead of stalling.
 #[test]
 fn controlled_bridge_panic_wakes_waiter_joins_worker_and_releases_context() {
     let _serial = TEST_LOCK

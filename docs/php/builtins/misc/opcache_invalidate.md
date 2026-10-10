@@ -1,8 +1,8 @@
 ---
 title: "opcache_invalidate()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Invalidates a script's cached opcodes, optionally without checking its timestamp."
 sidebar:
-  order: 616
+  order: 641
 ---
 
 ## opcache_invalidate()
@@ -11,7 +11,7 @@ sidebar:
 function opcache_invalidate(mixed $filename, mixed $force = false): bool
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Invalidates a script's cached opcodes, optionally without checking its timestamp.
 
 **Parameters**:
 - `$filename` (`mixed`)
@@ -22,9 +22,9 @@ Implemented by the compiler-injected OPcache prelude.
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported through native OPcache prelude declarations or dedicated interpreter handlers; see [OPcache](../../opcache.md).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

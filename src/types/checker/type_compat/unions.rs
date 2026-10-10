@@ -12,39 +12,53 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
+/// Flattens nested unions, drops duplicates, lets `Mixed` absorb everything, and applies
+/// PHP's `bool`/`false` subtype rule — `bool` already contains the literal `false`, so the
+/// two never coexist as separate members.
+///
+/// Free-standing because the inferred-return fold in
+/// `checker::functions::returns::wider_type` is an associated function with no `self` and
+/// must build its unions through the SAME normalizer. Hand-rolled member pushing there
+/// produced `false|string|bool`, whose redundant `False` made two structurally equal types
+/// compare unequal — and `PhpType`/`FunctionSig` equality is what callable-return metadata
+/// is keyed on.
+pub(crate) fn normalize_union_members(members: Vec<PhpType>) -> PhpType {
+    let mut flat = Vec::new();
+    for member in members {
+        match member {
+            PhpType::Union(inner) => flat.extend(inner),
+            PhpType::Mixed => return PhpType::Mixed,
+            other => flat.push(other),
+        }
+    }
+
+    let mut deduped: Vec<PhpType> = Vec::new();
+    for member in flat {
+        // `bool` already contains the literal `false` subtype. Keep `False` only when the
+        // declaration is specifically false-only (for example `int|false`).
+        if member == PhpType::False && deduped.iter().any(|existing| existing == &PhpType::Bool) {
+            continue;
+        }
+        if member == PhpType::Bool {
+            deduped.retain(|existing| existing != &PhpType::False);
+        }
+        if !deduped.iter().any(|existing| existing == &member) {
+            deduped.push(member);
+        }
+    }
+
+    if deduped.len() == 1 {
+        deduped.pop().expect("union member exists")
+    } else {
+        PhpType::Union(deduped)
+    }
+}
+
 impl Checker {
     /// Flattens nested unions, removes duplicates and `PhpType::Mixed` (which absorbs all),
     /// and returns a single `PhpType` or a `PhpType::Union` with deduped members.
     pub(crate) fn normalize_union_type(&self, members: Vec<PhpType>) -> PhpType {
-        let mut flat = Vec::new();
-        for member in members {
-            match member {
-                PhpType::Union(inner) => flat.extend(inner),
-                PhpType::Mixed => return PhpType::Mixed,
-                other => flat.push(other),
-            }
-        }
-
-        let mut deduped = Vec::new();
-        for member in flat {
-            // `bool` already contains the literal `false` subtype. Keep `False` only when the
-            // declaration is specifically false-only (for example `int|false`).
-            if member == PhpType::False && deduped.iter().any(|existing| existing == &PhpType::Bool) {
-                continue;
-            }
-            if member == PhpType::Bool {
-                deduped.retain(|existing| existing != &PhpType::False);
-            }
-            if !deduped.iter().any(|existing| existing == &member) {
-                deduped.push(member);
-            }
-        }
-
-        if deduped.len() == 1 {
-            deduped.pop().expect("union member exists")
-        } else {
-            PhpType::Union(deduped)
-        }
+        normalize_union_members(members)
     }
 
     /// Returns true if `expected` type can accept a value of `actual` type (i.e., the
@@ -54,6 +68,27 @@ impl Checker {
     pub(crate) fn type_accepts(&self, expected: &PhpType, actual: &PhpType) -> bool {
         if expected == actual {
             return true;
+        }
+        // The arithmetic union is decided by the arms below, not here: this per-member rule asks
+        // whether `int` accepts `float`, which is false, so it would refuse `int|float` at every
+        // position — including the `int` parameters the preludes pass a loop counter to.
+        if let PhpType::Union(members) = actual {
+            if !actual.is_int_float_union() {
+                // Inside a WIDER union the arithmetic pair is still judged as the unit it is:
+                // `$last ? null : -$i` is `int|float|null`, and splitting it asked whether `int`
+                // accepts `float`, so `?int $d` refused what it takes as `int|float` alone and as
+                // `null` alone. Every other member keeps the ordinary per-member rule, which is
+                // what still catches an unchecked `X|false` sentinel.
+                if members.contains(&PhpType::Int) && members.contains(&PhpType::Float) {
+                    let arithmetic = PhpType::Union(vec![PhpType::Int, PhpType::Float]);
+                    return self.type_accepts(expected, &arithmetic)
+                        && members
+                            .iter()
+                            .filter(|member| !matches!(member, PhpType::Int | PhpType::Float))
+                            .all(|member| self.type_accepts(expected, member));
+                }
+                return members.iter().all(|member| self.type_accepts(expected, member));
+            }
         }
         match expected {
             PhpType::Mixed => true,
@@ -67,6 +102,34 @@ impl Checker {
             {
                 true
             }
+
+            // The arithmetic union belongs with `Mixed` at a scalar position, and leaving it out
+            // was inconsistent: `mixed` is the widest type there is, so refusing `int|float`
+            // while accepting `mixed` made the NARROWER type the stricter one. It surfaced the
+            // moment `$i++` started reporting `int|float`: every prelude that passes a loop
+            // counter to an `int` parameter stopped compiling.
+            //
+            // Only THIS union, not unions in general. `string|false` at a `string` parameter
+            // must keep being refused — that diagnostic is how an unchecked `false` sentinel
+            // gets caught, and it is worth more than the symmetry.
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+                if actual.is_int_float_union() =>
+            {
+                true
+            }
+            // An expected UNION containing a number accepts the arithmetic union whole. The
+            // per-member recursion below cannot: it asks whether `int` accepts `float`, which is
+            // false, so `?int $x` refused a counter that a bare `int $x` took. `mixed` was
+            // accepted at all of these positions, so this is the same "narrower type is the
+            // stricter one" hole, one level up.
+            PhpType::Union(members)
+                if actual.is_int_float_union()
+                    && members
+                        .iter()
+                        .any(|member| matches!(member, PhpType::Int | PhpType::Float)) =>
+            {
+                true
+            }
             PhpType::Union(members) => match actual {
                 PhpType::Union(actual_members) => actual_members.iter().all(|actual_member| {
                     members
@@ -77,6 +140,7 @@ impl Checker {
                     .iter()
                     .any(|member| self.type_accepts(member, actual)),
             },
+
             PhpType::Array(expected_elem) => match actual {
                 PhpType::Array(actual_elem) if matches!(actual_elem.as_ref(), PhpType::Never) => {
                     true
@@ -98,6 +162,13 @@ impl Checker {
                     self.type_accepts(expected_key.as_ref(), actual_key.as_ref())
                         && self.type_accepts(expected_value.as_ref(), actual_value.as_ref())
                 }
+                // The empty literal `[]` is `Array(Never)` and carries no keys and no element
+                // storage, so it satisfies EVERY declared container form — including a
+                // string-keyed one, which the `Mixed | Int` case below cannot reach. Mirrors
+                // the same shortcut the indexed arm takes.
+                PhpType::Array(actual_elem) if matches!(actual_elem.as_ref(), PhpType::Never) => {
+                    true
+                }
                 PhpType::Array(actual_elem)
                     if matches!(expected_key.as_ref(), PhpType::Mixed | PhpType::Int)
                         && self.type_accepts(expected_value.as_ref(), actual_elem.as_ref()) =>
@@ -113,6 +184,11 @@ impl Checker {
                         || self.is_subclass_of(actual_name, expected_name)
                         || self.class_implements_interface(actual_name, expected_name)
                         || self.interface_extends_interface(actual_name, expected_name)
+                        // Two instantiations of one template are unrelated classes, so every
+                        // disjunct above has already said no. A variance marker is the only
+                        // thing that can relate them, and it relates them here rather than
+                        // through an inheritance edge — see `generic_variance`.
+                        || self.variance_permits(expected_name, actual_name)
                 }
                 _ => false,
             },
@@ -230,6 +306,17 @@ impl Checker {
         if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
             return Some(PhpType::Mixed);
         }
+        // The arithmetic union merges with either number it is made of. It is what an
+        // incremented integer local carries, and the checker walks a body more than once: the
+        // first walk sees `$t = $i++` as `int` and the second as `int|float`, so refusing the
+        // merge made a re-walk a hard `cannot reassign` on code that had not changed.
+        if (existing.is_int_float_union()
+            && matches!(new_ty, PhpType::Int | PhpType::Float))
+            || (new_ty.is_int_float_union()
+                && matches!(existing, PhpType::Int | PhpType::Float))
+        {
+            return Some(PhpType::Union(vec![PhpType::Int, PhpType::Float]));
+        }
         if matches!(existing, PhpType::Union(_)) {
             return None;
         }
@@ -329,6 +416,23 @@ impl Checker {
         matches!(ty, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Mixed))
     }
 
+    /// Whether a method's stored parameter may be sharpened to a call site's array shape.
+    ///
+    /// Only an unparameterized hint can be. A WRITTEN `array<mixed>` resolves to the same
+    /// `Array(Mixed)` but is a contract: sharpening the method's stored signature to the first
+    /// call's `array<int>` made every later call check against it, and `$k->g($strings)` was
+    /// refused with `expects array<int>, got array<string>`.
+    pub(crate) fn sharpens_to_call_site_array(sig: &crate::types::FunctionSig, index: usize) -> bool {
+        Self::is_generic_array_hint(&sig.params[index].1)
+            && !matches!(
+                sig.param_type_exprs.get(index),
+                Some(Some(
+                    crate::parser::ast::TypeExpr::Array(_)
+                        | crate::parser::ast::TypeExpr::AssocArray { .. }
+                ))
+            )
+    }
+
     /// If `declared_ty` is a generic array hint and `actual_ty` is a concrete array or
     /// assoc-array, returns `actual_ty` (specialization). Otherwise returns `declared_ty`.
     /// Used to sharpen untyped `array` parameters when the actual argument type is known.
@@ -357,6 +461,11 @@ impl Checker {
     ) -> PhpType {
         if !Self::is_generic_array_hint(declared_ty) {
             return declared_ty.clone();
+        }
+        if let PhpType::Union(members) = actual_ty {
+            if members.iter().all(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })) {
+                return actual_ty.clone();
+            }
         }
         match actual_ty {
             PhpType::Array(element)

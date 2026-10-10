@@ -19,6 +19,7 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    let key_already_diagnosed = compound_array_key_diagnosed_in_prelude(target, value, prelude, expr.span);
     for stmt in prelude {
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
@@ -39,11 +40,22 @@ pub(super) fn lower_assignment_expr(
         _ => None,
     };
     if let Some(name) = assigned_name {
+        crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
         if is_compound_assignment_self_read(value, name, expr.span) && !ctx.has_local_slot(name) {
             let null_value = ctx.builder.emit_const_null();
             let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
             ctx.store_local(name, null_lowered, PhpType::Void, Some(expr.span));
             ctx.mark_local_initialized(name);
+        }
+    }
+    if assigned_name.is_none() {
+        if let Some(result_target) = result_target {
+            // The non-local write evaluates the value itself. Lowering it beforehand leaves
+            // an unused read (or repeats a side effect) before the target is written.
+            lower_non_local_assignment_write_with_diagnosed_key(
+                ctx, target, value, expr.span, key_already_diagnosed,
+            );
+            return lower_expr(ctx, result_target);
         }
     }
     let static_callable = assigned_name.and_then(|_| static_callable_binding_for_expr(ctx, value));
@@ -65,6 +77,7 @@ pub(super) fn lower_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
+        let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(expr.span));
         // For static locals and ref-bound locals, keep the declared type to
         // avoid widening Int→Mixed. The codegen narrows Mixed→Int when the slot
         // is Int-typed. Without this, ref cells would hold Mixed boxes instead
@@ -108,7 +121,7 @@ pub(super) fn lower_assignment_expr(
             ctx.bind_fiber_start_sig(name, sig);
         }
     } else {
-        lower_non_local_assignment_write(ctx, target, value, expr.span);
+        lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, expr.span, key_already_diagnosed);
     }
     if let Some(result_target) = result_target {
         return lower_expr(ctx, result_target);
@@ -169,6 +182,8 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
     // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
     // load — the merge's — per execution.
+    // The insert converts a float key again: PHP's probe and its insert are separate accesses,
+    // and each reports the deprecation.
     ctx.with_borrowed_write_operand(|ctx| {
         lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
     });
@@ -182,6 +197,63 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     Some(take_owned_temp(ctx, temp_name, expr.span))
 }
 
+/// Lowers a statement-level `$place[$key] ??= $default` the way PHP executes it.
+///
+/// PHP probes the element once and inserts `$default` only when that probe produced null: a
+/// present element is never written back, and an inserted float key is converted twice, once
+/// by the probe and once by the insert, each reporting its deprecation. A statement has no
+/// result, so the probed value is dead as soon as the null test has consumed it.
+pub(crate) fn lower_null_coalesce_update_stmt(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    default: &Expr,
+    span: Span,
+) {
+    let current = lower_null_coalesce_value(ctx, target);
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![current.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, current, Some(span));
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let insert_block = ctx.builder.create_named_block("coalesce_assign.default", Vec::new());
+    let merge = ctx.builder.create_named_block("coalesce_assign.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: insert_block,
+        then_args: Vec::new(),
+        else_target: merge,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(insert_block);
+    lower_non_local_assignment_write(ctx, target, default, span);
+    let insert_reachable = !ctx.builder.insertion_block_is_terminated();
+    let insert_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        insert_initialized,
+        insert_reachable,
+        split_initialized.clone(),
+        true,
+    ));
+    // The probe answers non-null only when a local receiver already holds its array, and the
+    // insert stores into it, so that local is initialized on both paths. Without this fact the
+    // next store into it would skip releasing the array it replaces.
+    if let ExprKind::ArrayAccess { array, .. } = &target.kind {
+        if let ExprKind::Variable(name) = &array.kind {
+            ctx.mark_local_initialized(name);
+        }
+    }
+}
+
 /// Emits the write side of an assignment expression whose target is not a local variable.
 pub(super) fn lower_non_local_assignment_write(
     ctx: &mut LoweringContext<'_, '_>,
@@ -189,15 +261,110 @@ pub(super) fn lower_non_local_assignment_write(
     value: &Expr,
     span: Span,
 ) {
+    lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, span, false);
+}
+
+/// Writes an assignment target whose key may already have been diagnosed by its read half.
+fn lower_non_local_assignment_write_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
     if let ExprKind::DynamicPropertyAccess { object, property } = &target.kind {
         lower_dynamic_property_assign(ctx, object, property, value, span);
         return;
+    }
+    if key_already_diagnosed {
+        if let ExprKind::ArrayAccess { array, index } = &target.kind {
+            match &array.kind {
+                ExprKind::Variable(name) => {
+                    crate::ir_lower::stmt::lower_array_assign_with_diagnosed_key(
+                        ctx, name, index, value, span, true,
+                    );
+                    return;
+                }
+                ExprKind::PropertyAccess { object, property } => {
+                    crate::ir_lower::stmt::lower_property_array_assign_with_diagnosed_key(
+                        ctx, object, property, index, value, span, true,
+                    );
+                    return;
+                }
+                ExprKind::StaticPropertyAccess { receiver, property } => {
+                    crate::ir_lower::stmt::lower_static_property_array_assign_with_diagnosed_key(
+                        ctx, receiver, property, index, value, span, true,
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
     }
     let Some(kind) = non_local_assignment_stmt_kind(target, value) else {
         lower_expr(ctx, value);
         return;
     };
     crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(kind, span));
+}
+
+/// Finds a compound array read bound to the value temp before its write half runs.
+///
+/// The target is one dimension of a local, property, or static-property array, which are the
+/// write paths that can reuse the read's key conversion.
+fn compound_array_key_diagnosed_in_prelude(
+    target: &Expr,
+    value: &Expr,
+    prelude: &[Stmt],
+    span: Span,
+) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else {
+        return false;
+    };
+    if !matches!(
+        &array.kind,
+        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+    ) {
+        return false;
+    }
+    let ExprKind::Variable(value_name) = &value.kind else {
+        return false;
+    };
+    if prelude.iter().any(|stmt| {
+        if let StmtKind::Assign { name, value: read_value } = &stmt.kind {
+            name == value_name
+                && crate::ir_lower::stmt::desugared_element_update(read_value, span, |read| {
+                    read == target
+                })
+                .is_some()
+        } else {
+            false
+        }
+    }) {
+        return true;
+    }
+    // Increment and decrement first capture the old dimension, then calculate a new value.
+    prelude.iter().any(|stmt| {
+        let StmtKind::Assign { name: old_name, value: read_value } = &stmt.kind else {
+            return false;
+        };
+        if read_value != target {
+            return false;
+        }
+        prelude.iter().any(|next| {
+            matches!(
+                &next.kind,
+                StmtKind::Assign {
+                    name,
+                    value: Expr {
+                        kind: ExprKind::BinaryOp { left, .. },
+                        ..
+                    }
+                } if name == value_name
+                    && matches!(&left.kind, ExprKind::Variable(read_name) if read_name == old_name)
+            )
+        })
+    })
 }
 
 /// Builds the statement form that already owns lowering for non-local writes.
@@ -254,7 +421,33 @@ pub(super) fn lower_dynamic_property_assign(
 ) {
     let object = lower_expr(ctx, object);
     let property = lower_expr(ctx, property);
+    let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
+        ctx, property, span,
+    );
     let value = lower_expr(ctx, value);
+    // The NAME is only known at run time, so a statically known receiver can still land this
+    // value on any slot in its runtime-class subtree. Typed or representation-incompatible
+    // slots need the boxed runtime guard. An all-untyped subtree whose refined slots already
+    // share this concrete representation must keep that representation, because replacing a
+    // refined raw slot with a Mixed cell is not representation-safe.
+    let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed)
+        || !runtime_name_value_needs_boxing(ctx, object.value, value.value)
+    {
+        value
+    } else {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
+    };
+    // The store CAN THROW now: a name this scope may not write raises php's catchable access
+    // `Error`, and a runtime class whose typed slot refuses the value raises a `TypeError`.
+    // Leaving all three owned temporaries as plain SSA across it meant a caught refusal skipped
+    // every release. Pinning parks them for the window the throwing instruction occupies, so the
+    // unwind path retires them through the record and the normal path unpins and retires them
+    // exactly once, which is the contract call lowering already applies.
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(
+        ctx,
+        &[object.value, property.value, value.value],
+        span,
+    );
     ctx.emit_void(
         Op::DynamicPropSet,
         vec![object.value, property.value, value.value],
@@ -262,6 +455,34 @@ pub(super) fn lower_dynamic_property_assign(
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
+        ctx, &PhpType::Mixed, value, span,
+    );
+}
+
+/// Returns whether a runtime-name write needs a boxed value for a reachable fixed slot.
+fn runtime_name_value_needs_boxing(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    value: ValueId,
+) -> bool {
+    let value_ty = ctx.builder.value_php_type(value).codegen_repr();
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return true;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    if !ctx.classes.contains_key(normalized) {
+        return true;
+    }
+    ctx.classes.iter().any(|(candidate, class_info)| {
+        (candidate == normalized
+            || crate::types::class_inherits_from(ctx.classes, candidate, normalized))
+            && class_info.properties.iter().enumerate().any(|(index, (property, slot_ty))| {
+                class_info.property_slot_is_declared(index, property)
+                    || slot_ty.codegen_repr() != value_ty
+            })
+    })
 }
 
 /// Lowers pre/post increment and decrement expressions.
@@ -283,6 +504,7 @@ pub(super) fn lower_inc_dec(
     post: bool,
     expr: &Expr,
 ) -> LoweredValue {
+    crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
     if matches!(existing_type.codegen_repr(), PhpType::Mixed | PhpType::Str) {
@@ -338,4 +560,3 @@ pub(super) fn lower_inc_dec(
         ctx.load_local(name, Some(expr.span))
     }
 }
-

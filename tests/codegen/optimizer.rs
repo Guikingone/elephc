@@ -11,6 +11,14 @@
 
 use crate::support::*;
 
+#[path = "optimizer/switch_fallthrough.rs"]
+mod switch_fallthrough;
+
+#[path = "optimizer/boxed_array_snapshots.rs"]
+mod boxed_array_snapshots;
+mod implode_effects;
+mod spread_effects;
+
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
 #[path = "optimizer/call_result_alias.rs"]
@@ -41,8 +49,12 @@ mod eir_constant_propagation;
 mod eir_licm;
 #[path = "optimizer/effects_v2.rs"]
 mod effects_v2;
+#[path = "optimizer/mbstring.rs"]
+mod mbstring;
 #[path = "optimizer/identity_arithmetic.rs"]
 mod identity_arithmetic;
+#[path = "optimizer/generator_yield.rs"]
+mod generator_yield;
 #[path = "optimizer/peephole.rs"]
 mod peephole;
 #[path = "optimizer/property_receiver_ownership.rs"]
@@ -53,5 +65,11 @@ mod read_result_cleanup;
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
 mod inline;
+#[path = "optimizer/integer_range.rs"]
+mod integer_range;
 #[path = "optimizer/memory_model_propagation.rs"]
 mod memory_model_propagation;
+#[path = "optimizer/mem2reg.rs"]
+mod mem2reg;
+#[path = "optimizer/warning_globals.rs"]
+mod warning_globals;

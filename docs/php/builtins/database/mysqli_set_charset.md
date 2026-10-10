@@ -1,8 +1,8 @@
 ---
 title: "mysqli_set_charset()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Sets the character set used by the connection."
 sidebar:
-  order: 155
+  order: 156
 ---
 
 ## mysqli_set_charset()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_set_charset(mixed $mysql, string $charset): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Sets the character set used by the connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

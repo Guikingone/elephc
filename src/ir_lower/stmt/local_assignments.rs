@@ -11,6 +11,7 @@ use super::*;
 
 /// Lowers a plain PHP local assignment.
 pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
+    crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     // PHP allows compound assignment on an undefined variable (`$x += 1`),
     // treating the undefined variable as null/0 with a warning. The type
     // checker injects the variable as `Void` and emits a warning. At the
@@ -175,12 +176,18 @@ pub(super) fn contextualize_local_assignment(
 ) -> (LoweredValue, PhpType) {
     let source_ty = ctx.builder.value_php_type(lowered.value);
     let source_repr = source_ty.codegen_repr();
+    let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(span));
+
     let contextual_ty = if crate::superglobals::is_superglobal(name) {
         crate::superglobals::superglobal_type()
     } else {
         ctx.local_type(name)
     };
     let contextual_repr = contextual_ty.codegen_repr();
+    if contextual_ty.is_php_array() {
+        let converted = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
+        return (converted, contextual_ty);
+    }
     let has_loop_contract = local_has_loop_storage_contract(ctx, name, &contextual_ty);
 
     // A first assignment precedes the loop whose contract was computed from the final checker
@@ -295,6 +302,9 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
         ExprKind::PropertyAccess { .. } => {
             crate::ir_lower::expr::lower_ref_assign_property(ctx, target, source, span);
         }
+        ExprKind::StaticPropertyAccess { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_static_property(ctx, target, source, span);
+        }
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
@@ -312,4 +322,3 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
         }
     }
 }
-

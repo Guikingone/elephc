@@ -9,7 +9,7 @@
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, StaticReceiver};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
@@ -37,6 +37,38 @@ impl Checker {
         class_names.sort();
 
         for class_name in class_names {
+            let constructor = self
+                .classes
+                .get(&class_name)
+                .and_then(|class| class.methods.get("__construct"))
+                .cloned();
+            if let Some(constructor) = constructor {
+                for (arg_index, arg) in args.iter().enumerate() {
+                    let (param_index, value) = match &arg.kind {
+                        ExprKind::NamedArg { name, value } => (
+                            constructor
+                                .params
+                                .iter()
+                                .position(|(param, _)| param == name)
+                                .unwrap_or(arg_index),
+                            value.as_ref(),
+                        ),
+                        _ => (arg_index, arg),
+                    };
+                    if constructor
+                        .ref_params
+                        .get(param_index)
+                        .copied()
+                        .unwrap_or(false)
+                        && matches!(value.kind, ExprKind::ArrayAccess { .. })
+                    {
+                        return Err(CompileError::new(
+                            value.span,
+                            "new static() cannot bind an array element by reference because the runtime constructor target is late-bound",
+                        ));
+                    }
+                }
+            }
             self.infer_new_object_type(&class_name, args, expr, env)?;
         }
 
@@ -184,7 +216,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: Span,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => Ok(name.as_canonical()),
             StaticReceiver::Self_ | StaticReceiver::Static => self
                 .current_class
@@ -215,7 +256,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: Span,
     ) -> Result<(), CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(_) => Ok(()),
             StaticReceiver::Self_ | StaticReceiver::Static => {
                 if self.current_class.is_some() {

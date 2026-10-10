@@ -249,4 +249,268 @@ fn test_while_null_no_loop() {
     assert_eq!(out, "ok");
 }
 
+/// Issue #476: a `for` update clause accepts an array push, and the pushed element is the
+/// value the clause sees at the end of each iteration.
+///
+/// The clause used to go through a bespoke mini-grammar that recognised only `$v++`, `++$v`
+/// and `$v = / op= / ??= expr`, so `$a[] = $i` failed to PARSE with
+/// `Expected '=' after variable name`. PHP prints `3|2`.
+#[test]
+fn test_for_update_clause_accepts_an_array_push() {
+    let out = compile_and_run(
+        "<?php $a = []; $i = 0; for (; $i < 3; $a[] = $i) { $i++; } echo count($a), \"|\", $a[1];",
+    );
+    assert_eq!(out, "3|2");
+}
+
+/// Issue #476: both `for` clauses accept a COMMA-SEPARATED list, which is what PHP's grammar
+/// has always been. The update form used to fail with `Expected ')' after for clauses` and
+/// the init form — not reported on the issue, same gap — with `Expected ';'`.
+#[test]
+fn test_for_clauses_accept_comma_separated_lists() {
+    let update = compile_and_run(
+        "<?php $b = []; for ($i = 0; $i < 3; $i++, $b[] = $i) {} echo count($b), \"|\", $b[0];",
+    );
+    assert_eq!(update, "3|1");
+
+    let init = compile_and_run(
+        "<?php for ($x = 0, $y = 10; $x < 2; $x++) {} echo $x, \"|\", $y;",
+    );
+    assert_eq!(init, "2|10");
+}
+
+/// Issue #476: the same gap rejected an indexed assignment and a property assignment in the
+/// update clause. Neither is on the issue; both fell into the same mini-grammar error arms
+/// (`Expected '=' after variable name` and `Invalid assignment target`).
+///
+/// The indexed case also pins that the clause runs AFTER the body: `$i` is already 3 on the
+/// final pass, so PHP grows the array to four elements rather than three.
+#[test]
+fn test_for_update_clause_accepts_indexed_and_property_assignment() {
+    let indexed = compile_and_run(
+        "<?php $c = [0, 0, 0]; for ($i = 0; $i < 3; $c[$i] = $i * 2) { $i++; } echo implode(\",\", $c);",
+    );
+    assert_eq!(indexed, "0,2,4,6");
+
+    let property = compile_and_run(
+        "<?php class Box { public int $n = 0; } $box = new Box(); \
+         for ($i = 0; $i < 4; $box->n = $i) { $i++; } echo $box->n;",
+    );
+    assert_eq!(property, "4");
+}
+
+/// Issue #476 regression guard: a comma nested inside a call's argument list, an array
+/// literal or an index is NOT a clause separator, and an empty clause still parses.
+///
+/// This is the half a naive comma split gets wrong — `for ($i = max(0, 1); …)` would be cut
+/// in two at the argument comma.
+#[test]
+fn test_for_clause_commas_respect_nesting_and_empty_clauses() {
+    let call = compile_and_run(
+        "<?php for ($i = max(0, 1); $i < 3; $i = min($i + 1, 9)) {} echo $i;",
+    );
+    assert_eq!(call, "3");
+
+    let literal = compile_and_run(
+        "<?php for ($p = [1, 2, 3], $i = 0; $i < 2; $i++) {} echo count($p), \"|\", $i;",
+    );
+    assert_eq!(literal, "3|2");
+
+    let empty = compile_and_run(
+        "<?php $n = 0; for (;;) { $n++; if ($n > 2) { break; } } echo $n;",
+    );
+    assert_eq!(empty, "3");
+}
+
+/// Issue #476, the case that pins the depth tracking on BOTH axes at once: a closure in the
+/// init clause puts a `;` inside braces (which must not end the clause) ahead of the comma
+/// that really separates it from the next piece (which must).
+///
+/// A slicer that stopped at the first `;`, or split at the first `,`, would cut this clause
+/// in half. PHP prints `10|3`.
+#[test]
+fn test_for_init_clause_accepts_a_closure_containing_a_semicolon() {
+    let out = compile_and_run(
+        "<?php for ($f = function (int $n): int { return $n * 2; }, $i = 0; $i < 3; $i++) {} \
+         echo $f(5), \"|\", $i;",
+    );
+    assert_eq!(out, "10|3");
+}
+
+/// Issue #476 review follow-up: `throw` is an EXPRESSION in PHP 8, so it belongs in a clause.
+///
+/// The first version of the clause allow-list listed `throw` among the statements to reject,
+/// on the reasoning that it is a statement in PHP's grammar. That was true before PHP 8.0 and
+/// is not now: `for (throw new LogicException("init"); false; )` and a `throw` in the update
+/// clause both run on 8.5.10, and the output below was measured there.
+#[test]
+fn test_for_clause_throw_is_an_expression() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    for (throw new LogicException("init"); false; ) {
+    }
+} catch (LogicException $e) {
+    echo "init:", $e->getMessage(), "\n";
+}
+
+try {
+    for ($i = 0; $i < 3; throw new RuntimeException("update")) {
+        echo $i;
+    }
+} catch (RuntimeException $e) {
+    echo "|update:", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "init:init\n0|update:update\n");
+}
+
+/// Issue #562: a local that enters a loop holding `null` and is assigned inside it must be
+/// typed for BOTH, or the init guard re-runs every iteration.
+///
+/// A loop body is checked ONCE, with the entry environment, so the header kept the first
+/// iteration's `null` for the whole loop and `$n === null` folded to always-true. The fixture
+/// below printed `111` where PHP prints `123` — the guard fired every time, so the counter
+/// reset instead of accumulating. The same shape is how any `$x = null;` accumulator, parser
+/// cursor or lazily built buffer silently produced first-iteration results.
+///
+/// All four loop forms are here because they reach the header through different code:
+/// `do`-`while` runs its body before the condition, and `foreach` binds its own value
+/// variable. The widening targets beyond `int` — `null` to `string` through `.=`, `null` to
+/// `array` through `[]=` — are here because the join that produces the header type is
+/// per-shape. Nested loops check that an inner body's assignment reaches the OUTER header.
+///
+/// The last block is the control: a loop that never assigns the local must leave it `null` and
+/// keep the guard, so the widening is driven by evidence rather than applied to every
+/// null-initialized local that a loop happens to read.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_null_local_assigned_inside_a_loop_is_typed_for_both() {
+    let out = compile_and_run(
+        r#"<?php
+$a = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($a === null) { $a = 0; }
+    $a++;
+    echo $a;
+}
+echo "|";
+
+$b = null;
+$j = 0;
+while ($j < 3) {
+    if ($b === null) { $b = 0; }
+    $b++;
+    echo $b;
+    $j++;
+}
+echo "|";
+
+$c = null;
+$k = 0;
+do {
+    if ($c === null) { $c = 0; }
+    $c++;
+    echo $c;
+    $k++;
+} while ($k < 3);
+echo "|";
+
+$d = null;
+foreach ([1, 2, 3] as $ignored) {
+    if ($d === null) { $d = 0; }
+    $d++;
+    echo $d;
+}
+echo "|";
+
+$s = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($s === null) { $s = ""; }
+    $s .= "x";
+    echo strlen($s);
+}
+echo "|";
+
+$arr = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($arr === null) { $arr = []; }
+    $arr[] = $i;
+    echo count($arr);
+}
+echo "|";
+
+$n = null;
+for ($i = 0; $i < 2; $i++) {
+    for ($j = 0; $j < 2; $j++) {
+        if ($n === null) { $n = 0; }
+        $n++;
+    }
+    echo $n;
+}
+echo "|";
+
+$never = null;
+for ($i = 0; $i < 2; $i++) {
+    if ($never === null) { echo "n"; }
+}
+var_dump($never);
+"#,
+    );
+    assert_eq!(out, "123|123|123|123|123|123|24|nnNULL\n");
+}
+
 // --- Ternary operator ---
+
+/// A statement that starts with a variable but is not an assignment is an expression PHP
+/// evaluates for its effects: a ternary choosing a call, `||`/`&&`/`and`/`or` guards including
+/// `|| throw`, `??`, and a discarded concatenation. They failed to parse with
+/// `Expected '=' after variable name`. Regression for #827 and #841.
+#[test]
+fn test_variable_led_expression_statements_run() {
+    let out = compile_and_run(
+        r#"<?php
+function left(): void { echo "left\n"; }
+function right(): void { echo "right\n"; }
+$flag = $argc > 0;
+$flag ? left() : right();
+$flag ? print "yes\n" : print "no\n";
+$valid = $argc > 0;
+$valid || throw new RuntimeException('invalid');
+$value = 0;
+$valid && $value = 5;
+echo $value, "\n";
+$flag and left();
+$flag or right();
+$s = "a";
+$s . "b";
+$flag;
+try {
+    $zero = $argc - 1;
+    $zero || throw new RuntimeException('thrown');
+} catch (RuntimeException $e) {
+    echo $e->getMessage(), "\n";
+}
+$n = null;
+$n ?? right();
+$x = 3;
+$x += 2;
+$x .= "!";
+echo $x, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "left\n",
+            "yes\n",
+            "5\n",
+            "left\n",
+            "thrown\n",
+            "right\n",
+            "5!\n",
+        )
+    );
+}

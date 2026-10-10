@@ -116,6 +116,10 @@ struct ReflectionOwnerMetadata {
     required_parameter_count: i64,
     is_deprecated: bool,
     is_generator: bool,
+    /// Whether the declaration is `function &name()`. PHP answers `returnsReference()` from this
+    /// and prints an `&` before the name in the dump; both read one field so they cannot disagree
+    /// about the same declaration (#1231).
+    returns_reference: bool,
     prototype_member: Option<Box<ReflectionListedMember>>,
     is_final: bool,
     is_abstract: bool,
@@ -160,6 +164,8 @@ struct ReflectionListedMember {
     required_parameter_count: i64,
     is_deprecated: bool,
     is_generator: bool,
+    /// See `ReflectionOwnerMetadata::returns_reference`.
+    returns_reference: bool,
     prototype_member: Option<Box<ReflectionListedMember>>,
     parameters: Vec<ReflectionParameterMember>,
 }
@@ -197,6 +203,7 @@ enum ReflectionDeclaringFunctionMember {
         type_metadata: Option<ReflectionParameterTypeMetadata>,
         is_deprecated: bool,
         is_generator: bool,
+        returns_reference: bool,
     },
     Method {
         name: String,
@@ -208,6 +215,7 @@ enum ReflectionDeclaringFunctionMember {
         type_metadata: Option<ReflectionParameterTypeMetadata>,
         is_deprecated: bool,
         is_generator: bool,
+        returns_reference: bool,
     },
 }
 

@@ -68,6 +68,42 @@ and link the resulting user object against the cached runtime object.
 The active backend must remain target-aware. New lowering paths should use the
 ABI helpers instead of hardcoding AArch64 or x86_64 register and stack details.
 
+For a nested write into an associative array, `ArrayFetchForWrite` ensures the
+parent entry exists and diagnoses a float key while normalizing it. The
+following `HashGetForWrite` carries a boolean EIR marker indicating that the
+same key was already diagnosed. Its target lowering rebuilds the normalized
+key for the read without emitting the deprecation again. Missing ordinary
+hash reads likewise avoid repeating the float diagnostic while formatting
+their undefined-key warning.
+Compound hash updates carry the same diagnosed-key marker from the read half
+to `HashSet`. The marker also reaches the property and static-property write
+paths and the boxed `Mixed` array writer, whose `RuntimeCall` then rebuilds the
+key with `__rt_php_float_to_int`, so a compound update on a local, a property,
+a static property, or a `mixed` local reports one float-key diagnostic.
+Increment and decrement expressions capture the old element once, then
+calculate and write the new value. These updates also capture a mutable
+dimension after eager right-hand-side evaluation and before the read, so an
+error handler cannot redirect the write by changing the source index variable.
+
+A null-coalescing assignment (`$a[$k] ??= $v`) is not a compound update: it
+probes the element with `??` semantics and writes only when the probe produced
+null, so a present element is never written back. The insert converts a float
+key again, and reports that second conversion just as PHP does.
+
+Packed indexed arrays apply the same float-key conversion before `ArrayGet`,
+`ArraySet`, and existence probes. Compound writes reuse the read's diagnosis,
+including when a key becomes boxed `Mixed` or the array is promoted to hash
+storage at runtime. Integral float keys convert without a deprecation.
+
+String indexing returns a null sentinel for a missing offset when lowered for
+`isset()`, `empty()`, or `??`, allowing null coalescing to select its fallback
+without an out-of-bounds warning. Ordinary reads still return an empty string
+and warn. A float string offset is converted to an integer by a warning-marked
+`FToI` instruction before `StrCharAt`. A boxed float uses a marked integer cast
+that checks its runtime tag and issues the same warning. A boxed variable is
+fetched again after its warning handler returns, matching PHP when the handler
+changes that variable.
+
 ## Runtime Split
 
 Codegen always produces two compiler-owned artifacts:
@@ -101,6 +137,27 @@ typed `RuntimeCallTarget`. `src/codegen/lower_inst/runtime_calls.rs` and the bou
 builtin names are absent from backend dispatch. Only compiler-resident language
 constructs such as `eval`, `isset`, `unset`, `empty`, `exit`, and `die` retain the
 separate `LanguageConstructCall` path.
+
+## Reflection Reachability
+
+Synthetic builtin Reflection classes are lowered from EIR reachability rather than emitted as a
+fixed full surface in every native program. The EIR lowerer collects Reflection classes found in
+value types, object construction, static calls, and method-dispatch candidates, then adds their
+parents and implementation owners before lowering concrete methods and property-initializer
+thunks. Dynamic eval keeps the full Reflection surface because its class and method names can be
+resolved only at runtime.
+
+Some Reflection getters materialize a new Reflection object into a `mixed` property slot instead
+of emitting an EIR object-construction operation. For those slots, the lowerer also includes the
+materialized class when the holder is reachable and the getter name is present in the module's
+string data. It repeats this companion scan to a fixed point because a returned Reflection object
+can itself hold another materialized Reflection object. This keeps getter-returned objects' method
+and `__toString` tables available without pulling the entire Reflection hierarchy into programs
+that never call those getters. A getter name assembled at runtime never reaches the string data,
+but it can only be called through a runtime-resolved callable — `$holder->$name()`,
+`call_user_func([$holder, $name])` and `[$holder, $name]()` all lower to a
+`CallableDescriptorInvoke` — so a module containing one treats every getter as named. That cost
+falls only on programs that build a holder and make such a call.
 
 ## Eval Lowering Boundary
 
@@ -148,6 +205,42 @@ register conventions must match `__rt_mixed_from_value`. Owned boxing paths
 transfer or release references so payloads are never double-freed. `Union(...)`
 and `Iterable` values reuse the same boxed representation.
 
+### Staging a builtin's integer arguments
+
+A builtin whose integer argument may arrive BOXED cannot load its arguments in
+ABI order. Unboxing calls `__rt_mixed_cast_int`, which clobbers every
+caller-saved argument register, so any argument already loaded would be
+destroyed by the unboxing of a later one.
+
+The rule is: resolve every boxed integer argument FIRST, park each on the stack,
+load the remaining arguments into their ABI registers, then pop the parked ones
+back — in reverse staging order, since the stack is LIFO. An argument that is not
+boxed is loaded in place, which keeps the common path identical to a builtin that
+never needed staging at all.
+
+`array_fill()` is the worked example
+(`src/codegen/lower_inst/builtins/arrays/fill_helpers.rs`): `$start` and `$count`
+both go through `stage_boxed_fill_integer` / `settle_fill_integer`, and the
+string fill helper's `(count, ptr, len)` ABI — which puts the count in the FIRST
+argument register rather than the second — is settled the same way.
+
+Which representations need staging:
+
+- `Int` / `Bool` — no. One register, loaded directly.
+- `TaggedScalar` — no. The payload lives in the value's own slot and the null tag
+  in the adjacent one, so loading the slot into an ABI register already yields the
+  integer. A `?int` that is genuinely `null` still reaches the builtin as its
+  sentinel payload rather than PHP's "passing null is deprecated, treated as 0",
+  which is a gap in the tagged-null surface and not in the staging.
+- `Mixed` / `Union` — yes. `resolve_int_operand_to_result` unboxes them through
+  `__rt_mixed_cast_int`, which is the call that forces the ordering.
+
+A local whose value came from checked integer arithmetic is `Mixed`, because the
+product or sum may overflow to float: `$n = $this->w * $this->h` is boxed while a
+literal, a parameter, or the same expression folded at compile time is not. That
+asymmetry is why a missing stage looks like a defect that only happens inside a
+method (issue #502).
+
 ### Callable descriptors and invokers
 
 `PhpType::Callable` stays one pointer wide, but the pointer targets a
@@ -161,6 +254,27 @@ a generated uniform adapter (`src/codegen/runtime_callable_invoker.rs`) with
 the ABI `(descriptor, argument array) -> Mixed`. The invoker saves and restores
 the caller's callee-saved registers it scratches — `x19`-`x26` on AArch64 and
 `r12`, `rbx`, `r13`-`r15` on x86_64 — in a dedicated frame save area.
+
+### Inline wrappers and branch reach
+
+Some lowerings emit a wrapper or invoker in the middle of the enclosing
+function and jump over it: the `array_map()` and `preg_replace_callback()`
+descriptor callback wrappers, the direct-callback argument adapter, and the
+runtime-callable invokers. Their `label_global()` opens the wrapper's own
+`.text.<symbol>` section on ELF, so the lowering captures
+`Emitter::current_text_section()` before the wrapper and calls
+`reopen_text_section()` after it. Without that, the rest of the enclosing
+function continues inside the wrapper's section, and a conditional branch from
+the function into that tail becomes a cross-section relocation whose distance
+depends on the linker's section layout.
+
+On AArch64, `b.cond` and `cbz`/`cbnz` encode only a ±1 MiB displacement
+(`tbz`/`tbnz` only ±32 KiB). An edge that jumps over code whose size grows with
+the program, such as the runtime-name case tables of callable dispatch, uses
+`abi::emit_branch_if_equal_wide()`: an inverted `b.ne 1f` over an unconditional
+`b`, which reaches ±128 MiB. x86_64 `jcc` relaxes to a rel32 displacement and
+needs no widening. `tests/codegen/callables/branch_reach.rs` pins both rules on
+the runtime-selected callable paths.
 
 ### Static and global storage
 
@@ -213,6 +327,90 @@ collide with property values. On x86_64, heap headers carry the `ELPH` magic
 in the high 32 bits of the kind word: every stamp goes through the shared
 `x86_64_heap_kind_word` helper and every check compares against
 `X86_64_HEAP_MAGIC_HI32` — local copies of either constant are forbidden.
+
+### Nullable optional string lengths
+
+`substr()`, `substr_replace()`, and `substr_count()` share one PHP contract for
+their optional `$length`: omission and `null` mean “through the end”, while `0`
+means an empty window (or pure insertion for `substr_replace()`) and a negative
+integer keeps its PHP end-relative meaning. The backend must therefore inspect
+null before applying the ordinary weak integer conversion, because PHP's
+general `(int) null` result of `0` is not the argument contract for these
+builtins.
+
+Named-argument planning can materialize an omitted nullable default as a null
+EIR operand, so operand count alone is not authoritative. String builtin
+lowering classifies the operand as absent/static null, concrete, inline
+`TaggedScalar`, or boxed `Mixed`/union. Runtime-null tagged and boxed values are
+mapped to the through-end path; concrete zero and negative payloads continue
+through numeric length normalization unchanged.
+
+The three builtins use different final encodings:
+
+- `substr()` is lowered inline and maps runtime null to a saturating positive
+  length before clamping it to the remaining string.
+- `substr_replace()` passes `i64::MAX` to `__rt_substr_replace` for omitted or
+  null length. `-1` is never an omission sentinel because it is a real PHP
+  negative length.
+- `substr_count()` cannot use the saturating value because its explicit-length
+  bounds check would raise `ValueError`. It preserves null status separately
+  and selects `subject_length - resolved_offset` before validating concrete
+  lengths.
+
+For boxed values, the weak-integer helper keeps the original `Mixed` cell
+pointer in an aligned temporary stack slot across `__rt_mixed_unbox` and
+`__rt_mixed_cast_int`, preserving existing float-coercion diagnostics. The
+normalized payload and null/int tag use `x0`/`x1` on AArch64 and `rax`/`rdx` on
+x86_64. `substr_count()` copies the tag to `x7` or `r11` only after conversion
+calls have finished, then restores the subject, needle, and offset ABI
+registers before window validation.
+
+## Property Writes Through a Runtime-Typed Receiver
+
+A property write resolves its slot at compile time from the receiver's class. When the receiver is
+statically `mixed` or an object union there is no class to resolve, so the class is read at runtime
+and the slot chosen from it.
+
+Both spellings of the write dispatch the same way, on the payload's **class id** — the object
+header's first word:
+
+| write | lowering | chain |
+|---|---|---|
+| `$o->name = $v` | `lower_mixed_static_prop_set` | one compare per class in the build that declares `name` and can hold this value |
+| `$o->{$expr} = $v` | `lower_runtime_mixed_prop_set` | the same compare, then a name comparison per candidate |
+
+A match stores straight into that class's declared slot. A **stdClass** payload and a **non-object**
+payload both fall through to `__rt_mixed_property_set`, which writes a dynamic property for the
+first and drops the write for the second — PHP's *attempt to assign property on non-object*.
+
+Until issue #1094 only the runtime-name spelling dispatched. The static-name spelling went straight
+to `__rt_mixed_property_set`, whose class-id check only admits stdClass, so `$o->n = 9` through a
+`mixed` receiver was discarded in silence for every other class while `$o->{$p} = 9` on the same
+object wrote. The receiver does not have to be spelled `mixed` to reach it: a local the checker
+widened across a loop back-edge (`$o = null; for (...) { $o = new T(); $o->n = 9; }`) is boxed too.
+
+### Ownership: the release belongs to lowering
+
+`emit_property_store` **retains** what it stores, on both of these paths — the class-id dispatch
+and `materialize_dynamic_property_mixed_value`'s fresh Mixed cell — so `PropSet` never consumes its
+source. A declared-receiver write is therefore followed by an explicit EIR release
+(`release_property_assignment_source_after_retaining_store`), gated on the source being an owning
+temporary.
+
+A runtime-typed receiver never got one: `object_property_type` answers only for a statically known
+class, so the gate returned `None` and an owning temporary assigned through a `mixed` receiver
+leaked once per write — three blocks for an array literal and its two boxed elements.
+`release_runtime_typed_property_assignment_source` closes that, with the same ownership gate.
+
+The property's declared type is the one fact lowering does not have, because the payload's class is
+not known until runtime. It matters only for the transfer `property_store_keeps_independent_ref`
+excludes — a `Mixed` value into a `Mixed` slot, where the backend hands the source's own cell to the
+property instead of retaining — so a `Mixed`-typed source is left alone.
+
+Doing this in the backend instead does not work, and the reason is worth keeping: whether the SSA
+source owns a reference is not a property of its type. A backend release gated on types alone
+destroyed the property's own reference for a *borrowed* source, which reads back as a pointer and
+trips `heap debug detected bad refcount`.
 
 ## Backend Contract
 

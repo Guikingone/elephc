@@ -42,6 +42,7 @@ impl Checker {
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             body: closure_body,
             captures,
             ..
@@ -54,6 +55,7 @@ impl Checker {
                 params,
                 variadic,
                 *variadic_by_ref,
+                variadic_type,
                 captures,
                 body.span,
                 env,
@@ -81,6 +83,7 @@ impl Checker {
         Ok(())
     }
 
+    /// Records known Async closure/function tasks so later blocking Parallel calls can be warned on.
     pub(super) fn record_async_task_callable(&mut self, args: &[Expr]) {
         let Some(task) = args.first() else {
             return;
@@ -98,6 +101,7 @@ impl Checker {
         }
     }
 
+    /// Warns when tracked Async task bodies perform a blocking Parallel join or root-scope drain.
     pub(super) fn emit_parallel_async_join_warnings(&mut self) {
         let join_message = "Elephc\\Parallel\\Future::join() inside an Elephc Async task blocks the whole cooperative scheduler thread";
         for (join_site, closure_span) in &self.parallel_future_join_closure_sites {
@@ -128,6 +132,7 @@ impl Checker {
         }
     }
 
+    /// Deduplicates a Parallel root call and associates it with its enclosing closure or function.
     pub(super) fn record_parallel_run_site(&mut self, span: Span) {
         if self.parallel_run_sites.contains(&span) {
             return;
@@ -140,6 +145,7 @@ impl Checker {
         }
     }
 
+    /// Enforces the v1 worker target, capture, effect, argument and return-transfer restrictions.
     pub(super) fn check_parallel_spawn_transfer(
         &mut self,
         args: &[Expr],
@@ -257,6 +263,7 @@ impl Checker {
         self.require_parallel_task_return_transferable(task, &signature, env)
     }
 
+    /// Resolves worker-safety summaries through tracked aliases, captures and classified externs.
     pub(crate) fn parallel_callable_safety_for_expr(
         &self,
         callable: &Expr,
@@ -311,6 +318,7 @@ impl Checker {
         }
     }
 
+    /// Collects typed captures from resolvable tasks and rejects implicit object-bound closures.
     fn parallel_task_captures(
         &self,
         task: &Expr,
@@ -364,6 +372,7 @@ impl Checker {
         }
     }
 
+    /// Accepts receiver-free first-class targets and rejects a captured instance receiver.
     fn parallel_first_class_captures(
         target: &CallableTarget,
         task: &Expr,
@@ -377,6 +386,7 @@ impl Checker {
         }
     }
 
+    /// Maps the shared recursive transfer classifier's first rejection to a subject-specific error.
     fn require_parallel_transferable(
         ty: &PhpType,
         span: Span,
@@ -399,6 +409,7 @@ impl Checker {
         }
     }
 
+    /// Checks inferred shapes, proving heterogeneous array literals recursively and rejecting aliases.
     fn require_parallel_expr_transferable(
         &mut self,
         expr: &Expr,
@@ -474,6 +485,7 @@ impl Checker {
         }
     }
 
+    /// Validates declared or individually proven closure returns without allowing Cancellation output.
     fn require_parallel_task_return_transferable(
         &mut self,
         task: &Expr,
@@ -517,6 +529,7 @@ impl Checker {
         Ok(())
     }
 
+    /// Records whether a resolvable callable's result passes the worker-to-parent transfer boundary.
     pub(crate) fn parallel_callable_return_is_safe(
         &mut self,
         callable: &Expr,
@@ -530,6 +543,7 @@ impl Checker {
             .is_ok())
     }
 
+    /// Identifies tracked reference aliases whose array representation can carry cross-context cycles.
     fn is_reference_aliased_array(&self, name: &str, ty: &PhpType) -> bool {
         self.ref_aliased_locals.contains(name)
             && matches!(
@@ -539,6 +553,7 @@ impl Checker {
     }
 }
 
+/// Produces the diagnostic for returning a scope-owned TaskGroup beyond its Parallel root.
 fn parallel_task_group_scope_escape_error(span: Span) -> CompileError {
     CompileError::new(
         span,

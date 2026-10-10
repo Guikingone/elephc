@@ -41,6 +41,7 @@ pub struct ParallelValueWriter {
 }
 
 impl ParallelValueWriter {
+    /// Initializes the EPV version header and one outstanding root slot, reporting reserve failure.
     fn new() -> Result<Self, i32> {
         let mut bytes = Vec::new();
         bytes
@@ -54,6 +55,7 @@ impl ParallelValueWriter {
         })
     }
 
+    /// Consumes one structural slot and appends its scalar tag/payload without introducing pointers.
     fn write_scalar(&mut self, tag: i32, payload: &[u8]) -> Result<(), i32> {
         self.consume_value(0)?;
         self.bytes
@@ -64,6 +66,7 @@ impl ParallelValueWriter {
         Ok(())
     }
 
+    /// Appends a container count and schedules its required children after consuming its parent slot.
     fn write_container(&mut self, tag: i32, count: usize, slots: usize) -> Result<(), i32> {
         let count = u64::try_from(count).map_err(|_| PARALLEL_TRANSFER_INVALID_ARGUMENT)?;
         self.consume_value(slots)?;
@@ -75,6 +78,7 @@ impl ParallelValueWriter {
         Ok(())
     }
 
+    /// Advances structural completion, rejecting extra roots, exhausted parents and excessive depth.
     fn consume_value(&mut self, children: usize) -> Result<(), i32> {
         if self.complete {
             return Err(PARALLEL_TRANSFER_INVALID_ARGUMENT);
@@ -127,6 +131,7 @@ impl ParallelValueView {
     };
 }
 
+/// Borrows an outer-envelope payload; callers must keep its allocation alive for every returned view.
 fn payload(blob: ParallelTransferBlob) -> Option<&'static [u8]> {
     if !transfer_blob_is_valid(blob) {
         return None;
@@ -136,6 +141,7 @@ fn payload(blob: ParallelTransferBlob) -> Option<&'static [u8]> {
     })
 }
 
+/// Reads a bounded little-endian word and advances the cursor only when all eight bytes exist.
 fn read_u64(bytes: &[u8], cursor: &mut usize) -> Option<u64> {
     let end = cursor.checked_add(8)?;
     let raw: [u8; 8] = bytes.get(*cursor..end)?.try_into().ok()?;
@@ -143,6 +149,7 @@ fn read_u64(bytes: &[u8], cursor: &mut usize) -> Option<u64> {
     Some(u64::from_le_bytes(raw))
 }
 
+/// Checks one complete value/subtree with bounded depth and advances past all of its children.
 fn skip_value(bytes: &[u8], cursor: &mut usize, depth: usize) -> Option<()> {
     if depth >= MAX_VALUE_DEPTH {
         return None;
@@ -181,6 +188,7 @@ fn skip_value(bytes: &[u8], cursor: &mut usize, depth: usize) -> Option<()> {
     }
 }
 
+/// Requires the EPV header and exactly one structurally valid root with no trailing bytes.
 pub(crate) fn value_envelope_is_valid(blob: ParallelTransferBlob) -> bool {
     let Some(bytes) = payload(blob) else {
         return false;
@@ -192,6 +200,7 @@ pub(crate) fn value_envelope_is_valid(blob: ParallelTransferBlob) -> bool {
     skip_value(bytes, &mut cursor, 0).is_some() && cursor == bytes.len()
 }
 
+/// Validates the writer handle and contains Rust panics while mapping one mutation to ABI status.
 fn writer_status(
     writer: *mut ParallelValueWriter,
     action: impl FnOnce(&mut ParallelValueWriter) -> Result<(), i32>,
@@ -206,6 +215,7 @@ fn writer_status(
     }
 }
 
+/// Allocates a single-root writer, returning null on initialization failure or panic.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_value_writer_new() -> *mut ParallelValueWriter {
     match catch_unwind(ParallelValueWriter::new) {
@@ -214,6 +224,7 @@ pub extern "C" fn elephc_parallel_value_writer_new() -> *mut ParallelValueWriter
     }
 }
 
+/// Destroys a writer not consumed by finish; a null handle is ignored.
 #[no_mangle]
 /// # Safety
 /// `writer` must be a live, uniquely accessible writer returned by
@@ -225,6 +236,7 @@ pub unsafe extern "C" fn elephc_parallel_value_writer_free(writer: *mut Parallel
     }
 }
 
+/// Appends one null value while preserving the writer's single-root structural contract.
 #[no_mangle]
 /// # Safety
 /// `writer` must be a live, uniquely accessible writer returned by
@@ -241,6 +253,7 @@ pub unsafe extern "C" fn elephc_parallel_value_write_null(writer: *mut ParallelV
     writer_status(writer, |writer| writer.write_scalar(PARALLEL_VALUE_NULL, &[]))
 }
 
+/// Encodes zero as false and any nonzero C boolean as true in the next value slot.
 #[no_mangle]
 /// # Safety
 /// `writer` must be a live, uniquely accessible writer returned by
@@ -258,6 +271,7 @@ pub unsafe extern "C" fn elephc_parallel_value_write_bool(
     writer_status(writer, |writer| writer.write_scalar(tag, &[]))
 }
 
+/// Appends a signed integer as its pointer-free little-endian payload.
 #[no_mangle]
 /// # Safety
 /// `writer` must be a live, uniquely accessible writer returned by
@@ -272,6 +286,7 @@ pub unsafe extern "C" fn elephc_parallel_value_write_int(
     })
 }
 
+/// Appends exact binary64 bits, preserving signed zero and special floating-point encodings.
 #[no_mangle]
 /// # Safety
 /// `writer` must be a live, uniquely accessible writer returned by
@@ -286,6 +301,7 @@ pub unsafe extern "C" fn elephc_parallel_value_write_float(
     })
 }
 
+/// Copies a counted byte string into the next slot, rejecting invalid pointer/length combinations.
 #[no_mangle]
 /// # Safety
 /// `writer` must be a live, uniquely accessible writer returned by
@@ -320,6 +336,7 @@ pub unsafe extern "C" fn elephc_parallel_value_write_string(
     })
 }
 
+/// Begins an indexed container whose following values must fill exactly count child slots.
 #[no_mangle]
 /// # Safety
 /// `writer` must be a live, uniquely accessible writer returned by
@@ -334,6 +351,7 @@ pub unsafe extern "C" fn elephc_parallel_value_begin_indexed(
     })
 }
 
+/// Begins an associative container with checked space for count key/value pairs.
 #[no_mangle]
 /// # Safety
 /// `writer` must be a live, uniquely accessible writer returned by
@@ -351,6 +369,7 @@ pub unsafe extern "C" fn elephc_parallel_value_begin_assoc(
     })
 }
 
+/// Appends a nonzero cancellation identity without transferring a native token pointer.
 #[no_mangle]
 /// # Safety
 /// `writer` must be a live, uniquely accessible writer returned by
@@ -368,6 +387,8 @@ pub unsafe extern "C" fn elephc_parallel_value_write_cancellation(
     })
 }
 
+/// Consumes a writer into an owned transfer blob, requiring a complete root and clearing output first.
+/// Once a nonnull output is accepted, the writer is consumed even on incomplete/envelope-copy failure.
 #[no_mangle]
 /// # Safety
 /// `output` must be writable for one `ParallelTransferBlob`. `writer` must be a
@@ -397,6 +418,7 @@ pub unsafe extern "C" fn elephc_parallel_value_writer_finish(
     }
 }
 
+/// Checks the entire value envelope and returns structural validity without allocating decoded values.
 #[no_mangle]
 /// # Safety
 /// If `blob.len` is nonzero, `blob.ptr` must be readable for `blob.len` bytes
@@ -417,6 +439,7 @@ pub unsafe extern "C" fn elephc_parallel_value_validate(blob: ParallelTransferBl
     }
 }
 
+/// Validates an envelope before positioning the reader just after its version header.
 #[no_mangle]
 /// # Safety
 /// If `blob.len` is nonzero, `blob.ptr` must be readable for `blob.len` bytes.
@@ -436,6 +459,8 @@ pub unsafe extern "C" fn elephc_parallel_value_reader_begin(
     PARALLEL_TRANSFER_OK
 }
 
+/// Reads one value header/scalar; container children remain at the cursor for subsequent reads.
+/// String byte views borrow the blob and become invalid when its owning allocation is freed.
 #[no_mangle]
 /// # Safety
 /// If `blob.len` is nonzero, `blob.ptr` must be readable for `blob.len` bytes.

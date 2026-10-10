@@ -340,6 +340,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
+    /// Checks AArch64 poll dispatch, ordered readiness scanning and signed timeout clamping.
     #[test]
     fn emits_aarch64_poll_adapter_with_ordered_scan() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
@@ -352,6 +353,7 @@ mod tests {
         assert!(asm.contains("csel x20, x20, x9, le"));
     }
 
+    /// Checks Linux x86_64 poll dispatch, ordered scanning and its timeout clamp sequence.
     #[test]
     fn emits_linux_x86_64_poll_adapter_with_ordered_scan() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));

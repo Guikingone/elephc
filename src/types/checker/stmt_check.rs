@@ -13,6 +13,8 @@ mod assignments;
 mod control_flow;
 mod narrowing;
 
+use std::collections::HashSet;
+
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::types::TypeEnv;
@@ -119,6 +121,15 @@ impl Checker {
                 Err(CompileError::new(stmt.span, "Unresolved include statement"))
             }
             StmtKind::PackedClassDecl { .. } => Ok(()),
+            // An included file's `return`, rewritten into a `break` to the include's wrapper,
+            // may leave a `finally` as the `return` could. Its depth still has to hold.
+            StmtKind::Break(levels) if stmt.is_include_return_break() => {
+                if *levels <= self.break_continue_depth {
+                    Ok(())
+                } else {
+                    self.check_loop_exit(stmt.span, "break", *levels)
+                }
+            }
             StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
             StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
             StmtKind::ExprStmt(expr) => {
@@ -153,17 +164,27 @@ impl Checker {
                     if self.current_by_ref_return {
                         if let ExprKind::PropertyAccess { object, property } = &e.kind {
                             let object_ty = self.infer_type(object, env)?;
-                            if let Some(class) =
+                            // A CLOSURE's `$this` is never settled by the scope it was written
+                            // in: `Closure::bind`/`bindTo` can hand it any receiver, and the
+                            // enclosing class is only the default. Inferring it as that class
+                            // and promoting only there left a bound receiver of another class
+                            // with an ordinary (non-cell) slot, which the runtime class dispatch
+                            // then could not match at all.
+                            let rebindable_this =
+                                self.closure_depth > 0 && matches!(object.kind, ExprKind::This);
+                            let declared_class = if rebindable_this {
+                                None
+                            } else {
                                 crate::types::checker::single_object_class_name(&object_ty)
-                            {
+                            };
+                            if let Some(class) = declared_class {
                                 self.reference_property_promotions
                                     .insert((class, property.clone()));
                             } else {
-                                // A by-reference closure returning `$this->prop` whose `$this`
-                                // is bound dynamically (`Closure::bind`) has a Mixed receiver, so
-                                // the class is unknown here. Promote the property on every class
-                                // that declares it so the reference resolves at runtime through
-                                // class-id dispatch.
+                                // A by-reference closure returning `$this->prop` has a receiver
+                                // that is only known at run time, so the class is unknown here.
+                                // Promote the property on every class that declares it so the
+                                // reference resolves at runtime through class-id dispatch.
                                 let owners: Vec<String> = self
                                     .classes
                                     .iter()
@@ -211,9 +232,20 @@ impl Checker {
     where
         F: FnOnce(&mut Self, &mut TypeEnv) -> Result<(), CompileError>,
     {
+        let mut boxed_ref_aliased = self.boxed_ref_aliased_locals.clone();
+        self.conditional_boxed_ref_invalidations.push(HashSet::new());
         self.local_conditional_depth += 1;
         let result = f(self, env);
         self.local_conditional_depth -= 1;
+        // Provenance is an affirmative storage proof for the current binding. A conditional
+        // body may not execute, so new facts cannot escape. Conversely, invalidating an entry
+        // fact on any path makes it unsafe at the join, even when another path preserves it.
+        let invalidated = self
+            .conditional_boxed_ref_invalidations
+            .pop()
+            .expect("conditional provenance scope must be balanced");
+        boxed_ref_aliased.retain(|name| !invalidated.contains(name));
+        self.boxed_ref_aliased_locals = boxed_ref_aliased;
         result
     }
 

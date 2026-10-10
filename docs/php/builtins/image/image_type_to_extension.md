@@ -1,8 +1,8 @@
 ---
 title: "image_type_to_extension()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the filename extension for an IMAGETYPE_* constant."
 sidebar:
-  order: 453
+  order: 454
 ---
 
 ## image_type_to_extension()
@@ -11,7 +11,7 @@ sidebar:
 function image_type_to_extension(int $image_type, bool $include_dot = true): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the filename extension for an IMAGETYPE_* constant.
 
 **Parameters**:
 - `$image_type` (`int`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

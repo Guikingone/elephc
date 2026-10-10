@@ -121,7 +121,7 @@ impl Parser {
                 if is_static || effective_readonly {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
-                let (requires_get_hook, requires_set_hook) =
+                let (requires_get_hook, requires_set_hook, get_returns_by_ref) =
                     self.parse_property_hook_contracts()?;
                 let property = EvalClassProperty::with_visibility_static_final_and_readonly(
                     name,
@@ -133,10 +133,10 @@ impl Parser {
                 )
                 .with_type(property_type)
                 .with_set_visibility(set_visibility)
-                .with_abstract_hook_contract(requires_get_hook, requires_set_hook);
+                .with_abstract_hook_contract(requires_get_hook, requires_set_hook)
+                .with_get_contract_returns_by_ref(get_returns_by_ref);
                 return Ok((vec![property], Vec::new()));
             }
-            let default_is_some = default.is_some();
             if self.consume(TokenKind::Comma) {
                 properties.push(
                     EvalClassProperty::with_visibility_static_final_and_readonly(
@@ -174,13 +174,15 @@ impl Parser {
                     property_type.as_ref(),
                     is_static,
                     effective_readonly,
-                    default_is_some,
                 )?;
             if set_hook_type.is_some() && property_type.is_none() {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             let is_virtual = (has_get_hook || has_set_hook)
                 && !property_hook_methods_use_backing_slot(&parsed_hook_methods, &name);
+            if is_virtual && default.is_some() {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             properties.push(
                 EvalClassProperty::with_visibility_static_final_and_readonly(
                     name,
@@ -209,7 +211,6 @@ impl Parser {
         property_type: Option<&EvalParameterType>,
         is_static: bool,
         is_readonly: bool,
-        has_default: bool,
     ) -> Result<(bool, bool, Option<EvalParameterType>, Vec<EvalClassMethod>), EvalParseError> {
         if self.consume(TokenKind::Semicolon) {
             return Ok((false, false, None, Vec::new()));
@@ -217,7 +218,7 @@ impl Parser {
         if !matches!(self.current(), TokenKind::LBrace) {
             return Err(EvalParseError::UnexpectedToken);
         }
-        if is_static || is_readonly || has_default {
+        if is_static || is_readonly {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         self.advance();
@@ -316,7 +317,8 @@ impl Parser {
             params,
             body,
         )
-        .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line));
+        .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
+        .with_returns_by_ref(returns_by_ref);
         if is_set {
             method = method.with_parameter_types(vec![
                 set_hook_type.clone().or_else(|| property_type.cloned()),

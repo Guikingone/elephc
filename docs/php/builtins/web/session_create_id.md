@@ -1,8 +1,8 @@
 ---
 title: "session_create_id()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Generates a new session id, optionally with a prefix."
 sidebar:
-  order: 890
+  order: 985
 ---
 
 ## session_create_id()
@@ -11,7 +11,7 @@ sidebar:
 function session_create_id(string $prefix = ''): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Generates a new session id, optionally with a prefix.
 
 **Parameters**:
 - `$prefix` (`string`), default `''`, optional
@@ -23,7 +23,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -141,6 +141,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         ExprKind::InstanceOf { value, target } => {
             let target_inv = match target {
                 InstanceOfTarget::Name(_) => Invalidation::none(),
+                InstanceOfTarget::Generic(_) => Invalidation::none(),
                 InstanceOfTarget::Expr(expr) => expr_invalidation(expr),
             };
             expr_invalidation(value).union(target_inv)
@@ -150,7 +151,9 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
             expr_invalidation(value).union(expr_invalidation(default))
         }
         ExprKind::ArrayAccess { array, index } => {
-            expr_invalidation(array).union(expr_invalidation(index))
+            expr_invalidation(array)
+                .union(expr_invalidation(index))
+                .union(top_level_globals_guard(expr_effect(expr)))
         }
         ExprKind::Ternary {
             condition,
@@ -170,6 +173,12 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                     .union(expr_invalidation(value))
             })
         }
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .fold(Invalidation::none(), |acc, expr| {
+                acc.union(expr_invalidation(expr))
+            }),
         ExprKind::Match {
             subject,
             arms,
@@ -334,6 +343,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                 .union(top_level_globals_guard(expr_call_effect(callable)))
         }
         ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewDynamic { args, .. }
         | ExprKind::NewDynamicObject { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
@@ -395,10 +405,7 @@ fn call_args_invalidation(
     for arg in args {
         match &arg.kind {
             ExprKind::NamedArg { name, value } => {
-                if sig
-                    .iter()
-                    .any(|(param, is_ref)| param == name && *is_ref)
-                {
+                if named_arg_binds_by_ref(sig, name) {
                     expose_argument_root(value, retain, &mut inv);
                 }
             }
@@ -422,6 +429,18 @@ fn call_args_invalidation(
         }
     }
     inv
+}
+
+/// Returns whether a named argument lands on a by-ref parameter.
+///
+/// A name the signature does not declare is collected by the variadic tail, so
+/// `f(named: $v)` on `function f(&...$items)` writes through `$v` exactly like a positional
+/// argument in that tail does. Missing that left the caller's constant in place across the call.
+pub(crate) fn named_arg_binds_by_ref(sig: &[(String, bool)], name: &str) -> bool {
+    if let Some((_, is_ref)) = sig.iter().find(|(param, _)| param == name) {
+        return *is_ref;
+    }
+    sig.last().is_some_and(|(_, is_ref)| *is_ref)
 }
 
 /// Returns whether a positional argument lands on a by-ref parameter.

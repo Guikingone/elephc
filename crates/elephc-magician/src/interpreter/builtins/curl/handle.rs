@@ -1,7 +1,7 @@
 //! Purpose:
 //! Shared curl easy-handle resolution and `curl_setopt()`'s option-KIND dispatch, reused
-//! by every home file in this family (mirrors `crate::curl_prelude::curl_setopt`'s body
-//! one-for-one, minus the callback/share arms this module's doc defers).
+//! by every home file in this family (mirrors `crate::curl_prelude::curl_setopt`'s dispatch,
+//! including its callback, share, and `CURLOPT_POSTFIELDS` multipart arms).
 //!
 //! Called from:
 //! - Every `curl_*` home file in this directory.
@@ -68,6 +68,51 @@ pub(in crate::interpreter) fn eval_curl_given_type_name(
         return Ok(String::from_utf8_lossy(&bytes).into_owned());
     }
     Ok(eval_gettype_name(tag).to_string())
+}
+
+/// Coerces one `curl_*()` STRING parameter the way php-src's typed parameter does, throwing a
+/// catchable `\TypeError` for a value that cannot become a string.
+///
+/// `values.cast_string()` alone is what this replaces, and it is a silent-wrong-value hole: it
+/// turns an object or an array into `""` and lets the call succeed, where php-src throws
+/// (issue #872). `curl_escape($ch, new stdClass())` reported an escaped empty string; PHP
+/// reports `curl_escape(): Argument #2 ($string) must be of type string, stdClass given`.
+///
+/// PHP's COERCIVE typing is preserved for everything that really does convert: `int`, `float`,
+/// `bool` and `null` all reach `cast_string`, and an object WITH `__toString()` is converted
+/// through it — `curl_escape($ch, new Stringable())` is accepted by php-src and returns the
+/// escaped result, so rejecting every object would trade one divergence for another.
+///
+/// `type_label` is the parameter's declared type as PHP spells it in the message: `"string"`
+/// for `curl_escape`/`curl_unescape`'s `$string`, `"?string"` for `curl_init`'s nullable
+/// `$url`. The "given" name comes from [`eval_curl_given_type_name`], the same one every other
+/// guard in this family uses, so the wording stays consistent across the whole curl surface.
+pub(in crate::interpreter) fn eval_curl_string_argument(
+    function: &str,
+    position: u32,
+    parameter: &str,
+    type_label: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    let is_object = tag == EVAL_TAG_OBJECT;
+    let convertible_object = is_object && eval_object_has_to_string(value, context, values)?;
+    if eval_curl_is_php_array(value, values)? || (is_object && !convertible_object) {
+        let given = eval_curl_given_type_name(value, context, values)?;
+        return eval_throw_type_error(
+            &format!(
+                "{function}(): Argument #{position} (${parameter}) must be of type {type_label}, {given} given"
+            ),
+            context,
+            values,
+        );
+    }
+    if convertible_object {
+        return eval_string_context_value(value, context, values);
+    }
+    values.cast_string(value)
 }
 
 /// Resolves a `curl_*()` call's `$handle` argument to its EVAL TABLE KEY and bridge raw id,
@@ -269,10 +314,9 @@ pub(in crate::interpreter) fn eval_curl_require_php_85(
     Ok(())
 }
 
-/// `curl_setopt()`'s message for KIND 6 (a real option this build cannot carry), KIND 8
-/// (callbacks) and KIND 9 (the PHP-stream options) — accepted PHP API this eval interpreter
-/// specifically does not wire, per this family's module doc — formatted exactly like the
-/// AOT prelude's own
+/// `curl_setopt()`'s message for KIND 6 (a real option this build cannot carry), KIND 9
+/// (the PHP-stream options), or a defensive unknown KIND 8 callback slot — formatted
+/// exactly like the AOT prelude's own
 /// `__elephc_curl_setopt_unsupported_warning` (`src/codegen_support/runtime/curl/
 /// warn_option.rs`'s `CURL_SETOPT_UNSUPPORTED_PREFIX`/`_SUFFIX`), so a script observing
 /// the warning text sees the identical wording whether it runs compiled or through
@@ -304,11 +348,10 @@ pub(in crate::interpreter) fn eval_curl_warn_unsupported_multi_option(
 /// id, EVAL TABLE KEY (for the PHP-layer mirror fields), and already-evaluated option/value
 /// cells. Returns the same `bool` `curl_setopt()` itself returns.
 ///
-/// Mirrors `crate::curl_prelude::curl_setopt`'s body kind-for-kind (see that function's own
-/// extensive comments for the libcurl-side rationale of each branch), MINUS the
-/// `CURLOPT_POSTFIELDS` array/`multipart` special case and KIND 8 (callbacks) — both fall
-/// into the honest "not supported by this build" warning path instead, per this family's
-/// module doc.
+/// Mirrors `crate::curl_prelude::curl_setopt`'s body kind-for-kind, including
+/// `CURLOPT_POSTFIELDS` array/multipart handling and KIND 8 callbacks. KIND 9 PHP-stream
+/// options and KIND 6 options this build cannot carry still take the honest "not supported
+/// by this build" warning path.
 pub(in crate::interpreter) fn eval_curl_setopt_apply(
     raw: i64,
     table_id: i64,

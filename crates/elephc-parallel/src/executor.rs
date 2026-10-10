@@ -75,14 +75,17 @@ struct WorkerJoin {
 static EXECUTOR: OnceLock<Mutex<ExecutorState>> = OnceLock::new();
 static WORKERS: OnceLock<Mutex<HashMap<u64, Arc<WorkerJoin>>>> = OnceLock::new();
 
+/// Initializes the bounded admission counter and FIFO queue under one executor mutex.
 fn executor() -> &'static Mutex<ExecutorState> {
     EXECUTOR.get_or_init(|| Mutex::new(ExecutorState::default()))
 }
 
+/// Initializes the join-record registry kept until terminal job release forgets each worker.
 fn workers() -> &'static Mutex<HashMap<u64, Arc<WorkerJoin>>> {
     WORKERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Checks nonzero job/runtime addresses, heap capacity and reviewed stack-size bounds before submission.
 fn valid_spec(spec: WorkerSpec) -> bool {
     spec.id != 0
         && spec.acquire_addr != 0
@@ -120,6 +123,7 @@ pub extern "C" fn elephc_parallel_job_submit_v1(
     }
 }
 
+/// Reserves one submission, queues it and admits available work, rolling back on lock failure.
 fn submit(spec: WorkerSpec) -> i32 {
     if !valid_spec(spec) {
         return PARALLEL_EXECUTOR_ERROR;
@@ -136,6 +140,7 @@ fn submit(spec: WorkerSpec) -> i32 {
     PARALLEL_EXECUTOR_ACCEPTED
 }
 
+/// Admits queued specs in FIFO order up to capacity, skipping cancelled jobs without spawning threads.
 fn admit_available(state: &mut ExecutorState) {
     while state.active < PARALLEL_WORKER_CONTEXT_CAPACITY {
         let Some(spec) = state.queued.pop_front() else {
@@ -160,6 +165,7 @@ fn admit_available(state: &mut ExecutorState) {
     }
 }
 
+/// Installs a join record before releasing a fresh, stack-sized OS thread through its startup barrier.
 fn spawn_worker(spec: WorkerSpec) -> bool {
     let gate = Arc::new(Barrier::new(2));
     let join = Arc::new(WorkerJoin {
@@ -205,6 +211,7 @@ fn spawn_worker(spec: WorkerSpec) -> bool {
     true
 }
 
+/// Marks one admitted job Running and invokes the isolated runtime bridge before enforcing settlement.
 fn execute(spec: WorkerSpec) {
     if elephc_parallel_job_mark_running(spec.id) != 1 {
         return;
@@ -223,6 +230,7 @@ fn execute(spec: WorkerSpec) {
     ensure_terminal(spec.id, status);
 }
 
+/// Settles an otherwise-running exit as cancellation or the typed bridge/runtime failure category.
 fn ensure_terminal(id: u64, status: i64) {
     if elephc_parallel_job_phase(id) != PARALLEL_JOB_RUNNING {
         return;
@@ -277,6 +285,7 @@ fn ensure_terminal(id: u64, status: i64) {
     publish_failure(id, kind, message);
 }
 
+/// Transfers an owned failure envelope to a running job, using its emergency envelope on allocation failure.
 fn publish_failure(id: u64, kind: i32, message: &[u8]) {
     if elephc_parallel_job_phase(id) != PARALLEL_JOB_RUNNING {
         return;
@@ -290,6 +299,7 @@ fn publish_failure(id: u64, kind: i32, message: &[u8]) {
     }
 }
 
+/// Returns one admission slot after worker execution and admits the next queued specs.
 fn worker_finished() {
     let Ok(mut state) = executor().lock() else {
         return;
@@ -298,6 +308,7 @@ fn worker_finished() {
     admit_available(&mut state);
 }
 
+/// Joins a worker once and shares that result with racing waiters without holding the join lock during join.
 pub(crate) fn join_worker(id: u64) -> bool {
     let join = {
         let Ok(workers) = workers().lock() else {
@@ -340,6 +351,7 @@ pub(crate) fn join_worker(id: u64) -> bool {
     }
 }
 
+/// Removes join bookkeeping after the owning terminal job has completed its join/release protocol.
 pub(crate) fn forget_worker(id: u64) {
     if let Ok(mut workers) = workers().lock() {
         workers.remove(&id);

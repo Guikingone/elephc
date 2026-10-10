@@ -1,8 +1,8 @@
 ---
 title: "session_set_save_handler()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Installs a custom session storage handler."
 sidebar:
-  order: 904
+  order: 999
 ---
 
 ## session_set_save_handler()
@@ -11,7 +11,7 @@ sidebar:
 function session_set_save_handler(mixed $handler_or_open = null, mixed $register_or_close = true, mixed $read = null, mixed $write = null, mixed $destroy = null, mixed $gc = null, mixed $create_sid = null, mixed $validate_id = null, mixed $update_timestamp = null): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Installs a custom session storage handler.
 
 **Parameters**:
 - `$handler_or_open` (`mixed`), default `null`, optional
@@ -31,7 +31,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

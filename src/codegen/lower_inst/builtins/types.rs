@@ -128,15 +128,16 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// call or a dynamic-property removal, so the message lists the shapes that do lower
 /// directly and then names the one shape users hit most.
 ///
-/// THE UNTYPED FIXED SLOT is that shape. `unset($obj->untypedProp)` on a property
-/// declared without a type (`public $foo = 1;`) truly REMOVES it in PHP: a later read
-/// warns `Undefined property` and answers `null`, and a later write recreates it.
-/// elephc gives each declared property a fixed, monomorphically typed slot, so a
-/// property the checker typed `Int` has no encoding for "removed and reading as null"
-/// — every candidate encoding answers `int(0)` or a raw marker word instead. A loud
-/// error beats a wrong value, so the shape is refused here. Untyped properties whose
-/// storage is a DYNAMIC hash (`stdClass`, undeclared names on
-/// `#[AllowDynamicProperties]` classes) are genuinely removable and lower fine.
+/// Fixed untyped slots selected by reachable property `unset()` operations are widened to
+/// boxed `Mixed` and lowered through `PropUnset`, so they do not reach this fallback. Packed
+/// fields, by-reference property slots, and dynamic shapes whose magic behavior depends on
+/// runtime state remain deliberately unsupported.
+///
+/// A BY-REFERENCE INDEXED ARRAY is the shape named here. `unset()` removes a key without
+/// renumbering, so a packed list has to become a hash — and a callee cannot retype the
+/// caller's slot, which still reads `array<T>`. The associative form has no such problem
+/// and lowers directly (issue #677), so the message names the difference rather than
+/// leaving "array/hash elements" looking like a blanket promise.
 pub(super) fn lower_unset_builtin(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -144,9 +145,12 @@ pub(super) fn lower_unset_builtin(
     Err(CodegenIrError::unsupported(format!(
         "unset target shape with {} lowered operands (supported: variables, \
          array/hash elements, ArrayAccess offsets, __unset()-backed properties, \
-         declared typed object properties, and dynamic object properties). \
-         An UNTYPED declared property (`public $p = 1;`) is not supported: its fixed \
-         slot has no representation for PHP's removed-then-null read",
+         declared fixed object properties, and dynamic object properties). \
+         Packed fields, by-reference property slots, and runtime-dependent magic \
+         property shapes are not supported. An element of a by-reference INDEXED array \
+         (`function f(array &$a) {{ unset($a[1]); }}`) would leave a key hole, so the \
+         local must become a hash, and the caller's slot still says `array<T>`; the \
+         associative form (`unset($a[\"k\"])`) is supported",
         inst.operands.len()
     )))
 }
@@ -441,13 +445,25 @@ pub(crate) fn lower_class_name_lookup(
     }
 
     let value = expect_operand(inst, 0)?;
-    match ctx.value_php_type(value)? {
+    let value_ty = ctx.value_php_type(value)?;
+    match &value_ty {
+        // A statically typed slot can still hold an eval-declared subclass, which owns no
+        // generated class id and would otherwise report its nearest emitted ancestor. Magician
+        // answers from dynamic-owner metadata first and falls back to the same class-name table.
+        PhpType::Object(_) if super::has_eval_context(ctx) => {
+            return super::lower_eval_object_class_name(ctx, inst, value, name);
+        }
         PhpType::Object(_) => {
             ctx.load_value_to_result(value)?;
             emit_dynamic_object_class_name(ctx, name);
         }
-        PhpType::Callable if name == "get_class" => {
-            emit_string_result(ctx, b"Closure");
+        PhpType::Callable => {
+            let result = if name == "get_class" {
+                b"Closure".as_slice()
+            } else {
+                b"".as_slice()
+            };
+            emit_string_result(ctx, result);
         }
         PhpType::Mixed | PhpType::Union(_) if super::has_eval_context(ctx) => {
             return super::lower_eval_object_class_name(ctx, inst, value, name);
@@ -458,8 +474,23 @@ pub(crate) fn lower_class_name_lookup(
         }
         PhpType::Str if name == "get_parent_class" => {
             let class_name = const_string_operand(ctx, value)?;
-            let parent = parent_of(ctx, &class_name);
-            emit_string_result(ctx, parent.as_bytes());
+            if let Some(parent) = parent_of_existing(ctx, &class_name) {
+                emit_string_result(ctx, parent.as_bytes());
+            } else {
+                emit_class_lookup_type_error(ctx, name, "string");
+            }
+        }
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Str
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Void
+        | PhpType::Never
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Resource(_) => {
+            emit_static_class_lookup_type_error(ctx, name, value, &value_ty)?;
         }
         _ => {
             ctx.load_value_to_result(value)?;
@@ -546,6 +577,16 @@ fn emit_object_hash_projection(
     Ok(())
 }
 
+/// Projects every object property with PHP visibility-mangled keys and boxes the fresh hash.
+pub(crate) fn emit_mangled_object_vars(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    emit_object_hash_projection(ctx, value, true, -1)?;
+    Ok(())
+}
+
 /// Resolves the EIR function's lexical class id, using `-1` for global scopes.
 fn lexical_object_vars_scope_class_id(ctx: &FunctionContext<'_>) -> i64 {
     let Some(class_name) = ctx.function.lexical_class.as_deref() else {
@@ -605,8 +646,48 @@ pub(crate) fn lower_is_a_relation(
             return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
         }
     }
-    let result = static_relation_holds(ctx, object, target, exclude_self)?;
-    emit_bool_result(ctx, result);
+    // `$allow_string` decides whether a string first operand names a class, and the two builtins
+    // disagree on its default: `is_subclass_of` takes names unless told otherwise, `is_a` only
+    // when told to. Measured, `is_a("Derived", "Base")` is false and `is_a("Derived", "Base",
+    // true)` is true.
+    let literal_flag = match inst.operands.get(2) {
+        Some(flag) => const_bool_operand(ctx, *flag)?,
+        None => Some(exclude_self),
+    };
+    let subject_is_object = matches!(ctx.value_php_type(object)?, PhpType::Object(_));
+    if let Some(allow_string_subject) = literal_flag {
+        let result =
+            static_relation_holds(ctx, object, target, exclude_self, allow_string_subject)?;
+        emit_bool_result(ctx, result);
+        return store_if_result(ctx, inst);
+    }
+    if subject_is_object {
+        // The flag only governs a STRING subject; an object never consults it, so its runtime
+        // value cannot change this answer.
+        let result = static_relation_holds(ctx, object, target, exclude_self, false)?;
+        emit_bool_result(ctx, result);
+        return store_if_result(ctx, inst);
+    }
+    // A literal name with a RUNTIME flag. Substituting the builtin's default here answered `y`
+    // for `is_subclass_of("Derived", "Base", $false)`, where PHP answers `n` — a wrong answer
+    // this lowering did not produce before it learned to read names at all. The result is simply
+    // `$allow_string && relation`, so when the relation holds the flag IS the answer.
+    let holds = static_relation_holds(ctx, object, target, exclude_self, true)?;
+    if !holds {
+        emit_bool_result(ctx, false);
+        return store_if_result(ctx, inst);
+    }
+    let flag = expect_operand(inst, 2)?;
+    if matches!(ctx.value_php_type(flag)?, PhpType::Bool) {
+        ctx.load_value_to_result(flag)?;
+        return store_if_result(ctx, inst);
+    }
+    // The declared signature is `bool $allow_string`, but coercive mode admits any scalar and the
+    // argument lowering does not cast it, so an `int`, `string` or `float` flag reaches here.
+    // Answering `false` made `$flag = 1; is_subclass_of("Derived", "Base", $flag)` report `n`
+    // where PHP reports `y`. The relation already holds at this point, so the answer is exactly
+    // the flag's PHP truthiness.
+    super::super::predicates::emit_value_truthiness(ctx, flag, name)?;
     store_if_result(ctx, inst)
 }
 
@@ -785,10 +866,20 @@ pub(crate) fn lower_get_resource_type(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_type", 1)?;
     let value = expect_operand(inst, 0)?;
+    let raw_ty = ctx.raw_value_php_type(value)?;
     ctx.load_value_to_result(value)?;
-    match resource_type_name_shape(&ctx.raw_value_php_type(value)?) {
+    match resource_type_name_shape(&raw_ty) {
         ResourceTypeNameShape::Boxed => emit_boxed_resource_type_name(ctx),
         ResourceTypeNameShape::Unboxed => {
+            let subtype = match raw_ty {
+                PhpType::Resource(Some(ref kind)) if kind == "stream filter" => 9,
+                _ => 0,
+            };
+            let subtype_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x3",
+                Arch::X86_64 => "rcx",
+            };
+            abi::emit_load_int_immediate(ctx.emitter, subtype_reg, subtype);
             abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
         }
         ResourceTypeNameShape::Constant => emit_string_result(ctx, b"stream"),
@@ -876,9 +967,11 @@ fn emit_boxed_resource_type_name_asm(
     emitter.label(resource_label);
     match emitter.target.arch {
         Arch::AArch64 => {
+            emitter.instruction("mov x3, x2");                                  // preserve the resource subtype for runtime name selection
             emitter.instruction("mov x0, x1");                                  // move the unboxed Mixed low payload into the integer result register
         }
         Arch::X86_64 => {
+            emitter.instruction("mov rcx, rdx");                                // preserve the resource subtype for runtime name selection
             emitter.instruction("mov rax, rdi");                                // move the unboxed Mixed low payload into the integer result register
         }
     }
@@ -921,45 +1014,219 @@ fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
 
 /// Emits class-name lookup for a boxed Mixed value that may contain an object.
 fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
-    let empty_label = ctx.next_label("get_class_mixed_empty");
+    let object_label = ctx.next_label("get_class_mixed_object");
     let closure_label = ctx.next_label("get_class_mixed_closure");
+    let string_label = ctx.next_label("get_parent_class_mixed_string");
+    let bool_label = ctx.next_label("get_class_mixed_bool");
+    let false_label = ctx.next_label("get_class_mixed_false");
+    let true_label = ctx.next_label("get_class_mixed_true");
+    let fallback_error_label = ctx.next_label("get_class_mixed_type_error");
     let done_label = ctx.next_label("get_class_mixed_done");
+    let mut error_labels = vec![
+        (0_u64, "int", ctx.next_label("get_class_mixed_type_error")),
+        (2, "float", ctx.next_label("get_class_mixed_type_error")),
+        (4, "array", ctx.next_label("get_class_mixed_type_error")),
+        (5, "array", ctx.next_label("get_class_mixed_type_error")),
+        (8, "null", ctx.next_label("get_class_mixed_type_error")),
+        (9, "resource", ctx.next_label("get_class_mixed_type_error")),
+    ];
+    if name == "get_class" {
+        error_labels.push((1, "string", ctx.next_label("get_class_mixed_type_error")));
+    }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            if name == "get_class" {
-                ctx.emitter.instruction("cmp x0, #10");                         // runtime tag 10 identifies boxed Closure values
-                ctx.emitter.instruction(&format!("b.eq {}", closure_label));    // return PHP's builtin Closure class name
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 identifies boxed object payloads
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // resolve a valid object's concrete class metadata
+            ctx.emitter.instruction("cmp x0, #10");                             // runtime tag 10 identifies boxed Closure values
+            ctx.emitter.instruction(&format!("b.eq {}", closure_label));        // closures are objects for both lookup builtins
+            if name == "get_parent_class" {
+                ctx.emitter.instruction("cmp x0, #1");                          // runtime tag 1 identifies a possible class-name string
+                ctx.emitter.instruction(&format!("b.eq {}", string_label));     // validate and resolve the dynamic class name
             }
-            ctx.emitter.instruction("cmp x0, #6");                              // require a boxed object payload for class-name lookup
-            ctx.emitter
-                .instruction(&format!("b.ne {}", empty_label));                 // non-object Mixed payloads produce an empty class name
+            ctx.emitter.instruction("cmp x0, #3");                              // runtime tag 3 identifies a boolean payload
+            ctx.emitter.instruction(&format!("b.eq {}", bool_label));           // PHP names the rejected boolean value
+            for (tag, _, label) in &error_labels {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));          // identify the rejected Mixed payload kind
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // throw the TypeError naming that payload kind
+            }
+            ctx.emitter.instruction(&format!("b {}", fallback_error_label));    // reject every remaining non-object runtime tag
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 identifies boxed object payloads
+            ctx.emitter.instruction(&format!("je {}", object_label));           // resolve a valid object's concrete class metadata
+            ctx.emitter.instruction("cmp rax, 10");                             // runtime tag 10 identifies boxed Closure values
+            ctx.emitter.instruction(&format!("je {}", closure_label));          // closures are objects for both lookup builtins
+            if name == "get_parent_class" {
+                ctx.emitter.instruction("cmp rax, 1");                          // runtime tag 1 identifies a possible class-name string
+                ctx.emitter.instruction(&format!("je {}", string_label));       // validate and resolve the dynamic class name
+            }
+            ctx.emitter.instruction("cmp rax, 3");                              // runtime tag 3 identifies a boolean payload
+            ctx.emitter.instruction(&format!("je {}", bool_label));             // PHP names the rejected boolean value
+            for (tag, _, label) in &error_labels {
+                ctx.emitter.instruction(&format!("cmp rax, {}", tag));          // identify the rejected Mixed payload kind
+                ctx.emitter.instruction(&format!("je {}", label));              // throw the TypeError naming that payload kind
+            }
+            ctx.emitter.instruction(&format!("jmp {}", fallback_error_label));  // reject every remaining non-object runtime tag
+        }
+    }
+
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // expose the unboxed object pointer to the object lookup path
         }
         Arch::X86_64 => {
-            if name == "get_class" {
-                ctx.emitter.instruction("cmp rax, 10");                         // runtime tag 10 identifies boxed Closure values
-                ctx.emitter.instruction(&format!("je {}", closure_label));      // return PHP's builtin Closure class name
-            }
-            ctx.emitter.instruction("cmp rax, 6");                              // require a boxed object payload for class-name lookup
-            ctx.emitter
-                .instruction(&format!("jne {}", empty_label));                  // non-object Mixed payloads produce an empty class name
             ctx.emitter.instruction("mov rax, rdi");                            // expose the unboxed object pointer to the object lookup path
         }
     }
     emit_dynamic_object_class_name(ctx, name);
     abi::emit_jump(ctx.emitter, &done_label);
 
+    ctx.emitter.label(&closure_label);
     if name == "get_class" {
-        ctx.emitter.label(&closure_label);
         emit_string_result(ctx, b"Closure");
-        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_string_result(ctx, b"");
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    if name == "get_parent_class" {
+        ctx.emitter.label(&string_label);
+        emit_dynamic_parent_class_name(ctx, &done_label);
     }
 
-    ctx.emitter.label(&empty_label);
-    emit_string_result(ctx, b"");
+    ctx.emitter.label(&bool_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // a zero boolean payload is PHP false
+            ctx.emitter.instruction(&format!("b {}", true_label));              // every non-zero boolean payload is PHP true
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // inspect the unboxed boolean payload
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // a zero boolean payload is PHP false
+            ctx.emitter.instruction(&format!("jmp {}", true_label));            // every non-zero boolean payload is PHP true
+        }
+    }
+    ctx.emitter.label(&false_label);
+    emit_class_lookup_type_error(ctx, name, "false");
+    ctx.emitter.label(&true_label);
+    emit_class_lookup_type_error(ctx, name, "true");
+    for (_, type_name, label) in &error_labels {
+        ctx.emitter.label(label);
+        emit_class_lookup_type_error(ctx, name, type_name);
+    }
+    ctx.emitter.label(&fallback_error_label);
+    emit_class_lookup_type_error(ctx, name, "unknown");
 
     ctx.emitter.label(&done_label);
+}
+
+/// Resolves an unboxed dynamic class-name string for `get_parent_class()`.
+///
+/// The string pair is still in the Mixed-unbox payload registers. It is matched
+/// case-insensitively against deterministic AOT class metadata; unknown names
+/// raise the same catchable `TypeError` as reference PHP.
+fn emit_dynamic_parent_class_name(ctx: &mut FunctionContext<'_>, done_label: &str) {
+    let mut metadata = ctx
+        .module
+        .class_infos
+        .iter()
+        .map(|(name, info)| (name.clone(), info.parent.clone().unwrap_or_default()))
+        .collect::<Vec<_>>();
+    metadata.sort_by(|left, right| left.0.cmp(&right.0));
+    let candidates = metadata
+        .into_iter()
+        .map(|(name, parent)| {
+            (
+                name,
+                parent,
+                ctx.next_label("get_parent_class_mixed_match"),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+        Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rdi", "rdx"),
+    }
+    for (candidate, _, label) in &candidates {
+        super::member_queries::emit_branch_if_dynamic_class_like_exists_candidate(
+            ctx,
+            candidate,
+            label,
+        );
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    emit_class_lookup_type_error(ctx, "get_parent_class", "string");
+
+    for (_, parent, label) in candidates {
+        ctx.emitter.label(&label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        emit_string_result(ctx, parent.as_bytes());
+        abi::emit_jump(ctx.emitter, done_label);
+    }
+}
+
+/// Throws the lookup builtin's PHP-compatible `TypeError` for a static argument.
+fn emit_static_class_lookup_type_error(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    if matches!(value_ty, PhpType::Bool) {
+        ctx.load_value_to_result(value)?;
+        let false_label = ctx.next_label("get_class_static_false");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz x0, {}", false_label));   // a zero boolean argument is PHP false
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // inspect the static boolean argument
+                ctx.emitter.instruction(&format!("jz {}", false_label));        // a zero boolean argument is PHP false
+            }
+        }
+        emit_class_lookup_type_error(ctx, name, "true");
+        ctx.emitter.label(&false_label);
+        emit_class_lookup_type_error(ctx, name, "false");
+        return Ok(());
+    }
+    let type_name = match value_ty {
+        PhpType::Int => "int",
+        PhpType::Float => "float",
+        PhpType::Str => "string",
+        PhpType::False => "false",
+        PhpType::Void | PhpType::Never => "null",
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array",
+        PhpType::Resource(_) => "resource",
+        _ => "unknown",
+    };
+    emit_class_lookup_type_error(ctx, name, type_name);
+    Ok(())
+}
+
+/// Throws the selected class-name builtin's catchable PHP `TypeError`.
+fn emit_class_lookup_type_error(ctx: &mut FunctionContext<'_>, name: &str, type_name: &str) {
+    let expected = if name == "get_parent_class" {
+        "an object or a valid class name"
+    } else {
+        "of type object"
+    };
+    super::super::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "{}(): Argument #1 (${parameter}) must be {}, {} given",
+            name,
+            expected,
+            type_name,
+            parameter = if name == "get_parent_class" {
+                "object_or_class"
+            } else {
+                "object"
+            },
+        ),
+    );
 }
 
 /// Emits AArch64 runtime object class-name lookup for `get_class()` and `get_parent_class()`.
@@ -1094,9 +1361,50 @@ fn static_relation_holds(
     object: ValueId,
     target: ValueId,
     exclude_self: bool,
+    allow_string_subject: bool,
 ) -> Result<bool> {
-    let PhpType::Object(object_class) = ctx.value_php_type(object)? else {
-        return Ok(false);
+    // PHP takes a class NAME as readily as an object here, and answering `false` for the name
+    // form is a silent wrong answer rather than a refusal (issue #1113). A literal name is as
+    // decidable as a typed object: the parent and interface walks below need a class name, and
+    // do not care which operand shape it arrived in.
+    let object_class = match ctx.value_php_type(object)? {
+        PhpType::Object(class_name) => class_name,
+        _ if allow_string_subject => {
+            let Some(name) = optional_const_string_operand(ctx, object)? else {
+                return Ok(false);
+            };
+            let subject = name.trim_start_matches('\\');
+            // An interface name is a legal subject and is reachable ONLY this way — there is no
+            // instance of an interface to pass, so the object form can never ask the question.
+            // `interface J extends I {}` makes `is_subclass_of("J", "I")` true in PHP.
+            if lookup_class(ctx, subject).is_none() {
+                // A name that is neither a class nor an interface resolves to nothing, and PHP
+                // answers `false` for it — including for `is_a("Ghost", "Ghost", true)`, where
+                // the self-check must not fire before the name is known to exist.
+                if super::class_relations::lookup_interface(ctx, subject).is_none() {
+                    return Ok(false);
+                }
+                let Some(target_class) = optional_const_string_operand(ctx, target)? else {
+                    return Ok(false);
+                };
+                let target_key = php_symbol_key(target_class.trim_start_matches('\\'));
+                // `is_a` counts the subject itself, `is_subclass_of` does not — the same
+                // asymmetry the class path applies below.
+                if !exclude_self && php_symbol_key(subject) == target_key {
+                    return Ok(true);
+                }
+                // The transitive parent walk is `class_implements()`'s own, shared rather than
+                // copied: two walks over the same tables are how `is_subclass_of("J","I")` and
+                // `class_implements("J")` come to disagree.
+                let mut parents = Vec::new();
+                super::class_relations::collect_interface_parents(ctx, subject, &mut parents);
+                return Ok(parents
+                    .iter()
+                    .any(|parent| php_symbol_key(parent.trim_start_matches('\\')) == target_key));
+            }
+            name
+        }
+        _ => return Ok(false),
     };
     let Some(target_class) = optional_const_string_operand(ctx, target)? else {
         return Ok(false);
@@ -1186,7 +1494,10 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
 }
 
 /// Allocates an indexed string array and appends every declaration name.
-fn emit_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
+pub(in crate::codegen::lower_inst) fn emit_string_array(
+    ctx: &mut FunctionContext<'_>,
+    names: &[String],
+) -> Result<()> {
     let capacity = names.len().max(1);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -1270,10 +1581,15 @@ fn parent_of(ctx: &FunctionContext<'_>, class_name: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Returns a known class's parent, distinguishing parentless from invalid names.
+fn parent_of_existing(ctx: &FunctionContext<'_>, class_name: &str) -> Option<String> {
+    lookup_class(ctx, class_name).map(|info| info.parent.clone().unwrap_or_default())
+}
+
 /// Returns a string literal value defined by a `ConstStr` operand.
 fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
     optional_const_string_operand(ctx, value)?.ok_or_else(|| {
-        CodegenIrError::unsupported("get_parent_class with non-literal class name")
+        CodegenIrError::unsupported("builtin requires a compile-time string operand")
     })
 }
 
@@ -1293,7 +1609,7 @@ fn optional_const_string_operand(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::ConstStr {
+    if !matches!(inst_ref.op, Op::ConstStr | Op::ConstClassName) {
         return Ok(None);
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
@@ -1301,10 +1617,12 @@ fn optional_const_string_operand(
             "string literal operand has no data id",
         ));
     };
-    Ok(Some(ctx
-        .module
-        .data
-        .strings
+    let values = if inst_ref.op == Op::ConstClassName {
+        &ctx.module.data.class_names
+    } else {
+        &ctx.module.data.strings
+    };
+    Ok(Some(values
         .get(data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
@@ -1346,6 +1664,7 @@ mod get_resource_type_asm_tests {
             "    mov x2, #6\n",
             "    b _gt_done\n",
             "_gt_resource:\n",
+            "    mov x3, x2\n",
             "    mov x0, x1\n",
             "    bl __rt_resource_type_name\n",
             "_gt_done:\n",
@@ -1367,6 +1686,7 @@ mod get_resource_type_asm_tests {
             "    mov rdx, 6\n",
             "    jmp _gt_done\n",
             "_gt_resource:\n",
+            "    mov rcx, rdx\n",
             "    mov rax, rdi\n",
             "    call __rt_resource_type_name\n",
             "_gt_done:\n",

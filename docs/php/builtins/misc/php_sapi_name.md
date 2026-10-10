@@ -1,8 +1,8 @@
 ---
 title: "php_sapi_name()"
-description: "Implemented by the compiler-injected version prelude."
+description: "Returns the name of the server API this build runs under."
 sidebar:
-  order: 654
+  order: 679
 ---
 
 ## php_sapi_name()
@@ -11,7 +11,7 @@ sidebar:
 function php_sapi_name(): string
 ```
 
-Implemented by the compiler-injected version prelude.
+Returns the name of the server API this build runs under.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected version prelude.
 - **Compiled (AOT)**: supported through the compiler-injected version prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

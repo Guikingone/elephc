@@ -1,8 +1,8 @@
 ---
 title: "date_date_set()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Sets a DateTime's year, month, and day."
 sidebar:
-  order: 194
+  order: 195
 ---
 
 ## date_date_set()
@@ -11,7 +11,7 @@ sidebar:
 function date_date_set(mixed $object, int $year, int $month, int $day): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Sets a DateTime's year, month, and day.
 
 **Parameters**:
 - `$object` (`mixed`)
@@ -26,7 +26,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

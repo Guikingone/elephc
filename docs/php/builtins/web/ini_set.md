@@ -1,30 +1,30 @@
 ---
 title: "ini_set()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Overrides a configuration directive for the rest of the request."
 sidebar:
-  order: 885
+  order: 980
 ---
 
 ## ini_set()
 
 ```php
-function ini_set(string $option, mixed $value): mixed
+function ini_set(string $option, string|int|float|bool|null $value): string|false
 ```
 
-Implemented by the compiler-injected web prelude.
+Overrides a configuration directive for the rest of the request.
 
 **Parameters**:
 - `$option` (`string`)
-- `$value` (`mixed`)
+- `$value` (`string|int|float|bool|null`)
 
-**Returns**: `mixed`
+**Returns**: `string|false`
 
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

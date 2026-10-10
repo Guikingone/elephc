@@ -10,7 +10,7 @@
 //! - Every lowered function leaves all blocks terminated before validation.
 
 use crate::ir::{
-    Builder, Function, FunctionFlags, FunctionParam, GeneratorSource, Immediate, IrType, Module,
+    Builder, Function, FunctionFlags, FunctionParam, Immediate, IrType, Module,
     Op, Ownership, Terminator,
 };
 use crate::ir_lower::context::{
@@ -26,9 +26,12 @@ use crate::parser::ast::{
 use crate::names::Name;
 use crate::span::Span;
 use crate::types::{
-    collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, ExternFunctionSig,
-    FunctionSig, PackedClassInfo, PhpType, TypeEnv,
+    collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, ExternFunctionSig, FunctionSig,
+    PackedClassInfo, PhpType, ReturnArgAlias, TypeEnv,
 };
+
+mod builtin_wrappers;
+pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
 type AstParams = [(
@@ -38,16 +41,20 @@ type AstParams = [(
     bool,
 )];
 
-const EVAL_AOT_SCOPE_PARAM: &str = "__eir_eval_scope";
-
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
+/// Scope handle a scope-aware AOT eval fragment receives by value.
+///
+/// Both spellings live in `crate::names` so the EIR producer here and every backend
+/// exact-name lookup read one definition, and so both carry the generated-local marker
+/// that keeps them out of the fragment's `get_defined_vars()`.
+const EVAL_AOT_SCOPE_PARAM: &str = crate::names::EVAL_AOT_SCOPE_LOCAL;
 
 /// Compile-time callable binding to seed for a self-recursive closure capture.
 struct RecursiveClosureBinding {
     local_name: String,
     closure_name: String,
     signature: FunctionSig,
-    capture_names: Vec<String>,
+    captures: Vec<(String, bool)>,
+    return_alias: ReturnArgAlias,
 }
 
 /// Lowers the top-level statement list as the synthetic `main` EIR function.
@@ -62,9 +69,17 @@ pub(crate) fn lower_main(
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
     let all_global_var_names = collect_global_var_names(program);
+    let mut function_global_names =
+        crate::ir_lower::program::collect_function_global_names(program);
+    crate::ir_lower::program::close_function_global_names_over_calls(
+        &mut function_global_names,
+        &module.functions,
+        &module.data.function_names,
+    );
     let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         program,
         top_level_env.clone(),
@@ -78,13 +93,21 @@ pub(crate) fn lower_main(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
+        &check_result.boxed_reference_promotion_sites,
+        &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         "main".to_string(),
@@ -96,6 +119,7 @@ pub(crate) fn lower_main(
         None,
         true,
         all_global_var_names,
+        Some(function_global_names),
         module.source_path.clone(),
         None,
         web,
@@ -146,6 +170,7 @@ fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<St
 /// Lowers one user-defined function declaration into an EIR function.
 pub(crate) fn lower_user_function(
     name: &str,
+    is_internal: bool,
     params: &AstParams,
     return_type: Option<&TypeExpr>,
     attributes: &[AttributeGroup],
@@ -165,13 +190,14 @@ pub(crate) fn lower_user_function(
     // `Generator` object itself. The public signature stays `Generator` for
     // callers; only the EIR body return type becomes Mixed so `return $x`
     // lowers to a plain boxed Mixed return instead of a Generator coercion.
-    let body_return_type = generator_body_return_type(body, &eir_signature.return_type);
+    let body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&body_return_type),
         body_return_type.clone(),
     );
     function.params = function_params(&eir_signature);
+    function.flags.is_internal = is_internal;
     function.flags.by_ref_return = signature.by_ref_return;
     function.source_signature = Some(source_signature(name, signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
@@ -185,9 +211,14 @@ pub(crate) fn lower_user_function(
         .get(name)
         .cloned()
         .unwrap_or_else(|| collect_attribute_args(attributes));
-    attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
+    mark_generator_if_needed(
+        &mut function,
+        body,
+        signature.is_generator,
+    );
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         env_from_signature(&eir_signature, web),
@@ -201,13 +232,21 @@ pub(crate) fn lower_user_function(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
+        &check_result.boxed_reference_promotion_sites,
+        &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         name.to_string(),
@@ -219,6 +258,7 @@ pub(crate) fn lower_user_function(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -252,7 +292,7 @@ pub(crate) fn lower_class_method(
     let name = format!("{}::{}", class_name, method_name);
     // Generator methods lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
-    let method_body_return_type = generator_body_return_type(body, &eir_signature.return_type);
+    let method_body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
     let mut function = Function::new(
         name.clone(),
         return_ir_type(&method_body_return_type),
@@ -270,7 +310,11 @@ pub(crate) fn lower_class_method(
     let mut env = env_from_signature(&eir_signature, web);
     let mut body_params = eir_signature.params.clone();
     if is_static {
-        let hidden_called_class = (CALLED_CLASS_ID_PARAM.to_string(), PhpType::Int);
+        // The hidden late-static-binding argument keeps its leading position and its `Int`
+        // type; only the NAME is the marked one from `crate::names`, so the slot stays
+        // invisible to `get_defined_vars()` and to eval scope synchronization.
+        let hidden_called_class =
+            (crate::names::CALLED_CLASS_ID_LOCAL.to_string(), PhpType::Int);
         function.params.push(FunctionParam {
             name: hidden_called_class.0.clone(),
             ir_type: value_ir_type(&hidden_called_class.1),
@@ -293,9 +337,14 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(&eir_signature));
-    attach_generator_source_if_needed(&mut function, body, body_params.len());
+    mark_generator_if_needed(
+        &mut function,
+        body,
+        signature.is_generator,
+    );
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         env,
@@ -309,13 +358,21 @@ pub(crate) fn lower_class_method(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
+        &check_result.boxed_reference_promotion_sites,
+        &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         name.clone(),
@@ -327,6 +384,7 @@ pub(crate) fn lower_class_method(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -352,8 +410,12 @@ fn eval_aot_decision_maps() -> (
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<(String, Span), std::collections::HashSet<String>>,
 ) {
     (
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
@@ -382,6 +444,7 @@ pub(crate) fn lower_eval_aot_function(
         declared_params: Vec::new(),
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     let mut function = Function::new(
         name.to_string(),
@@ -390,9 +453,16 @@ pub(crate) fn lower_eval_aot_function(
     );
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
+    let (
+        bind_kill_sites,
+        ref_detach_sites,
+        retype_sites,
+        mixed_storage_store_sites,
+        boxed_reference_promotion_sites,
+    ) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         TypeEnv::new(),
@@ -406,13 +476,21 @@ pub(crate) fn lower_eval_aot_function(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
+        &boxed_reference_promotion_sites,
+        &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.ref_cell_mixed_locals,
         &bind_kill_sites,
+        &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
         "main".to_string(),
@@ -424,6 +502,7 @@ pub(crate) fn lower_eval_aot_function(
         None,
         false,
         collect_global_var_names(body),
+        None,
         module.source_path.clone(),
         None,
         module.web,
@@ -481,6 +560,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         ],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     let mut function = Function::new(
         name.to_string(),
@@ -502,9 +582,16 @@ pub(crate) fn lower_eval_aot_scope_function(
             scope_flush_writes.clone(),
         )
     });
-    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
+    let (
+        bind_kill_sites,
+        ref_detach_sites,
+        retype_sites,
+        mixed_storage_store_sites,
+        boxed_reference_promotion_sites,
+    ) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         env,
@@ -518,13 +605,21 @@ pub(crate) fn lower_eval_aot_scope_function(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
+        &boxed_reference_promotion_sites,
+        &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.ref_cell_mixed_locals,
         &bind_kill_sites,
+        &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
         "main".to_string(),
@@ -536,6 +631,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         None,
         false,
         collect_global_var_names(body),
+        None,
         module.source_path.clone(),
         eval_scope_reads,
         module.web,
@@ -545,6 +641,9 @@ pub(crate) fn lower_eval_aot_scope_function(
 }
 
 /// Builds fallback method signature metadata from parsed class-like method syntax.
+///
+/// Trait reflection reads this signature, so it keeps the declaration's `function &m()`
+/// flag for `ReflectionMethod::returnsReference()`.
 pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
     let mut signature = signature_from_ast_with_variadic(
         &method.params,
@@ -552,6 +651,7 @@ pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
         method.variadic.as_deref(),
         method.variadic_by_ref,
     );
+    signature.by_ref_return = method.by_ref_return;
     if !method.variadic_by_ref {
         if let Some(variadic_type) = &method.variadic_type {
             if let Some((_, php_type)) = signature.params.last_mut() {
@@ -574,11 +674,10 @@ pub(crate) fn lower_property_init_thunk(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
-    if !class_info.defaults.iter().any(|default| default.is_some()) {
+    if !super::property_initializers::needs_initializer(class_info) {
         return;
     }
     let web = module.web;
-    let body = property_init_body(class_info);
     let function_name = format!("_class_propinit_{}", class_info.class_id);
     let this_type = PhpType::Object(class_name.to_string());
     let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
@@ -602,6 +701,7 @@ pub(crate) fn lower_property_init_thunk(
         declared_params: vec![false],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     function.source_signature = Some(source_signature(&function_name, &sig));
     function.signature = Some(eir_runtime_metadata_signature(&sig));
@@ -610,8 +710,9 @@ pub(crate) fn lower_property_init_thunk(
     let params = vec![("this".to_string(), this_type)];
     let closures = lower_body_into_function(
         &mut function,
+        Some(class_info),
         &mut module.data,
-        &body,
+        &[],
         env,
         web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
@@ -623,13 +724,21 @@ pub(crate) fn lower_property_init_thunk(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
+        &check_result.boxed_reference_promotion_sites,
+        &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         function_name.clone(),
@@ -641,6 +750,7 @@ pub(crate) fn lower_property_init_thunk(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -956,6 +1066,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         declared_params: vec![false; params.len()],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     function.source_signature = Some(source_signature(&function_name, &sig));
     function.signature = Some(eir_runtime_metadata_signature(&sig));
@@ -966,6 +1077,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     let web = module.web;
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         &body,
         env,
@@ -979,13 +1091,21 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
+        &check_result.boxed_reference_promotion_sites,
+        &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         function_name.clone(),
@@ -997,6 +1117,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -1005,50 +1126,311 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     module.add_function(function);
 }
 
+/// Lowers one synthetic function belonging to the PHP 8.5 `clone()` override engine.
+///
+/// Both shapes go through here: the per-`(runtime class, invocation scope)` applicator, whose
+/// parameters are `(this: Object(<clone class>), __elephc_clone_overrides: mixed)`, and the
+/// per-`(declaring class, property)` scoped setter helper, whose `this` is typed with the
+/// ancestor that owns the private slot the scope selects.
+///
+/// `scope` becomes the body's lexical class, so property-slot resolution, set-hook routing and
+/// `__set()` selection inside the body see the PHP scope the statements were synthesized for.
+/// Visibility itself is decided BEFORE lowering, in `crate::ir_lower::clone_overrides::arms`,
+/// and is already baked into the statements as explicit assignment or denial arms.
+///
+/// The statements carry `Span::dummy()`. `CheckResult::throw_access_sites` is keyed by source
+/// span, so the checker's statically decided readonly REFUSAL never applies to these
+/// engine-owned stores, which is exactly the reinitialization `clone()` is specified to
+/// perform, while no process-global or fiber-visible allowance state is introduced anywhere.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_clone_override_function(
+    function_name: &str,
+    params: &[(String, PhpType)],
+    scope: Option<&str>,
+    body: &[Stmt],
+    module: &mut Module,
+    check_result: &CheckResult,
+    functions: &std::collections::HashMap<String, FunctionSig>,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) -> FunctionSig {
+    let sig = FunctionSig {
+        params: params.to_vec(),
+        param_type_exprs: vec![None; params.len()],
+        param_attributes: Vec::new(),
+        defaults: vec![None; params.len()],
+        return_type: PhpType::Void,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![false; params.len()],
+        declared_params: vec![false; params.len()],
+        variadic: None,
+        deprecation: None,
+        is_generator: false,
+    };
+    if module
+        .functions
+        .iter()
+        .any(|function| function.name == function_name)
+    {
+        return sig;
+    }
+    let mut function = Function::new(function_name.to_string(), IrType::Void, PhpType::Void);
+    function.flags.is_synthetic = true;
+    // The body is lowered AS IF it were written inside `scope`, so the EIR function has to carry
+    // that scope too. Leaving `lexical_class` at `None` made a nested `clone($o, [...])` inside an
+    // applicator or a scoped setter resolve its own invocation scope as global scope, both when
+    // `collect_sites` plans the candidate scopes and when the backend picks the applicator arm.
+    function.lexical_class = scope.map(str::to_string);
+    for (name, php_type) in params {
+        function.params.push(FunctionParam {
+            name: name.clone(),
+            ir_type: value_ir_type(php_type),
+            php_type: php_type.clone(),
+            by_ref: false,
+            variadic: false,
+        });
+    }
+    function.source_signature = Some(source_signature(function_name, &sig));
+    function.signature = Some(eir_runtime_metadata_signature(&sig));
+    let mut env = TypeEnv::new();
+    for (name, php_type) in params {
+        env.insert(name.clone(), php_type.clone());
+    }
+    let web = module.web;
+    let closures = lower_body_into_function(
+        &mut function,
+        None,
+        &mut module.data,
+        body,
+        env,
+        web_gated_global_env(&check_result.global_env, web),
+        functions,
+        &check_result.extern_functions,
+        &check_result.extern_globals,
+        &check_result.callable_param_sigs,
+        &check_result.return_alias_summaries,
+        fiber_return_sigs,
+        &module.class_infos,
+        &check_result.enums,
+        &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
+        &check_result.packed_classes,
+        &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
+        &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
+        &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
+        &check_result.ref_cell_mixed_locals,
+        &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
+        &check_result.local_retype_sites,
+        &check_result.mixed_storage_store_sites,
+        function_name.to_string(),
+        constants,
+        scope.map(str::to_string),
+        PhpType::Void,
+        false,
+        params,
+        None,
+        false,
+        std::collections::HashSet::new(),
+        None,
+        module.source_path.clone(),
+        None,
+        web,
+    );
+    add_closures(module, closures);
+    module.add_function(function);
+    sig
+}
+
 /// The symbol a dynamic-new candidate calls when it has to pad the constructor with defaults.
 pub(crate) fn dynamic_constructor_thunk_name(class_id: u64, provided_args: usize) -> String {
     format!("_class_ctor_{}_{}", class_id, provided_args)
 }
 
-/// Builds `$this->property = <default>;` statements for property-default initialization.
+/// Returns the internal function name that materializes one native eval parameter default.
+pub(crate) fn eval_native_default_helper_name(
+    class_id: u64,
+    is_static: bool,
+    method_name: &str,
+    param_index: usize,
+) -> String {
+    format!(
+        "__elephc_eval_default\\{}\\{}\\{}\\{}",
+        class_id,
+        if is_static { "static" } else { "instance" },
+        method_name,
+        param_index,
+    )
+}
+
+/// Lowers safe literal defaults into zero-argument Mixed-returning helpers for native eval calls.
 ///
-/// A null default whose slot type cannot represent null (a scalar slot rebound by
-/// constructor-argument propagation) is skipped: those slots are always overwritten
-/// before an observable read, and the store would be unrepresentable.
-fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
-    let span = Span::dummy();
-    class_info
-        .defaults
-        .iter()
-        .enumerate()
-        .filter_map(|(index, default)| {
-            let default = default.as_ref()?;
-            let (name, php_type) = class_info.properties.get(index)?;
-            if matches!(default.kind, ExprKind::Null) && !php_type.null_property_default_required() {
-                return None;
-            }
-            let property = name.clone();
-            Some(Stmt::new(
-                StmtKind::ExprStmt(Expr::new(
-                    ExprKind::Assignment {
-                        target: Box::new(Expr::new(
-                            ExprKind::PropertyAccess {
-                                object: Box::new(Expr::new(ExprKind::This, span)),
-                                property,
-                            },
-                            span,
-                        )),
-                        value: Box::new(default.clone()),
-                        result_target: None,
-                        prelude: Vec::new(),
-                        conditional_value_temp: None,
-                    },
-                    span,
-                )),
-                span,
-            ))
+/// Compact eval metadata deliberately has a recursion bound. A finite source literal beyond that
+/// bound is still safe for the compiler to lower normally, so the binder calls one of these
+/// helpers when no compact value was registered. Defaults outside this side-effect-free literal
+/// subset remain unsupported instead of executing arbitrary PHP while Rust owns the eval stack.
+pub(crate) fn lower_eval_native_default_helpers(
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) {
+    let uses_eval = super::program::all_lowered_functions(module).any(|function| {
+        function.locals.iter().any(|local| {
+            matches!(
+                local.kind,
+                crate::ir::LocalKind::EvalContext
+                    | crate::ir::LocalKind::EvalScope
+                    | crate::ir::LocalKind::EvalGlobalScope
+            )
         })
-        .collect()
+    });
+    if !uses_eval {
+        return;
+    }
+    let mut specs = Vec::new();
+    let mut classes = module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, info)| info.class_id);
+    for (class_name, class_info) in classes {
+        for (is_static, methods) in [
+            (false, &class_info.methods),
+            (true, &class_info.static_methods),
+        ] {
+            let mut methods = methods.iter().collect::<Vec<_>>();
+            methods.sort_by_key(|(name, _)| name.as_str());
+            for (method_name, signature) in methods {
+                for (param_index, default) in signature.defaults.iter().enumerate() {
+                    let Some(default) = default else { continue };
+                    if eval_native_default_helper_literal(&default.kind)
+                        && crate::types::signatures::literal_default_exceeds_compact_depth(default)
+                    {
+                        specs.push((
+                            class_name.clone(),
+                            class_info.clone(),
+                            is_static,
+                            method_name.clone(),
+                            param_index,
+                            default.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for (class_name, class_info, is_static, method_name, param_index, default) in specs {
+        let function_name = eval_native_default_helper_name(
+            class_info.class_id,
+            is_static,
+            &method_name,
+            param_index,
+        );
+        if module.functions.iter().any(|function| function.name == function_name) {
+            continue;
+        }
+        let mut function = Function::new(
+            function_name.clone(),
+            value_ir_type(&PhpType::Mixed),
+            PhpType::Mixed,
+        );
+        function.flags.is_synthetic = true;
+        let signature = FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Mixed,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        is_generator: false,
+        };
+        function.source_signature = Some(source_signature(&function_name, &signature));
+        function.signature = Some(eir_runtime_metadata_signature(&signature));
+        let body = [Stmt::new(StmtKind::Return(Some(default)), Span::dummy())];
+        // The helper inherits class scope through `current_class` below. It must not enter the
+        // separate property-initializer path, which skips `body` and expects an object receiver.
+        let closures = lower_body_into_function(
+            &mut function,
+            None,
+            &mut module.data,
+            &body,
+            TypeEnv::new(),
+            web_gated_global_env(&check_result.global_env, module.web),
+            &check_result.functions,
+            &check_result.extern_functions,
+            &check_result.extern_globals,
+            &check_result.callable_param_sigs,
+            &check_result.return_alias_summaries,
+            fiber_return_sigs,
+            &module.class_infos,
+            &check_result.enums,
+            &check_result.interfaces,
+            &module.declared_trait_names,
+            &module.declared_trait_methods,
+            &module.declared_trait_properties,
+            &check_result.packed_classes,
+            &check_result.throw_access_sites,
+            &check_result.builtin_call_types,
+            &check_result.boxed_reference_promotion_sites,
+            &check_result.first_class_builtin_call_types,
+            &check_result.generic_call_sites,
+            &check_result.loop_storage_types,
+            &check_result.string_incdec_locals,
+            &check_result.ref_cell_mixed_locals,
+            &check_result.local_bind_kill_sites,
+            &check_result.local_ref_detach_sites,
+            &check_result.local_retype_sites,
+            &check_result.mixed_storage_store_sites,
+            function_name.clone(),
+            constants,
+            Some(class_name),
+            PhpType::Mixed,
+            true,
+            &[],
+            None,
+            false,
+            std::collections::HashSet::new(),
+            None,
+            module.source_path.clone(),
+            None,
+            module.web,
+        );
+        add_closures(module, closures);
+        module.add_function(function);
+    }
+}
+
+/// Returns whether a default is a finite, side-effect-free literal tree.
+fn eval_native_default_helper_literal(expr: &ExprKind) -> bool {
+    match expr {
+        ExprKind::Null
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_) => true,
+        ExprKind::Negate(inner) => matches!(
+            &inner.kind,
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        ),
+        ExprKind::ArrayLiteral(items) => items
+            .iter()
+            .all(|item| eval_native_default_helper_literal(&item.kind)),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().all(|(key, value)| {
+            eval_native_default_helper_literal(&key.kind)
+                && eval_native_default_helper_literal(&value.kind)
+        }),
+        _ => false,
+    }
 }
 
 /// Lowers one closure literal into an EIR function plus any nested closure functions.
@@ -1062,6 +1444,7 @@ pub(crate) fn lower_closure_function(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    signature_captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
     loop_storage_scope: String,
@@ -1073,14 +1456,14 @@ pub(crate) fn lower_closure_function(
         variadic_type,
         return_type,
         body,
-        captures,
-        parent.classes,
-        parent.builtin_call_types,
+        signature_captures,
+        parent,
     );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
         parent,
         name,
+        params,
         signature,
         body,
         captures,
@@ -1089,7 +1472,15 @@ pub(crate) fn lower_closure_function(
     )
 }
 
-/// Lowers one closure literal using contextual types for unannotated parameters.
+/// Lowers one closure literal using contextual types for unannotated parameters and, when the
+/// binding context supplies one, for an undeclared result type.
+///
+/// The contextual result is applied BEFORE the body is lowered, because the body's `return`
+/// statements are lowered against the signature's return type: a by-reference `return
+/// $this->prop` decides there which payload representation it publishes to the caller. It is
+/// only a default: a closure that declares its own return type keeps it, so an explicit
+/// declaration is never silently overridden by the binding.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_closure_function_with_context(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1100,7 +1491,9 @@ pub(crate) fn lower_closure_function_with_context(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    signature_captures: &[(String, PhpType, bool)],
     contextual_arg_types: &[PhpType],
+    contextual_return_type: Option<&PhpType>,
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
     loop_storage_scope: String,
@@ -1112,13 +1505,17 @@ pub(crate) fn lower_closure_function_with_context(
         variadic_type,
         return_type,
         body,
-        captures,
-        parent.classes,
-        parent.builtin_call_types,
+        signature_captures,
+        parent,
     );
     signature.by_ref_return = by_ref_return;
-    for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
-        if type_ann.is_none() {
+    if let Some(contextual_return_type) = contextual_return_type {
+        if !signature.declared_return {
+            signature.return_type = contextual_return_type.clone();
+        }
+    }
+    for (idx, (_, type_ann, _, is_ref)) in params.iter().enumerate() {
+        if type_ann.is_none() && !is_ref {
             if let Some(contextual_ty) = contextual_arg_types.get(idx) {
                 if let Some((_, param_ty)) = signature.params.get_mut(idx) {
                     *param_ty = contextual_ty.clone();
@@ -1129,6 +1526,7 @@ pub(crate) fn lower_closure_function_with_context(
     lower_closure_function_with_signature(
         parent,
         name,
+        params,
         signature,
         body,
         captures,
@@ -1141,6 +1539,7 @@ pub(crate) fn lower_closure_function_with_context(
 fn lower_closure_function_with_signature(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
+    params: &AstParams,
     signature: FunctionSig,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -1150,7 +1549,7 @@ fn lower_closure_function_with_signature(
     let eir_signature = eir_signature_with_associative_variadic_storage(&signature);
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
-    let closure_body_return_type = generator_body_return_type(body, &eir_signature.return_type);
+    let closure_body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&closure_body_return_type),
@@ -1166,20 +1565,35 @@ fn lower_closure_function_with_signature(
     function.params.extend(closure_capture_params(captures));
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
-    attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
+    mark_generator_if_needed(
+        &mut function,
+        body,
+        signature.is_generator,
+    );
     let env = env_with_closure_captures(&eir_signature, captures, parent.web);
     let lowered_params = params_with_closure_captures(&eir_signature, captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
         local_name: local_name.to_string(),
         closure_name: name.to_string(),
         signature: eir_signature.clone(),
-        capture_names: captures
+        captures: captures
             .iter()
-            .map(|(capture_name, _, _)| capture_name.clone())
+            .map(|(capture_name, _, by_ref)| (capture_name.clone(), *by_ref))
             .collect(),
+        // The DECLARED parameters, with their hints: the alias summary needs to know which
+        // are spelled `string`, the one slot shape a `(string)` cast passes through (#700).
+        return_alias: crate::types::summarize_callable_return_alias(
+            params
+                .iter()
+                .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
+            None,
+            signature.by_ref_return,
+            body,
+        ),
     });
     let closures = lower_body_into_function(
         &mut function,
+        None,
         parent.data,
         body,
         env,
@@ -1193,13 +1607,21 @@ fn lower_closure_function_with_signature(
         parent.classes,
         parent.enums,
         parent.interfaces,
+        parent.declared_trait_names,
+        parent.declared_trait_methods,
+        parent.declared_trait_properties,
         parent.packed_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
+
+        parent.boxed_reference_promotion_sites,
+        parent.first_class_builtin_call_types,
+        parent.generic_call_sites,
         parent.loop_storage_types,
         parent.string_incdec_locals,
         parent.ref_cell_mixed_locals,
         parent.bind_kill_sites,
+        parent.ref_detach_sites,
         parent.retype_sites,
         parent.mixed_storage_store_sites,
         loop_storage_scope,
@@ -1211,6 +1633,7 @@ fn lower_closure_function_with_signature(
         recursive_binding,
         false,
         collect_global_var_names(body),
+        None,
         parent.source_path().map(str::to_string),
         None,
         parent.web,
@@ -1250,6 +1673,7 @@ pub(crate) fn lower_parallel_worker_function(
         declared_params: vec![true],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     let mut body = vec![
         s_assign(
@@ -1486,6 +1910,7 @@ pub(crate) fn lower_parallel_worker_function(
     function.signature = Some(eir_runtime_metadata_signature(&job_signature));
     let closures = lower_body_into_function(
         &mut function,
+        None,
         parent.data,
         &body,
         env_from_signature(&job_signature, parent.web),
@@ -1499,13 +1924,20 @@ pub(crate) fn lower_parallel_worker_function(
         parent.classes,
         parent.enums,
         parent.interfaces,
+        parent.declared_trait_names,
+        parent.declared_trait_methods,
+        parent.declared_trait_properties,
         parent.packed_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
+        parent.boxed_reference_promotion_sites,
+        parent.first_class_builtin_call_types,
+        parent.generic_call_sites,
         parent.loop_storage_types,
         parent.string_incdec_locals,
         parent.ref_cell_mixed_locals,
         parent.bind_kill_sites,
+        parent.ref_detach_sites,
         parent.retype_sites,
         parent.mixed_storage_store_sites,
         format!("{worker_name}::parallel"),
@@ -1517,6 +1949,7 @@ pub(crate) fn lower_parallel_worker_function(
         None,
         false,
         collect_global_var_names(&body),
+        None,
         parent.source_path().map(str::to_string),
         None,
         parent.web,
@@ -1527,6 +1960,7 @@ pub(crate) fn lower_parallel_worker_function(
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
 fn lower_body_into_function(
     function: &mut Function,
+    property_initializers: Option<&ClassInfo>,
     data: &mut crate::ir::DataPool,
     body: &[Stmt],
     env: TypeEnv,
@@ -1540,13 +1974,27 @@ fn lower_body_into_function(
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
     enums: &std::collections::HashMap<String, crate::types::EnumInfo>,
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
+    declared_trait_names: &[String],
+    declared_trait_methods: &std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, crate::ir::TraitMethodInfo>,
+    >,
+    declared_trait_properties: &std::collections::HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+
+    boxed_reference_promotion_sites: &std::collections::HashMap<
+        (String, Span),
+        std::collections::HashSet<String>,
+    >,
+    first_class_builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    generic_call_sites: &std::collections::HashMap<(String, Span), String>,
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
     ref_cell_mixed_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    ref_detach_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     mixed_storage_store_sites: &std::collections::HashMap<
         Span,
@@ -1561,6 +2009,9 @@ fn lower_body_into_function(
     recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
     all_global_var_names: std::collections::HashSet<String>,
+    function_global_names: Option<
+        std::collections::HashMap<String, Option<std::collections::HashSet<String>>>,
+    >,
     source_path: Option<String>,
     eval_scope_reads: Option<(
         String,
@@ -1594,13 +2045,21 @@ fn lower_body_into_function(
         classes,
         enums,
         interfaces,
+        declared_trait_names,
+        declared_trait_methods,
+        declared_trait_properties,
         packed_classes,
         throw_access_sites,
         builtin_call_types,
+
+        boxed_reference_promotion_sites,
+        first_class_builtin_call_types,
+        generic_call_sites,
         loop_storage_types,
         string_incdec_locals,
         ref_cell_mixed_locals,
         bind_kill_sites,
+        ref_detach_sites,
         retype_sites,
         mixed_storage_store_sites,
         loop_storage_scope,
@@ -1614,6 +2073,9 @@ fn lower_body_into_function(
         source_path,
         web,
     );
+    if let Some(function_global_names) = function_global_names {
+        ctx.set_function_global_names(function_global_names);
+    }
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
@@ -1630,38 +2092,48 @@ fn lower_body_into_function(
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
     // every write in the callee landed in the CALLER's storage. Re-bind each by-value container
     // parameter to an owning shadow slot, which restores the refcount the copy-on-write split
-    // depends on. This one site is the single funnel for free functions, methods, static methods
-    // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
-    // recursion — is covered without any per-flavour code.
+    // depends on. Exact PHP `array` parameters carry a boxed Mixed cell, so the shadow clones that
+    // wrapper as well as retaining its payload. This one site is the single funnel for free
+    // functions, methods, static methods and closures, so every call flavour, including
+    // `call_user_func`, dynamic `$f(...)` and recursion, is covered without per-flavour code.
     //
+    // Mixed parameters also need an owning cell: native return values must outlive an eval
+    // caller's temporary arguments, and a boxed array mutation must not replace the caller's
+    // cell payload. The resource-aware clone preserves shared resource identity.
     // By-reference parameters are excluded by definition: `array &$a` must alias, not copy.
     // `$this` is excluded because it is an object, never a container.
     for (index, (name, php_type)) in params.iter().enumerate() {
-        if by_ref_params.get(index).copied().unwrap_or(false) {
-            continue;
-        }
         if name == "this" {
             continue;
         }
-        if !matches!(
-            php_type.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+        if !FunctionSig::parameter_needs_owned_shadow(
+            php_type, by_ref_params.get(index).copied().unwrap_or(false),
         ) {
             continue;
         }
         ctx.privatize_container_param(name, php_type, None);
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
-    for stmt in body {
-        crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
+    if let Some(class) = property_initializers {
+        super::property_initializers::lower(&mut ctx, class);
+    } else if !super::throwable_constructors::lower(&mut ctx) {
+        for stmt in body {
+            crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
+        }
     }
     terminate_open_block(&mut ctx);
+    // Cleanup-only loads must follow the final frame representation after every
+    // source-order store has had a chance to widen its local slot.
+    ctx.builder.repair_owned_local_cleanup_load_types();
     // Final storage types are now known: erase deferred loop-store releases that
     // guard slots which never widened to lifetime-tracked storage (issue #534).
     ctx.builder.prune_untracked_release_local_slot_ops();
     // Likewise, erase provisional releases for concrete local loads unless a
     // later store widened their final frame slot to Mixed (issue #538).
     ctx.builder.prune_borrowed_local_load_release_ops();
+    // Provisional exception guards obey the same final-storage boundary. A
+    // concrete slot remains the owner and must survive a throwing call.
+    ctx.builder.prune_borrowed_local_load_guard_ops();
     // Publish the lowering-time ownership proof after provisional local-load
     // releases have been pruned, so codegen can consume EIR metadata instead of
     // maintaining a second producer allow-list (issue #595).
@@ -1678,11 +2150,11 @@ fn seed_recursive_closure_binding(
         return;
     };
     let captures = binding
-        .capture_names
+        .captures
         .iter()
-        .map(|capture_name| ClosureCapture {
+        .map(|(capture_name, by_ref)| ClosureCapture {
             value: ctx.load_local(capture_name, None).value,
-            by_ref: true,
+            by_ref_local: by_ref.then(|| capture_name.clone()),
         })
         .collect();
     ctx.bind_static_callable_local(
@@ -1691,6 +2163,7 @@ fn seed_recursive_closure_binding(
             name: binding.closure_name,
             signature: binding.signature,
             captures,
+            return_alias: binding.return_alias,
         },
     );
 }
@@ -1702,39 +2175,48 @@ fn add_closures(module: &mut Module, closures: Vec<Function>) {
     }
 }
 
-/// Retains generator source metadata until the EIR backend has native generator-state lowering.
-fn attach_generator_source_if_needed(
+/// Marks a function as a generator using its signature classification and remaining yield tokens.
+fn mark_generator_if_needed(
     function: &mut Function,
     body: &[Stmt],
-    visible_param_count: usize,
+    is_generator: bool,
 ) {
-    if !crate::types::checker::yield_validation::body_contains_yield(body)
-        && !is_generator_return_type(&function.return_php_type)
-    {
+    // Named functions and methods pass the checker's source-body bit as `is_generator`.
+    // Closures pass the optimized-body scan from `closure_signature_from_ast` instead.
+    // Retaining a true classification matters for two separate reasons:
+    //
+    // - Scanning `body` alone answers `false` once a pass has pruned the last `yield`, which is
+    //   what made a folded generator compile to a plain function returning null and hang its
+    //   `foreach` (issue #673).
+    // - Falling back to `return_type == Generator`, as this did, conflates a generator with a
+    //   FACTORY: `function f(): Generator { return inner(); }` declares and returns a Generator
+    //   without being one. That made its `return` lower to `Generator::getReturn()` and its
+    //   `foreach` yield nothing (issue #1086).
+    //
+    // The body scan stays as a second chance for callables whose signature this path cannot
+    // reach, but it can only ever ADD generator-ness, never withhold it.
+    if !is_generator && !crate::types::checker::yield_validation::body_contains_yield(body) {
         return;
     }
     function.flags.is_generator = true;
-    function.generator_source = Some(GeneratorSource {
-        body: body.to_vec(),
-        visible_param_count,
-    });
-}
-
-/// Returns true when checked function metadata already identifies a generator return.
-fn is_generator_return_type(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Object(name) if name.trim_start_matches('\\') == "Generator")
 }
 
 /// Returns the EIR return type to lower a function body with.
 ///
-/// For a generator (body contains `yield`, or the declared return type is
-/// `Generator`) the compiled body is a coroutine whose `return` produces the
-/// value later read by `Generator::getReturn()`, so the body return type is
-/// `Mixed`. For every other function it is the declared signature return type.
-fn generator_body_return_type(body: &[Stmt], signature_return: &PhpType) -> PhpType {
-    if crate::types::checker::yield_validation::body_contains_yield(body)
-        || is_generator_return_type(signature_return)
-    {
+/// For a generator the compiled body is a coroutine whose `return` produces the value later
+/// read by `Generator::getReturn()`, so the body return type is `Mixed`. For every other
+/// function it is the declared signature return type.
+///
+/// `is_generator` comes from the source-body checker bit for named functions/methods and from
+/// the optimized-body signature scan for closures. The additional body scan can only add
+/// generator-ness, never withhold it. A declared `: Generator` return is
+/// deliberately NOT consulted, because a factory declares one without being one.
+fn generator_body_return_type(
+    body: &[Stmt],
+    signature_return: &PhpType,
+    is_generator: bool,
+) -> PhpType {
+    if is_generator || crate::types::checker::yield_validation::body_contains_yield(body) {
         PhpType::Mixed
     } else {
         signature_return.clone()
@@ -1755,6 +2237,18 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
     if ctx.return_type == IrType::Void {
         ctx.emit_eval_scope_finalizer(None);
         ctx.builder.terminate(Terminator::Return { value: None });
+        return;
+    }
+    if ctx.by_ref_return {
+        // A by-reference result is a raw CELL ADDRESS the caller dereferences and may alias.
+        // A fallthrough has no accepted reference to transport, and the default placeholder
+        // would be a null or zero word the caller would read as a cell, so this path fails
+        // closed with the same catchable `Error` the run-time provenance guard raises.
+        crate::ir_lower::stmt::lower_throw_access_error(
+            ctx,
+            "Cannot return a reference from a path that has no by-reference return",
+            crate::span::Span::dummy(),
+        );
         return;
     }
     ctx.emit_eval_scope_finalizer(None);
@@ -1882,7 +2376,7 @@ fn function_params(signature: &FunctionSig) -> Vec<FunctionParam> {
         .collect()
 }
 
-/// Returns an EIR ABI signature that keeps dynamic untyped PHP parameters boxed.
+/// Returns an EIR ABI signature with boxed dynamic and object-reference parameters.
 pub(crate) fn eir_signature_with_php_param_contracts(
     owner_name: &str,
     signature: &FunctionSig,
@@ -1898,6 +2392,10 @@ pub(crate) fn eir_signature_with_php_param_contracts(
             .unwrap_or(false);
         let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
         let variadic = signature.variadic.as_deref() == Some(name.as_str());
+        if by_ref && matches!(php_type, PhpType::Object(_)) {
+            *php_type = PhpType::Mixed;
+            continue;
+        }
         if !declared && !by_ref && !variadic {
             if preserve_untyped_eir_param_contract(
                 owner_name,
@@ -1913,7 +2411,9 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         }
     }
     if has_dynamic_untyped_param && !signature.declared_return {
-        eir_signature.return_type = dynamic_param_container_return_type(&eir_signature.return_type);
+        eir_signature.return_type = crate::types::dynamic_params::dynamic_param_container_return_type(
+            &eir_signature.return_type,
+        );
     }
     eir_signature_with_associative_variadic_storage(&eir_signature)
 }
@@ -2075,24 +2575,6 @@ fn magic_method_param_keeps_eir_contract(
     }
 }
 
-/// Widens inferred container return elements that may be built from dynamic params.
-fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
-    match return_type.codegen_repr() {
-        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
-        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
-            key,
-            value: Box::new(PhpType::Mixed),
-        },
-        PhpType::Union(members) => PhpType::Union(
-            members
-                .iter()
-                .map(dynamic_param_container_return_type)
-                .collect(),
-        ),
-        other => other,
-    }
-}
-
 /// Converts closure captures into hidden EIR ABI parameters.
 fn closure_capture_params(captures: &[(String, PhpType, bool)]) -> Vec<FunctionParam> {
     captures
@@ -2179,8 +2661,7 @@ fn closure_signature_from_ast(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
@@ -2193,7 +2674,8 @@ fn closure_signature_from_ast(
             }
         }
     }
-    if crate::types::checker::yield_validation::body_contains_yield(body) {
+    signature.is_generator = crate::types::checker::yield_validation::body_contains_yield(body);
+    if signature.is_generator {
         signature.return_type = PhpType::Object("Generator".to_string());
         return signature;
     }
@@ -2203,8 +2685,7 @@ fn closure_signature_from_ast(
                 body,
                 captures,
                 &signature.params,
-                classes,
-                builtin_call_types,
+                ctx,
             )
         {
             signature.return_type = return_ty;
@@ -2220,8 +2701,7 @@ fn direct_closure_return_type(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> Option<PhpType> {
     let [stmt] = body else {
         return None;
@@ -2233,8 +2713,7 @@ fn direct_closure_return_type(
         expr,
         captures,
         params,
-        classes,
-        builtin_call_types,
+        ctx,
     ))
 }
 
@@ -2245,32 +2724,89 @@ fn direct_closure_return_type(
 /// `return $obj->prop` where `$obj` is a captured/parameter object of a known class adopts
 /// the property's declared type, so a `fn &() => $o->items` closure returns the array type
 /// rather than the syntactic integer default. An array literal built out of those same
-/// variables resolves its element/value slots the same way (see
-/// `direct_closure_return_array_element_type`).
+/// variables and scoped constants resolves its element/value slots the same way (see
+/// `direct_closure_return_array_type`). A call resolves through the same metadata ordinary
+/// call lowering uses, and a call whose callee is only known at runtime is boxed `Mixed`.
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
-    if matches!(expr.kind, ExprKind::FunctionCall { .. }) {
-        if let Some(ty) = builtin_call_types.get(&expr.span) {
+    if matches!(expr.kind, ExprKind::Null) {
+        return PhpType::Mixed;
+    }
+    // A postfix chain holding `?->` is lowered as one lazy unit whose short-circuit and success
+    // paths share one boxed result, so that box is what the body returns.
+    if let Some(storage) = crate::ir_lower::expr::nullsafe_chain_result_storage_type(expr) {
+        return storage;
+    }
+    if let ExprKind::FunctionCall { name, .. } = &expr.kind {
+        if let Some(ty) = ctx.builtin_call_types.get(&expr.span) {
             return ty.clone();
         }
+        // A USER function is not in `builtin_call_types` -- that map only records builtin call
+        // results -- so without this the call fell all the way to the syntactic fallback at the
+        // end of this function, whose `FunctionCall` arm answers `Int` for anything it does not
+        // recognize. `$f = function ($v) { return tag($v); }` therefore returned a declared
+        // `: string` through an int slot and printed 0, with no diagnostic (issue #1028). The
+        // checker gets this right; only this re-derivation did not.
+        // Through `eir_user_function_return_type`, NOT the raw signature type, because that is
+        // what ordinary call lowering hands back and the two have to agree. A callee with an
+        // untyped by-value parameter receives it as a boxed Mixed, so a container it builds out
+        // of that parameter has Mixed elements whatever the signature's inferred element type
+        // says. Copying the raw type here stamped `array<string>` on a call that really produces
+        // `array<mixed>`, and the caller then read the boxed element with the wrong layout: the
+        // element came back as its own pointer printed as an integer. Raised in review.
+        if let Some(sig) = ctx.functions.get(name.as_str()) {
+            return crate::ir_lower::expr::eir_user_function_return_type(sig);
+        }
+    }
+    // The other call shapes fell to the same syntactic fallback, whose answer for a call it does
+    // not recognize is `Int`: `function () use ($o) { return $o->name(); }` returned a string
+    // through an int slot and printed 0 (issue #1269), and a captured closure, an expression
+    // call or a pipe did the same (issue #1272). Methods resolve through the metadata their call
+    // lowering reads; a callee chosen at runtime hands back a boxed result.
+    match &expr.kind {
+        ExprKind::MethodCall { object, method, .. } => {
+            let receiver_ty = match &object.kind {
+                ExprKind::This => captures
+                    .iter()
+                    .find(|(capture_name, _, _)| capture_name == "this")
+                    .map(|(_, ty, _)| ty.clone())
+                    .unwrap_or(PhpType::Mixed),
+                _ => direct_closure_return_expr_type(object, captures, params, ctx),
+            };
+            return crate::ir_lower::expr::closure_return_method_call_type(
+                ctx,
+                &receiver_ty,
+                method,
+                expr,
+            );
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            return crate::ir_lower::expr::static_method_call_expr_type_for_ir(
+                ctx, receiver, method,
+            )
+            .unwrap_or(PhpType::Mixed);
+        }
+        ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::Pipe { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. } => return PhpType::Mixed,
+        _ => {}
     }
     // An array literal returned directly is stamped with this inferred type and its elements
     // are coerced into it by `lower_return_expr`, so its slots must be resolved against the
     // closure signature instead of the syntactic integer default.
     if let ExprKind::ArrayLiteral(items) = &expr.kind {
         if !items.is_empty() {
-            return PhpType::Array(Box::new(direct_closure_return_array_element_type(
+            return direct_closure_return_array_type(
                 items,
                 captures,
                 params,
-                classes,
-                builtin_call_types,
-            )));
+                ctx,
+            );
         }
     }
     if let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind {
@@ -2279,22 +2815,34 @@ fn direct_closure_return_expr_type(
                 pairs,
                 captures,
                 params,
-                classes,
-                builtin_call_types,
+                ctx,
             );
         }
     }
-    if let ExprKind::ScopedConstantAccess {
-        receiver: crate::parser::ast::StaticReceiver::Named(class_name),
-        name,
-    } = &expr.kind
-    {
-        let normalized = class_name.as_str().trim_start_matches('\\');
-        if let Some(value) = classes
-            .get(normalized)
-            .and_then(|class_info| class_info.constants.get(name))
+    if let ExprKind::ArrayLiteralMixed(entries) = &expr.kind {
+        return direct_closure_return_mixed_literal_type(
+            entries,
+            captures,
+            params,
+            ctx,
+        );
+    }
+    if let ExprKind::ScopedConstantAccess { receiver, name } = &expr.kind {
+        // A descendant can override static::CONST with a different storage type.
+        if matches!(receiver, crate::parser::ast::StaticReceiver::Static) {
+            return PhpType::Mixed;
+        }
+        if let Some(class_name) =
+            crate::ir_lower::expr::static_receiver_class_name(ctx, receiver)
         {
-            return crate::types::checker::infer_expr_type_syntactic(value);
+            if ctx.enums.get(&class_name).is_some_and(|enum_info| {
+                enum_info.cases.iter().any(|case| case.name.as_str() == name.as_str())
+            }) {
+                return PhpType::Mixed;
+            }
+            if let Some(value) = ctx.scoped_constant_value(&class_name, name) {
+                return direct_closure_return_expr_type(&value, captures, params, ctx);
+            }
         }
     }
     if let ExprKind::Variable(name) = &expr.kind {
@@ -2325,22 +2873,39 @@ fn direct_closure_return_expr_type(
                         .find(|(param_name, _)| param_name == receiver_name)
                         .map(|(_, ty)| ty)
                 });
-            if let Some(PhpType::Object(class)) = receiver_ty {
-                if let Some(info) = classes.get(class.trim_start_matches('\\')) {
-                    if let Some((_, ty)) =
-                        info.properties.iter().find(|(name, _)| name == property)
-                    {
-                        return ty.clone();
+            match receiver_ty {
+                Some(PhpType::Object(class)) => {
+                    if let Some(info) = ctx.classes.get(class.trim_start_matches('\\')) {
+                        if let Some((_, ty)) =
+                            info.properties.iter().find(|(name, _)| name == property)
+                        {
+                            return ty.clone();
+                        }
+                    }
+                    if receiver_name == "this" {
+                        // A method-defined closure may later be rebound to an unrelated class.
+                        // Its signature keeps the enclosing `$this` type so ordinary known
+                        // properties remain precise, but a property absent from that class is
+                        // resolved against the eventual bound receiver and must stay boxed.
+                        return PhpType::Mixed;
                     }
                 }
+                Some(receiver_ty) if receiver_ty.codegen_repr() == PhpType::Mixed => {
+                    // A runtime-shaped receiver makes the property runtime-shaped too. Falling
+                    // through to syntactic inference stamps an otherwise unknown property read
+                    // as `int`; a later scoped `Closure::bind` clone can then find a string slot
+                    // correctly but coerce that string through the stale integer signature.
+                    return PhpType::Mixed;
+                }
+                _ => {}
             }
         }
     }
     crate::types::checker::infer_expr_type_syntactic(expr)
 }
 
-/// Returns the EIR storage element type for an indexed array literal returned directly
-/// from a closure, resolving every item against the closure's captures and parameters.
+/// Returns literal storage for a closure return, resolving elements and spread keys
+/// against the closure's captures and parameters.
 ///
 /// This mirrors `crate::ir_lower::expr::array_literal_type_for_ir`, which types the very
 /// same literal while lowering the body from `LoweringContext::local_types`. The two must
@@ -2350,27 +2915,42 @@ fn direct_closure_return_expr_type(
 /// { return [$a, $b]; }` called as `(1, "z")` produced `[1, 0]`. The syntactic fallback used
 /// before this helper existed types every unrecognized item `int`, which also mis-stamped
 /// `string`, `float`, `bool`, and `array` parameters.
-fn direct_closure_return_array_element_type(
+fn direct_closure_return_array_type(
     items: &[crate::parser::ast::Expr],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     let mut elem_ty = PhpType::Never;
+    let mut has_hash_spread = false;
     for item in items {
+        if let ExprKind::Spread(inner) = &item.kind {
+            has_hash_spread |= matches!(
+                direct_closure_return_expr_type(
+                    inner,
+                    captures,
+                    params,
+                    ctx,
+                )
+                .codegen_repr(),
+                PhpType::AssocArray { .. } | PhpType::Mixed
+            );
+        }
         elem_ty = crate::ir_lower::expr::merge_ir_indexed_element_type(
             elem_ty,
             direct_closure_return_array_item_type(
                 item,
                 captures,
                 params,
-                classes,
-                builtin_call_types,
+                ctx,
             ),
         );
     }
-    elem_ty
+    if has_hash_spread {
+        PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(elem_ty) }
+    } else {
+        PhpType::Array(Box::new(elem_ty))
+    }
 }
 
 /// Returns the EIR storage element type contributed by one indexed array-literal item.
@@ -2382,22 +2962,21 @@ fn direct_closure_return_array_item_type(
     item: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     if let ExprKind::Spread(inner) = &item.kind {
         let source = direct_closure_return_array_item_type(
             inner,
             captures,
             params,
-            classes,
-            builtin_call_types,
+            ctx,
         );
         return match source.codegen_repr() {
             PhpType::Array(elem) => match elem.codegen_repr() {
                 PhpType::Void | PhpType::Never => PhpType::Mixed,
                 other => other,
             },
+            PhpType::AssocArray { value, .. } => value.codegen_repr(),
             _ => PhpType::Mixed,
         };
     }
@@ -2410,8 +2989,7 @@ fn direct_closure_return_array_item_type(
         item,
         captures,
         params,
-        classes,
-        builtin_call_types,
+        ctx,
     ))
 }
 
@@ -2426,8 +3004,7 @@ fn direct_closure_return_assoc_literal_type(
     pairs: &[(crate::parser::ast::Expr, crate::parser::ast::Expr)],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     let mut key_ty = PhpType::Never;
     let mut value_ty = PhpType::Never;
@@ -2436,25 +3013,85 @@ fn direct_closure_return_assoc_literal_type(
             key,
             crate::types::checker::infer_expr_type_syntactic(key),
         );
+        let next_value = direct_closure_return_array_item_type(
+            value,
+            captures,
+            params,
+            ctx,
+        );
         key_ty = if matches!(key_ty, PhpType::Never) {
             next_key
         } else {
             crate::types::merge_array_key_types(key_ty, next_key)
         };
-        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(
-            value_ty,
-            direct_closure_return_array_item_type(
-                value,
-                captures,
-                params,
-                classes,
-                builtin_call_types,
-            ),
-        );
+        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(value_ty, next_value);
     }
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(value_ty),
+    }
+}
+
+/// Returns the EIR storage type for a directly returned literal that mixes keys with spreads.
+///
+/// The lowering (`lower_mixed_array_literal`) always builds a hash, and a spread renumbers the
+/// integer keys it contributes, so the KEY slot is `Mixed` regardless of the written keys; the
+/// value slot merges every entry's storage type, with a spread contributing its source's.
+fn direct_closure_return_mixed_literal_type(
+    entries: &[crate::parser::ast::ArrayEntry],
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    ctx: &LoweringContext<'_, '_>,
+) -> PhpType {
+    let mut value_ty = PhpType::Never;
+    for entry in entries {
+        let next_value = match entry {
+            crate::parser::ast::ArrayEntry::Spread(source) => {
+                direct_closure_return_assoc_spread_entry_types(
+                    source,
+                    captures,
+                    params,
+                    ctx,
+                )
+                .1
+            }
+            crate::parser::ast::ArrayEntry::Keyed(_, value)
+            | crate::parser::ast::ArrayEntry::Value(value) => direct_closure_return_array_item_type(
+                value,
+                captures,
+                params,
+                ctx,
+            ),
+        };
+        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(value_ty, next_value);
+    }
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(value_ty),
+    }
+}
+
+/// Returns the `(key, value)` storage types one `...$source` entry of a directly returned literal
+/// contributes, resolved against the closure's captures and parameters.
+///
+/// An indexed source contributes integer keys, a hash source contributes its own key type, and a
+/// source this pass cannot name stays `Mixed` on both slots.
+fn direct_closure_return_assoc_spread_entry_types(
+    inner: &crate::parser::ast::Expr,
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    ctx: &LoweringContext<'_, '_>,
+) -> (PhpType, PhpType) {
+    let source = direct_closure_return_array_item_type(
+        inner,
+        captures,
+        params,
+        ctx,
+    );
+    match source.codegen_repr() {
+        PhpType::Array(elem) => (PhpType::Int, elem.codegen_repr()),
+        PhpType::AssocArray { key, value } => (key.codegen_repr(), value.codegen_repr()),
+        _ => (PhpType::Mixed, PhpType::Mixed),
     }
 }
 
@@ -2570,6 +3207,7 @@ fn signature_from_ast_with_variadic(
         declared_params: params.iter().map(|(_, ty, _, _)| ty.is_some()).collect(),
         variadic: variadic.map(str::to_string),
         deprecation: None,
+        is_generator: false,
     };
     append_variadic_param_slot(&mut signature, variadic_by_ref);
     signature

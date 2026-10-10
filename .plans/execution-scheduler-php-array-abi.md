@@ -127,8 +127,10 @@ Hash collector as one raw argument. Valid scalar/Stringable values therefore arr
 The lowering must choose the proper boundary before argument packing, sharing named/spread planning
 and source-order rules without packaging the same tail twice.
 
-Runtime parameter preflight borrows source values and must finish before acquiring marshalled
-owners. A valid Stringable conversion can still throw during marshalling; pending owned fixed
+Descriptor binding validates and converts each physical parameter in invocation order; a global
+all-parameter preflight must not skip earlier observable Stringable conversions. Source argument
+evaluation order remains a separate frontend obligation. A valid Stringable conversion can throw
+during marshalling; pending owned fixed
 arguments and partial collectors require balanced cleanup across the borrowed callee ABI, through
 normal return or unwind. EIR-prebuilt source boxes have explicit normal-path release instructions;
 the backend must not also release the same owner on success. Typed Object/Packed
@@ -180,3 +182,20 @@ cell-copy change without source evidence, but remain explicit unresolved finding
 declared-object and shared-stream-position controls does not prove dynamic properties or explicit
 close semantics. Reconcile their affected-source scope and outcome before claiming the complete
 Mixed copy/identity contract or final artifact acceptance.
+
+## Main-integration backtrace and return-boundary probes (2026-10-10)
+
+The named backtrace reader now has separate entry-time variadic capture and preserves names
+without contaminating positional func_get_args. Its initial, typed-string and named reference
+escape/aliasing controls pass with clean heap teardown on macOS; supported-target breadth and
+other value kinds remain required gates. Private invoker marker tag 11 is not a PHP persistent reference;
+resolve its source storage before copying a trace value. The managed temporary cell also needs
+its own retained collector payload even when Hash storage is passed as raw Array(Mixed).
+Evidence and retained debugger artifacts are in execution-scheduler-main-integration.md.
+
+An additional valid PHP boundary remains rejected: a function declared to return array cannot
+currently return the opaque Mixed result of $frame["args"]. The supplementary namedValues and
+namedReferences controls use a mixed return to isolate their native reader/ownership behavior.
+Changing those annotations back to array reproduces "return type expects array, got mixed".
+Runtime declared-array return validation/unboxing must be covered by the full transport/return
+campaign; the mixed-return controls do not close that acceptance requirement.

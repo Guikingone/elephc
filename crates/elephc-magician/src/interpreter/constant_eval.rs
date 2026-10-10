@@ -5,11 +5,13 @@
 //! - `crate::interpreter::eval_expr()` for constant and magic-constant expression nodes.
 //!
 //! Key details:
-//! - Dynamic constants prefer eval context declarations before predefined fallback constants.
+//! - Registered AOT constants override the standalone predefined fallback inventory.
+//! - AOT user constants live in their own registry and materialize a fresh value per read.
 //! - Magic file and directory values come from the current eval call-site context.
 
 use super::*;
 use elephc_builtin_contract::ConstValue;
+use crate::context::{EvalNativeGlobalConstant, EvalNativeUserConstant};
 
 /// Converts one EvalIR constant into a runtime-cell handle.
 pub(super) fn eval_const(
@@ -21,23 +23,30 @@ pub(super) fn eval_const(
         EvalConst::Bool(value) => values.bool_value(*value),
         EvalConst::Int(value) => values.int(*value),
         EvalConst::Float(value) => values.float(*value),
-        EvalConst::String(value) => values.string(value),
+        EvalConst::String(value) => values.string_literal(value),
+        EvalConst::Bytes(value) => values.string_literal_bytes(value),
     }
 }
 
-/// Loads a retained value for one eval-defined dynamic constant.
+/// Borrows one eval-defined dynamic constant until its expression consumer takes a copy.
 pub(super) fn eval_const_fetch(
     name: &str,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = context.native_global_constant(name) {
+        return eval_native_global_constant(value, values);
+    }
+    if let Some(value) = context.native_user_constant(name) {
+        return eval_native_user_constant(value, values);
+    }
     if let Some(value) = eval_predefined_constant(name, values)? {
         return Ok(value);
     }
     let Some(value) = context.constant(name) else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    values.retain(value)
+    Ok(value)
 }
 
 /// Fetches a namespaced constant and falls back to the global constant namespace.
@@ -47,17 +56,86 @@ pub(super) fn eval_namespaced_const_fetch(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = context.native_global_constant(name) {
+        return eval_native_global_constant(value, values);
+    }
+    if let Some(value) = context.native_user_constant(name) {
+        return eval_native_user_constant(value, values);
+    }
     if let Some(value) = eval_predefined_constant(name, values)? {
         return Ok(value);
     }
     if let Some(value) = context.constant(name) {
-        return values.retain(value);
+        return Ok(value);
     }
     eval_const_fetch(fallback_name, context, values)
 }
 
+/// Materializes one registered AOT global constant into a fresh runtime cell.
+pub(in crate::interpreter) fn eval_native_global_constant(
+    value: &EvalNativeGlobalConstant,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match value {
+        EvalNativeGlobalConstant::Null => values.null(),
+        EvalNativeGlobalConstant::Bool(value) => values.bool_value(*value),
+        EvalNativeGlobalConstant::Int(value) => values.int(*value),
+        EvalNativeGlobalConstant::Float(value) => values.float(*value),
+        EvalNativeGlobalConstant::String(value) => values.string(value),
+        EvalNativeGlobalConstant::Resource(value) => values.resource(*value),
+    }
+}
+
+/// Materializes one registered AOT user constant into a fresh runtime cell.
+///
+/// Array constants allocate a brand-new boxed array on every read, so an eval fragment that
+/// mutates the fetched value never writes through to the retained compiler metadata and never
+/// shares storage with a previous fetch.
+pub(in crate::interpreter) fn eval_native_user_constant<V: RuntimeValueOps>(
+    value: &EvalNativeUserConstant,
+    values: &mut V,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match value {
+        EvalNativeUserConstant::Scalar(value) => eval_native_global_constant(value, values),
+        EvalNativeUserConstant::Array(elements) => {
+            materialize_native_callable_array_default_elements(
+                elements,
+                values,
+                eval_native_user_constant_element::<V>,
+            )
+        }
+    }
+}
+
+/// Materializes one element of an AOT user array constant without an eval context.
+///
+/// AOT only materializes literal scalars and nested arrays inside a constant array, and the
+/// registration ABI rejects an object element at any depth before storing, so an object here
+/// is unreachable; it stays an explicit fatal rather than a silently constructed instance.
+fn eval_native_user_constant_element<V: RuntimeValueOps>(
+    value: &NativeCallableDefault,
+    values: &mut V,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match value {
+        NativeCallableDefault::Null => values.null(),
+        NativeCallableDefault::Bool(value) => values.bool_value(*value),
+        NativeCallableDefault::Int(value) => values.int(*value),
+        NativeCallableDefault::Float(value) => values.float(*value),
+        NativeCallableDefault::String(value) => values.string(value),
+        NativeCallableDefault::EmptyArray => values.array_new(0),
+        NativeCallableDefault::Array(elements) => {
+            materialize_native_callable_array_default_elements(
+                elements,
+                values,
+                eval_native_user_constant_element::<V>,
+            )
+        }
+        NativeCallableDefault::Object { .. } => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
 /// Materializes one eval-visible predefined constant into a runtime cell.
-fn eval_predefined_constant(
+pub(in crate::interpreter) fn eval_predefined_constant(
     name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
@@ -124,6 +202,7 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         "PHP_RELEASE_VERSION" => EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION),
         "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION),
         "PHP_SAPI" => EvalPredefinedConstant::String(EVAL_PHP_SAPI),
+        "E_ALL" => EvalPredefinedConstant::Int(crate::eval_php_profile::eval_all_error_mask()),
         "DIRECTORY_SEPARATOR" => EvalPredefinedConstant::String("/"),
         // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.
         "FNM_NOESCAPE" => EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE),
@@ -132,6 +211,7 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
     })
 }
 
+/// Returns the PHP_OS spelling for the host platform running the eval interpreter.
 fn eval_php_os_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "Darwin"

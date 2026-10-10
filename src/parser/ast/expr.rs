@@ -23,6 +23,73 @@ pub struct Expr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// One entry of an array literal that mixes spreads with explicit keys.
+///
+/// PHP lets the three forms appear in any order in one literal -- `["a" => 1, ...$v, 2]` -- and
+/// the order is observable, because a spread's elements take the next free integer key at the
+/// point they appear. Keeping them in one ordered list is what preserves that.
+pub enum ArrayEntry {
+    /// `...$source`: the source's entries are appended in order, string keys kept and integer
+    /// keys renumbered from the destination's next free slot.
+    Spread(Expr),
+    /// `key => value`.
+    Keyed(Expr, Expr),
+    /// A bare element, which takes the next free integer key.
+    Value(Expr),
+}
+
+impl ArrayEntry {
+    /// Returns every expression this entry holds, in EVALUATION order.
+    ///
+    /// Most of the tree walkers over `ExprKind` only need to reach the sub-expressions of a
+    /// node, not to know which role each one plays. Handing them one iterator keeps their
+    /// `ArrayLiteralMixed` arm a single line and stops the three shapes from being re-matched,
+    /// and re-ordered, in thirty different places.
+    pub fn exprs(&self) -> std::vec::IntoIter<&Expr> {
+        match self {
+            Self::Spread(expr) | Self::Value(expr) => vec![expr].into_iter(),
+            Self::Keyed(key, value) => vec![key, value].into_iter(),
+        }
+    }
+
+    /// Mutable counterpart of [`ArrayEntry::exprs`], for the rewriting passes.
+    pub fn exprs_mut(&mut self) -> std::vec::IntoIter<&mut Expr> {
+        match self {
+            Self::Spread(expr) | Self::Value(expr) => vec![expr].into_iter(),
+            Self::Keyed(key, value) => vec![key, value].into_iter(),
+        }
+    }
+
+    /// Rebuilds this entry with `rewrite` applied to each expression, keeping the entry's shape.
+    ///
+    /// The rewriting passes (constant folding, pruning, magic-constant substitution) replace an
+    /// expression tree wholesale, and every one of them has to put a spread back as a spread and
+    /// a key back as a key. Doing that here means none of them can quietly turn one into another.
+    pub fn map_exprs(self, mut rewrite: impl FnMut(Expr) -> Expr) -> Self {
+        match self {
+            Self::Spread(expr) => Self::Spread(rewrite(expr)),
+            Self::Value(expr) => Self::Value(rewrite(expr)),
+            Self::Keyed(key, value) => Self::Keyed(rewrite(key), rewrite(value)),
+        }
+    }
+
+    /// Fallible counterpart of [`ArrayEntry::map_exprs`], borrowing rather than consuming.
+    ///
+    /// The schema passes rewrite `self::`/`parent::` inside a constant initializer and can
+    /// reject what they find, so they need the error to escape rather than be swallowed.
+    pub fn try_map_exprs<E>(
+        &self,
+        mut rewrite: impl FnMut(&Expr) -> Result<Expr, E>,
+    ) -> Result<Self, E> {
+        Ok(match self {
+            Self::Spread(expr) => Self::Spread(rewrite(expr)?),
+            Self::Value(expr) => Self::Value(rewrite(expr)?),
+            Self::Keyed(key, value) => Self::Keyed(rewrite(key)?, rewrite(value)?),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 /// Expression kind.
 pub enum ExprKind {
     StringLiteral(String),
@@ -74,6 +141,10 @@ pub enum ExprKind {
     },
     ArrayLiteral(Vec<Expr>),
     ArrayLiteralAssoc(Vec<(Expr, Expr)>),
+    /// An array literal that MIXES a spread with explicit keys, which neither of the two
+    /// nodes above can hold: `ArrayLiteral` has no place for a key and `ArrayLiteralAssoc`
+    /// has no place for a keyless spread. Produced only for that shape.
+    ArrayLiteralMixed(Vec<ArrayEntry>),
     Match {
         subject: Box<Expr>,
         arms: Vec<(Vec<Expr>, Expr)>,
@@ -140,6 +211,21 @@ pub enum ExprKind {
     ConstRef(Name),
     NewObject {
         class_name: Name,
+        args: Vec<Expr>,
+    },
+    /// `new Box<int>(5)` — construction of a generic class at explicit type arguments.
+    ///
+    /// Lives only between parsing and monomorphization, exactly like
+    /// [`crate::parser::ast::TypeExpr::GenericClass`], which is what `class_type` always holds.
+    /// `crate::generics::classes` rewrites it to an ordinary `NewObject` naming the instantiated
+    /// class, so nothing downstream has a notion of constructing a template.
+    ///
+    /// A separate variant rather than a field on `NewObject` because the type arguments have to
+    /// be a `TypeExpr`, not text: the name resolver canonicalizes `new Box<User>` to
+    /// `\App\Box<\App\User>`, and it can only do that by walking the argument as a type. It
+    /// also keeps every pass that predates generics matching on `NewObject` unchanged.
+    NewGeneric {
+        class_type: crate::parser::ast::TypeExpr,
         args: Vec<Expr>,
     },
     /// PHP `new $var()` / `new $var(args)` — the class is named at runtime
@@ -263,21 +349,64 @@ pub enum CastType {
     String,
     Bool,
     Array,
+    Object,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 /// Static receiver.
 pub enum StaticReceiver {
     Named(Name),
+    /// `Box<int>::of(1)` — static access through a generic class named with type arguments.
+    ///
+    /// Lives only between parsing and monomorphization, exactly like
+    /// [`crate::parser::ast::TypeExpr::GenericClass`], which is always what it holds.
+    /// `generics::classes` instantiates the template and the AST walker collapses this back to
+    /// `Named`, so no pass after that has a notion of a generic static receiver.
+    ///
+    /// A variant rather than a `Name` carrying angle brackets because the arguments have to be
+    /// resolved and substituted as TYPES: `Box<User>` inside a namespace names that namespace's
+    /// `User`, and `Box<T>` inside a template becomes `Box<int>` only once `T` is bound.
+    Generic(crate::parser::ast::TypeExpr),
     Self_,
     Static,
     Parent,
+}
+
+impl StaticReceiver {
+    /// Returns this receiver with a generic class reduced to the class it is WRITTEN on.
+    ///
+    /// `Box<int>::of()` reaches through `Box` until `generics::classes` renames it to
+    /// `Box<int>`, so a pass that asks "which class does this receiver name" gets a truthful
+    /// answer either side of instantiation. Every other receiver is returned unchanged.
+    ///
+    /// Used by the passes that only look a receiver up — the effect model, the checker's class
+    /// resolution, reflection metadata — so their matches can state that a generic receiver
+    /// never reaches them, and be right. It is NOT used by the passes that rebuild a receiver:
+    /// those must carry the type arguments through, or the instantiation never happens.
+    pub fn written_class_receiver(&self) -> StaticReceiver {
+        match self {
+            StaticReceiver::Generic(crate::parser::ast::TypeExpr::GenericClass {
+                name, ..
+            }) => StaticReceiver::Named(name.clone()),
+            StaticReceiver::Generic(crate::parser::ast::TypeExpr::Named(name)) => {
+                StaticReceiver::Named(name.clone())
+            }
+            other => other.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 /// InstanceOf target.
 pub enum InstanceOfTarget {
     Name(Name),
+    /// `$x instanceof Box<int>` — a generic class named with type arguments.
+    ///
+    /// Lives only between parsing and monomorphization, exactly like
+    /// [`crate::parser::ast::TypeExpr::GenericClass`], which is always what it holds. The AST
+    /// walker collapses it back to `Name` once the type is concrete, so no pass after
+    /// instantiation has a notion of a generic instanceof target.
+    Generic(crate::parser::ast::TypeExpr),
     Expr(Box<Expr>),
 }
 

@@ -46,6 +46,7 @@ const MAX_DEPTH: usize = 256;
 struct PreparedPhpBlob(ParallelTransferBlob);
 
 impl Drop for PreparedPhpBlob {
+    /// Releases the native transfer allocation when its thread-local owner is replaced or dropped.
     fn drop(&mut self) {
         unsafe { crate::release_transfer_blob(self.0) };
     }
@@ -75,6 +76,7 @@ static COMPLETION_TRANSFER_PAUSE: OnceLock<(Mutex<CompletionTransferPause>, Cond
     OnceLock::new();
 
 #[cfg(test)]
+/// Initializes the shared test barrier for pausing one decoded result before publication.
 fn completion_transfer_pause() -> &'static (Mutex<CompletionTransferPause>, Condvar) {
     COMPLETION_TRANSFER_PAUSE.get_or_init(|| {
         (
@@ -85,6 +87,7 @@ fn completion_transfer_pause() -> &'static (Mutex<CompletionTransferPause>, Cond
 }
 
 #[cfg(test)]
+/// Blocks only the selected test job after decoding until the test releases its barrier.
 fn pause_after_completion_transfer_decode(id: u64) {
     let (state, changed) = completion_transfer_pause();
     let mut state = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -101,6 +104,7 @@ fn pause_after_completion_transfer_decode(id: u64) {
 }
 
 #[cfg(test)]
+/// Selects a job and resets the result-publication barrier for its cancellation test.
 fn arm_completion_transfer_pause(id: u64) {
     let (state, _) = completion_transfer_pause();
     *state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = CompletionTransferPause {
@@ -111,6 +115,7 @@ fn arm_completion_transfer_pause(id: u64) {
 }
 
 #[cfg(test)]
+/// Waits with a bounded deadline until the selected job reaches the publication barrier.
 fn wait_for_completion_transfer_pause(id: u64) {
     let deadline = Instant::now() + Duration::from_secs(10);
     let (state, changed) = completion_transfer_pause();
@@ -132,6 +137,7 @@ fn wait_for_completion_transfer_pause(id: u64) {
 }
 
 #[cfg(test)]
+/// Wakes the selected worker so its decoded result can become the terminal job outcome.
 fn release_completion_transfer_pause(id: u64) {
     let (state, changed) = completion_transfer_pause();
     let mut state = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -160,11 +166,13 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    /// Parses one safe serialized value and rejects any trailing bytes.
     fn parse(mut self) -> Option<PhpWireValue<'a>> {
         let value = self.value(0)?;
         (self.cursor == self.bytes.len()).then_some(value)
     }
 
+    /// Decodes a supported scalar or array while enforcing the recursive depth limit.
     fn value(&mut self, depth: usize) -> Option<PhpWireValue<'a>> {
         if depth >= MAX_DEPTH {
             return None;
@@ -204,6 +212,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Accepts only integer and byte-string keys in a serialized PHP array.
     fn key(&mut self) -> Option<PhpWireKey<'a>> {
         match self.take_byte()? {
             b'i' => {
@@ -218,6 +227,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Checks the declared array length, then reads its ordered key/value pairs and closing brace.
     fn array(&mut self, depth: usize) -> Option<PhpWireValue<'a>> {
         let count = self.unsigned_integer(b':')?;
         let count = usize::try_from(count).ok()?;
@@ -236,6 +246,7 @@ impl<'a> Parser<'a> {
         Some(PhpWireValue::Array(values))
     }
 
+    /// Borrows exactly the declared byte-string payload and validates its closing delimiters.
     fn string(&mut self) -> Option<&'a [u8]> {
         let len = usize::try_from(self.unsigned_integer(b':')?).ok()?;
         self.expect(b'"')?;
@@ -247,6 +258,7 @@ impl<'a> Parser<'a> {
         Some(value)
     }
 
+    /// Parses a float token, including PHP's explicit infinity and NaN spellings.
     fn float(&mut self) -> Option<f64> {
         let token = self.until(b';')?;
         match token {
@@ -257,11 +269,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses a delimited signed integer with checked conversion to the wire's i64 carrier.
     fn signed_integer(&mut self, delimiter: u8) -> Option<i64> {
         let token = self.until(delimiter)?;
         std::str::from_utf8(token).ok()?.parse().ok()
     }
 
+    /// Requires a nonempty decimal digit sequence for array counts and byte-string lengths.
     fn unsigned_integer(&mut self, delimiter: u8) -> Option<u64> {
         let token = self.until(delimiter)?;
         if token.is_empty() || token.iter().any(|byte| !byte.is_ascii_digit()) {
@@ -270,6 +284,7 @@ impl<'a> Parser<'a> {
         std::str::from_utf8(token).ok()?.parse().ok()
     }
 
+    /// Borrows bytes up to the next delimiter and advances the cursor past that delimiter.
     fn until(&mut self, delimiter: u8) -> Option<&'a [u8]> {
         let relative = self.bytes.get(self.cursor..)?.iter().position(|byte| *byte == delimiter)?;
         let end = self.cursor.checked_add(relative)?;
@@ -278,10 +293,12 @@ impl<'a> Parser<'a> {
         Some(value)
     }
 
+    /// Consumes one byte and rejects a delimiter that differs from the expected value.
     fn expect(&mut self, expected: u8) -> Option<()> {
         (self.take_byte()? == expected).then_some(())
     }
 
+    /// Reads the next available byte without advancing beyond the input slice.
     fn take_byte(&mut self) -> Option<u8> {
         let value = *self.bytes.get(self.cursor)?;
         self.cursor += 1;
@@ -351,6 +368,7 @@ unsafe fn encode_value(writer: *mut crate::ParallelValueWriter, value: &PhpWireV
     }
 }
 
+/// Parses the safe PHP subset into an owned EPV1 allocation, freeing an unfinished writer on error.
 fn from_php_serialized(source: &[u8]) -> Result<ParallelTransferBlob, i32> {
     let value = Parser {
         bytes: source,
@@ -377,6 +395,7 @@ fn from_php_serialized(source: &[u8]) -> Result<ParallelTransferBlob, i32> {
     }
 }
 
+/// Borrows consecutive zero-based array values, optionally requiring an exact field count.
 fn indexed_values<'a>(
     value: &'a PhpWireValue<'a>,
     expected: Option<usize>,
@@ -396,6 +415,7 @@ fn indexed_values<'a>(
         .collect()
 }
 
+/// Distinguishes an absent null field from a present byte string, including an empty string.
 fn php_optional_string<'a>(value: &'a PhpWireValue<'a>) -> Option<Option<&'a [u8]>> {
     match value {
         PhpWireValue::Null => Some(None),
@@ -404,6 +424,7 @@ fn php_optional_string<'a>(value: &'a PhpWireValue<'a>) -> Option<Option<&'a [u8
     }
 }
 
+/// Builds a borrowed failure-field view with a null pointer only for an absent field.
 fn parallel_bytes(value: Option<&[u8]>) -> ParallelBytes {
     value.map_or(
         ParallelBytes {
@@ -417,6 +438,7 @@ fn parallel_bytes(value: Option<&[u8]>) -> ParallelBytes {
     )
 }
 
+/// Validates the seven-field failure tuple and its frames before copying them into EPFL storage.
 fn php_failure_blob(source: &[u8]) -> Result<ParallelTransferBlob, i32> {
     let value = Parser {
         bytes: source,
@@ -475,6 +497,7 @@ fn php_failure_blob(source: &[u8]) -> Result<ParallelTransferBlob, i32> {
     unsafe { encode_failure(&input) }
 }
 
+/// Serializes one EPV1 subtree, preserving array keys and rejecting cancellation capabilities.
 fn append_php_value(
     blob: ParallelTransferBlob,
     cursor: &mut usize,
@@ -547,6 +570,7 @@ fn append_php_value(
     Ok(())
 }
 
+/// Validates an EPV1 value and copies its complete PHP serialization into a new transfer allocation.
 fn to_php_serialized(blob: ParallelTransferBlob) -> Result<ParallelTransferBlob, i32> {
     let mut cursor = 0;
     if unsafe { elephc_parallel_value_reader_begin(blob, &mut cursor) } != PARALLEL_TRANSFER_OK {
@@ -563,6 +587,11 @@ fn to_php_serialized(blob: ParallelTransferBlob) -> Result<ParallelTransferBlob,
     copy_transfer_payload(output.as_ptr(), output.len())
 }
 
+/// Copies a safe serialized PHP value into EPV1 and clears the output on conversion failure.
+///
+/// # Safety
+/// A nonempty source must be readable for `source_len` bytes. A nonnull output must be
+/// writable for one blob and must not overlap the source. Successful output is caller-owned.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_value_from_php_serialized(
     source: *const u8,
@@ -588,6 +617,11 @@ pub unsafe extern "C" fn elephc_parallel_value_from_php_serialized(
     }
 }
 
+/// Borrows an EPV1 allocation and returns a separately owned PHP-serialization allocation.
+///
+/// # Safety
+/// The blob must reference readable storage for its declared length. A nonnull output must
+/// be writable for one blob and disjoint from that storage. This does not consume the input.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_value_to_php_serialized(
     blob: ParallelTransferBlob,
@@ -609,6 +643,9 @@ pub unsafe extern "C" fn elephc_parallel_value_to_php_serialized(
 
 /// Creates a native job from bytes produced by PHP's local-context `serialize()`.
 /// Ownership of the intermediate `EPV1` envelope transfers only when job creation succeeds.
+///
+/// # Safety
+/// A nonempty source must remain readable for `source_len` bytes throughout this call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_job_create_php_serialized(
     source: *const u8,
@@ -637,6 +674,9 @@ pub unsafe extern "C" fn elephc_parallel_job_create_php_serialized(
 }
 
 /// Copies a job's input into bytes accepted by the worker context's `unserialize()`.
+///
+/// # Safety
+/// A nonnull output must be writable for one blob; a successful copy is caller-owned.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_job_input_php_serialized(
     id: u64,
@@ -646,6 +686,9 @@ pub unsafe extern "C" fn elephc_parallel_job_input_php_serialized(
 }
 
 /// Completes a running job from bytes produced by the worker context's `serialize()`.
+///
+/// # Safety
+/// A nonempty source must remain readable for `source_len` bytes throughout this call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_job_complete_php_serialized(
     id: u64,
@@ -677,6 +720,9 @@ pub unsafe extern "C" fn elephc_parallel_job_complete_php_serialized(
 }
 
 /// Fails a running job from a safe serialized field array produced in the worker context.
+///
+/// # Safety
+/// A nonempty source must remain readable for `source_len` bytes throughout this call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_job_fail_php_serialized(
     id: u64,
@@ -706,6 +752,9 @@ pub unsafe extern "C" fn elephc_parallel_job_fail_php_serialized(
 }
 
 /// Copies a completed job's result into bytes accepted by the parent context's `unserialize()`.
+///
+/// # Safety
+/// A nonnull output must be writable for one blob; a successful copy is caller-owned.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_job_result_php_serialized(
     id: u64,
@@ -715,6 +764,9 @@ pub unsafe extern "C" fn elephc_parallel_job_result_php_serialized(
 }
 
 /// Converts an input (`which=0`) or completed result (`which=1`) copy to PHP wire bytes.
+///
+/// # Safety
+/// A nonnull output must be writable for one blob; conversion releases the temporary EPV1 copy.
 unsafe fn convert_job_value_to_php_serialized(
     id: u64,
     which: i32,
@@ -790,6 +842,7 @@ pub extern "C" fn elephc_parallel_job_failure_php_prepare(id: u64) -> i32 {
     }
 }
 
+/// Replaces the calling thread's prepared slot with an owned input or result serialization.
 fn prepare_job_value(id: u64, which: i32) -> i32 {
     match catch_unwind(AssertUnwindSafe(|| {
         PREPARED_PHP_BLOB.with(|slot| slot.borrow_mut().take());
@@ -809,6 +862,7 @@ fn prepare_job_value(id: u64, which: i32) -> i32 {
 }
 
 /// Returns the exact byte pointer of the calling thread's prepared PHP serialization.
+/// The borrowed pointer expires on the next preparation, explicit release or thread teardown.
 #[no_mangle]
 pub extern "C" fn elephc_parallel_php_blob_ptr() -> *const u8 {
     catch_unwind(AssertUnwindSafe(|| {
@@ -862,6 +916,10 @@ pub extern "C" fn elephc_parallel_php_buffer_alloc(len: usize) -> *mut u8 {
 }
 
 /// Frees a native byte buffer returned by `elephc_parallel_php_buffer_alloc`.
+///
+/// # Safety
+/// A nonnull pointer must be an unreleased allocation from that allocator with exactly `len`
+/// bytes, and no access to the buffer may outlive this call. Null is accepted as a no-op.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_parallel_php_buffer_free(pointer: *mut u8, len: usize) {
     if pointer.is_null() {

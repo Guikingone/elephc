@@ -1,8 +1,8 @@
 ---
 title: "inet_pton()"
-description: "Converts a human-readable IP address to its packed in_addr representation."
+description: "Packs a textual IPv4 or IPv6 address into its 4- or 16-byte network-order form, or false when the string is not a valid address."
 sidebar:
-  order: 793
+  order: 824
 ---
 
 ## inet_pton()
@@ -11,7 +11,7 @@ sidebar:
 function inet_pton(string $ip): mixed
 ```
 
-Converts a human-readable IP address to its packed in_addr representation.
+Packs a textual IPv4 or IPv6 address into its 4- or 16-byte network-order form, or false when the string is not a valid address.
 
 **Parameters**:
 - `$ip` (`string`)
@@ -21,9 +21,9 @@ Converts a human-readable IP address to its packed in_addr representation.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/inet_pton.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/inet_pton.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/inet_pton.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/inet_pton.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

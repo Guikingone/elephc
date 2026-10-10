@@ -109,6 +109,62 @@ for ($i = 0; $i < 10; $i++) {
 }
 ```
 
+The **init** and **update** clauses take any PHP expression, not just an assignment or an
+increment — an array push, an indexed or property assignment, a call — and either may be a
+comma-separated list, which PHP evaluates left to right:
+
+```php
+<?php
+$squares = [];
+for ($i = 0, $limit = 4; $i < $limit; $i++, $squares[] = $i * $i) {
+    // ...
+}
+
+$box = new Box();
+for ($i = 0; $i < 4; $box->total = $i) {
+    $i++;
+}
+```
+
+A comma inside a call's argument list, an array literal or a closure body is **not** a clause
+separator, so `for ($i = max(0, 1); …)` and a closure with its own `;` both parse as one
+member:
+
+```php
+<?php
+for ($fmt = function (int $n): string { return "#$n"; }, $i = 0; $i < 3; $i++) {
+    echo $fmt($i);
+}
+```
+
+`throw` counts as an expression here, as it does everywhere in PHP 8, so either clause
+accepts it:
+
+```php
+<?php
+for (throw new LogicException("unreachable"); false; ) {
+}
+
+for ($i = 0; $i < 3; throw new RuntimeException("one pass only")) {
+    echo $i;
+}
+```
+
+Three limits, the first two matching PHP:
+
+- The clauses accept **expressions only**. `for (echo "x"; …)` is a parse error, as it is in
+  PHP; so is a named declaration (`function f() {}`), which PHP rejects because it reads
+  `function` in that position as the start of a closure.
+- The **condition** clause does not yet accept a comma-separated list. PHP evaluates every
+  expression there and uses the last one's value, but elephc has no sequence expression to
+  hold the list and the condition re-runs each iteration, so it reports a diagnostic naming
+  the limitation rather than mis-parsing.
+- `include` / `require` **are** expressions and PHP does run them in a clause, but elephc
+  rejects them there: include resolution expands a value-include by rewriting the surrounding
+  statement *list*, which a clause is not. Move it above the loop. An include inside a
+  **closure** in a clause is fine — it runs when the closure is called, not while the clause
+  is evaluated.
+
 ## foreach
 
 ```php
@@ -166,6 +222,17 @@ reference marker applies to a variable target, never to a whole pattern, so
 
 Use `foreach ($arr as $key => &$value)` when both the key and a mutable
 element reference are needed. The key itself cannot be bound by reference.
+
+The source of a by-reference loop can be any array the program can name, and the
+writes land in it: a local, an array element (`$a[0]`), an object property, a
+property reached through a runtime name (`$o->$n`), through an object held in an
+array element (`$arr[0]->x`), or through a call result (`$o->get()->x`). The loop
+holds whatever storage it is iterating for as long as it runs, so replacing the
+receiver inside the body does not disturb it. A receiver that turns out to be
+`null` — `$arr[5]->x` on a shorter array — raises PHP's
+`Attempt to modify property "x" on null` `Error`, because a by-reference source is
+a write target rather than a read.
+
 By-reference value binding is currently supported only for array sources;
 `foreach ($iterator as &$value)` over `Iterator`, `IteratorAggregate`, or
 `iterable`-typed values is rejected at compile time. Use an array source or

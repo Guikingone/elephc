@@ -1,8 +1,8 @@
 ---
 title: "mysqli_warning_count()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many warnings the last query raised."
 sidebar:
-  order: 181
+  order: 182
 ---
 
 ## mysqli_warning_count()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_warning_count(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many warnings the last query raised.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

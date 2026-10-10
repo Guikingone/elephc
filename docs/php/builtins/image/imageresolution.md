@@ -1,8 +1,8 @@
 ---
 title: "imageresolution()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Reads or sets an image's horizontal and vertical resolution in DPI."
 sidebar:
-  order: 523
+  order: 524
 ---
 
 ## imageresolution()
@@ -11,7 +11,7 @@ sidebar:
 function imageresolution(mixed $image, ?int $resolution_x = null, ?int $resolution_y = null): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Reads or sets an image's horizontal and vertical resolution in DPI.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

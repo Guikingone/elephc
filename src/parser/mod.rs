@@ -18,7 +18,7 @@ mod control;
 pub mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
-mod stmt;
+pub(crate) mod stmt;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
 
@@ -118,6 +118,11 @@ pub fn parse_with_recovery_in_mode(
 /// Implements recovery parsing after the source-mode scope has been installed.
 fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
     reject_excessive_nesting(tokens)?;
+    crate::compiler_stack::with_compiler_stack(|| parse_checked_tokens(tokens))
+}
+
+/// Parses tokens whose nesting depth is already known to be within the compiler's limit.
+fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
     let mut pos = 0;
     let mut stmts = Vec::new();
     let mut errors = Vec::new();
@@ -154,7 +159,7 @@ fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<Com
             }
         } else {
             match stmt::parse_stmt(tokens, &mut pos) {
-                Ok(stmt) => stmts.push(stmt),
+                Ok(stmt) => stmt::push_parsed_stmt(&mut stmts, stmt),
                 Err(error) => {
                     errors.extend(error.flatten());
                     stmt::recover_to_statement_boundary(tokens, &mut pos);

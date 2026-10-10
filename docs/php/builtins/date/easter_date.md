@@ -1,8 +1,8 @@
 ---
 title: "easter_date()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the Unix timestamp of midnight on Easter Sunday of a year."
 sidebar:
-  order: 216
+  order: 217
 ---
 
 ## easter_date()
@@ -11,7 +11,7 @@ sidebar:
 function easter_date(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the Unix timestamp of midnight on Easter Sunday of a year.
 
 **Parameters**:
 - `$year` (`?int`), default `null`, optional
@@ -24,7 +24,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

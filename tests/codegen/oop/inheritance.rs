@@ -85,6 +85,21 @@ echo $dog->run();
     assert_eq!(out, "dog");
 }
 
+/// Inferring a parent's method return must leave a child's overriding return ABI intact.
+#[test]
+fn test_inherited_return_inference_preserves_child_override() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseValue { public function value() { return 3; } }
+class ChildValue extends BaseValue { public function value() { return 'child'; } }
+$base = new BaseValue();
+$child = new ChildValue();
+echo $base->value() . ',' . $child->value();
+"#,
+    );
+    assert_eq!(out, "3,child");
+}
+
 /// Verifies private methods use lexical binding: `Base::reveal()` calls `Base::secret()`
 /// even when the object is a `Child` instance, returning "base". Private methods are
 /// not polymorphic and are resolved at the defining class at compile time.

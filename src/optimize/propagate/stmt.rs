@@ -75,14 +75,31 @@ thread_local! {
     /// everything there; inside function bodies the `global`-bound names are
     /// volatile instead.
     static IN_FUNCTION_SCOPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// True while propagating a function-like body whose return expression must remain an
+    /// addressable place. Substituting a local with its constant value would destroy reference
+    /// identity before EIR lowering sees the return.
+    static IN_BY_REF_RETURN_SCOPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Runs `f` with the propagation scope marked as a function/method/closure
 /// body, restoring the previous scope afterwards.
 pub(in crate::optimize) fn with_function_scope<R>(f: impl FnOnce() -> R) -> R {
+    with_function_scope_mode(false, f)
+}
+
+/// Runs `f` in a function-like scope while preserving by-reference return identity.
+pub(in crate::optimize) fn with_function_scope_mode<R>(
+    by_ref_return: bool,
+    f: impl FnOnce() -> R,
+) -> R {
     IN_FUNCTION_SCOPE.with(|cell| {
         let previous = cell.replace(true);
-        let result = f();
+        let result = IN_BY_REF_RETURN_SCOPE.with(|by_ref_cell| {
+            let previous_by_ref = by_ref_cell.replace(by_ref_return);
+            let result = f();
+            by_ref_cell.set(previous_by_ref);
+            result
+        });
         cell.set(previous);
         result
     })
@@ -91,6 +108,11 @@ pub(in crate::optimize) fn with_function_scope<R>(f: impl FnOnce() -> R) -> R {
 /// Returns true while propagating inside a function/method/closure body.
 pub(in crate::optimize) fn in_function_scope() -> bool {
     IN_FUNCTION_SCOPE.with(|cell| cell.get())
+}
+
+/// Returns true when a return expression must preserve its source place.
+fn in_by_ref_return_scope() -> bool {
+    IN_BY_REF_RETURN_SCOPE.with(|cell| cell.get())
 }
 
 /// Removes from the environment every local the given expressions can write
@@ -356,6 +378,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -368,20 +391,30 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                 StmtKind::FunctionDecl {
                     by_ref_return,
                     name,
+                    type_params,
                     params: propagate_params(params),
                     param_attributes,
                     variadic,
                     variadic_by_ref,
                     variadic_type,
                     return_type,
-                    body: with_function_scope(|| propagate_block(body, HashMap::new()).0),
+                    body: with_function_scope_mode(by_ref_return, || {
+                        crate::optimize::generator_bodies::rewrite_preserving_yield(
+                            body,
+                            |body| propagate_block(body, HashMap::new()).0,
+                        )
+                    }),
                 },
                 span,
             ),
             env,
         ),
         StmtKind::Return(expr) => {
-            let expr = expr.map(|expr| propagate_expr(expr, &env));
+            let expr = if in_by_ref_return_scope() {
+                expr
+            } else {
+                expr.map(|expr| propagate_expr(expr, &env))
+            };
             (Stmt::new(StmtKind::Return(expr), span), env)
         }
         StmtKind::ConstDecl { name, value } => {
@@ -419,6 +452,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             )
         }
         StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -432,6 +466,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         } => (
             Stmt::new(
                 StmtKind::ClassDecl {
+                    generics,
                     name,
                     extends,
                     implements,
@@ -449,6 +484,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         ),
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -459,6 +495,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             Stmt::new(
                 StmtKind::EnumDecl {
                     name,
+                    generics,
                     backing_type,
                     implements,
                     trait_uses,
@@ -474,6 +511,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             (Stmt::new(StmtKind::PackedClassDecl { name, fields }, span), env)
         }
         StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties,
@@ -482,6 +520,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         } => (
             Stmt::new(
                 StmtKind::InterfaceDecl {
+                    generics,
                     name,
                     extends,
                     properties: properties.into_iter().map(propagate_property).collect(),
@@ -494,6 +533,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         ),
         StmtKind::TraitDecl {
             name,
+            generics,
             trait_uses,
             properties,
             methods,
@@ -502,6 +542,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             Stmt::new(
                 StmtKind::TraitDecl {
                     name,
+                    generics,
                     trait_uses,
                     properties: properties.into_iter().map(propagate_property).collect(),
                     methods: methods.into_iter().map(propagate_method).collect(),

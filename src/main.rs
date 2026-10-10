@@ -15,12 +15,15 @@ mod builtins;
 mod cli;
 mod codegen;
 mod codegen_support;
+mod compiler_stack;
 mod conditional;
 mod curl_prelude;
 mod errors;
 mod eval_aot;
 mod exports;
+mod docblock;
 mod func_args;
+mod generics;
 mod global_decls;
 mod hash_prelude;
 mod image_prelude;
@@ -43,8 +46,10 @@ mod name_resolver;
 mod native_deps;
 mod names;
 mod numeric_string;
+mod object_cast_prelude;
 mod opcache;
 mod opcache_prelude;
+mod shared_ini_prelude;
 mod optimize;
 mod otlp;
 mod parser;
@@ -56,6 +61,7 @@ mod monitor;
 mod call_graph;
 mod php_profile;
 mod pprof_encode;
+mod project_ini;
 mod prelude_prune;
 mod probe_key;
 mod pipeline;
@@ -99,17 +105,41 @@ mod web_prelude;
 ///   ([`emit_ini_override_warnings`]) for compile commands.
 /// - May create temporary files during assembly and linking.
 fn main() {
+    compiler_stack::with_compiler_stack(main_inner)
+}
+
+/// The real entry point, running on the stack established by
+/// [`compiler_stack::with_compiler_stack`].
+fn main_inner() {
     let args: Vec<String> = std::env::args().collect();
     if cli::wants_mascotte(&args) {
         cli::print_mascotte();
     }
     match cli::parse_args(&args) {
-        cli::Command::Compile(config) => {
+        cli::Command::Compile(mut config) => {
+            apply_project_ini(&mut config);
             emit_ini_override_warnings(&config);
             pipeline::compile(config);
         }
         cli::Command::Native(command) => run_native(command),
         cli::Command::Monitor(command) => std::process::exit(monitor::run(command)),
+    }
+}
+
+/// Puts the project's `elephc.toml` `[ini]` entries AHEAD of the command line's `--ini` ones,
+/// so an `--ini` for the same directive, being the later entry, is the value every consumer
+/// reads. A manifest that cannot be used stops the compile: its directives would otherwise be
+/// dropped without a word.
+fn apply_project_ini(config: &mut cli::CliConfig) {
+    match project_ini::project_ini_overrides(std::path::Path::new(&config.filename)) {
+        Ok(mut entries) => {
+            entries.append(&mut config.ini_overrides);
+            config.ini_overrides = entries;
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(1);
+        }
     }
 }
 

@@ -12,6 +12,7 @@
 use super::*;
 use crate::synthetic_class::{e_binop, e_call, e_int, e_new_fq, e_str, e_var};
 
+/// Validates a declared string return, protects its owners and wraps implicit conversion failures.
 pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, source: LoweredValue, span: Span,
 ) -> LoweredValue {
@@ -63,6 +64,7 @@ pub(super) fn lower(
     result
 }
 
+/// Holds one balanced source lease in an owned hidden slot across conversion or diagnostic creation.
 fn hold(ctx: &mut LoweringContext<'_, '_>, source: LoweredValue, span: Span) -> String {
     let ty = ctx.builder.value_php_type(source.value);
     let slot = ctx.declare_owned_hidden_temp(ty.clone());
@@ -74,12 +76,14 @@ fn hold(ctx: &mut LoweringContext<'_, '_>, source: LoweredValue, span: Span) -> 
     slot
 }
 
+/// Retires the hidden slot's owned value and clears its frame-cleanup ownership record.
 fn release_slot(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
     let value = ctx.load_local(slot, Some(span));
     crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     ctx.clear_owned_hidden_temp(slot, Some(span));
 }
 
+/// Removes the conversion boundary's exception handler on normal and exceptional paths.
 fn pop_handler(ctx: &mut LoweringContext<'_, '_>, handler: BlockId, span: Span) {
     ctx.emit_void(
         Op::TryPopHandler, Vec::new(), Some(Immediate::I64(handler.as_raw() as i64)),
@@ -87,6 +91,7 @@ fn pop_handler(ctx: &mut LoweringContext<'_, '_>, handler: BlockId, span: Span) 
     );
 }
 
+/// Constructs the return TypeError through borrowed aliases, then retires source and cause leases.
 fn throw_type_error(ctx: &mut LoweringContext<'_, '_>, source: &str, previous: Option<&str>, span: Span) {
     let prefix = format!("{}(): Return value must be of type string, ", ctx.owner_name());
     // Ordinary AST call lowering may consume owned temporary reads. Expose only
@@ -108,6 +113,7 @@ fn throw_type_error(ctx: &mut LoweringContext<'_, '_>, source: &str, previous: O
     ctx.builder.terminate(Terminator::Throw { value: error.value });
 }
 
+/// Exposes an owned boundary value to ordinary AST call lowering without transferring its lease.
 fn borrowed_alias(ctx: &mut LoweringContext<'_, '_>, owner: &str, span: Span) -> String {
     let value = ctx.load_local(owner, Some(span));
     let ty = ctx.builder.value_php_type(value.value);
@@ -116,6 +122,7 @@ fn borrowed_alias(ctx: &mut LoweringContext<'_, '_>, owner: &str, span: Span) ->
     alias
 }
 
+/// Zeros a borrowed hidden slot without releasing the boundary owner's reference a second time.
 fn clear_borrowed_alias(ctx: &mut LoweringContext<'_, '_>, alias: &str, span: Span) {
     let slot = ctx.local_slots[alias];
     // HiddenTemp participates in frame cleanup too. This slot only borrowed

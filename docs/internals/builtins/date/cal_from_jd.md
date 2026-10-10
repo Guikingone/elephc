@@ -1,16 +1,16 @@
 ---
-title: "cal_from_jd() — internals"
+title: "cal_from_jd() - internals"
 description: "Compiler internals for cal_from_jd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 184
+  order: 185
 ---
 
-## `cal_from_jd()` — internals
+## `cal_from_jd()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:671](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L671) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:743](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L743) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

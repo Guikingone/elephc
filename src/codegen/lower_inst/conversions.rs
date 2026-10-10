@@ -12,13 +12,14 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, IrHeapKind, IrType, ValueId};
-use crate::names::{label_fragment, method_symbol};
+use crate::names::label_fragment;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
 use super::{
-    direct_call_stack_pad_bytes, emit_dynamic_instance_method_call,
-    emit_mixed_method_class_dispatch, expect_operand, load_value_to_first_int_arg,
+    direct_call_stack_pad_bytes, emit_mixed_method_class_dispatch, emit_resolved_method_call,
+    expect_operand,
+    load_value_to_first_int_arg,
     lower_runtime_object_method_call, materialize_method_call_args_with_receiver_reg_and_refs,
     mixed_method_candidates, predicates, store_if_result, strings,
 };
@@ -111,6 +112,18 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            if matches!(inst.immediate, Some(Immediate::StringOffsetCast)) {
+                load_value_to_first_int_arg(ctx, value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                let no_warning = ctx.next_label("string_offset_no_cast_warning");
+                predicates::emit_mixed_tag_eq(ctx, value, 2)?;
+                abi::emit_branch_if_int_result_zero(ctx.emitter, &no_warning);
+                super::floats::emit_string_offset_cast_warning(ctx);
+                ctx.emitter.label(&no_warning);
+                abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                return store_if_result(ctx, inst);
+            }
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
         }
@@ -199,6 +212,9 @@ pub(super) fn lower_cast_to_string(
         }
         PhpType::Mixed | PhpType::Union(_) => {
             emit_mixed_string_context_result(ctx, value)?;
+            if let Some(result) = inst.result {
+                ctx.store_runtime_return_ownership(result);
+            }
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
@@ -384,14 +400,7 @@ fn emit_mixed_tostring_candidate_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(slot) = candidate.target.dynamic_slot {
-        emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&candidate.target.impl_class, &candidate.target.method_key),
-        );
-    }
+    emit_resolved_method_call(ctx, &candidate.target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     Ok(candidate.target.return_ty.clone())
@@ -552,6 +561,7 @@ fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
 fn expect_cast_target(inst: &Instruction) -> Result<IrType> {
     match inst.immediate {
         Some(Immediate::CastTarget(target)) => Ok(target),
+        Some(Immediate::StringOffsetCast) => Ok(IrType::I64),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing cast target immediate",
             inst.op.name()

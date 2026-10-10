@@ -83,7 +83,9 @@ fn compile_lfc_eval_project_and_run(
         regex: true,
         async_reactor: false,
         parallel_execution: false,
-        mb_strlen: false,
+        mbstring: false,
+        mbregex: false,
+        mbstring_mime: false,
         phar_archive: false,
         descriptor_invoker: true,
         eval_bridge: true,
@@ -103,6 +105,7 @@ fn compile_lfc_eval_project_and_run(
         // Pinned to false, this linked a runtime with no `__rt_ctx_init` against a main
         // that calls it — an undefined reference, which is the tripwire doing its job.
         ctx_register: true,
+        ..elephc::codegen::RuntimeFeatures::none()
     };
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);

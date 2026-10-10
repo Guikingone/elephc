@@ -300,8 +300,10 @@ build_and_drop(false);
     assert!(exhaustive.success, "program failed: {}", exhaustive.stderr);
     let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
     let (exhaustive_allocs, exhaustive_frees) = parse_gc_stats(&exhaustive.stderr);
-    assert_eq!(baseline_allocs, exhaustive_allocs);
-    assert_eq!(baseline_frees, exhaustive_frees);
+    // The conditional function also owns boxed untyped arguments. Compare live
+    // allocations so those balanced argument costs cannot mask a leaked local.
+    assert_eq!(baseline_allocs, baseline_frees, "baseline leaks its local array");
+    assert_eq!(exhaustive_allocs, exhaustive_frees, "conditional cleanup leaks storage");
 }
 
 /// Verifies that a nested associative alias survives outer and inner unset.
@@ -477,8 +479,8 @@ unset($b);
     assert_eq!(cyclic_frees, acyclic_frees + 1);
 }
 
-/// Verifies that a cycle between two Mixed hashes (`$a["peer"] = $b; $b["peer"] = $a`)
-/// allocates 1 extra slot for boxed Mixed conversion compared to the acyclic case.
+/// Verifies that the second hash assignment separates shared storage into one header
+/// and one entry allocation, and releases both extra owners compared to the one-way case.
 #[test]
 fn test_cow_hash_assignment_detaches_before_forming_cycle() {
     let acyclic = compile_and_run_with_gc_stats(
@@ -512,8 +514,8 @@ unset($b);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
-    assert_eq!(cyclic_allocs, acyclic_allocs + 1);
-    assert_eq!(cyclic_frees, acyclic_frees + 1);
+    assert_eq!(cyclic_allocs, acyclic_allocs + 2);
+    assert_eq!(cyclic_frees, acyclic_frees + 2);
 }
 
 /// Verifies that a cycle between a Mixed-hash and an object (`$h = ["node" => $n];

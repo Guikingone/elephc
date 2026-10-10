@@ -24,24 +24,27 @@ use crate::codegen_support::RuntimeFeatures;
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
-    diagnostics::emit_diagnostics(emitter);
+    diagnostics::emit_diagnostics(emitter, features);
 
     // Per-context state publication. Emitted before every helper that may read
     // ctx-relative state; gated on the ctx-register spike feature.
     if features.ctx_register {
         ctx::emit_rt_ctx_init(emitter);
         // The pool the M1 bridge calls to give a spawned task its own context.
-        ctx::emit_rt_ctx_pool(emitter);
+        ctx::emit_rt_ctx_pool(emitter, features);
     }
 
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.
     numeric::emit_php_float_to_int(emitter);
+    numeric::emit_php_float_to_int_cap(emitter);
     round_mode::emit_round_mode(emitter);
 
     // String runtime functions
     strings::emit_concat_scratch(emitter);
     strings::emit_itoa(emitter);
+    strings::emit_string_offset_warning(emitter);
+    strings::emit_itoa_into(emitter);
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);
@@ -52,17 +55,18 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
     strings::emit_str_to_number(emitter);
+    strings::emit_str_numeric_value(emitter);
     strings::emit_str_looks_like_int_for_coercion(emitter);
     strings::emit_str_to_int(emitter);
     strings::emit_str_to_int_base(emitter);
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
-    strings::emit_str_persist(emitter);
+    strings::emit_str_persist(emitter, features.mbstring || features.eval_bridge);
     strings::emit_str_inc_dec(emitter);
     strings::emit_mixed_inc_dec(emitter);
-    strings::emit_strtolower(emitter);
-    strings::emit_strtoupper(emitter);
+    strings::emit_strtolower(emitter, features.mbstring || features.eval_bridge);
+    strings::emit_strtoupper(emitter, features.mbstring || features.eval_bridge);
     strings::emit_trim(emitter);
     strings::emit_ltrim(emitter);
     strings::emit_rtrim(emitter);
@@ -76,6 +80,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_chr(emitter);
     strings::emit_strcmp(emitter);
     strings::emit_strcasecmp(emitter);
+    strings::emit_strnatcmp(emitter);
     strings::emit_strncmp(emitter);
     strings::emit_strncasecmp(emitter);
     strings::emit_str_starts_with(emitter);
@@ -85,6 +90,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);
     strings::emit_implode_bool(emitter);
+    strings::emit_implode_float(emitter);
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
@@ -119,8 +125,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_md5(emitter);
     strings::emit_sha1(emitter);
     strings::emit_crc32(emitter);
-    if features.mb_strlen {
-        strings::emit_mb_strlen(emitter);
+    if features.mbstring || features.eval_bridge {
+        strings::emit_mbstring(emitter, features.eval_bridge, features.mbregex);
     }
     strings::emit_iconv(emitter);
     strings::emit_hash(emitter);
@@ -153,6 +159,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     callables::emit_is_callable_runtime(emitter);
     callables::emit_function_exists_lookup(emitter);
     callables::emit_callable_descriptor_release(emitter);
+    callables::emit_callable_invoke_owned_args(emitter);
+    callables::emit_throw_named_parameter_overwrite(emitter);
+    callables::emit_throw_unknown_named_parameter(emitter);
+    callables::emit_throw_positional_after_named(emitter);
     callables::emit_closure_bind(emitter);
 
     // System runtime functions
@@ -201,7 +211,6 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.regex {
         system::emit_preg_strip(emitter);
         system::emit_pcre_to_posix(emitter);
-        system::emit_mb_ereg_match(emitter);
         system::emit_preg_match(emitter);
         system::emit_preg_match_all(emitter);
         system::emit_preg_replace(emitter);
@@ -220,6 +229,15 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
+    exceptions::emit_throwable_previous(emitter);
+    exceptions::emit_throwable_initialize(emitter);
+    exceptions::emit_exception_chain(emitter);
+    exceptions::emit_cleanup_invoke(emitter);
+    exceptions::emit_cleanup_preserve_exception(emitter);
+    exceptions::emit_cleanup_call_operand_owner(emitter);
+    exceptions::emit_local_ref_cell_release(emitter);
+    exceptions::emit_throwable_boxed_owners(emitter);
+    exceptions::emit_destructor_throw(emitter);
 
     // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
     generators::emit_generator_runtime(emitter);

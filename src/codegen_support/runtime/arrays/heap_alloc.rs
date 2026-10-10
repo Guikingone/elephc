@@ -48,6 +48,14 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_heap_alloc_start");                          // skip if already >= 8
     emitter.instruction("mov x0, #8");                                          // round up to minimum 8 bytes
     emitter.label("__rt_heap_alloc_start");
+    // -- keep every payload 8-byte aligned --
+    // The bump path adds the payload size and the 16-byte header straight onto the offset, so a
+    // request that is not a multiple of 8 — a persisted string of any odd length — misaligns
+    // EVERY block carved after it. Generated code reads those with plain word loads and never
+    // notices, but the eval interpreter dereferences the same blocks as `*mut RuntimeCell` and
+    // aborts on the alignment check.
+    emitter.instruction("add x0, x0, #7");                                      // round the payload up to the next 8-byte boundary
+    emitter.instruction("and x0, x0, #0xfffffffffffffff8");                     // clear the low bits so the following block stays aligned
     emitter.instruction("lsr x9, x0, #32");                                     // inspect bits the 32-bit block-size header cannot represent
     emitter.instruction("cbnz x9, __rt_heap_alloc_size_overflow");              // reject unrepresentable payload sizes before truncating metadata
 
@@ -78,7 +86,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "add x9, x28, #{}",
         crate::codegen_support::runtime::ctx::CTX_HEAP_SMALL_BINS_OFFSET
-    )); // x9 = base of the per-context small-bin head array
+    ));                                                                         // x9 = base of the per-context small-bin head array
     emitter.instruction("add x9, x9, x13");                                     // x9 = address of the first candidate bin head
     emitter.label("__rt_heap_alloc_small_bin_loop");
     emitter.instruction("mov x16, x9");                                         // x16 tracks the previous next-pointer slot while scanning this bin
@@ -92,7 +100,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x14, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // load the per-context heap bump offset before deriving the live heap end
+    ));                                                                         // load the per-context heap bump offset before deriving the live heap end
     emitter.instruction("add x14, x12, x14");                                   // x14 = current live heap end
     emitter.instruction("cmp x10, x14");                                        // does the cached block point at or beyond the live heap end?
     emitter.instruction("b.hs __rt_heap_alloc_small_bin_drop_tail");            // wild pointer: truncate the chain past the live heap window
@@ -142,7 +150,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "add x9, x28, #{}",
         crate::codegen_support::runtime::ctx::CTX_HEAP_FREE_LIST_OFFSET
-    )); // x9 = address of the per-context free-list head slot
+    ));                                                                         // x9 = address of the per-context free-list head slot
     emitter.instruction("ldr x10, [x9]");                                       // x10 = first free block header (0 if empty)
 
     // -- walk the free list looking for first-fit block --
@@ -154,7 +162,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x13, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // load the per-context heap bump offset before deriving the live heap end
+    ));                                                                         // load the per-context heap bump offset before deriving the live heap end
     emitter.instruction("add x13, x12, x13");                                   // x13 = current live heap end
     emitter.instruction("cmp x10, x13");                                        // reject free-list pointers at or beyond the live heap end
     emitter.instruction("b.hs __rt_heap_alloc_fl_drop_tail");                   // truncate a chain that has escaped the live heap window
@@ -246,7 +254,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x10, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // x10 = per-context heap offset
+    ));                                                                         // x10 = per-context heap offset
 
     // -- bounds check: offset + 16 + requested <= heap_max --
     emitter.instruction("add x12, x10, x0");                                    // x12 = offset + requested size
@@ -269,12 +277,14 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "str x10, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // store the advanced per-context bump offset
+    ));                                                                         // store the advanced per-context bump offset
     emitter.instruction("add x0, x14, #16");                                    // return user pointer = header + 16
     emitter.instruction("mov x10, x14");                                        // reuse the common allocation-accounting path with the new block header pointer
     emitter.instruction("b __rt_heap_alloc_count");                             // count alloc/live/peak stats and return
 
     // -- fatal error: heap memory exhausted --
+    // Cross-helper callers use the shared entry; allocator conditionals stay local.
+    emitter.label_shared("__rt_heap_allocation_failed");
     emitter.label("__rt_heap_exhausted");
     if emitter.cdylib_boundary {
         crate::codegen_support::abi::emit_symbol_address(
@@ -323,6 +333,14 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_heap_alloc_start");                           // keep the original request when it already satisfies the minimum payload size
     emitter.instruction("mov rax, 8");                                          // round tiny allocations up so free blocks can still carry a next pointer
     emitter.label("__rt_heap_alloc_start");
+    // -- keep every payload 8-byte aligned --
+    // The bump path adds the payload size and the 16-byte header straight onto the offset, so a
+    // request that is not a multiple of 8 — a persisted string of any odd length — misaligns
+    // EVERY block carved after it. Generated code reads those with plain word loads and never
+    // notices, but the eval interpreter dereferences the same blocks as `*mut RuntimeCell` and
+    // aborts on the alignment check.
+    emitter.instruction("add rax, 7");                                          // round the payload up to the next 8-byte boundary
+    emitter.instruction("and rax, -8");                                         // clear the low bits so the following block stays aligned
     emitter.instruction("mov r10d, 0xffffffff");                                // materialize u32::MAX with zero-extension to a 64-bit comparison operand
     emitter.instruction("cmp rax, r10");                                        // verify the request fits the 32-bit block-size header
     emitter.instruction("ja __rt_heap_alloc_size_overflow");                    // reject before a narrowing metadata store can truncate the size
@@ -521,6 +539,8 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the shared allocation-accounting path for bumped blocks
 
     // -- fatal error: heap memory exhausted --
+    // Keep the same non-returning recovery entry on every target.
+    emitter.label_shared("__rt_heap_allocation_failed");
     emitter.label("__rt_heap_exhausted");
     if emitter.cdylib_boundary {
         crate::codegen_support::abi::emit_symbol_address(
@@ -561,7 +581,33 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
+
+    /// Cross-helper allocation failure has an unconditional shared entry on every target.
+    #[test]
+    fn heap_allocation_failure_shared_entry_keeps_local_branches() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            emitter.dead_strip = true;
+            emit_heap_alloc(&mut emitter);
+            let internal = emitter.take_internal_labels();
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_heap_allocation_failed:\n__rt_heap_exhausted:\n"));
+            assert!(!internal.contains("__rt_heap_allocation_failed"));
+            if target.platform == Platform::MacOS {
+                assert!(internal.contains("__rt_heap_exhausted"));
+                assert!(asm.contains(".alt_entry __rt_heap_allocation_failed\n"));
+            }
+            assert!(asm.contains(crate::codegen_support::cdylib::BOUNDARY_STATUS));
+            assert!(asm.contains("__rt_throw_current"));
+        }
+    }
 
     /// Verifies the AArch64 allocator rejects payload sizes that cannot be
     /// represented by its 32-bit block-size header before any metadata write.

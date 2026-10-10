@@ -1,16 +1,16 @@
 ---
-title: "easter_days() — internals"
+title: "easter_days() - internals"
 description: "Compiler internals for easter_days(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 217
+  order: 218
 ---
 
-## `easter_days()` — internals
+## `easter_days()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L716) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:788](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L788) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

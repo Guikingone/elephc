@@ -161,8 +161,9 @@ pub(in crate::interpreter) fn eval_builtin_xml_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_xml_require_bridge(name, context, values)?;
-    let evaluated = eval_call_arg_values(args, context, scope, values)?;
-    eval_xml_forward_evaluated(name, evaluated, context, values)
+    with_eval_call_arguments(args, context, scope, values, |evaluated, context, _, values| {
+        eval_xml_forward_evaluated(name, evaluated, context, values)
+    })
 }
 
 /// Evaluates positional expression hooks when registry dispatch is invoked directly; the
@@ -174,17 +175,8 @@ pub(in crate::interpreter) fn eval_builtin_xml_expr_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_xml_require_bridge(name, context, values)?;
-    let mut evaluated = Vec::with_capacity(args.len());
-    for arg in args {
-        let (value, ref_target) = eval_call_arg_value(arg, context, scope, values)?;
-        evaluated.push(EvaluatedCallArg {
-            name: None,
-            value,
-            ref_target,
-        });
-    }
-    eval_xml_forward_evaluated(name, evaluated, context, values)
+    let args = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    eval_builtin_xml_call(name, &args, context, scope, values)
 }
 
 /// Evaluates an already-bound callable xml invocation by value.
@@ -255,47 +247,12 @@ fn eval_xml_parser_argument(
     if values.type_tag(parser)? == EVAL_TAG_OBJECT && values.object_is_a(parser, "XMLParser", false)? {
         return Ok(parser);
     }
-    let given = eval_xml_given_type_name(parser, context, values)?;
+    let given = eval_given_type_name(parser, context, values)?;
     eval_throw_type_error(
         &format!("{function}(): Argument #1 ($parser) must be of type XMLParser, {given} given"),
         context,
         values,
     )
-}
-
-/// Names a value the way PHP's argument `TypeError` does (`zend_zval_value_name()`):
-/// `null`, `true` / `false`, the zend scalar names (`int`, `float`, `string`, `array`), a
-/// compiled closure's `Closure`, or an object's class — never `gettype()`'s `integer` /
-/// `double` / `boolean`. An eval-declared class is looked up in the dynamic-object registry
-/// first, since its backing runtime cell is a `stdClass`.
-fn eval_xml_given_type_name(
-    value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<String, EvalStatus> {
-    let tag = values.type_tag(value)?;
-    if tag == EVAL_TAG_OBJECT {
-        let identity = values.object_identity(value)?;
-        if let Some(name) = context.dynamic_object_class_name(identity) {
-            return Ok(name);
-        }
-        let class_name = values.object_class_name(value)?;
-        let bytes = values.string_bytes(class_name)?;
-        return Ok(String::from_utf8_lossy(&bytes).into_owned());
-    }
-    let name = match tag {
-        EVAL_TAG_NULL => "null",
-        EVAL_TAG_BOOL if values.truthy(value)? => "true",
-        EVAL_TAG_BOOL => "false",
-        EVAL_TAG_INT => "int",
-        EVAL_TAG_FLOAT => "float",
-        EVAL_TAG_STRING => "string",
-        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
-        EVAL_TAG_RESOURCE => "resource",
-        EVAL_TAG_CALLABLE => "Closure",
-        _ => "mixed",
-    };
-    Ok(name.to_string())
 }
 
 /// Returns whether a handler value can only be resolved by this eval context — an eval
@@ -416,7 +373,16 @@ fn eval_xml_set_handler(
         }
         handlers.push(handler);
     }
-    values.method_call(parser, method, handlers)
+    eval_native_method_with_positional_values_unchecked_bridge_scope(
+        parser,
+        "XMLParser",
+        method,
+        handlers,
+        Some("XMLParser"),
+        None,
+        context,
+        values,
+    )
 }
 
 /// Runs `xml_parse_into_struct()` through the parser's `__elephc_parse_into_struct()` and
@@ -432,11 +398,38 @@ fn eval_xml_parse_into_struct(
     let values_target = required_evaluated_ref_arg(&bound, 2)?.ref_target.clone();
     let index_arg = optional_evaluated_ref_arg(&bound, 3);
     let with_index = values.bool_value(index_arg.is_some())?;
-    let result = values.method_call(parser, "__elephc_parse_into_struct", vec![data, with_index])?;
-    let struct_values = values.method_call(parser, "__elephc_struct_values", Vec::new())?;
+    let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
+        parser,
+        "XMLParser",
+        "__elephc_parse_into_struct",
+        vec![data, with_index],
+        Some("XMLParser"),
+        None,
+        context,
+        values,
+    )?;
+    let struct_values = eval_native_method_with_positional_values_unchecked_bridge_scope(
+        parser,
+        "XMLParser",
+        "__elephc_struct_values",
+        Vec::new(),
+        Some("XMLParser"),
+        None,
+        context,
+        values,
+    )?;
     eval_xml_write_output("values", 3, &values_target, struct_values, context, values)?;
     if let Some(index_arg) = index_arg {
-        let struct_index = values.method_call(parser, "__elephc_struct_index", Vec::new())?;
+        let struct_index = eval_native_method_with_positional_values_unchecked_bridge_scope(
+            parser,
+            "XMLParser",
+            "__elephc_struct_index",
+            Vec::new(),
+            Some("XMLParser"),
+            None,
+            context,
+            values,
+        )?;
         eval_xml_write_output("index", 4, &index_arg.ref_target.clone(), struct_index, context, values)?;
     }
     Ok(result)

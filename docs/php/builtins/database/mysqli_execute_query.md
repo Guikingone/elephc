@@ -1,8 +1,8 @@
 ---
 title: "mysqli_execute_query()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Prepares, binds, and executes a statement in one call."
 sidebar:
-  order: 113
+  order: 114
 ---
 
 ## mysqli_execute_query()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_execute_query(mixed $mysql, string $query, ?array $params = null): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Prepares, binds, and executes a statement in one call.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

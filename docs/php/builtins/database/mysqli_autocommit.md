@@ -1,8 +1,8 @@
 ---
 title: "mysqli_autocommit()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Turns automatic committing on or off."
 sidebar:
-  order: 99
+  order: 100
 ---
 
 ## mysqli_autocommit()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_autocommit(mixed $mysql, bool $enable): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Turns automatic committing on or off.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

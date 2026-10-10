@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Keeps form feed outside PHP's default trim mask in native calls, eval, and constant-folded pipes.
+#[test]
+fn test_trim_preserves_form_feed_with_default_mask() {
+    let body = r#"$subject = " \x0b\x0cA\x0c\x0b ";
+echo bin2hex(trim($subject)), "|", bin2hex(ltrim($subject)), "|", bin2hex(rtrim($subject));"#;
+    for eval in [false, true] {
+        let source = if eval { format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);") }
+            else { format!("<?php {body}") };
+        assert_eq!(compile_and_run(&source), "0c410c|0c410c0b20|200b0c410c", "eval={eval}");
+    }
+    let pipe = r#"<?php echo bin2hex("\x0cA\x0c" |> trim(...));"#;
+    assert_eq!(compile_and_run(pipe), "0c410c");
+}
+
 /// Verifies strtolower converts all alphabetic characters to lowercase.
 #[test]
 fn test_strtolower() {
@@ -844,5 +858,84 @@ var_dump(ucwords($subject));
         "string(17) \"Hello|World-Again\"\n\
 string(17) \"Hello|World-Again\"\n\
 string(17) \"Hello|world-again\"\n"
+    );
+}
+
+/// Verifies `(int)` over a numeric STRING caps at PHP_INT_MAX/MIN instead of wrapping.
+///
+/// PHP applies two different rules, and elephc was using the wrong one here. A float VALUE is
+/// reduced modulo 2^64 (`(int)1e19` is negative in PHP too, and `__rt_php_float_to_int` is right
+/// to do that); a numeric STRING is CAPPED. Routing the string through the wrapping helper made
+/// `(int)"1e19"` answer -8446744073709551616, and `(int)"1e308"` answer 0.
+///
+/// The `9007199254740993` case is the guard on the fix: 2^53+1 is exactly representable as an
+/// integer but not as a double, so a cap applied to the parsed double instead of to the
+/// integer-form parse would round it down by one.
+#[test]
+fn test_int_cast_of_a_numeric_string_caps_instead_of_wrapping() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = ["1e19", "-1e19", "1.8e19", "1e100", "1e308", "9e18", "9.9", "-9.9",
+          "9223372036854775807", "9223372036854775808", "-9223372036854775809",
+          "9007199254740993"];
+foreach ($cases as $s) { echo (int)$s, ","; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "9223372036854775807,-9223372036854775808,9223372036854775807,9223372036854775807,9223372036854775807,9000000000000000000,9,-9,9223372036854775807,9223372036854775807,-9223372036854775808,9007199254740993,"
+    );
+}
+
+/// Pins the same cap on the LITERAL inputs the constant folder sees, and on `intval()`.
+///
+/// The runtime siblings above feed the helper a variable, so they never reach `fold_intval` or
+/// the literal `(int)` fold. Those entry points parse with Rust's `i64::from_str`, which simply
+/// refuses `"1e19"` and a 310-digit run and leaves the call to the runtime; a future fold that
+/// accepted them by routing through `f64` would silently answer `-8446744073709551616` and `0`
+/// here while every existing test stayed green.
+#[test]
+fn test_int_cast_and_intval_of_literal_numeric_strings_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+echo (int)"1e19", ",", (int)"-1e19", ",";
+echo intval("1e19"), ",", intval("-1e19"), ",";
+echo (int)"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111", ",";
+echo intval("1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"), ",";
+echo (int)"1e309", ",", intval("1e309"), ",";
+echo intval("9223372036854775808"), ",", intval("-9223372036854775809"), ",";
+echo intval("9007199254740993"), ",", intval("42"), ",";
+"#,
+    );
+    assert_eq!(
+        out,
+        "9223372036854775807,-9223372036854775808,\
+9223372036854775807,-9223372036854775808,\
+0,0,\
+0,0,\
+9223372036854775807,-9223372036854775808,\
+9007199254740993,42,"
+    );
+}
+
+/// Verifies a numeric string whose value overflows the double casts to 0, as PHP does.
+///
+/// `strtoll` saturates a 310-digit integer to PHP_INT_MAX, so the integer-form path answered
+/// with that; PHP classifies such a string as a double, and INF casts to 0. The check has to
+/// come before the integer/float form choice, because this string is integer-form.
+#[test]
+fn test_int_cast_of_an_infinite_numeric_string_is_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$huge = str_repeat("1", 310);
+echo (int)$huge, ",", (int)("-" . $huge), ",", (int)("   " . $huge), ",";
+echo (int)"1e309", ",", (int)"-1e309", ",";
+$finite = str_repeat("1", 309);
+echo (int)$finite, ",";
+"#,
+    );
+    assert_eq!(
+        out,
+        "0,0,0,0,0,9223372036854775807,"
     );
 }

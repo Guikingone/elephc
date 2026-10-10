@@ -7,12 +7,16 @@
 //!
 //! Key details:
 //! - Array, hash, heap, GC, and Mixed helpers must preserve runtime layout, refcounts, and COW rules before mutating shared storage.
+//! - A hash entry that belongs to a PHP reference set carries runtime value tag 11 and a managed
+//!   reference cell in `value_lo`; `hash_entry_reference` owns that representation.
 
 mod array_chunk;
 mod array_chunk_refcounted;
 mod array_chunk_to_hash;
+mod call_argument_unpack;
 mod array_count_values;
 mod array_column;
+mod array_column_boxed;
 mod array_column_mixed;
 mod array_column_ref;
 mod array_column_str;
@@ -24,16 +28,16 @@ mod array_diff_refcounted;
 mod array_diff_key;
 mod array_edge_key;
 mod array_ensure_unique;
+mod array_take_boxed;
 mod array_fill;
 mod array_fill_assoc;
 mod array_fill_keys;
 mod array_fill_keys_refcounted;
 mod array_fill_refcounted;
 mod array_fill_str;
-mod array_filter;
-mod array_filter_refcounted;
-mod array_find_any_all;
+mod array_predicate_boxed;
 mod array_flip;
+mod array_flip_boxed;
 mod array_flip_string;
 mod array_free_deep;
 mod array_get_mixed_key;
@@ -47,9 +51,11 @@ mod array_is_list;
 mod array_key_exists;
 mod array_key_exists_mixed_key;
 mod array_map;
+mod array_map_boxed;
 mod array_map_mixed;
 mod array_map_str;
 mod array_merge;
+mod array_merge_boxed;
 mod array_merge_into;
 mod array_merge_into_refcounted;
 mod array_merge_recursive;
@@ -59,6 +65,7 @@ mod array_new;
 mod array_pad;
 mod array_pad_refcounted;
 mod array_product;
+mod array_numeric_aggregate;
 mod array_push_int;
 mod array_push_refcounted;
 mod array_push_str;
@@ -72,10 +79,12 @@ mod random_u32;
 mod random_uniform;
 mod random_uniform64;
 mod array_reduce;
+mod array_reduce_boxed;
 mod array_reduce_str;
 mod array_replace;
 mod array_replace_recursive;
 mod array_reverse;
+mod array_reverse_boxed;
 mod array_reverse_refcounted;
 mod array_search;
 mod array_shift;
@@ -85,6 +94,7 @@ mod array_slice_to_hash;
 mod array_splice;
 mod array_splice_insert;
 mod array_splice_refcounted;
+mod array_slice_str;
 mod array_splice_str;
 mod array_strict_eq;
 mod array_sum;
@@ -98,6 +108,7 @@ mod array_udiff_uintersect;
 mod array_union;
 mod array_unshift;
 mod array_walk;
+mod array_walk_boxed;
 mod array_walk_recursive;
 mod asort;
 mod assoc_diff_intersect;
@@ -106,30 +117,44 @@ mod decref_array;
 mod decref_hash;
 mod decref_mixed;
 mod decref_object;
+mod eval_array_references;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
+mod gc_control;
+mod gc_destructors;
+mod gc_exceptions;
+mod gc_eval_object_children;
 mod gc_mark_reachable;
 mod gc_note_child_ref;
 mod hash_count;
 mod hash_append;
+mod hash_append_error;
+mod hash_next_index;
 mod hash_clone_shallow;
+mod hash_chunk;
 mod hash_fnv1a;
 mod hash_free_deep;
 mod hash_get;
 mod hash_grow;
+pub(crate) mod hash_layout;
+mod hash_pin;
+mod hash_write_guard;
 mod hash_array_union;
 mod hash_key_eq;
 mod hash_key_hash;
 mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
+mod hash_entry_reference;
 mod hash_flip;
+mod hash_slice;
 mod hash_insert_owned;
 mod hash_map;
 mod hash_iter;
 mod hash_new;
 mod hash_set;
 mod hash_key_compare;
+mod key_compare_flags;
 mod hash_sort;
 mod hash_spread;
 mod hash_sum_mixed;
@@ -146,16 +171,20 @@ mod heap_free;
 mod in_array_mixed_int;
 mod min_max_container;
 mod natsort;
+
+pub(super) mod deep_cleanup;
 mod object_free_deep;
 mod range;
 mod incref;
 mod foreach_non_iterable_warning;
+mod float_key_to_int;
 mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
 mod mixed_cast_array;
 mod mixed_clone;
+mod mixed_reference;
 mod mixed_cast_bool;
 mod mixed_cast_float;
 mod mixed_cast_int;
@@ -171,6 +200,7 @@ mod int_checked_binops;
 mod int_pow_checked;
 mod mixed_numeric_pow;
 mod mixed_strict_eq;
+mod in_array_boxed;
 mod mixed_unbox;
 mod mixed_write_stdout;
 mod refcount;
@@ -189,8 +219,10 @@ pub use array_chunk::emit_array_chunk;
 pub use array_chunk_refcounted::emit_array_chunk_refcounted;
 /// Emit refcounted array chunk helper.
 pub use array_chunk_to_hash::emit_array_chunk_to_hash;
+pub use call_argument_unpack::emit_call_argument_unpack;
 /// Emit key-preserving array chunk helper (array_chunk preserve_keys).
 pub use array_column::emit_array_column;
+pub use array_column_boxed::emit_array_column_boxed;
 pub use array_count_values::{emit_array_count_values, ARRAY_COUNT_VALUES_SKIPPED_MESSAGES};
 /// Emit array column extraction helper.
 pub use array_column_mixed::emit_array_column_mixed;
@@ -231,18 +263,16 @@ pub use array_fill_keys_refcounted::emit_array_fill_keys_refcounted;
 pub use array_fill_refcounted::emit_array_fill_refcounted;
 /// Emit refcounted array fill helper.
 pub use array_fill_str::emit_array_fill_str;
-/// Emit string array fill helper.
-pub use array_filter::emit_array_filter;
-/// Emit array filter helper.
-pub use array_filter_refcounted::emit_array_filter_refcounted;
-/// Emit refcounted array filter helper.
-pub use array_find_any_all::emit_array_find_any_all;
+/// Emit storage-neutral array search and filter predicates.
+pub use array_predicate_boxed::emit_array_predicate_boxed;
 /// Emit array find/any/all predicate helper.
 pub use array_flip::emit_array_flip;
+pub use array_flip_boxed::emit_array_flip_boxed;
 /// Emit array flip helper.
 pub use array_flip_string::emit_array_flip_string;
 /// Emit string-only array flip helper.
 pub use hash_flip::{emit_hash_flip, ARRAY_FLIP_SKIPPED_MESSAGES};
+pub use hash_slice::emit_hash_slice;
 /// Emit associative (hash) array flip helper and its skipped-entry warning table.
 pub use hash_map::{emit_hash_map, HashMapResultKind};
 /// Emit associative (hash) array map helper and its callback result-kind selector.
@@ -265,12 +295,16 @@ pub use array_key_exists::emit_array_key_exists;
 pub use array_key_exists_mixed_key::emit_array_key_exists_mixed_key;
 /// Emit array map helper.
 pub use array_map::emit_array_map;
+pub use array_map_boxed::emit_array_map_boxed;
 /// Emit mixed-result array map helper.
 pub use array_map_mixed::emit_array_map_mixed;
 /// Emit string-returning array map helpers.
 pub use array_map_str::{emit_array_map_str, emit_array_map_str_owned};
 /// Emit array merge helper.
 pub use array_merge::emit_array_merge;
+/// Emits key-preserving merges of borrowed packed or associative PHP arrays.
+pub use array_merge_boxed::emit_array_merge_boxed;
+pub use array_take_boxed::emit_array_take_boxed;
 /// Emit array merge-into helper.
 pub use array_merge_into::emit_array_merge_into;
 pub use array_merge_into_refcounted::emit_array_merge_into_refcounted;
@@ -288,6 +322,7 @@ pub use array_pad::emit_array_pad;
 pub use array_pad_refcounted::emit_array_pad_refcounted;
 /// Emit refcounted array pad helper.
 pub use array_product::emit_array_product;
+pub use array_numeric_aggregate::{emit_array_numeric_aggregate, ARRAY_AGGREGATE_MESSAGES};
 /// Emit array product helper.
 pub use array_push_int::emit_array_push_int;
 /// Emit integer-optimized array push helper.
@@ -314,6 +349,7 @@ pub use random_uniform::emit_random_uniform;
 pub use random_uniform64::{emit_random_u64, emit_random_uniform64};
 /// Emit uniform random integer helper.
 pub use array_reduce::emit_array_reduce;
+pub use array_reduce_boxed::emit_array_reduce_boxed;
 /// Emit string-array reduce helper.
 pub use array_reduce_str::emit_array_reduce_str;
 /// Emit array reduce helper.
@@ -322,6 +358,8 @@ pub use array_replace::emit_array_replace;
 pub use array_replace_recursive::emit_array_replace_recursive;
 /// Emit recursive array replace helper.
 pub use array_reverse::emit_array_reverse;
+/// Emit reversal for a borrowed boxed PHP array with runtime key preservation.
+pub use array_reverse_boxed::emit_array_reverse_boxed;
 /// Emit array reverse helper.
 pub use array_reverse_refcounted::emit_array_reverse_refcounted;
 /// Emit refcounted array reverse helper.
@@ -342,6 +380,7 @@ pub use array_splice_insert::{
 };
 /// Emit array splice helper.
 pub use array_splice_refcounted::emit_array_splice_refcounted;
+pub use array_slice_str::emit_array_slice_str;
 pub use array_splice_str::{emit_array_splice_insert_str, emit_array_splice_str};
 /// Emit deep array strict-equality (`===`) helper.
 pub use array_strict_eq::emit_array_strict_eq;
@@ -368,7 +407,9 @@ pub use array_union::emit_array_union;
 pub use array_unshift::emit_array_unshift;
 /// Emit array unshift (prepend) helper.
 pub use array_walk::emit_array_walk;
-/// Emit array walk helper.
+/// Emit boxed array walk and recursive walk helper.
+pub use array_walk_boxed::emit_array_walk_boxed;
+/// Emit recursive array walk helper.
 pub use array_walk_recursive::emit_array_walk_recursive;
 /// Emit recursive array walk helper.
 pub use asort::emit_asort;
@@ -385,8 +426,16 @@ pub use hash_append::emit_hash_append;
 /// Emit hash append helper.
 pub use hash_clone_shallow::emit_hash_clone_shallow;
 /// Emit shallow hash clone helper.
+pub use hash_chunk::emit_hash_chunk;
+/// Emit the associative array_chunk() helper.
 pub use gc_collect_cycles::emit_gc_collect_cycles;
 /// Emit garbage collection cycle collector.
+pub use gc_control::emit_gc_control;
+/// Emits pinned destructor snapshots for both cycle collectors.
+pub use gc_destructors::emit_gc_destructors;
+/// Emits eval-owned object GC edges and final-release dispatch.
+pub use gc_eval_object_children::emit_gc_eval_object_children;
+/// Emit garbage collection control and status helpers.
 pub use gc_mark_reachable::emit_gc_mark_reachable;
 /// Emit GC mark reachable helper.
 pub use gc_note_child_ref::emit_gc_note_child_ref;
@@ -398,6 +447,8 @@ pub use hash_free_deep::emit_hash_free_deep;
 pub use hash_get::emit_hash_get;
 /// Emit hash get helper.
 pub use hash_grow::emit_hash_grow;
+pub use hash_pin::emit_hash_pin;
+pub use hash_write_guard::emit_hash_write_guards;
 /// Emit hash grow helper.
 pub use hash_array_union::emit_hash_array_union;
 /// Emit hash array union helper.
@@ -470,6 +521,7 @@ pub use mixed_abs::emit_mixed_abs;
 pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.
 pub use mixed_clone::emit_mixed_clone;
+pub use mixed_reference::emit_mixed_reference;
 /// Emit Mixed from value conversion helper.
 pub use mixed_from_value::emit_mixed_from_value;
 /// Emit Mixed instanceof check helper.
@@ -496,6 +548,7 @@ pub use int_pow_checked::emit_int_pow_checked;
 pub use mixed_numeric_pow::emit_mixed_numeric_pow;
 /// Emit checked integer add/sub/mul helpers with overflow-to-float promotion.
 pub use mixed_strict_eq::emit_mixed_strict_eq;
+pub use in_array_boxed::emit_in_array_boxed;
 /// Emit Mixed strict equality check helper.
 pub use mixed_unbox::emit_mixed_unbox;
 /// Emit Mixed unbox helper.
@@ -514,6 +567,7 @@ pub use sort_int::emit_sort_int;
 pub use sort_str::emit_sort_str;
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
+pub use float_key_to_int::emit_float_key_to_int;
 /// Emit user-defined sort helper.
 pub use php_compare_slots::emit_php_compare_slots;
 pub use usort::emit_usort;

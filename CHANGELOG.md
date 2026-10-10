@@ -5,6 +5,50 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.2] - 2026-10-08
+
+- Added compile-time generics for functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables, and PHPDoc template support; `--strict-php` accepts PHPDoc templates and rejects native generic syntax.
+- Added a runtime OPcache script cache for dynamic `include` and `require` through `eval()`, with optional persistent file caching, timestamp revalidation, admission limits, blacklists, preloading, live statistics, and API restrictions; ordinary compiled code remains ahead of time and no tracing JIT is provided.
+- Improved scalar code generation by promoting eligible `int`, `bool`, and `float` locals into SSA values across branches and loops, and refining effects for resolved static calls.
+- Added EIR integer range and induction-variable analysis to remove proven-safe overflow checks and simplify boxed numeric values while preserving PHP overflow-to-float behavior.
+- Added project INI directives in the `[ini]` table of `elephc.toml`, using the same settings as `--ini` and allowing command-line overrides.
+- Fixed sparse array writes, typed-to-mixed array argument ownership, bare-array value builtins, mapped result types, `array_map(null, ...)`, associative filtering and sorting, internal-pointer values, and callable string-transform leaks.
+- Fixed ownership of callable and reference entries in associative `array_chunk()` results, bound closures on Linux x86_64, and strings stored in static properties.
+- Fixed crashes when reading untyped null properties from `get_object_vars()` or an object-to-array cast.
+- Fixed deeply nested compiler entry points, unreachable EIR continuations, reference-return callable metadata, and dynamic include/eval handling of templates, argument counts, scoped returns, and pending exceptions across `finally`.
+- Fixed constant propagation and control-flow handling across switch fallthrough, side-effecting case labels, and default blocks that appear before later cases.
+- Fixed descriptor wrapper placement to keep generated functions contiguous, avoiding AArch64 branch-range assembly failures and broken ELF function extents under `--debug-info`.
+- Fixed source identities for literal eval fragments so type and binding metadata cannot collide with equal coordinates in root or included files.
+- Fixed heap leaks when eval writes back replacements through native typed by-reference variadic parameters.
+- Fixed `implode()` and `join()` on nullable, mixed, and runtime-promoted arrays, preserving actual element layouts, catchable type errors, and safe integer formatting near the string scratch-buffer limit.
+- Fixed serialization and unserialization of PHP classes that forbid it, with catchable exceptions, and omitted uninitialized typed properties from serialized property counts.
+- Fixed `PDOException` subclass validation and reflected method ownership, isolated driver connection diagnostics per thread, and preserved SQLSRV constructor SQLSTATE and native error codes.
+- Fixed qualified predefined names, named `::class` constants in defaults and attribute keys, nested array spread types, interface reflection order, strict-PHP callable guards, runtime `boolval()` callables, and the exception class and messages for invalid mixed throws.
+- Fixed argument-unpack validation to reject positional entries after named entries within the same unpacked array.
+- Fixed `urlencode()` and `rawurlencode()` to leave ASCII digits unescaped.
+- Improved diagnostics for unparenthesized `instanceof` call targets, missing class-constant names, disabled `class_alias()` autoload, and conflicting include-variant signatures.
+
+## [0.27.1] - 2026-09-29
+- Added the full PHP 8.5.10 mbstring symbol surface to native compilation and `eval()`: all 65 functions and 9 constants through a shared bridge, with request-scoped INI and web state, managed Oniguruma-backed mbregex, MIME and mail handling, and by-reference `mb_convert_variables()` across nested arrays, object properties, and references on every supported target.
+- Added broader PHP compatibility across Core builtins and `eval()`, object casts, class constants, control-flow and declaration syntax, property defaults, arrays, IPv6, and filesystem APIs; also hardened compiler artifacts, archives, and web request handling.
+- Fixed compiler and runtime correctness across compilation and linking, inheritance and reflection, type inference, dynamic and by-reference calls, array mutation and ownership, nullable object-property inspection and serialization, numeric, string, and date/time parsing edge cases, curl, and supported-target behavior.
+
+## [0.27.0] - 2026-09-11
+- Added PHP's `pcntl` extension to native compilation and `eval()`: `pcntl_fork()`, child waits and status decoding, `pcntl_exec()`, priorities, Linux CPU affinity and namespaces, Darwin QoS, `posix_setpgid()` and `posix_setsid()`, plus PHP-compatible signal registration, dispatch, masks, alarms, async signals, siginfo and synchronous waits on macOS AArch64, Linux AArch64 and Linux x86_64. Elephc's `pcntl_daemon()` is available outside `--strict-php`; PCNTL is refused on iOS targets and in hosted `cdylib`/`staticlib` exports.
+- Added PHP's `xml` and `xmlwriter` extensions to native compilation and `eval()`: 22 `xml_*` functions with `XMLParser`, 42 `xmlwriter_*` functions with `XMLWriter` and 28 `XML_*` constants, on libxml2 2.15.3 from the managed native catalog. Run `elephc native add libxml2` once per project, or force the bridge with `--with-xml`; external DTD subsets and external parsed entities are never fetched.
+- Added a shared catalog of every PHP-visible symbol elephc ships — function, class-like and global constant — carrying the PHP module that owns it and the first PHP minor that ships it. The compiler and Magician derive their constant tables and class-name lists from it, and the compatibility page counts functions, classes and constants per module against a PHP 8.5.10 baseline with all 68 bundled extensions. Compiled function coverage moves from 515/2030 to 789/2169.
+- Added PHP 8 numeric-string arithmetic: `+ - * / % **` accept numeric and leading-numeric string operands and coerce them with `is_numeric_string` semantics, including integer spellings outside the 64-bit range becoming `float`. Relational comparison and spaceship still reject string operands.
+- Added the whole environment to `getenv()`: calling it with no argument answers `array<string, string>`, `getenv($name, true)` is accepted, and `$_ENV` and `$_SERVER` now carry the environment plus PHP's own CLI keys (`argv`, `argc`, `SCRIPT_NAME`, `REQUEST_TIME`, ...) instead of being seeded empty. Seeding stays pay-for-use, and `putenv()` reaches `getenv()` only, as in PHP. Reading an element of the nested `$_SERVER['argv']` runs into a pre-existing limitation on typed arrays held in a `mixed` value; read `$argv` directly.
+- Changed `elephc monitor --live` and `--attach` to work on Linux as well as macOS. `--live` asks the program it launched over a private channel established before the fork, and `--attach` reads a running process through ptrace with ELF symbolization, worker trees, per-window stop deadlines and PAC-stripped return addresses on AArch64. An `--attach` target built without symbols names `--keep-symbols`, and a kernel that forbids tracing names `yama/ptrace_scope`.
+- Added network telemetry to monitoring: operation counts and measured wait for `curl_exec()`, multi-handle transfers, `curl_multi_select()` and `curl_upkeep()`, with inclusive and exclusive attribution through nested calls, recursion and coroutines, automatic W3C `traceparent` propagation during active captures, and network metrics in exact tables, sampled summaries, HTML reports, Graphviz output, OTLP spans, Prometheus gauges and `network` / `network_wait_ms` performance assertions. Every bridge and bridge-backed runtime function now declares a reviewed monitoring policy, enforced in CI.
+- Added `sort()` and `rsort()` on indexed arrays whose elements are runtime-typed (`Array(Mixed)`), comparing scalars and `null` through PHP's comparison rules. Arrays containing nested arrays, objects, resources or boxed callables terminate with an explicit fatal error instead of being ordered incorrectly.
+- Fixed a per-iteration memory leak when the EIR inliner moved a callee's owning local stores into a caller loop: such call sites inside loops are no longer inlined, while calls outside loops remain eligible.
+- Fixed `putenv("NAME")` without `=` to remove the variable, as PHP does, instead of leaving it set.
+- Fixed `readline()` to strip the trailing newline and answer `false` at end of input instead of `""`, so an empty line is distinguishable from the end of them and `while (($line = readline()) !== false)` terminates.
+- Fixed `getenv()` inside `eval()` to preserve the value's bytes and answer `false` for a name that is not set.
+- Fixed Linux `--debug-info` source lookups by anchoring DWARF abbreviation and line-table offsets to the program's own compilation unit, so linked libc debug sections no longer redirect them.
+- Fixed PDO wait timing in remote-probe monitoring windows, which recorded database operations with zero driver wait.
+
 ## [0.26.6] - 2026-09-03
 - Added PHP's `curl` extension to native compilation and `eval()`: 35 functions, six classes, 689 constants, easy, multi and share handles, callbacks, streams, multipart uploads, and managed pinned native dependencies on every supported target.
 - Added `elephc monitor` for exact or sampled profiling of time, allocations, retained memory, waits, SQL, and calls, with selective instrumentation, live service capture, budgets, baselines, recommendations, timelines, and Speedscope, pprof, DOT, and HTML exports on macOS and Linux.
@@ -703,7 +747,10 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.26.6...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.2...HEAD
+[0.27.2]: https://github.com/illegalstudio/elephc/compare/v0.27.1...v0.27.2
+[0.27.1]: https://github.com/illegalstudio/elephc/compare/v0.27.0...v0.27.1
+[0.27.0]: https://github.com/illegalstudio/elephc/compare/v0.26.6...v0.27.0
 [0.26.6]: https://github.com/illegalstudio/elephc/compare/v0.26.5...v0.26.6
 [0.26.5]: https://github.com/illegalstudio/elephc/compare/v0.26.4...v0.26.5
 [0.26.4]: https://github.com/illegalstudio/elephc/compare/v0.26.3...v0.26.4

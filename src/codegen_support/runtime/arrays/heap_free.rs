@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
+//! - Enabled mbstring hooks retire native string identity leases before storage can be reused.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -27,9 +28,9 @@ use crate::codegen_support::platform::Arch;
 /// Input: `x0` = user pointer (as returned by `heap_alloc`)
 ///
 /// ABI: `x0` is callee-saved where needed; all other registers are scratch.
-pub fn emit_heap_free(emitter: &mut Emitter) {
+pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_heap_free_linux_x86_64(emitter);
+        emit_heap_free_linux_x86_64(emitter, eval_bridge, mbstring);
         return;
     }
 
@@ -50,7 +51,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x17, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // load the per-context heap offset
+    ));                                                                         // load the per-context heap offset
     emitter.instruction("add x17, x16, x17");                                   // compute the current heap end
     emitter.instruction("cmp x0, x17");                                         // is the candidate at or beyond the heap end?
     emitter.instruction("b.hs __rt_heap_free_done");                            // yes — ignore pointers outside the live heap
@@ -63,14 +64,25 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("b.hi __rt_heap_free_done");                            // yes — reject the invalid block before free-list insertion
 
     // -- return this block's PHP object handle to the pool before the storage goes --
-    // This is the SINGLE release chokepoint for object identity: every object dies
-    // by having its storage reclaimed here, whatever released it (refcount drop,
-    // deep free, cycle collection). The helper falls out after one load for the
-    // strings/arrays/hashes/descriptors that never held a handle, and it preserves
-    // every register, so only x30 has to be saved around the branch.
+    // Probe the authoritative side table inline. Most blocks are strings, arrays,
+    // hashes, or Mixed cells and have no handle, so they avoid a preserving helper call.
+    emitter.instruction("sub x9, x0, x16");                                     // derive this validated payload's heap-relative byte offset
+    emitter.instruction("lsr x9, x9, #4");                                      // convert the payload offset to its object-handle granule index
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_obj_handle_index");
+    emitter.instruction("ldr w9, [x10, x9, lsl #2]");                           // inspect the handle bound to this allocation granule
+    emitter.instruction("cbz w9, __rt_heap_free_object_handle_done");           // ordinary non-object allocations need no handle release
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address across the handle release
-    emitter.instruction("bl __rt_object_handle_release");                       // hand this block's PHP object handle back to the LIFO pool
+    emitter.instruction("bl __rt_object_handle_release");                       // hand this object's PHP handle back to the LIFO pool
     emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address
+    emitter.label("__rt_heap_free_object_handle_done");
+    if eval_bridge {
+        super::eval_array_references::emit_eval_array_reference_retirement(emitter);
+    }
+    if mbstring {
+        emitter.instruction("stp x0, x30, [sp, #-16]!");                        // preserve the freed pointer and caller return address across the metadata callback
+        emitter.instruction("bl __rt_mbstring_ini_forget");                     // retire the string identity before allocator reuse
+        emitter.instruction("ldp x0, x30, [sp], #16");                          // restore the frameless allocator's input and original return address
+    }
 
     // -- debug mode: validate the free list before mutating it --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
@@ -108,7 +120,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x14, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // x14 = per-context heap offset
+    ));                                                                         // x14 = per-context heap offset
     emitter.instruction("add x14, x15, x14");                                   // x14 = heap_buf + heap_off = heap end
 
     // -- check if this is the last bump-allocated block --
@@ -121,7 +133,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "str x14, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // shrink the per-context bump offset
+    ));                                                                         // shrink the per-context bump offset
     emitter.instruction("b __rt_heap_free_trim_tail");                          // trim any newly-exposed free tail blocks too
 
     // -- small non-tail blocks go through segregated bins first --
@@ -131,7 +143,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "add x10, x28, #{}",
         crate::codegen_support::runtime::ctx::CTX_HEAP_SMALL_BINS_OFFSET
-    )); // x10 = base of the per-context small-bin head array
+    ));                                                                         // x10 = base of the per-context small-bin head array
     emitter.instruction("mov x12, #0");                                         // default to the <=8-byte bin offset
     emitter.instruction("cmp x11, #8");                                         // does the freed payload fit in the smallest class?
     emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=8-byte bin offset
@@ -171,11 +183,13 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_free_post_validate");                      // finish through the common debug validation and free counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
+    emitter.label_shared("__rt_heap_free_insert_cached");
+    emitter.instruction("b __rt_heap_free_insert");                             // enter coalescing from gc_mem_caches through an unconditional cross-atom target
     emitter.label("__rt_heap_free_insert");
     emitter.instruction(&format!(
         "add x10, x28, #{}",
         crate::codegen_support::runtime::ctx::CTX_HEAP_FREE_LIST_OFFSET
-    )); // x10 = address of the per-context free-list head slot
+    ));                                                                         // x10 = address of the per-context free-list head slot
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current free block while scanning for insertion point
 
     emitter.label("__rt_heap_free_insert_loop");
@@ -217,7 +231,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "add x14, x28, #{}",
         crate::codegen_support::runtime::ctx::CTX_HEAP_FREE_LIST_OFFSET
-    )); // x14 = address of the per-context free-list head slot
+    ));                                                                         // x14 = address of the per-context free-list head slot
     emitter.instruction("cmp x10, x14");                                        // was the block inserted at the head of the list?
     emitter.instruction("b.eq __rt_heap_free_trim_tail");                       // yes — there is no previous block to merge with
     emitter.instruction("sub x14, x10, #16");                                   // x14 = previous free block header (prev_next_addr - 16)
@@ -237,13 +251,13 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x14, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // x14 = per-context heap offset
+    ));                                                                         // x14 = per-context heap offset
     crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x15");
     emitter.instruction("add x14, x15, x14");                                   // x14 = current heap end
     emitter.instruction(&format!(
         "add x10, x28, #{}",
         crate::codegen_support::runtime::ctx::CTX_HEAP_FREE_LIST_OFFSET
-    )); // x10 = address of the per-context free-list head slot
+    ));                                                                         // x10 = address of the per-context free-list head slot
     emitter.instruction("ldr x11, [x10]");                                      // x11 = first free block header
 
     emitter.label("__rt_heap_free_trim_tail_scan");
@@ -264,7 +278,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "str x12, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // shrink the per-context bump pointer to the reclaimed block start
+    ));                                                                         // shrink the per-context bump pointer to the reclaimed block start
     emitter.instruction("b __rt_heap_free_trim_tail");                          // keep trimming while more adjacent free blocks reach the tail
 
     // -- debug mode: validate the free list after mutation --
@@ -306,7 +320,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x10, [x28, #{}]",
         crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
-    )); // x10 = per-context heap offset
+    ));                                                                         // x10 = per-context heap offset
     emitter.instruction("add x10, x9, x10");                                    // x10 = heap_buf + heap_off = heap end
     emitter.instruction("cmp x0, x10");                                         // is pointer at or beyond heap end?
     emitter.instruction("b.hs __rt_heap_free_safe_skip");                       // yes — not a valid heap pointer, skip
@@ -340,7 +354,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 ///
 /// Input: `rax` = user pointer
 /// Output: `rax` preserved through the free path; all other scratch registers are clobbered.
-fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
+fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
     let double_free_msg = "Fatal error: heap debug detected double free\n";
 
     emitter.blank();
@@ -360,15 +374,15 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r11, [r10 + r11]");                                // compute the current live heap end from the base plus bump offset
     emitter.instruction("cmp rax, r11");                                        // does the candidate freed pointer lie at or beyond the live heap end?
     emitter.instruction("jae __rt_heap_free_debug_checked");                    // pointers outside the live heap window cannot participate in heap-debug double-free checks
-    emitter.instruction("sub rsp, 16");                                         // reserve one aligned stack slot to preserve the user pointer across the nested call
+    emitter.instruction("sub rsp, 24");                                         // preserve the pointer and align the nested call from frameless entry parity
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the user pointer across the free-list validator call
     emitter.instruction("call __rt_heap_debug_validate_free_list");             // verify the ordered free list and cached small bins before mutating them
     emitter.instruction("mov rax, QWORD PTR [rsp]");                            // restore the user pointer after the free-list validator call returns
-    emitter.instruction("add rsp, 16");                                         // release the temporary validator spill slot
+    emitter.instruction("add rsp, 24");                                         // release the validator spill and restore frameless entry parity
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the current heap kind word before deciding whether a zero refcount is stale or legitimately being freed
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word while isolating the ownership marker for the stale-free check
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker from the packed kind metadata
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // does this heap-range pointer still carry a live x86_64 heap marker?
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// does this heap-range pointer still carry a live x86_64 heap marker?
     emitter.instruction("je __rt_heap_free_debug_checked");                     // yes — a live marker means this is the first legitimate free path, even if refcount is already zero
     emitter.instruction("mov ecx, DWORD PTR [rax - 12]");                       // load the current live refcount before any x86_64 free-side mutations
     emitter.instruction("test ecx, ecx");                                       // does the header still look like a live heap block?
@@ -379,13 +393,31 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_heap_free_debug_checked");
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
 
     // -- return this block's PHP object handle to the pool before the storage goes --
-    // Single release chokepoint for object identity, matching the AArch64 path: the
-    // helper preserves every register including rax, so no spill is needed here.
-    emitter.instruction("call __rt_object_handle_release");                     // hand this block's PHP object handle back to the LIFO pool
+    // Probe the authoritative side table inline so ordinary non-object frees do not
+    // enter the preserving helper and push six scratch registers on every release.
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r9");
+    emitter.instruction("mov r10, rax");                                        // copy the validated payload before deriving its heap granule
+    emitter.instruction("sub r10, r9");                                         // convert the payload address to a heap-relative byte offset
+    emitter.instruction("shr r10, 4");                                          // convert the byte offset to its object-handle granule index
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_obj_handle_index");
+    emitter.instruction("cmp DWORD PTR [r9 + r10 * 4], 0");                     // inspect the handle bound to this allocation granule
+    emitter.instruction("je __rt_heap_free_object_handle_done");                // ordinary non-object allocations need no handle release
+    emitter.instruction("sub rsp, 8");                                          // align the nested handle-release call from frameless entry parity
+    emitter.instruction("call __rt_object_handle_release");                     // hand this object's PHP handle back to the LIFO pool
+    emitter.instruction("add rsp, 8");                                          // restore entry parity before the optional eval metadata callback
+    emitter.label("__rt_heap_free_object_handle_done");
+    if eval_bridge {
+        super::eval_array_references::emit_eval_array_reference_retirement(emitter);
+    }
+    if mbstring {
+        emitter.instruction("sub rsp, 8");                                      // align the identity-retirement call from the frameless entry
+        emitter.instruction("call __rt_mbstring_ini_forget");                   // retire the string identity before allocator reuse
+        emitter.instruction("add rsp, 8");                                      // restore the allocator's entry stack
+    }
 
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it
@@ -469,6 +501,8 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_heap_free_post_validate");                    // finish through the shared post-mutation validation and free-counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
+    emitter.label_shared("__rt_heap_free_insert_cached");
+    emitter.instruction("jmp __rt_heap_free_insert");                           // enter coalescing from gc_mem_caches through a cross-section relocation
     emitter.label("__rt_heap_free_insert");
     crate::codegen_support::runtime::ctx::emit_free_list_address(emitter, "r10"); // r10 = free-list head slot address
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the current free-list head while scanning for the insertion point
@@ -555,7 +589,9 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag after mutating free-list or cached-bin state
     emitter.instruction("test r8, r8");                                         // should the x86_64 runtime validate the updated free state now?
     emitter.instruction("jz __rt_heap_free_count");                             // skip the post-mutation validator when heap-debug mode is disabled
+    emitter.instruction("sub rsp, 8");                                          // align the post-mutation validator call from frameless entry parity
     emitter.instruction("call __rt_heap_debug_validate_free_list");             // verify the ordered free list and cached bins after insertion, coalescing, and trimming
+    emitter.instruction("add rsp, 8");                                          // restore entry parity before allocator accounting and return
 
     // -- increment gc_frees counter --
     emitter.label("__rt_heap_free_count");
@@ -603,7 +639,7 @@ mod tests {
     fn ctx_mode_heap_free_recycles_state_through_ctx_register() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
         emitter.ctx_register = true;
-        emit_heap_free(&mut emitter);
+        emit_heap_free(&mut emitter, false, false);
         let asm = emitter.output();
 
         let heap_off = format!("ldr x17, [x28, #{}]", crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET);
@@ -630,6 +666,34 @@ mod tests {
                     && !asm.contains(&format!("adrp x17, {legacy}")),
                 "ctx-mode free path must not materialize legacy symbol {legacy}:\n{asm}"
             );
+        }
+    }
+
+    /// Non-object frees bypass the preserving handle helper through its authoritative side table.
+    #[test]
+    fn heap_free_probes_object_handles_before_calling_the_release_helper() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_heap_free(&mut emitter, false, false);
+            let output = emitter.output();
+            let probe = output.find("_obj_handle_index").unwrap();
+            let skip = output.find("__rt_heap_free_object_handle_done").unwrap();
+            let call = output.find("__rt_object_handle_release").unwrap();
+            assert!(probe < skip && skip < call, "{name}");
+        }
+    }
+
+    /// The optional metadata callback must not replace the frameless AArch64 return address.
+    #[test]
+    fn heap_free_preserves_aarch64_linkage_across_mbstring_retirement() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_heap_free(&mut emitter, false, true);
+            let output = emitter.output();
+            assert!(output.contains(
+                "stp x0, x30, [sp, #-16]!\n    bl __rt_mbstring_ini_forget\n    ldp x0, x30, [sp], #16"
+            ), "{name}");
         }
     }
 }

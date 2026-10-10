@@ -11,6 +11,9 @@
 pub mod autoload;
 /// Structured cooperative scheduler prelude (`Elephc\Async`).
 pub mod async_prelude;
+/// Local Cargo source inputs shared by bridge discovery and integration-test builders.
+#[doc(hidden)]
+pub mod bridge_sources;
 /// Builtin catalog and signature metadata snapshots.
 pub mod builtin_metadata;
 /// Single-source builtin registry: catalog, signatures, type-check, and lowering dispatch.
@@ -20,6 +23,8 @@ pub mod codegen;
 /// Shared target/runtime support used by the EIR backend.
 #[doc(hidden)]
 pub mod codegen_support;
+/// The stack depth a compiler run needs, and the wrapper that supplies it.
+pub mod compiler_stack;
 /// Conditional compilation directives.
 pub mod conditional;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
@@ -30,7 +35,11 @@ mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
 /// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
+/// PHPStan/Psalm generic annotations read out of doc comments.
+pub mod docblock;
 pub mod func_args;
+/// Monomorphization support for generic function declarations.
+pub mod generics;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 mod progress;
@@ -67,6 +76,9 @@ pub(crate) mod numeric_string;
 pub mod opcache;
 /// `opcache_get_configuration()` standard-library prelude injection.
 pub mod opcache_prelude;
+pub mod shared_ini_prelude;
+/// PHP `(object)` cast standard-library prelude injection.
+pub mod object_cast_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.

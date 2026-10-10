@@ -10,7 +10,7 @@
 use super::*;
 
 /// Public property metadata for a runtime eval class.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalClassProperty {
     name: String,
     trait_origin: Option<String>,
@@ -28,11 +28,20 @@ pub struct EvalClassProperty {
     has_set_hook: bool,
     requires_get_hook: bool,
     requires_set_hook: bool,
+    /// Whether an abstract `get` contract is declared `&get`. A concrete `&get` hook carries the
+    /// flag on its generated accessor method instead.
+    get_contract_returns_by_ref: bool,
     is_virtual: bool,
     default: Option<EvalExpr>,
 }
 
 impl EvalClassProperty {
+    /// Recognizes a generated accessor belonging to this property's actual hook declarations.
+    pub(crate) fn matches_hook_method(&self, method: &str) -> bool {
+        (self.has_get_hook && method.eq_ignore_ascii_case(&format!("__propget_{}", self.name)))
+            || (self.has_set_hook && method.eq_ignore_ascii_case(&format!("__propset_{}", self.name)))
+    }
+
     /// Creates a public eval class property with an optional initializer.
     pub fn new(name: impl Into<String>, default: Option<EvalExpr>) -> Self {
         Self::with_visibility(name, EvalVisibility::Public, default)
@@ -101,6 +110,7 @@ impl EvalClassProperty {
             has_set_hook: false,
             requires_get_hook: false,
             requires_set_hook: false,
+            get_contract_returns_by_ref: false,
             is_virtual: false,
             default,
         }
@@ -130,6 +140,13 @@ impl EvalClassProperty {
         self.requires_get_hook = requires_get_hook;
         self.requires_set_hook = requires_set_hook;
         self.is_virtual = true;
+        self
+    }
+
+    /// Returns a copy of this property recording whether its abstract `get` contract is declared
+    /// `&get`, which `ReflectionMethod::returnsReference()` reports for the contract's hook.
+    pub const fn with_get_contract_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
+        self.get_contract_returns_by_ref = returns_by_ref;
         self
     }
 
@@ -264,6 +281,11 @@ impl EvalClassProperty {
         self.requires_set_hook
     }
 
+    /// Returns whether this abstract property's `get` contract is declared `&get`.
+    pub const fn get_contract_returns_by_ref(&self) -> bool {
+        self.get_contract_returns_by_ref
+    }
+
     /// Returns whether this property is virtual instead of backed by object storage.
     pub const fn is_virtual(&self) -> bool {
         self.is_virtual
@@ -276,7 +298,7 @@ impl EvalClassProperty {
 }
 
 /// PHP visibility for eval-declared object members.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalVisibility {
     Public,
     Protected,

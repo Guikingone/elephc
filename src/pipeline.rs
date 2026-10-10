@@ -31,9 +31,12 @@ use crate::{
     var_export_prelude, web_prelude,
 };
 
+mod artifact_io;
+pub(crate) use artifact_io::write_artifact;
 mod backend;
 mod eir_output;
 mod frontend;
+mod mbstring_configuration;
 mod output;
 
 use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
@@ -84,14 +87,45 @@ pub(crate) fn compile(config: CliConfig) {
     // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
+    codegen::set_ini_overrides(ini_overrides.clone());
     crate::superglobals::set_compiling_for_web(web);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
     let output_paths = output_paths(filename, target, emit);
+    // BEFORE ANY WORK RUNS. Every generated path is derived from the source filename, so a
+    // tree someone else controls chooses them; refusing a symlink destination up front is
+    // the only way to cover the ones an external assembler or linker writes, which this
+    // process never opens itself (issue #888).
+    let artifact_plan = artifact_io::ArtifactPlan::for_run(
+        check_only,
+        emit_ir,
+        emit_asm,
+        emit_source_map,
+        with_crates.contains("probe"),
+    );
+    if let Err(error) = artifact_io::reject_unsafe_destinations(&output_paths, &artifact_plan) {
+        eprintln!("error: {error}");
+        process::exit(1);
+    }
     let mut timings = CompileTimings::new(emit_timings);
 
     let parsed = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
+
+    // `opcache.preload` becomes an implicit `require_once` at the very top of the entry program,
+    // which is what reference PHP's startup preload pass IS for a compiler: the resolver inlines
+    // the target below, so its declarations are baked into the binary and its top-level code runs
+    // first. Injected BEFORE the autoload registry so a preload file that registers an autoloader
+    // or declares an autoloadable class is seen by both, and before `resolve` so its transitive
+    // requires join the OPcache script manifest. An unresolvable path is refused in here, at the
+    // compile-time position closest to reference's startup fatal.
+    let parsed = opcache_prelude::inject_preload_require(
+        parsed,
+        php_version,
+        web,
+        &ini_overrides,
+        filename,
+    );
 
     crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
@@ -115,7 +149,14 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
-    let ast = autoload::collect_aliases(ast);
+    let ast = match autoload::collect_aliases(ast) {
+        Ok(ast) => ast,
+        Err(error) => {
+            crate::progress::clear();
+            errors::report(&error);
+            process::exit(1);
+        }
+    };
     timings.record_since("resolve", phase_started);
 
     // Report how the PHP profile is observable in THIS program, while `ast` is still the
@@ -298,6 +339,13 @@ pub(crate) fn compile(config: CliConfig) {
     // manifest deliberately drops entries it cannot stat, so its first element is not a
     // dependable stand-in. See `opcache_prelude::restrict_api_denies`.
     let opcache_entry_path = opcache_prelude::canonical_entry_path(filename);
+    // The SAME verdict for the eval bridge: an OPcache call hidden in a runtime-provided
+    // `eval()` source gets no native body, so the interpreter must refuse it itself.
+    codegen::set_opcache_api_restricted(opcache_prelude::restrict_api_denies(
+        opcache_entry_path.as_deref(),
+        php_version.version_id(),
+        &ini_overrides,
+    ));
     // `opcache.preload` is a COMPILE-TIME decision, resolved here for the same reason
     // `restrict_api` is: reference PHP preloads during STARTUP, before the script runs, and
     // elephc's INI is fixed when the binary is built. The three outcomes mirror reference exactly
@@ -305,11 +353,11 @@ pub(crate) fn compile(config: CliConfig) {
     // - unresolvable path with the cache enabled → HARD COMPILE ERROR, the AOT equivalent of
     //   reference's startup fatal. It fires whether or not the program calls an OPcache function,
     //   because reference's fatal does not depend on that either.
-    // - resolvable but outside the compile-time script manifest → a WARNING only: preloading a file
-    //   this program never includes is a legitimate configuration and must not break a build. That
-    //   arm depends on the COMPLETE manifest, so it is evaluated after `autoload::run` below; only
-    //   the manifest-independent compile ERROR is decided here, matching reference PHP, which
-    //   fatals at startup regardless of what the script does.
+    // - resolvable → the file is preloaded. `inject_preload_require` makes it part of this binary,
+    //   so it is always a member of the script manifest and there is no out-of-manifest diagnostic.
+    //   Only the manifest-independent compile ERROR is decided here, matching reference PHP, which
+    //   fatals at startup regardless of what the script does; the verdict is taken again against
+    //   the COMPLETE manifest after `autoload::run`, for `preload_statistics`.
     // - empty directive, or a disabled cache → nothing at all happens (reference does not preload
     //   when the accelerator is off, and does not even validate the path).
     let opcache_preload =
@@ -401,6 +449,24 @@ pub(crate) fn compile(config: CliConfig) {
     );
     timings.record_since("xml-prelude", phase_started);
 
+    // The resolved `opcache.preload` path, so the web prelude can find that file's guard by
+    // label and lift it out of the per-request handler. Recomputed rather than threaded down
+    // from `inject_preload_require`: the verdict is a pure function of the directives and the
+    // entry, and passing it through six intervening phases to save one call would be worse.
+    let preload_startup_path = if web {
+        match opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &[]) {
+            opcache_prelude::PreloadVerdict::Preloading { resolved, .. }
+                if opcache_prelude::canonical_entry_path(filename)
+                    .is_none_or(|entry| entry != resolved) =>
+            {
+                Some(std::path::PathBuf::from(resolved))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(
@@ -409,6 +475,7 @@ pub(crate) fn compile(config: CliConfig) {
         php_version,
         &ini_overrides,
         &mut prelude_inventory,
+        preload_startup_path.as_deref(),
     );
     timings.record_since("web-prelude", phase_started);
 
@@ -459,6 +526,28 @@ pub(crate) fn compile(config: CliConfig) {
         };
     timings.record_since("autoload-run", phase_started);
 
+    // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
+    // spells a `(object)` cast, so other binaries carry nothing.
+    //
+    // Runs AFTER `autoload::run`, unlike every prelude above, because the cast is detected
+    // syntactically and an autoloaded class file is not part of the AST until here: a program
+    // whose only `(object)` cast lives in a PSR-4 class saw no injection, and the call
+    // `ir_lower` synthesizes for the cast then failed codegen with
+    // `unsupported EIR backend feature: language construct __elephc_cast_object`. The
+    // declarations are name-resolved on the way in, exactly as `autoload::run` resolves the
+    // files it splices, because the position is past the pipeline's own name-resolution pass.
+    crate::progress::phase("object-cast-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("object-cast-prelude", phase_started);
+
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
     // `mixed ...$__elephc_func_args` parameter, so the surplus positional arguments PHP
@@ -491,16 +580,15 @@ pub(crate) fn compile(config: CliConfig) {
         &opcache_included_files,
         &opcache_autoloaded_files,
     );
-    // Re-decide `opcache.preload` against the complete manifest. Only the `in_manifest` arm can
-    // differ from the verdict taken above (the directive, the SAPI gate and the path resolution
-    // are all manifest-independent), so this second call exists purely to emit the
-    // outside-the-manifest WARNING against the truthful set — reporting it against the
-    // placeholder manifest would warn about files that are, in fact, compiled in.
+    // The manifest's scripts hold hash slots, so the runtime tier gets what they leave.
+    codegen::set_opcache_manifest_len(opcache_manifest.len());
+    // Re-decide `opcache.preload` against the COMPLETE manifest, which is the set
+    // `preload_statistics` reports. Only the `in_manifest` arm can differ from the verdict taken
+    // above (the directive, the SAPI gate and the path resolution are all manifest-independent).
+    // There is no out-of-manifest diagnostic to emit any more: `inject_preload_require` has
+    // already made the preload file part of this binary, so it is always a manifest member.
     let opcache_preload =
         opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &opcache_manifest);
-    if let Some(message) = opcache_preload.compile_warning() {
-        errors::report_warning(&errors::CompileWarning::new(Span::new(0, 0), &message));
-    }
     let opcache_preload_statistics = opcache_prelude::preload_statistics(
         &opcache_preload,
         &opcache_manifest,
@@ -526,8 +614,12 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
     let check_options = types::CheckOptions { strict_locals };
-    let mut check_result = match types::check_with_target_and_options(&ast, target, check_options) {
-        Ok(result) => result,
+    // Type checking runs to a generic-instantiation fixpoint, so every reachable template has
+    // become an ordinary monomorphic declaration before anything downstream sees the program.
+    let (ast, mut check_result) = match crate::generics::monomorphize(ast, |program, bounds| {
+        types::check_with_target_and_options(program, target, check_options, bounds)
+    }) {
+        Ok(pair) => pair,
         Err(e) => {
             crate::progress::clear();
             errors::report(&e);
@@ -588,7 +680,9 @@ pub(crate) fn compile(config: CliConfig) {
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which
     // names those are and refuses to record a fact for them.
-    let ast = post_typecheck_optimizer.propagate(ast, check_result.mixed_storage_local_names());
+    let ast = post_typecheck_optimizer.propagate(
+        ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone(),
+    );
     timings.record_since("opt-prop", phase_started);
 
     crate::progress::phase("opt-post");
@@ -615,7 +709,24 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("decl-reach");
     let phase_started = Instant::now();
-    let exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
+    let mut exported_function_names: HashSet<String> =
+        exported_functions.keys().cloned().collect();
+    // The hoisted `opcache.preload` body is a reachability ROOT. Nothing in PHP calls it —
+    // the `--web` entry stub does, in assembly, before the request loop — so the declaration
+    // pruner sees an unreferenced function and removes it, taking the preload's side effects
+    // with it. That failure is silent: the responses come out clean, which is what the hoist
+    // was for, and the preload simply never runs.
+    if preload_startup_path.is_some() {
+        exported_function_names.insert(crate::web_prelude::PRELOAD_STARTUP_FN.to_string());
+    }
+    // A generic instantiation is reachable by construction — it exists only because a call
+    // site asked for it — but no call site NAMES it: the source still says `identity(5)` and
+    // lowering is what resolves that to `identity<int>`. Without this the pruner drops every
+    // instantiation as unreferenced and lowering finds nothing to call.
+    exported_function_names.extend(crate::generics::instantiation_roots(
+        &check_result.requested_instantiations,
+    ));
+    let exported_function_names = exported_function_names;
     let ast = optimize::prune_unreachable_declarations(
         ast,
         &mut check_result,
@@ -642,6 +753,7 @@ pub(crate) fn compile(config: CliConfig) {
             web,
             ir_opt,
             &exported_functions,
+            &opcache_manifest,
             &mut timings,
         );
         return;
@@ -656,12 +768,23 @@ pub(crate) fn compile(config: CliConfig) {
         web,
     ) {
         Ok(module) => module,
+        Err(ir_lower::LoweringError::Unsupported(error)) => {
+            // A refused shape is an ordinary source-level diagnostic, so it is reported with the
+            // same file/line formatting as a checker error instead of a bare backend message.
+            crate::progress::clear();
+            errors::report(&error.with_file(filename.to_string()));
+            process::exit(1);
+        }
         Err(err) => {
             crate::progress::clear();
             eprintln!("EIR lowering error: {}", err);
             process::exit(1);
         }
     };
+    ir_module.included_files = opcache_manifest
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
     timings.record_since("ir-lower", phase_started);
 
     if emit.is_library() || (check_only && !exported_functions.is_empty()) {
@@ -706,6 +829,7 @@ pub(crate) fn compile(config: CliConfig) {
     backend::emit_and_link(backend::BackendInputs {
         filename,
         with_crates: &with_crates,
+        ini_overrides: &ini_overrides,
         linked_php_surfaces: &linked_php_surfaces,
         ir_module,
         web,

@@ -1,8 +1,8 @@
 ---
 title: "date_interval_create_from_date_string()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Creates a DateInterval from a relative date string such as \"2 days\"."
 sidebar:
-  order: 200
+  order: 201
 ---
 
 ## date_interval_create_from_date_string()
@@ -11,7 +11,7 @@ sidebar:
 function date_interval_create_from_date_string(string $datetime): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Creates a DateInterval from a relative date string such as "2 days".
 
 **Parameters**:
 - `$datetime` (`string`)
@@ -23,7 +23,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "elephc\async\run()"
 description: "Runs a structured cooperative task scope to completion."
 sidebar:
-  order: 605
+  order: 609
 ---
 
 ## elephc\async\run()
@@ -22,7 +22,7 @@ Runs a structured cooperative task scope to completion.
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
-- **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
+- **Strict PHP mode**: hidden - this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 **Examples**:
 

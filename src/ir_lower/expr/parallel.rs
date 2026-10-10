@@ -14,6 +14,7 @@
 
 use super::*;
 
+/// Serializes evaluated arguments/captures, submits a checked worker entry and records its Future.
 pub(super) fn lower_parallel_spawn(
     ctx: &mut LoweringContext<'_, '_>,
     group: LoweredValue,
@@ -40,6 +41,7 @@ pub(super) fn lower_parallel_spawn(
             name,
             signature,
             captures,
+            ..
         }) => (name, signature, captures, true),
         Some(StaticCallableBinding::UserFunction(name)) => {
             let signature = ctx
@@ -96,7 +98,7 @@ pub(super) fn lower_parallel_spawn(
             php_type.codegen_repr(),
             PhpType::Object(ref class) if crate::types::parallel_transfer::is_parallel_cancellation(class)
         );
-        (php_type, cancellation, capture.by_ref, capture.value)
+        (php_type, cancellation, capture.by_ref_local.is_some(), capture.value)
     });
     let sources = argument_sources.chain(capture_sources).collect::<Vec<_>>();
     let payload_values = sources
@@ -164,6 +166,7 @@ pub(super) fn lower_parallel_spawn(
     future
 }
 
+/// Builds the ordered boxed transfer payload and retires source operands after retaining insertion.
 fn mixed_array_from_values(
     ctx: &mut LoweringContext<'_, '_>,
     values: impl Iterator<Item = crate::ir::ValueId>,

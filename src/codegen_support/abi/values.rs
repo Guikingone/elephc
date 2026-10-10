@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Refcounted values require balanced retain/release behavior around borrowed and owned temporaries.
+//! - Local reference-cell retirement must finish freeing the cell before a payload destructor escapes.
 
 use crate::codegen_support::callable_descriptor;
 use crate::codegen_support::emit::Emitter;
@@ -14,7 +15,7 @@ use crate::codegen_support::platform::Arch;
 use crate::types::PhpType;
 
 use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
-use super::frame::{emit_reg_move, load_at_offset, store_at_offset};
+use super::frame::{load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
 
@@ -99,45 +100,73 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 /// - `Callable` → `__rt_callable_descriptor_release`
 /// - Non-refcounted types → no-op
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
-    match ty {
-        PhpType::Mixed | PhpType::Union(_) => {
-            emit_call_label(emitter, "__rt_decref_mixed"); // release mixed cell reference
-        }
-        PhpType::Array(_) => {
-            emit_call_label(emitter, "__rt_decref_array"); // release indexed array reference
-        }
-        PhpType::AssocArray { .. } => {
-            emit_call_label(emitter, "__rt_decref_hash"); // release associative array reference
-        }
-        PhpType::Object(_) => {
-            emit_call_label(emitter, "__rt_decref_object"); // release object reference
-        }
-        PhpType::Iterable => {
-            emit_call_label(emitter, "__rt_decref_any"); // release the erased iterable payload by inspecting its heap kind
-        }
-        PhpType::Callable => {
-            callable_descriptor::emit_release_current_descriptor(emitter);
-        }
-        _ => {}
+    if let Some(entry) = refcount_release_helper(ty) {
+        emit_call_label(emitter, entry);
     }
 }
 
-/// Drops one shared owner of a local reference cell.
+/// Releases a typed owner without escaping cleanup, leaving the newly-caught flag in the result.
+pub fn emit_decref_preserving_exception(emitter: &mut Emitter, ty: &PhpType) {
+    if let Some(entry) = refcount_release_helper(ty) {
+        emit_unary_cleanup_preserving_exception(emitter, entry, int_result_reg(emitter));
+    }
+}
+
+/// Calls unary cleanup, accumulating its exception and returning whether this call caught one.
+pub fn emit_unary_cleanup_preserving_exception(emitter: &mut Emitter, entry: &str, payload: &str) {
+    let arg0 = super::int_arg_reg_name(emitter.target, 0);
+    let arg1 = super::int_arg_reg_name(emitter.target, 1);
+    super::emit_reg_move(emitter, arg1, payload);
+    super::emit_symbol_address(emitter, arg0, entry);
+    emit_call_label(emitter, "__rt_cleanup_preserve_exception");
+}
+
+/// Selects the unary release helper for one concrete or boxed heap representation.
+pub(crate) fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
+    match ty {
+        PhpType::Mixed | PhpType::Union(_) => Some("__rt_decref_mixed"),
+        PhpType::Array(_) => Some("__rt_decref_array"),
+        PhpType::AssocArray { .. } => Some("__rt_decref_hash"),
+        PhpType::Object(_) => Some("__rt_decref_object"),
+        PhpType::Iterable => Some("__rt_decref_any"),
+        PhpType::Callable => Some("__rt_callable_descriptor_release"),
+        _ => None,
+    }
+}
+
+/// Releases one tracked local reference-cell owner and its payload when ownership ends.
 ///
-/// The runtime helper decrements the cell allocation's uniform refcount. Its final owner releases
-/// the typed payload and the cell itself, allowing the frame and any number of closure descriptors
-/// to share the same cell safely across `unset()` and scope exit.
+/// The runtime contains payload exceptions, frees the cell, then propagates the exception.
+/// Scalar payloads use a null release entry; strings and heap values use their typed helper.
 pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
-    let result_reg = int_result_reg(emitter);
-    if cell_reg != result_reg {
-        emit_reg_move(emitter, result_reg, cell_reg);
+    emit_local_ref_cell_cleanup(emitter, cell_reg, value_ty, false);
+}
+
+/// Retires a local reference cell during unwinding and leaves destructor exceptions pending.
+pub fn emit_release_local_ref_cell_preserving_exception(
+    emitter: &mut Emitter,
+    cell_reg: &str,
+    value_ty: &PhpType,
+) {
+    emit_local_ref_cell_cleanup(emitter, cell_reg, value_ty, true);
+}
+
+/// Stages the release entry, cell owner and propagation mode for one bounded cell retirement.
+fn emit_local_ref_cell_cleanup(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType, defer_throw: bool) {
+    let entry = match value_ty.codegen_repr() {
+        PhpType::Str => Some("__rt_heap_free_safe"),
+        ty => refcount_release_helper(&ty),
+    };
+    let arg0 = super::int_arg_reg_name(emitter.target, 0);
+    let arg1 = super::int_arg_reg_name(emitter.target, 1);
+    super::emit_reg_move(emitter, arg1, cell_reg);
+    emit_load_int_immediate(emitter, super::int_arg_reg_name(emitter.target, 2), i64::from(defer_throw));
+    if let Some(entry) = entry {
+        super::emit_symbol_address(emitter, arg0, entry);
+    } else {
+        emit_load_int_immediate(emitter, arg0, 0);
     }
-    let tag = callable_descriptor::type_tag(value_ty) as i64;
-    match emitter.target.arch {
-        Arch::AArch64 => emit_load_int_immediate(emitter, "x1", tag),
-        Arch::X86_64 => emit_load_int_immediate(emitter, "rdx", tag),
-    }
-    emit_call_label(emitter, "__rt_ref_cell_release"); // drop the frame or descriptor ownership of the shared cell
+    emit_call_label(emitter, "__rt_local_ref_cell_release");
 }
 
 /// Loads a value of the given type from a stack frame offset into result registers.
@@ -195,8 +224,11 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            let test = format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter));
-            emitter.instruction(&test);                                         // test whether the coerced integer truthiness result is zero
+            emitter.instruction(&format!(                                       // test whether the integer result is zero
+                "test {}, {}",
+                int_result_reg(emitter),
+                int_result_reg(emitter)
+            ));
             emitter.instruction(&format!("je {}", label));                      // branch when the coerced integer truthiness result is zero
         }
     }
@@ -216,9 +248,27 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            let test = format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter));
-            emitter.instruction(&test);                                         // test whether the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!(                                       // test whether the integer result is nonzero
+                "test {}, {}",
+                int_result_reg(emitter),
+                int_result_reg(emitter)
+            ));
             emitter.instruction(&format!("jne {}", label));                     // branch when the coerced integer truthiness result is non-zero
+        }
+    }
+}
+
+/// Branches to the target when the previous compare was equal, using the wider unconditional
+/// AArch64 branch range instead of the ±1 MiB conditional-branch range.
+pub fn emit_branch_if_equal_wide(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction("b.ne 1f");                                     // skip the transfer when the previous compare was unequal
+            emitter.instruction(&format!("b {label}"));                         // take the equal edge with the wider branch range
+            emitter.label("1");                                                // resume after the conditional transfer
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("je {label}"));                        // x86_64 conditional branches already cover the generated function size
         }
     }
 }
@@ -314,16 +364,25 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
                 let uval = value as u64;
                 emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
                 if (uval >> 16) & 0xFFFF != 0 {
-                    let patch = format!("movk {}, #0x{:x}, lsl #16", reg, (uval >> 16) & 0xFFFF);
-                    emitter.instruction(&patch);                                // patch bits 16-31 of the wider immediate value
+                    emitter.instruction(&format!(                               // patch bits 16-31 of the wider immediate value
+                        "movk {}, #0x{:x}, lsl #16",
+                        reg,
+                        (uval >> 16) & 0xFFFF
+                    ));
                 }
                 if (uval >> 32) & 0xFFFF != 0 {
-                    let patch = format!("movk {}, #0x{:x}, lsl #32", reg, (uval >> 32) & 0xFFFF);
-                    emitter.instruction(&patch);                                // patch bits 32-47 of the wider immediate value
+                    emitter.instruction(&format!(                               // patch bits 32-47 of the wider immediate value
+                        "movk {}, #0x{:x}, lsl #32",
+                        reg,
+                        (uval >> 32) & 0xFFFF
+                    ));
                 }
                 if (uval >> 48) & 0xFFFF != 0 {
-                    let patch = format!("movk {}, #0x{:x}, lsl #48", reg, (uval >> 48) & 0xFFFF);
-                    emitter.instruction(&patch);                                // patch bits 48-63 of the wider immediate value
+                    emitter.instruction(&format!(                               // patch bits 48-63 of the wider immediate value
+                        "movk {}, #0x{:x}, lsl #48",
+                        reg,
+                        (uval >> 48) & 0xFFFF
+                    ));
                 }
             }
         }

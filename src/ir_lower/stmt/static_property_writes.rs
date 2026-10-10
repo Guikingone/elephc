@@ -15,20 +15,26 @@ use super::*;
 /// reference to a refcounted value. There are two storage disciplines, matched
 /// to what the codegen store actually does:
 ///
-/// - **Boxing store** (a Mixed/Union slot receiving a non-Mixed value, e.g.
-///   `Class::$h = new C()`): codegen boxes the value with `__rt_mixed_from_value`,
-///   which takes its *own* retained reference to the child. The slot therefore
-///   keeps a reference independent of the source, so an owning temporary must be
-///   *released* after the store (its reference is not the one the slot holds), and
-///   a borrowed source must be left untouched. Acquiring here would leak the extra
-///   reference on top of the box's retained one.
-/// - **Moving store** (every other case: concrete-typed slot, or a Mixed→Mixed
-///   move): the store consumes (moves) its value operand. An owning temporary is
-///   moved in as-is, but a *borrowed* value (a parameter, local, or container read)
-///   must be `Acquire`d first. Without this, storing a borrowed `Mixed`
-///   (e.g. `Class::$h = $handler` where `$handler` is a `?SessionHandlerInterface`
-///   parameter) leaves the property dangling once the borrow's owner releases its
-///   reference, so a later read dispatches on freed memory (a fatal "on null").
+/// - **Independent-value store** (the store crosses the boxed/unboxed boundary, in
+///   either direction): a Mixed/Union slot receiving a non-Mixed value, e.g.
+///   `Class::$h = new C()`, is boxed with `__rt_mixed_from_value`, which takes its
+///   *own* retained reference to the child; and a narrowing slot receiving a Mixed
+///   value, e.g. `Class::$s += 1` on an `int` slot, is cast out of the box, so the
+///   slot holds a payload word that owns nothing of it. Either way the slot keeps a
+///   reference independent of the source, so an owning temporary must be *released*
+///   after the store (its reference is not the one the slot holds), and a borrowed
+///   source must be left untouched. Acquiring here would leak the extra reference on
+///   top of the slot's, and skipping the release leaks the source's own -- which is
+///   what made every compound assignment to a typed static property leak one Mixed
+///   cell (issue #1041).
+/// - **Moving store** (every other case: a same-representation store, or a Mixed
+///   value into a slot codegen leaves untouched): the store consumes (moves) its
+///   value operand. An owning temporary is moved in as-is, but a *borrowed* value (a
+///   parameter, local, or container read) must be `Acquire`d first. Without this,
+///   storing a borrowed `Mixed` (e.g. `Class::$h = $handler` where `$handler` is a
+///   `?SessionHandlerInterface` parameter) leaves the property dangling once the
+///   borrow's owner releases its reference, so a later read dispatches on freed
+///   memory (a fatal "on null").
 pub(super) fn lower_static_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -36,28 +42,84 @@ pub(super) fn lower_static_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    let value = lower_expr(ctx, value);
-    if static_property_store_retains_independent_value(ctx, receiver, property, value) {
-        store_static_property(ctx, receiver, property, value.value, span);
-        if ctx.value_is_owning_temporary(value) {
-            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    let source = lower_expr(ctx, value);
+    let source = static_property_type(ctx, receiver, property)
+        .map(|slot_ty| coerce_typed_assign_value(ctx, source, &slot_ty, span))
+        .unwrap_or(source);
+    if static_property_store_retains_independent_value(ctx, receiver, property, source) {
+        store_static_property(ctx, receiver, property, source.value, span);
+        if ctx.value_is_owning_temporary(source) {
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
         }
         return;
     }
-    let value = if ctx.value_is_owning_temporary(value) {
-        value
+    // A `Str` is PERSISTED into the slot whatever its ownership says, and the source is then
+    // released. Ownership is the wrong question for a string here: "owning" distinguishes who
+    // must release, not WHERE the bytes live, and a great many string producers hand back a
+    // pointer into the shared 64 KiB `_concat_buf` scratch. Moving such a pointer into a slot
+    // that outlives the statement stores the right LENGTH over bytes the next producer
+    // overwrites — `B::$s = strtoupper($x)` read back a later `str_repeat`'s bytes.
+    //
+    // Fixing this at the producer instead (reclassifying runtime-call `Str` results as
+    // non-owning) was tried and is wrong twice over: it only reaches the producers someone
+    // thought to list — `$x . "c"`, `"v=$x!"`, `(string)$i`, `strval($i)` all still clobbered —
+    // and above 64 KiB `__rt_concat_reserve` returns an OWNED heap block, so suppressing the
+    // release leaked one block per call. The consumer is the only place that knows the value is
+    // about to outlive the frame, so it is the only place the question can be answered once.
+    //
+    // The three storage classes all land correctly, which is why this is safe rather than
+    // merely conservative:
+    // - scratch slice: `Acquire` is `__rt_str_persist`, which duplicates it onto the heap; the
+    //   paired `Release` reaches `__rt_heap_free_safe`, which skips a non-heap pointer.
+    // - owned heap block (a unary-string result over 64 KiB): duplicated, then the original is
+    //   freed — this is the leak the producer-side attempt introduced.
+    // - `CONCAT_TEMP_HEAP_KIND` block (a `.` result over 64 KiB): `__rt_str_persist` takes it
+    //   over IN PLACE, and the release cannot double-free it because codegen classifies
+    //   `Op::StrConcat` as a scratch string and drops its `Release` entirely.
+    //
+    // `store_local` reached the same answer for `static` LOCALS at `context.rs`'s
+    // `static_local_store_needs_string_retain`; a static property has the identical lifetime
+    // problem and now has the identical rule.
+    let stores_a_string = matches!(
+        ctx.builder.value_php_type(source.value).codegen_repr(),
+        PhpType::Str
+    );
+    let source_is_owning_temporary = ctx.value_is_owning_temporary(source);
+    let provisional_load = ctx.value_is_owned_unboxed_local_load(source.value);
+    let stored = if stores_a_string || !source_is_owning_temporary || provisional_load {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span))
     } else {
-        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+        source
     };
-    store_static_property(ctx, receiver, property, value.value, span);
+    // A concrete local load can still be borrowed after final frame typing.
+    // Retain its published owner, then retire only an actual Mixed unbox owner.
+    if provisional_load {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    store_static_property(ctx, receiver, property, stored.value, span);
+    // The string rule's own release, SKIPPED when the provisional-load arm already issued
+    // one: the two conditions overlap for an owned unboxed local load of a `Str`, and
+    // releasing the same source twice is a double free rather than a tidy-up.
+    if stores_a_string && source_is_owning_temporary && !provisional_load {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
 }
 
 /// Returns true when codegen gives the static-property slot an independently retained value.
 ///
-/// This covers both concrete values boxed into Mixed/Union slots and boxed Mixed values
-/// unboxed into object slots. Both backend paths retain the stored child independently,
-/// so borrowed sources need no `Acquire` and owning temporary sources are released after
-/// the store. Unknown metadata conservatively keeps the moving-store discipline.
+/// The rule is whether the store crosses the boxed/unboxed boundary. A concrete value going
+/// into a Mixed/Union slot is boxed, and the box retains the child itself. A boxed value
+/// going into a slot codegen narrows to -- `Str`, `Int`, `Bool`, `Float`, `Object`, or the
+/// tagged-scalar pair -- is cast out of the box, and what lands in the slot owns nothing of
+/// it (`__rt_str_persist` copies, the scalar casts read a payload word, the object arm
+/// increfs the unboxed pointer on its own). Both directions leave the source's reference
+/// unrelated to the slot's, so borrowed sources need no `Acquire` and owning temporary
+/// sources must be released after the store -- without that release the box outlives its
+/// last use and leaks, one cell per compound assignment (issue #1041).
+///
+/// Every other case is a moving store: a Mixed value into a Mixed/Union slot, or into one of
+/// the container slots codegen leaves untouched, writes the pointer itself into the slot, so
+/// the store consumes the reference. Unknown metadata conservatively keeps that discipline.
 pub(super) fn static_property_store_retains_independent_value(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -70,11 +132,23 @@ pub(super) fn static_property_store_retains_independent_value(
     let value_ty = ctx.builder.value_php_type(value.value);
     let slot_ty = slot_ty.codegen_repr();
     let value_ty = value_ty.codegen_repr();
-    let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_))
-        && !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
-    let unboxes_into_object = matches!(slot_ty, PhpType::Object(_))
-        && matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
-    boxes_into_mixed || unboxes_into_object
+    let value_is_boxed = matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_)) && !value_is_boxed;
+    // The slot types codegen actually casts a Mixed source out of. Deliberately not "any slot
+    // that is not Mixed": an array or iterable slot falls through `load_static_property_store_
+    // value_to_result`'s catch-all arm untouched, so the Mixed pointer itself is what gets
+    // stored and the store still consumes it.
+    let narrows_out_of_mixed = value_is_boxed
+        && matches!(
+            slot_ty,
+            PhpType::Str
+                | PhpType::Int
+                | PhpType::Bool
+                | PhpType::Float
+                | PhpType::Object(_)
+                | PhpType::TaggedScalar
+        );
+    boxes_into_mixed || narrows_out_of_mixed
 }
 
 /// Lowers `Class::$prop[] = value`.
@@ -85,6 +159,20 @@ pub(super) fn lower_static_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![array.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return;
+    }
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
@@ -124,6 +212,9 @@ pub(super) fn lower_static_property_array_push(
 }
 
 /// Lowers `Class::$prop[index] = value`.
+///
+/// A desugared `??=` becomes a probe plus a conditional insert, and a desugared compound update
+/// writes with the key its own read already converted (see `ElementUpdate`).
 pub(super) fn lower_static_property_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -132,6 +223,73 @@ pub(super) fn lower_static_property_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let update = desugared_element_update(value, span, |read| {
+        reads_static_property_array_element(read, receiver, property, index)
+    });
+    if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
+        crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+        return;
+    }
+    lower_static_property_array_assign_with_diagnosed_key(
+        ctx,
+        receiver,
+        property,
+        index,
+        value,
+        span,
+        update.is_some(),
+    );
+}
+
+/// Returns whether `read` is the element `Class::$property[index]` a statement writes.
+fn reads_static_property_array_element(
+    read: &Expr,
+    receiver: &StaticReceiver,
+    property: &str,
+    index: &Expr,
+) -> bool {
+    matches!(
+        &read.kind,
+        ExprKind::ArrayAccess { array, index: read_index }
+            if read_index.as_ref() == index
+                && matches!(
+                    &array.kind,
+                    ExprKind::StaticPropertyAccess { receiver: read_receiver, property: read_property }
+                        if read_receiver == receiver && read_property == property
+                )
+    )
+}
+
+/// Lowers `Class::$prop[index] = value`, optionally reusing a float-key diagnosis.
+///
+/// `key_already_diagnosed` marks the write half of a compound update whose read of the same
+/// element already reported the float key's conversion. An `ArrayAccess` receiver gets the key
+/// unconverted, so its `offsetSet` call never consults the flag.
+pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    let key_marker = key_already_diagnosed.then_some(Immediate::Bool(true));
+    if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
+        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![array.value, index.value, value.value],
+            key_marker,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, index, span);
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return;
+    }
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
@@ -143,6 +301,8 @@ pub(super) fn lower_static_property_array_assign(
         // the same source line.
         let (index, value) =
             crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+        let index =
+            coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &array_ty, value, Some(span));
         ctx.emit_void(
             Op::ArraySet,
@@ -155,9 +315,11 @@ pub(super) fn lower_static_property_array_assign(
         return;
     }
 
-    let property_value = if let Some(property_ty) = static_property_type(ctx, receiver, property)
-        .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
-    {
+    let array_access_ty = static_property_type(ctx, receiver, property)
+        .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty));
+    // `offsetSet` receives the original key, so only a boxed array receiver has a key to rebuild.
+    let key_marker = if array_access_ty.is_some() { None } else { key_marker };
+    let property_value = if let Some(property_ty) = array_access_ty {
         load_static_property_as(ctx, receiver, property, property_ty, span)
     } else {
         load_static_property(ctx, receiver, property, span)
@@ -172,7 +334,7 @@ pub(super) fn lower_static_property_array_assign(
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
-            None,
+            key_marker,
             effects_lookup::runtime_effects(),
             Some(span),
         );
@@ -182,10 +344,35 @@ pub(super) fn lower_static_property_array_assign(
     ctx.emit_void(
         Op::RuntimeCall,
         vec![property_value.value, index.value, value.value],
-        None,
+        key_marker,
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Publishes a detached boxed PHP array before a static-property element mutation.
+/// The static slot consumes the new cell and releases its previous owner through ordinary storage.
+fn separate_php_array_static_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    span: Span,
+) -> Option<LoweredValue> {
+    let ty = static_property_type(ctx, receiver, property)?;
+    if !ty.is_php_array() {
+        return None;
+    }
+    let previous = load_static_property_as(ctx, receiver, property, ty.clone(), span);
+    let separated = ctx.emit_value(
+        Op::MixedClone,
+        vec![previous.value],
+        None,
+        ty,
+        Op::MixedClone.default_effects(),
+        Some(span),
+    );
+    store_static_property(ctx, receiver, property, separated.value, span);
+    Some(separated)
 }
 
 /// Returns true when a named static-property receiver may resolve through eval metadata.
@@ -201,4 +388,3 @@ pub(super) fn static_property_may_be_eval_dynamic(
             .classes
             .contains_key(class_name.as_str().trim_start_matches('\\'))
 }
-

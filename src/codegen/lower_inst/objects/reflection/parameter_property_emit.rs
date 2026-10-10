@@ -19,11 +19,18 @@ pub(super) fn emit_reflection_parameter_properties(
         .class_infos
         .get("ReflectionParameter")
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let public_name_offset = reflection_property_offset(class_info, "name")?;
     let name_offset = reflection_property_offset(class_info, "__name")?;
     let default_value_constant_name_offset =
         reflection_property_offset(class_info, "__default_value_constant_name")?;
     let default_value_object_class_offset =
         reflection_property_offset(class_info, "__default_value_object_class")?;
+    emit_reflection_string_property(
+        ctx,
+        &parameter.name,
+        public_name_offset,
+        public_name_offset + 8,
+    );
     emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
     emit_reflection_attrs_property(
         ctx,
@@ -155,6 +162,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             type_metadata,
             is_deprecated,
             is_generator,
+            returns_reference,
         }) => {
             let mut metadata = empty_reflection_metadata();
             metadata.reflected_name = Some(name.clone());
@@ -164,6 +172,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.type_metadata = type_metadata.clone();
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
+            metadata.returns_reference = *returns_reference;
             emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
@@ -180,6 +189,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             type_metadata,
             is_deprecated,
             is_generator,
+            returns_reference,
         }) => {
             let mut metadata = empty_reflection_metadata();
             metadata.reflected_name = Some(name.clone());
@@ -192,6 +202,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.modifiers = reflection_method_modifiers_from_flags(*flags);
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
+            metadata.returns_reference = *returns_reference;
             emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,

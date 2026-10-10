@@ -184,6 +184,7 @@ impl ElephcEvalContext {
                 normalize_enum_case_name(case_name),
             ))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores a materialized singleton case object and returns any replaced distinct cell.
@@ -214,6 +215,7 @@ impl ElephcEvalContext {
                 normalize_enum_case_name(case_name),
             ))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores a materialized backing value and returns any replaced distinct cell.
@@ -405,8 +407,15 @@ impl ElephcEvalContext {
         key: EvalArrayReferenceKey,
         target: EvalReferenceTarget,
     ) -> Option<EvalReferenceTarget> {
-        self.array_element_aliases
-            .insert((array.as_ptr() as usize, key), target)
+        self.prune_retired_array_aliases();
+        let address = array.as_ptr() as usize;
+        let aliases = self.array_element_aliases.entry(address).or_insert_with(|| {
+            let lifetime = crate::ffi::array_references::register_array_reference_cell(
+                address, &self.array_reference_retirements,
+            );
+            EvalArrayReferenceAliases { targets: HashMap::new(), lifetime }
+        });
+        aliases.targets.insert(key, target)
     }
 
     /// Returns the persistent reference target bound to one runtime array element slot.
@@ -416,7 +425,63 @@ impl ElephcEvalContext {
         key: &EvalArrayReferenceKey,
     ) -> Option<&EvalReferenceTarget> {
         self.array_element_aliases
-            .get(&(array.as_ptr() as usize, key.clone()))
+            .get(&(array.as_ptr() as usize))
+            .filter(|alias| alias.lifetime.is_live())
+            .and_then(|alias| alias.targets.get(key))
+    }
+
+    /// Copies element references into a fresh COW array, omitting an explicitly removed key.
+    pub(crate) fn clone_array_element_aliases(
+        &mut self,
+        source: RuntimeCellHandle,
+        destination: RuntimeCellHandle,
+        removed: Option<&EvalArrayReferenceKey>,
+    ) {
+        self.prune_retired_array_aliases();
+        let targets = self.array_element_aliases.get(&(source.as_ptr() as usize))
+            .filter(|aliases| aliases.lifetime.is_live())
+            .map(|aliases| aliases.targets.iter()
+                .filter(|(key, _)| Some(*key) != removed)
+                .map(|(key, target)| (key.clone(), target.clone()))
+                .collect::<HashMap<_, _>>())
+            .unwrap_or_default();
+        let destination = destination.as_ptr() as usize;
+        self.array_element_aliases.remove(&destination);
+        if !targets.is_empty() {
+            let lifetime = crate::ffi::array_references::register_array_reference_cell(
+                destination, &self.array_reference_retirements,
+            );
+            self.array_element_aliases.insert(destination, EvalArrayReferenceAliases { targets, lifetime });
+        }
+    }
+
+    /// Removes alias and cursor metadata when an array box is retired or reused.
+    pub(crate) fn clear_array_metadata(&mut self, array: RuntimeCellHandle) {
+        let identity = array.as_ptr() as usize;
+        self.array_element_aliases.remove(&identity);
+        self.array_cursors.remove(&identity);
+    }
+
+    /// Copies array references and cursor state to an independently owned array box.
+    pub(crate) fn copy_array_metadata(&mut self, source: RuntimeCellHandle, target: RuntimeCellHandle) {
+        let source_id = source.as_ptr() as usize;
+        let target_id = target.as_ptr() as usize;
+        if source_id == target_id { return; }
+        let cursor = self.array_cursors.get(&source_id).copied();
+        self.clone_array_element_aliases(source, target, None);
+        self.array_cursors.remove(&target_id);
+        if let Some(cursor) = cursor {
+            self.array_cursors.insert(target_id, cursor);
+        }
+    }
+
+    /// Drops only retired allocation records, preserving any newer allocation at the same address.
+    fn prune_retired_array_aliases(&mut self) {
+        for address in self.array_reference_retirements.take() {
+            if self.array_element_aliases.get(&address).is_some_and(|aliases| !aliases.lifetime.is_live()) {
+                self.array_element_aliases.remove(&address);
+            }
+        }
     }
 
     /// Marks one eval object storage slot as initialized.

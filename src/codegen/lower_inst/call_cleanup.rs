@@ -6,8 +6,12 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Dynamic constructor conversion owners stay guarded until each normal cleanup consumes it.
 
 use super::*;
+
+// One aligned owner slot followed by its invisible unwind activation.
+pub(super) const CALL_ARG_TEMP_CLEANUP_BYTES: usize = 16 + abi::CALL_OPERAND_OWNER_RECORD_BYTES;
 
 /// Plans scalar Mixed arguments that can be borrowed on the caller stack for a direct callee.
 pub(super) fn plan_borrowed_stack_mixed_args(
@@ -167,13 +171,13 @@ pub(super) fn plan_call_arg_temp_cleanups(
         if direct_call_arg_creates_mixed_temp(&source_ty, param_ty) {
             cleanups.push(CallArgTempCleanup {
                 param_index: index,
-                offset: cleanups.len() * 16,
+                offset: cleanups.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
                 ty: PhpType::Mixed,
             });
-        } else if direct_call_arg_splits_borrowed_array(ctx, *value, &source_ty, param_ty)? {
+        } else if direct_call_arg_splits_widened_array(&source_ty, param_ty) {
             cleanups.push(CallArgTempCleanup {
                 param_index: index,
-                offset: cleanups.len() * 16,
+                offset: cleanups.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
                 ty: widened_array_temp_type(&source_ty),
             });
         }
@@ -194,18 +198,25 @@ pub(super) fn direct_call_arg_creates_mixed_temp(source_ty: &PhpType, param_ty: 
 /// 1 and only clones when the array is visibly shared. Handing it a BORROWED array therefore
 /// rewrote the caller's own array — `f($pts)` with `function f(array $a)` and `$pts` an array
 /// of objects left `$pts[0]->x` reading a boxed cell as a raw object pointer AFTER the call,
-/// on data the callee never touched, with no diagnostic. An owned temporary is left alone: it
-/// has no other reader, so converting it in place is both correct and free.
-fn direct_call_arg_splits_borrowed_array(
-    ctx: &FunctionContext<'_>,
-    value: ValueId,
-    source_ty: &PhpType,
-    param_ty: &PhpType,
-) -> Result<bool> {
-    if !argument_widens_typed_array(source_ty, param_ty) {
-        return Ok(false);
-    }
-    Ok(ctx.value_ownership(value)? != Ownership::Owned)
+/// on data the callee never touched, with no diagnostic.
+///
+/// An OWNED operand needs the split just as much, because owned is not unique. The operand of
+/// a call is usually `acquire` of a local — one more reference to the local's own array — and
+/// the call parks it in an operand-owner slot that releases it after the call. Converted
+/// unguarded, `__rt_array_ensure_unique` saw the shared array, cloned it and gave up the
+/// operand's reference to the original; the clone went to the callee and was never released,
+/// and the slot then released the original a second time:
+///
+/// ```text
+/// function g(array<mixed> $a): int { return count($a); }
+/// $ints = [3, 1, 2]; g($ints); echo count($ints);     // php: 3, elephc: 0, freed
+/// ```
+///
+/// `new ArrayIterator($local)` reaches the same boundary through its `array<mixed>` constructor.
+/// The incref makes the split unconditional and the cleanup slot owns the clone, so the
+/// operand's own reference is untouched whoever releases it.
+fn direct_call_arg_splits_widened_array(source_ty: &PhpType, param_ty: &PhpType) -> bool {
+    argument_widens_typed_array(source_ty, param_ty)
 }
 
 /// Returns whether this argument boundary widens a typed array into Mixed element slots.
@@ -229,16 +240,17 @@ fn widened_array_temp_type(source_ty: &PhpType) -> PhpType {
     }
 }
 
-/// Saves the current pointer result into the reserved call-argument cleanup area.
+/// Saves and publishes a coercion owner before another argument or the callee can throw.
 pub(super) fn save_call_arg_temp_cleanup(
     ctx: &mut FunctionContext<'_>,
     cleanup: &CallArgTempCleanup,
     arg_temp_bytes: usize,
 ) {
-    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    let scratch = abi::tertiary_scratch_reg(ctx.emitter);
     let offset = arg_temp_bytes + cleanup.offset;
     abi::emit_temporary_stack_address(ctx.emitter, scratch, offset);
     abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), scratch, 0);
+    abi::emit_link_call_operand_owner_at_stack(ctx.emitter, scratch, false, offset + 16);
 }
 
 /// Releases caller-owned temporary arguments after the call result has been saved.
@@ -251,7 +263,10 @@ pub(super) fn emit_call_arg_temp_cleanups(
         return Ok(());
     }
     let result_alias = call_result_can_alias_mixed_temp(ctx, result)?;
-    for cleanup in &call_args.cleanup_slots {
+    // Owners were published in argument order. Detach one at a time in reverse
+    // order so a throwing destructor still unwinds every outstanding argument.
+    for cleanup in call_args.cleanup_slots.iter().rev() {
+        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cleanup.offset + 16);
         abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -270,6 +285,7 @@ pub(super) fn emit_call_arg_temp_cleanups(
         }
     }
     abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_guard_bytes);
     Ok(())
 }
 
@@ -350,4 +366,3 @@ pub(super) fn emit_loaded_assoc_array_to_mixed(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
 }
-

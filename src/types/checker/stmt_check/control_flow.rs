@@ -16,10 +16,15 @@
 //!   Compiler-internal types with no PHP spelling stay a hard error.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::names::{php_symbol_key, property_hook_get_method};
+use std::collections::{HashMap, HashSet};
+
+use crate::parser::ast::{
+    BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, Visibility,
+};
 use crate::types::{PhpType, TypeEnv};
 
-use super::super::Checker;
+use super::super::{Checker, SavedNarrowingOrigin};
 
 const FS_CURRENT_AS_SELF: i64 = 16;
 const FS_CURRENT_AS_PATHNAME: i64 = 32;
@@ -38,6 +43,7 @@ fn stabilize_loop_storage(
     body: &[Stmt],
     update: Option<&Stmt>,
     env: &mut TypeEnv,
+    packed_counter: Option<&str>,
 ) {
     let key = (checker.current_loop_storage_scope.clone(), loop_span);
     if let Some(recorded) = checker.loop_storage_types.get(&key).cloned() {
@@ -53,6 +59,7 @@ fn stabilize_loop_storage(
         body,
         update,
         &snapshot,
+        packed_counter,
         &mut |expr, analysis_env| {
             let is_call = matches!(
                 expr.kind,
@@ -86,6 +93,161 @@ fn stabilize_loop_storage(
     }
 }
 
+/// Gives a by-reference foreach root its persistent hash representation.
+///
+/// PHP's `array` property declaration constrains the container, not its element types. Once a
+/// by-reference loop can replace an element with a different runtime type, every later property
+/// read must select boxed Mixed hash operations rather than the initializer's old concrete
+/// layout. Nested sources promote their root too, then traverse boxed Mixed entries dynamically.
+/// Applying the storage change to property metadata also converts initializers and assignments,
+/// so no `Array`-typed access can observe hash-backed storage.
+fn promoted_by_ref_foreach_root_type(ty: &PhpType) -> Option<PhpType> {
+    let ty = ty.codegen_repr();
+    match ty {
+        PhpType::Array(_) => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Mixed),
+        }),
+        PhpType::AssocArray { key, .. } => Some(PhpType::AssocArray {
+            key,
+            value: Box::new(PhpType::Mixed),
+        }),
+        _ => None,
+    }
+}
+
+/// Widens local or static property storage when foreach exposes mutable element references.
+fn widen_by_ref_foreach_source_storage(
+    checker: &mut Checker,
+    source: &Expr,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let mut root = source;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    if let ExprKind::Variable(name) = &root.kind {
+        if let Some(widened) = env
+            .get(name)
+            .and_then(promoted_by_ref_foreach_root_type)
+        {
+            env.insert(name.clone(), widened);
+        }
+        return Ok(());
+    }
+    if let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind {
+        let access_class = checker.resolve_static_property_receiver(receiver, root)?;
+        let Some(declaring_class) = checker
+            .classes
+            .get(&access_class)
+            .and_then(|info| info.static_property_declaring_classes.get(property).cloned())
+        else {
+            return Ok(());
+        };
+        let mut reachable_declarations = HashSet::from([declaring_class]);
+        if matches!(receiver, StaticReceiver::Static) {
+            for (class_name, info) in &checker.classes {
+                if class_name != &access_class
+                    && !checker.is_subclass_of(class_name, &access_class)
+                {
+                    continue;
+                }
+                let Some(selected_declaration) =
+                    info.static_property_declaring_classes.get(property)
+                else {
+                    continue;
+                };
+                let visibility = info
+                    .static_property_visibilities
+                    .get(property)
+                    .unwrap_or(&Visibility::Public);
+                // The backend's late-static dispatch raises before loading a private
+                // redeclaration owned by a descendant, so that inaccessible storage must keep
+                // its independently declared representation.
+                if matches!(visibility, Visibility::Private)
+                    && selected_declaration != &access_class
+                {
+                    continue;
+                }
+                reachable_declarations.insert(selected_declaration.clone());
+            }
+        }
+        for info in checker.classes.values_mut() {
+            if !info
+                .static_property_declaring_classes
+                .get(property)
+                .is_some_and(|declaring| reachable_declarations.contains(declaring))
+            {
+                continue;
+            }
+            let Some((_, property_ty)) = info
+                .static_properties
+                .iter_mut()
+                .find(|(name, _)| name == property)
+            else {
+                continue;
+            };
+            if let Some(widened) = promoted_by_ref_foreach_root_type(property_ty) {
+                *property_ty = widened;
+            }
+        }
+        return Ok(());
+    }
+    let ExprKind::PropertyAccess { object, property } = &root.kind else {
+        return Ok(());
+    };
+    let object_ty = checker.infer_type(object, env)?;
+    let Some(access_class) = crate::types::checker::single_object_class_name(&object_ty) else {
+        return Ok(());
+    };
+    let access_class = access_class.trim_start_matches('\\').to_string();
+    let property_is_addressable = checker.classes.get(&access_class).is_some_and(|info| {
+        !info
+            .methods
+            .contains_key(&php_symbol_key(&property_hook_get_method(property)))
+            && matches!(
+                crate::types::resolve_property_name(
+                    &checker.classes,
+                    &access_class,
+                    property,
+                    checker.current_class.as_deref(),
+                ),
+                crate::types::PropertyNameResolution::Visible
+                    | crate::types::PropertyNameResolution::ScopePrivate { .. }
+            )
+    });
+    if !property_is_addressable {
+        return Ok(());
+    }
+    checker
+        .reference_property_promotions
+        .insert((access_class.clone(), property.clone()));
+    let Some(declaring_class) = checker
+        .classes
+        .get(&access_class)
+        .and_then(|info| info.property_declaring_classes.get(property).cloned())
+    else {
+        return Ok(());
+    };
+    for info in checker.classes.values_mut() {
+        if !info
+            .property_declaring_classes
+            .get(property)
+            .is_some_and(|declaring| declaring == &declaring_class)
+        {
+            continue;
+        }
+        let Some(slot) = info.visible_property_index(property) else {
+            continue;
+        };
+        let widened = promoted_by_ref_foreach_root_type(&info.properties[slot].1);
+        if let Some(widened) = widened {
+            info.properties[slot].1 = widened;
+        }
+    }
+    Ok(())
+}
+
 /// Restores a narrowed variable in the environment to its previously saved type after a guarded
 /// branch, removing it when it had no prior type. Used to keep `if`/`else` type narrowing scoped
 /// to its branch.
@@ -98,6 +260,54 @@ fn restore_narrowed_var(env: &mut TypeEnv, var: &str, saved: &Option<PhpType>) {
             env.remove(var);
         }
     }
+}
+
+/// Intersects callable-array facts from every reachable branch of a control-flow join.
+///
+/// Instance-method arrays additionally require one shared assignment identity across all exits:
+/// lowering captures each assignment's receiver in a hidden slot, so equal source expressions in
+/// separate branches do not prove equal runtime receivers. Static targets need no capture and
+/// remain usable whenever every reachable branch resolves to the same method.
+fn joined_callable_array_targets(
+    exits: &[HashMap<String, CallableTarget>],
+    versions: &[HashMap<String, u64>],
+) -> (HashMap<String, CallableTarget>, HashMap<String, u64>) {
+    let Some(first) = exits.first() else {
+        return (HashMap::new(), HashMap::new());
+    };
+    let targets = first
+        .iter()
+        .filter(|(name, target)| {
+            exits
+                .iter()
+                .skip(1)
+                .all(|exit| exit.get(name.as_str()) == Some(*target))
+        })
+        .filter(|(name, target)| {
+            if !matches!(target, CallableTarget::Method { .. }) {
+                return true;
+            }
+            let Some(first_version) = versions.first().and_then(|exit| exit.get(name.as_str()))
+            else {
+                return false;
+            };
+            versions
+                .iter()
+                .skip(1)
+                .all(|exit| exit.get(name.as_str()) == Some(first_version))
+        })
+        .map(|(name, target)| (name.clone(), target.clone()))
+        .collect::<HashMap<_, _>>();
+    let retained_versions = targets
+        .keys()
+        .filter_map(|name| {
+            versions
+                .first()
+                .and_then(|exit| exit.get(name))
+                .map(|version| (name.clone(), *version))
+        })
+        .collect();
+    (targets, retained_versions)
 }
 
 /// Names a `foreach` source that PHP accepts but can never iterate, or `None` when the type
@@ -150,6 +360,10 @@ impl Checker {
                 value_by_ref,
                 body,
             } => {
+                // A later iteration can observe a reference rebinding performed by an earlier
+                // one. Require the body to establish any affirmative managed-cell provenance it
+                // consumes within the loop itself.
+                self.boxed_ref_aliased_locals.clear();
                 // `foreach ($arr as &$v)` takes a reference into each element, so BOTH names it
                 // touches are reference-aliased for the rest of the body and neither binding can
                 // be killed or re-bound — releasing or abandoning that storage would strand the
@@ -174,39 +388,83 @@ impl Checker {
                     self.record_reference_alias_root(array);
                     self.ref_aliased_locals.insert(value_var.clone());
                 }
+                let value_was_bound = env.contains_key(value_var);
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
+                if *value_by_ref {
+                    widen_by_ref_foreach_source_storage(self, array, env)?;
+                }
                 if let PhpType::Array(elem_ty) = &arr_ty {
+                    // A genuinely packed array has int keys; an UNKNOWN-element array (an
+                    // `array`-hinted param/property, elements known only to phpdoc) may be
+                    // associative at runtime, so its keys are Mixed (ward-http's
+                    // `foreach ($headers as $name => $values)` with string keys).
+                    let key_ty = if matches!(elem_ty.as_ref(), PhpType::Mixed) {
+                        PhpType::Mixed
+                    } else {
+                        PhpType::Int
+                    };
+                    // An indexed foreach-by-reference over a simple local promotes the payload
+                    // to hash storage with boxed Mixed entries. Flow typing below the conversion
+                    // selects associative operations; earlier expressions were already checked
+                    // against the original indexed representation.
+                    let promotes_to_hash =
+                        *value_by_ref && matches!(&array.kind, ExprKind::Variable(_));
                     if let Some(k) = key_var {
-                        // A genuinely packed array has int keys; an UNKNOWN-element array (an
-                        // `array`-hinted param/property, elements known only to phpdoc) may be
-                        // associative at runtime, so its keys are Mixed (ward-http's
-                        // `foreach ($headers as $name => $values)` with string keys).
-                        let key_ty = if matches!(elem_ty.as_ref(), PhpType::Mixed) {
-                            PhpType::Mixed
-                        } else {
-                            PhpType::Int
-                        };
-                        env.insert(k.clone(), key_ty);
+                        env.insert(k.clone(), key_ty.clone());
                         self.clear_foreach_callable_metadata(k);
                     }
-                    let value_ty = *elem_ty.clone();
+                    // A fresh by-reference binding is null when an empty source never enters the
+                    // body, and later writes through the live reference may change its PHP type.
+                    // Preserve an existing binding's stricter write-through contract, but give a
+                    // fresh binding the Mixed shape used by the runtime reference slot.
+                    let value_ty = if *value_by_ref && !value_was_bound {
+                        PhpType::Mixed
+                    } else {
+                        *elem_ty.clone()
+                    };
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
+                    if promotes_to_hash {
+                        if let ExprKind::Variable(source_name) = &array.kind {
+                            env.insert(
+                                source_name.clone(),
+                                PhpType::AssocArray {
+                                    key: Box::new(PhpType::Int),
+                                    value: Box::new(PhpType::Mixed),
+                                },
+                            );
+                        }
+                    }
                 } else if let PhpType::AssocArray { key, value } = &arr_ty {
                     if let Some(k) = key_var {
                         env.insert(k.clone(), *key.clone());
                         self.clear_foreach_callable_metadata(k);
                     }
-                    let value_ty = *value.clone();
+                    // Associative foreach-by-reference converts every entry to boxed Mixed
+                    // storage. Reflect that in a simple source local so post-loop reads do not
+                    // reinterpret boxed-cell pointers as the old concrete payload type. The
+                    // reference local itself retains the entry's declared type, matching the
+                    // checker's normal strict write-through rules.
+                    let value_ty = if *value_by_ref && !value_was_bound {
+                        PhpType::Mixed
+                    } else {
+                        *value.clone()
+                    };
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
+                    if *value_by_ref {
+                        if let ExprKind::Variable(source_name) = &array.kind {
+                            env.insert(
+                                source_name.clone(),
+                                PhpType::AssocArray {
+                                    key: key.clone(),
+                                    value: Box::new(PhpType::Mixed),
+                                },
+                            );
+                        }
+                    }
                 } else if let PhpType::Object(class_name) = &arr_ty {
-                    let is_iter = self.class_implements_interface(class_name, "Iterator")
-                        || self.interface_extends_interface(class_name, "Iterator");
-                    let is_iter_agg = self
-                        .class_implements_interface(class_name, "IteratorAggregate")
-                        || self.interface_extends_interface(class_name, "IteratorAggregate");
-                    if !is_iter && !is_iter_agg {
+                    if !self.object_type_implements_iterable(class_name) {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!(
@@ -279,8 +537,10 @@ impl Checker {
                 }
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                stabilize_loop_storage(self, stmt.span, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env, None);
                 let errors = self.check_break_continue_target_body(body, env);
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -294,6 +554,7 @@ impl Checker {
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
                 let mut errors = Vec::new();
+                let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                 for (values, _) in cases {
                     for v in values {
                         self.infer_type_with_assignment_effects(v, env)?;
@@ -301,12 +562,33 @@ impl Checker {
                 }
                 self.break_continue_depth += 1;
                 for (_, body) in cases {
+                    let invalidated = self
+                        .conditional_boxed_ref_invalidations
+                        .last()
+                        .cloned()
+                        .unwrap_or_default();
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs
+                        .iter()
+                        .filter(|name| !invalidated.contains(*name))
+                        .cloned()
+                        .collect();
                     errors.extend(self.check_body(body, env));
                 }
                 if let Some(body) = default {
+                    let invalidated = self
+                        .conditional_boxed_ref_invalidations
+                        .last()
+                        .cloned()
+                        .unwrap_or_default();
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs
+                        .into_iter()
+                        .filter(|name| !invalidated.contains(name))
+                        .collect();
                     errors.extend(self.check_body(body, env));
                 }
                 self.break_continue_depth -= 1;
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -339,6 +621,13 @@ impl Checker {
                 // Pre-`if` type of every variable we narrow, captured the first time we touch it,
                 // so each one can be restored after the construct.
                 let mut saved_vars: Vec<(String, Option<PhpType>)> = Vec::new();
+                // The same pre-`if` types, held for `merge_local_assignment_type` so a store
+                // inside a guarded region is measured against the BINDING rather than against
+                // the guard's view of the value (issue #509). Opened where `saved_vars` records
+                // a variable and closed once for the whole construct: the complement a guarded
+                // clause publishes narrows the later clauses and the `else` body too, so the
+                // origin has to outlive the then-branch it was opened for.
+                let mut saved_origins: Vec<SavedNarrowingOrigin> = Vec::new();
                 let mut applied_any_guard = false;
                 // Single-clause join state: the guarded key and the type it has where the
                 // then-branch falls out of the construct. `None` means "no usable fact" (the
@@ -346,9 +635,15 @@ impl Checker {
                 let mut join_key: Option<String> = None;
                 let mut then_exit_ty: Option<PhpType> = None;
                 let single_clause = clauses.len() == 1;
+                let mut callable_target_exits = Vec::new();
+                let mut callable_target_version_exits = Vec::new();
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
+                    let branch_entry_targets = self.callable_array_targets.clone();
+                    let branch_entry_target_versions =
+                        self.callable_array_target_versions.clone();
+                    let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
 
                     if let Some(guard) = self.guard_narrowing(cond, env)? {
                         applied_any_guard = true;
@@ -356,6 +651,11 @@ impl Checker {
                         if !saved_vars.iter().any(|(v, _)| v == &guard.var) {
                             saved_vars.push((guard.var.clone(), env.get(&guard.var).cloned()));
                         }
+                        saved_origins.push(self.enter_flow_narrowing(
+                            &guard.var,
+                            env.get(&guard.var),
+                            &guard.then_ty,
+                        ));
 
                         // Check the guarded body with the "then" type.
                         let saved = env.get(&guard.var).cloned();
@@ -379,11 +679,20 @@ impl Checker {
                             join_key = Some(guard.var.clone());
                             then_exit_ty = branch_exit.cloned();
                         }
+                        if !self.body_cannot_fall_through(body) {
+                            callable_target_exits.push(self.callable_array_targets.clone());
+                            callable_target_version_exits
+                                .push(self.callable_array_target_versions.clone());
+                        }
+                        self.callable_array_targets = branch_entry_targets;
+                        self.callable_array_target_versions = branch_entry_target_versions;
+                        self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                         restore_narrowed_var(env, &guard.var, &saved);
 
                         // The fallthrough env for the rest of the chain (next elseif or else)
                         // sees the complement.
                         env.insert(guard.var.clone(), guard.else_ty.clone());
+                        self.republish_flow_narrowing(&guard.var, &guard.else_ty);
                     } else {
                         // No narrowing for this clause — check the body with the current env.
                         for s in *body {
@@ -391,6 +700,14 @@ impl Checker {
                                 errors.extend(error.flatten());
                             }
                         }
+                        if !self.body_cannot_fall_through(body) {
+                            callable_target_exits.push(self.callable_array_targets.clone());
+                            callable_target_version_exits
+                                .push(self.callable_array_target_versions.clone());
+                        }
+                        self.callable_array_targets = branch_entry_targets;
+                        self.callable_array_target_versions = branch_entry_target_versions;
+                        self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     }
                 }
 
@@ -408,6 +725,17 @@ impl Checker {
                     }
                     else_falls_through = !self.body_cannot_fall_through(body);
                 }
+                if else_falls_through {
+                    callable_target_exits.push(self.callable_array_targets.clone());
+                    callable_target_version_exits
+                        .push(self.callable_array_target_versions.clone());
+                }
+                let (joined_targets, joined_target_versions) = joined_callable_array_targets(
+                    &callable_target_exits,
+                    &callable_target_version_exits,
+                );
+                self.callable_array_targets = joined_targets;
+                self.callable_array_target_versions = joined_target_versions;
                 if let Some(key) = &join_key {
                     if else_falls_through {
                         else_exit_ty = Some(env.get(key).cloned());
@@ -446,6 +774,14 @@ impl Checker {
                         env.insert(key, joined);
                     }
                 }
+                // Closed for the construct even when the complement is KEPT for the code after
+                // it. A kept complement is a sound fact about every path that gets there, so the
+                // statements after the `if` are ordinary straight-line code: a store that does
+                // not fit takes the depth-0 re-bind path, which abandons the slot properly,
+                // rather than being waved through against a binding the `if` may have replaced.
+                for saved_origin in saved_origins.into_iter().rev() {
+                    self.exit_flow_narrowing(saved_origin);
+                }
 
                 if errors.is_empty() {
                     Ok(())
@@ -454,9 +790,12 @@ impl Checker {
                 }
             }
             StmtKind::DoWhile { body, condition } => {
-                stabilize_loop_storage(self, stmt.span, body, None, env);
+                self.boxed_ref_aliased_locals.clear();
+                stabilize_loop_storage(self, stmt.span, body, None, env, None);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -464,7 +803,8 @@ impl Checker {
                 }
             }
             StmtKind::While { condition, body } => {
-                stabilize_loop_storage(self, stmt.span, body, None, env);
+                self.boxed_ref_aliased_locals.clear();
+                stabilize_loop_storage(self, stmt.span, body, None, env, None);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 // The condition is re-evaluated before every iteration, so a guard on it
                 // holds on entry to each one: `while (($row = fgetcsv($h)) !== false)`
@@ -474,10 +814,16 @@ impl Checker {
                 let saved = guard
                     .as_ref()
                     .map(|g| (g.var.clone(), env.get(&g.var).cloned()));
+                let saved_origin = guard
+                    .as_ref()
+                    .map(|g| self.enter_flow_narrowing(&g.var, env.get(&g.var), &g.then_ty));
                 if let Some(g) = &guard {
                     env.insert(g.var.clone(), g.then_ty.clone());
                 }
                 let errors = self.check_break_continue_target_body(body, env);
+                if let Some(saved_origin) = saved_origin {
+                    self.exit_flow_narrowing(saved_origin);
+                }
                 if let Some((var, previous)) = saved {
                     match previous {
                         Some(ty) => {
@@ -488,6 +834,8 @@ impl Checker {
                         }
                     }
                 }
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -503,28 +851,59 @@ impl Checker {
                 if let Some(s) = init {
                     self.check_stmt(s, env)?;
                 }
-                stabilize_loop_storage(self, stmt.span, body, update.as_deref(), env);
-                if let Some(c) = condition {
-                    self.infer_type_with_assignment_effects(c, env)?;
-                }
-                if let Some(s) = update {
-                    self.check_stmt(s, env)?;
-                }
-                let errors = self.check_break_continue_target_body(body, env);
-                if errors.is_empty() {
-                    Ok(())
-                } else {
-                    Err(CompileError::from_many(errors))
-                }
+                self.boxed_ref_aliased_locals.clear();
+                // A `for ($i = 0; …; $i++)` counter is the one index a still-empty array can be
+                // written through without leaving packed storage, because it is 0 at the first
+                // write and grows one slot at a time with the array. Recorded with the depth its
+                // body runs at, so a write under an `if` — which could skip a slot — is not
+                // covered. Saved and restored so a nested loop's counter cannot outlive it.
+                let saved_packed_counter = self.packed_loop_counter.take();
+                // A counter a reference already reaches is not provable from the body: `$r = &$i`
+                // before the loop lets `$r += 2` inside it advance `$i` with nothing in the body
+                // naming `$i`. `ref_aliased_locals` holds every local of this body a reference
+                // can reach, permanently, so such a counter takes hash storage.
+                self.packed_loop_counter =
+                    crate::types::checker::packed_counter::packed_for_counter(
+                        init.as_deref(),
+                        condition.as_ref(),
+                        update.as_deref(),
+                        body,
+                        self.local_conditional_depth,
+                    )
+                    .filter(|counter| !self.ref_aliased_locals.contains(&counter.name));
+                // Cloned first: the stabilizer takes `&mut Checker`, so the name cannot be
+                // borrowed out of `self` across the call.
+                let packed_counter_name = self
+                    .packed_loop_counter
+                    .as_ref()
+                    .map(|counter| counter.name.clone());
+                stabilize_loop_storage(
+                    self,
+                    stmt.span,
+                    body,
+                    update.as_deref(),
+                    env,
+                    packed_counter_name.as_deref(),
+                );
+                // The rest of the arm re-walks this same body, so the counter stays registered
+                // through it — the storage decision must not come out differently on the second
+                // walk than on the first — and is restored on every exit, error paths included.
+                let outcome = self.check_for_tail(condition.as_ref(), update.as_deref(), body, env);
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
+                self.packed_loop_counter = saved_packed_counter;
+                outcome
             }
             StmtKind::Throw(expr) => {
                 let thrown_ty = self.infer_type_with_assignment_effects(expr, env)?;
                 match thrown_ty {
                     PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name) =>
+                        if self.object_type_implements_throwable(&type_name)
+                            || self.object_type_may_be_eval_declared(&type_name) =>
                     {
                         Ok(())
                     }
+                    PhpType::Mixed if self.eval_barrier_active => Ok(()),
                     PhpType::Object(_) => Err(CompileError::new(
                         stmt.span,
                         "Type error: throw requires an object implementing Throwable",
@@ -541,12 +920,14 @@ impl Checker {
                 finally_body,
             } => {
                 let mut errors = Vec::new();
+                let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                 for s in try_body {
                     if let Err(error) = self.check_stmt(s, env) {
                         errors.extend(error.flatten());
                     }
                 }
                 for catch_clause in catches {
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     let mut resolved_types = Vec::new();
                     for raw_exception_type in &catch_clause.exception_types {
                         let exception_type =
@@ -583,11 +964,22 @@ impl Checker {
                     }
                 }
                 if let Some(body) = finally_body {
+                    let invalidated = self
+                        .conditional_boxed_ref_invalidations
+                        .last()
+                        .cloned()
+                        .unwrap_or_default();
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs
+                        .into_iter()
+                        .filter(|name| !invalidated.contains(name))
+                        .collect();
                     self.finally_break_continue_bases
                         .push(self.break_continue_depth);
                     errors.extend(self.check_body(body, env));
                     self.finally_break_continue_bases.pop();
                 }
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -675,7 +1067,7 @@ impl Checker {
     }
 
     /// Evaluates a side-effect-free integer expression used for SPL flag constants.
-    fn eval_static_int_expr(&self, expr: &Expr) -> Option<i64> {
+    pub(in crate::types::checker) fn eval_static_int_expr(&self, expr: &Expr) -> Option<i64> {
         match &expr.kind {
             ExprKind::IntLiteral(value) => Some(*value),
             ExprKind::Negate(inner) => self.eval_static_int_expr(inner).map(|value| -value),
@@ -738,6 +1130,29 @@ impl Checker {
     /// Increments `break_continue_depth` before checking the body and decrements it after,
     /// so that `break`/`continue` validation knows the correct nesting level. Returns all
     /// errors accumulated while checking the body; the caller decides whether to propagate them.
+    /// Checks a `for` loop's condition, update, and body re-walk, after its storage has settled.
+    fn check_for_tail(
+        &mut self,
+        condition: Option<&Expr>,
+        update: Option<&Stmt>,
+        body: &[Stmt],
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        if let Some(c) = condition {
+            self.infer_type_with_assignment_effects(c, env)?;
+        }
+        if let Some(s) = update {
+            self.check_stmt(s, env)?;
+        }
+        let errors = self.check_break_continue_target_body(body, env);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(CompileError::from_many(errors))
+        }
+    }
+
+    /// Checks a loop body with its control-flow depth and conservative property narrowings.
     fn check_break_continue_target_body(
         &mut self,
         body: &[Stmt],
@@ -778,6 +1193,8 @@ impl Checker {
 
     /// Copies callable signature, capture, first-class target, and callable-array metadata.
     fn copy_foreach_callable_metadata(&mut self, dest: &str, src: &str) {
+        let copied_target_version = self.callable_array_target_versions.get(src).copied();
+        self.mark_callable_array_target_write(dest);
         if let Some(return_ty) = self.closure_return_types.get(src).cloned() {
             self.closure_return_types.insert(dest.to_string(), return_ty);
         } else {
@@ -808,6 +1225,10 @@ impl Checker {
         if let Some(target) = self.callable_array_targets.get(src).cloned() {
             self.callable_array_targets
                 .insert(dest.to_string(), target);
+            if let Some(version) = copied_target_version {
+                self.callable_array_target_versions
+                    .insert(dest.to_string(), version);
+            }
         } else {
             self.callable_array_targets.remove(dest);
         }
@@ -821,6 +1242,7 @@ impl Checker {
 
     /// Clears callable metadata for a foreach key or value binding.
     fn clear_foreach_callable_metadata(&mut self, dest: &str) {
+        self.mark_callable_array_target_write(dest);
         self.closure_return_types.remove(dest);
         self.callable_sigs.remove(dest);
         self.callable_captures.remove(dest);
