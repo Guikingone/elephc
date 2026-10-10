@@ -91,12 +91,33 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
 /// Builds the method list for SPL empty iterator.
 fn spl_empty_iterator_methods() -> Vec<ClassMethod> {
     vec![
-        method_with_body("current", Vec::new(), Some(mixed_type()), null_return_body()),
-        method_with_body("key", Vec::new(), Some(mixed_type()), null_return_body()),
+        method_with_body(
+            "current",
+            Vec::new(),
+            Some(mixed_type()),
+            empty_iterator_bad_call_body("Accessing the value of an EmptyIterator"),
+        ),
+        method_with_body(
+            "key",
+            Vec::new(),
+            Some(mixed_type()),
+            empty_iterator_bad_call_body("Accessing the key of an EmptyIterator"),
+        ),
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), Vec::new()),
         method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), Vec::new()),
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), return_body(bool_expr(false))),
     ]
+}
+
+/// Builds an `EmptyIterator` reader that raises php's `BadMethodCallException`.
+///
+/// `EmptyIterator` never has a current element, and php refuses both readers with its own wording
+/// rather than answering null.
+fn empty_iterator_bad_call_body(message: &str) -> Vec<Stmt> {
+    vec![throw_stmt(new_object_expr(
+        "BadMethodCallException",
+        vec![string_expr(message)],
+    ))]
 }
 
 /// Builds the property list for array iterator.

@@ -53,6 +53,34 @@ echo "end";
     assert_eq!(out, "start:end");
 }
 
+/// Verifies `EmptyIterator::key()`/`current()` raise php's `BadMethodCallException`.
+///
+/// `EmptyIterator` never has a current element, and php refuses both readers with its own wording
+/// rather than answering null.
+#[test]
+fn test_empty_iterator_readers_raise_bad_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+$it = new EmptyIterator();
+var_dump($it->valid());
+try {
+    $it->key();
+} catch (BadMethodCallException $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    $it->current();
+} catch (BadMethodCallException $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nAccessing the key of an EmptyIterator\nAccessing the value of an EmptyIterator\n"
+    );
+}
+
 /// Verifies that array iterator iterates associative keys and values.
 #[test]
 fn test_array_iterator_iterates_associative_keys_and_values() {
