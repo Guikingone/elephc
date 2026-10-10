@@ -488,6 +488,34 @@ unlink("stream.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `SplFileObject::fwrite()` honours php's optional `$length` byte cap.
+///
+/// php writes at most `$length` bytes: an omitted/null length writes the whole string, a shorter
+/// one truncates, an oversized one still writes everything, and an explicit `0` writes nothing.
+#[test]
+fn test_spl_file_object_fwrite_honours_length() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$path = "fwlen.txt";
+$f = new SplFileObject($path, "w");
+$f->fwrite("test_write", 4);
+echo file_get_contents($path), "|";
+$f2 = new SplFileObject($path, "w");
+$f2->fwrite("test_write", 12);
+echo file_get_contents($path), "|";
+$f3 = new SplFileObject($path, "w");
+$f3->fwrite("test_write");
+echo file_get_contents($path), "|";
+$f4 = new SplFileObject($path, "w");
+$f4->fwrite("test_write", 0);
+echo file_get_contents($path);
+unlink($path);
+"#,
+    );
+    assert_eq!(out, "test|test_write|test_write|");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplTempFileObject uses a writable stream for basic read/write cycles.
 #[test]
 fn test_spl_temp_file_object_stream_read_write() {

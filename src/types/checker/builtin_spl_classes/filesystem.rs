@@ -411,7 +411,15 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Str),
             return_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
         ),
-        method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_file_object_fwrite_body()),
+        method_with_body(
+            "fwrite",
+            vec![
+                param("data", TypeExpr::Str),
+                param_default("length", TypeExpr::Nullable(Box::new(TypeExpr::Int)), null_expr()),
+            ],
+            Some(TypeExpr::Int),
+            spl_file_object_fwrite_body(),
+        ),
         method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("fflush", vec![file_stream_expr()]))),
         method_with_body("flock", vec![param("operation", TypeExpr::Int)], Some(TypeExpr::Bool), return_body(function_call("flock", vec![file_stream_expr(), var_expr("operation")]))),
         method_with_body("ftruncate", vec![param("size", TypeExpr::Int)], Some(TypeExpr::Bool), spl_file_object_ftruncate_body()),
@@ -530,7 +538,15 @@ fn spl_temp_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Str),
             spl_temp_file_object_fread_body(),
         ),
-        method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_temp_file_object_fwrite_body()),
+        method_with_body(
+            "fwrite",
+            vec![
+                param("data", TypeExpr::Str),
+                param_default("length", TypeExpr::Nullable(Box::new(TypeExpr::Int)), null_expr()),
+            ],
+            Some(TypeExpr::Int),
+            spl_temp_file_object_fwrite_body(),
+        ),
         method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), spl_temp_file_object_fflush_body()),
         method_with_body("ftruncate", vec![param("size", TypeExpr::Int)], Some(TypeExpr::Bool), spl_temp_file_object_ftruncate_body()),
         method_with_body("fstat", Vec::new(), Some(mixed_type()), spl_temp_file_object_fstat_body()),
@@ -1061,6 +1077,7 @@ fn spl_temp_file_object_fread_body() -> Vec<Stmt> {
 /// Builds SplTempFileObject fwrite() with threshold-based spill to a temp file.
 fn spl_temp_file_object_fwrite_body() -> Vec<Stmt> {
     let mut body = vec![
+        fwrite_length_clamp_stmt(),
         if_stmt(
             temp_spilled_expr(),
             spl_temp_file_object_spilled_fwrite_body(),
@@ -1451,11 +1468,31 @@ fn spl_file_object_get_current_line_body() -> Vec<Stmt> {
 /// Builds SplFileObject fwrite().
 fn spl_file_object_fwrite_body() -> Vec<Stmt> {
     let mut body = vec![
+        fwrite_length_clamp_stmt(),
         assign_stmt("bytes", function_call("fwrite", vec![file_stream_expr(), var_expr("data")])),
     ];
     body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));
     body.push(return_stmt(var_expr("bytes")));
     body
+}
+
+/// Builds the `$length` clamp shared by both `fwrite()` implementations.
+///
+/// php's `?int $length` is null when omitted (write the whole string) and an explicit byte count
+/// otherwise, so a shorter request truncates `$data` before it is written: `0` writes nothing and
+/// an oversized request still writes everything (`substr()` caps at the string length).
+fn fwrite_length_clamp_stmt() -> Stmt {
+    if_stmt(
+        binary_expr(var_expr("length"), BinOp::StrictNotEq, null_expr()),
+        vec![assign_stmt(
+            "data",
+            function_call(
+                "substr",
+                vec![var_expr("data"), int_expr(0), var_expr("length")],
+            ),
+        )],
+        None,
+    )
 }
 
 /// Builds SplFileObject ftruncate().
