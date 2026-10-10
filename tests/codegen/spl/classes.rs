@@ -694,6 +694,70 @@ echo count($stack), "|", count($stackClone), "\n";
     assert_eq!(out, "2|1\n3|1\n1|0\n");
 }
 
+/// Verifies the per-class default iterator mode and traversal direction.
+///
+/// php seeds SplStack with LIFO (`getIteratorMode()` 6) and SplQueue with FIFO (4), while the
+/// base SplDoublyLinkedList starts at 0. elephc started every list at 0, so an SplStack iterated
+/// forwards and reported the wrong mode.
+#[test]
+fn test_spl_list_default_iterator_modes() {
+    let out = compile_and_run(
+        r#"<?php
+$stack = new SplStack();
+echo $stack->getIteratorMode(), "\n";
+$queue = new SplQueue();
+echo $queue->getIteratorMode(), "\n";
+$dll = new SplDoublyLinkedList();
+echo $dll->getIteratorMode(), "\n";
+$stack->push(1);
+$stack->push(2);
+foreach ($stack as $v) {
+    echo $v;
+}
+echo "\n";
+$queue->enqueue(1);
+$queue->enqueue(2);
+foreach ($queue as $v) {
+    echo $v;
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "6\n4\n0\n21\n12\n");
+}
+
+/// Verifies `var_dump` renders the SplDoublyLinkedList family's two internal fields.
+///
+/// php prints the list's private `flags` (iterator mode) and `dllist` (element storage) fields;
+/// without a var_dump adapter the class rendered as an empty `(0) {}` object.
+#[test]
+fn test_spl_doubly_linked_list_var_dump_renders_fields() {
+    let out = compile_and_run(
+        r#"<?php
+$dll = new SplDoublyLinkedList();
+$dll->push("hai");
+$dll->push("thar");
+var_dump($dll);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(SplDoublyLinkedList)#1 (2) {\n",
+            "  [\"flags\":\"SplDoublyLinkedList\":private]=>\n",
+            "  int(0)\n",
+            "  [\"dllist\":\"SplDoublyLinkedList\":private]=>\n",
+            "  array(2) {\n",
+            "    [0]=>\n",
+            "    string(3) \"hai\"\n",
+            "    [1]=>\n",
+            "    string(4) \"thar\"\n",
+            "  }\n",
+            "}\n",
+        )
+    );
+}
+
 /// Verifies that ordinary SplFixedArray allocation is unaffected by the storage-size guard.
 #[test]
 fn test_spl_fixed_array_normal_size_still_works() {

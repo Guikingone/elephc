@@ -301,19 +301,29 @@ pub(crate) fn emit_runtime_data_user(
     // Per-class var_dump adapter tables for intrinsic containers. A zero entry means the class
     // is rendered by the generic property walker; a non-zero entry points at a helper pair that
     // supplies the `object(C) (n)` count and renders the class's own payload layout instead.
-    for (symbol, adapter) in [
-        ("_class_vd_count_ptrs", "__rt_vd_fixed_array_count"),
-        ("_class_vd_body_ptrs", "__rt_vd_fixed_array_body"),
+    for (symbol, fixed_adapter, dll_adapter) in [
+        (
+            "_class_vd_count_ptrs",
+            "__rt_vd_fixed_array_count",
+            "__rt_vd_dll_count",
+        ),
+        (
+            "_class_vd_body_ptrs",
+            "__rt_vd_fixed_array_body",
+            "__rt_vd_dll_body",
+        ),
     ] {
         out.push_str(&format!(".globl {symbol}\n{symbol}:\n"));
         if let Some(max_class_id) = max_class_id {
             for class_id in 0..=max_class_id {
-                let is_fixed_array =
-                    class_name_by_id.get(&class_id).map(|name| name.as_str()) == Some("SplFixedArray");
-                if is_fixed_array {
-                    out.push_str(&format!("    .quad {adapter}\n"));
-                } else {
-                    out.push_str("    .quad 0\n");
+                let adapter = match class_name_by_id.get(&class_id).map(|name| name.as_str()) {
+                    Some("SplFixedArray") => Some(fixed_adapter),
+                    Some("SplDoublyLinkedList" | "SplStack" | "SplQueue") => Some(dll_adapter),
+                    _ => None,
+                };
+                match adapter {
+                    Some(adapter) => out.push_str(&format!("    .quad {adapter}\n")),
+                    None => out.push_str("    .quad 0\n"),
                 }
             }
         }

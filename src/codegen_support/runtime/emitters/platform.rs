@@ -134,6 +134,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_var_dump_array_float(emitter);
     io::emit_var_dump_indexed(emitter);
     io::emit_vd_container_adapters(emitter);
+    io::emit_vd_dll_adapters(emitter);
     io::emit_var_dump_value(emitter);
     io::emit_var_dump_open_container(emitter);
     io::emit_var_dump_close_container(emitter);

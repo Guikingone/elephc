@@ -70,7 +70,9 @@
 
 use super::super::objects::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
-use crate::codegen_support::runtime::spl::SPL_FIXED_STORAGE_OFFSET;
+use crate::codegen_support::runtime::spl::{
+    SPL_DLL_ITER_MODE_OFFSET, SPL_DLL_STORAGE_OFFSET, SPL_FIXED_STORAGE_OFFSET,
+};
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -448,6 +450,80 @@ pub fn emit_vd_container_adapters(emitter: &mut Emitter) {
     emitter.label_global("__rt_vd_fixed_array_body");
     emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load the fixed-array storage
     emitter.instruction("b __rt_var_dump_indexed");                             // render each slot as an indexed element
+}
+
+/// Emits the `SplDoublyLinkedList` family var_dump adapters.
+///
+/// PHP renders the list's internal state as two private fields — `flags` (the iterator mode) and
+/// `dllist` (the indexed element storage) — that the declared-property walk cannot see. A count
+/// adapter reports the fixed field count and a body adapter writes both fields by hand, delegating
+/// the mode to the int renderer and the storage to the indexed-array renderer.
+pub fn emit_vd_dll_adapters(emitter: &mut Emitter) {
+    const FLAGS_KEY: &str = "\"flags\":\"SplDoublyLinkedList\":private";
+    const DLLIST_KEY: &str = "\"dllist\":\"SplDoublyLinkedList\":private";
+
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.blank();
+        emitter.comment("--- runtime: vd_dll_adapters ---");
+        emitter.label_global("__rt_vd_dll_count");
+        emitter.instruction("mov rax, 2");                                      // the list always renders its flags and dllist fields
+        emitter.instruction("ret");                                             // return the fixed field count
+        emitter.label_global("__rt_vd_dll_body");
+        emitter.instruction("push rbp");                                        // save the caller frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // establish the adapter frame
+        emitter.instruction("sub rsp, 16");                                     // reserve the source spill slot
+        emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                    // save the source payload
+        abi::emit_symbol_address(emitter, "rdi", "_vd_dll_flags_key");
+        emitter.instruction(&format!("mov esi, {}", FLAGS_KEY.len()));          // pass the rendered flags key length
+        emitter.instruction("call __rt_var_dump_emit_object_key");              // emit `<indent>["flags":...]=>\n`
+        emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                     // reload the source payload
+        emitter.instruction(&format!("mov rsi, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load the iterator mode
+        emitter.instruction("mov edi, 0");                                      // runtime tag 0 = int
+        emitter.instruction("xor edx, edx");                                    // integer values use no high word
+        emitter.instruction("call __rt_var_dump_value");                        // emit the mode value line
+        abi::emit_symbol_address(emitter, "rdi", "_vd_dll_dllist_key");
+        emitter.instruction(&format!("mov esi, {}", DLLIST_KEY.len()));         // pass the rendered dllist key length
+        emitter.instruction("call __rt_var_dump_emit_object_key");              // emit `<indent>["dllist":...]=>\n`
+        emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                     // reload the source payload
+        emitter.instruction(&format!("mov rsi, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); // load the internal storage array
+        emitter.instruction("mov edi, 4");                                      // runtime tag 4 = indexed array
+        emitter.instruction("xor edx, edx");                                    // arrays use no high word
+        emitter.instruction("call __rt_var_dump_value");                        // emit the storage array block
+        emitter.instruction("mov rsp, rbp");                                    // release the adapter frame
+        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
+        emitter.instruction("ret");                                             // return to the object walker
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: vd_dll_adapters ---");
+    emitter.label_global("__rt_vd_dll_count");
+    emitter.instruction("mov x0, #2");                                          // the list always renders its flags and dllist fields
+    emitter.instruction("ret");                                                 // return the fixed field count
+    emitter.label_global("__rt_vd_dll_body");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve the source spill slot
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the adapter frame
+    emitter.instruction("str x0, [sp, #0]");                                    // save the source payload
+    abi::emit_symbol_address(emitter, "x1", "_vd_dll_flags_key");
+    emitter.instruction(&format!("mov x2, #{}", FLAGS_KEY.len()));              // pass the rendered flags key length
+    emitter.instruction("bl __rt_var_dump_emit_object_key");                    // emit `<indent>["flags":...]=>\n`
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source payload
+    emitter.instruction(&format!("ldr x1, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load the iterator mode
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
+    emitter.instruction("mov x2, #0");                                          // integer values use no high word
+    emitter.instruction("bl __rt_var_dump_value");                              // emit the mode value line
+    abi::emit_symbol_address(emitter, "x1", "_vd_dll_dllist_key");
+    emitter.instruction(&format!("mov x2, #{}", DLLIST_KEY.len()));             // pass the rendered dllist key length
+    emitter.instruction("bl __rt_var_dump_emit_object_key");                    // emit `<indent>["dllist":...]=>\n`
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source payload
+    emitter.instruction(&format!("ldr x1, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // load the internal storage array
+    emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
+    emitter.instruction("mov x2, #0");                                          // arrays use no high word
+    emitter.instruction("bl __rt_var_dump_value");                              // emit the storage array block
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the adapter frame
+    emitter.instruction("ret");                                                 // return to the object walker
 }
 
 /// `__rt_var_dump_open_object`: emit `<indent>object(NAME) (COUNT) {\n`.

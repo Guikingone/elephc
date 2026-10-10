@@ -781,6 +781,16 @@ pub(crate) fn emit_runtime_data_fixed(
             "_iterator_iterator_downcast_msg",
             "Class to downcast to not found or not base class or does not implement Traversable",
         ),
+        // Rendered `var_dump` keys for the SplDoublyLinkedList family's two internal fields,
+        // printed as `["flags":"SplDoublyLinkedList":private]` / `["dllist":...:private]`.
+        (
+            "_vd_dll_flags_key",
+            "\"flags\":\"SplDoublyLinkedList\":private",
+        ),
+        (
+            "_vd_dll_dllist_key",
+            "\"dllist\":\"SplDoublyLinkedList\":private",
+        ),
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
