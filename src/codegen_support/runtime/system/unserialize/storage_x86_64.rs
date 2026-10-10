@@ -22,7 +22,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.label_global("__rt_obj_store_prop");
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the store frame
-    emitter.instruction("sub rsp, 80");                                         // reserve frame slots
+    emitter.instruction("sub rsp, 96");                                         // reserve frame slots (class id spill included)
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the key pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length
@@ -151,6 +151,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     // -- declared-type mismatch: compose and throw PHP's hydration TypeError --
     emitter.label("__rt_obj_store_prop_type_error");
+    // The owning Mixed box owns the object, so releasing it can free the very object whose header
+    // names the diagnostic's declaring class. Read the class id FIRST, exactly as the AArch64 twin
+    // saves `x9` before its release; reading it afterwards yielded class id 0 (the first class in
+    // the table) and named the wrong class in the TypeError.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // class id from the object header
+    emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // keep the class id across the owning-box release
     // The decoder published this object's owning Mixed box before parsing its body, so a
     // hydration TypeError must release it here: the throw unwinds past `__rt_unser_obj_fail_x`,
     // the only other place that drops the box, and `__rt_unserialize_end` never owns it.
@@ -162,8 +169,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // rejected value box
     emitter.instruction("mov rdi, QWORD PTR [r9 + 8]");                         // rejected value payload (object class resolution)
     emitter.instruction("mov rax, QWORD PTR [r9]");                             // rejected value runtime tag
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // class id from the object header
+    emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // class id, read before the owning box was released
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // row index
     emitter.instruction("lea r11, [rip + _class_serpdiag_ptrs]");               // diagnostic pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // diagnostic rows for this class
@@ -175,7 +181,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, {}", UNSER_PROPERTY_ASSIGN_PREFIX.len())); // prefix byte length
     emitter.instruction("mov r10, 1");                                          // spell a bool value as true/false
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // hand the rejected value box to the helper for release
-    emitter.instruction("add rsp, 80");                                         // drop the store frame so the error helper sees a normal entry
+    emitter.instruction("add rsp, 96");                                         // drop the store frame so the error helper sees a normal entry
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_unser_throw_type_error");                     // close the context and throw the TypeError
     emitter.label("__rt_obj_store_prop_next");
@@ -185,7 +191,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_obj_store_prop_loop");                        // continue scanning
     emitter.label("__rt_obj_store_prop_done");
     emitter.label("__rt_obj_store_prop_ret");
-    emitter.instruction("add rsp, 80");                                         // deallocate the store frame
+    emitter.instruction("add rsp, 96");                                         // deallocate the store frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
 
