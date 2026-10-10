@@ -142,19 +142,6 @@ pub(crate) fn lower_array_walk_recursive(
     )? {
         return Ok(());
     }
-    if let PhpType::AssocArray { value, .. } = ctx.value_php_type(array)?.codegen_repr() {
-        if value.codegen_repr() == PhpType::Mixed {
-            super::boxed_walk::lower_assoc_array_walk(
-                ctx,
-                inst,
-                array,
-                callback,
-                "array_walk_recursive",
-                true,
-            )?;
-            return Ok(());
-        }
-    }
     require_array_like_operand(ctx.value_php_type(array)?, "array_walk_recursive")?;
     let source_arg_ty = PhpType::Array(Box::new(PhpType::Int));
     lower_single_array_callback_builtin(

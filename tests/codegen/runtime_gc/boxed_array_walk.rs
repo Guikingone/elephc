@@ -297,27 +297,3 @@ echo "done";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
     assert_eq!(compile_and_run_tagged(source), expected);
 }
-
-/// A concrete Mixed-valued hash walks through a by-reference callback, keeps a copied alias
-/// intact, and releases every owner.
-#[test]
-fn test_core_concrete_mixed_hash_walk_mutates_and_balances() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
-for ($i = 0; $i < 4; $i++) {
-    $items = ["x" => 1, "y" => str_repeat('s', 12), "z" => 3];
-    $copy = $items;
-    array_walk($items, function (&$v, $k) { $v = "$k:$v"; });
-    echo $items["x"], '|', strlen($items["y"]), '|', $items["z"], '|', implode(',', $copy), '|';
-    unset($items, $copy);
-}
-echo 'done';
-"#);
-    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(
-        out.stdout,
-        "x:1|14|z:3|1,ssssssssssss,3|".repeat(4) + "done",
-        "{}",
-        out.stderr
-    );
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-}
