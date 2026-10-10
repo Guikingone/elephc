@@ -449,6 +449,11 @@ mod tests {
             let hash_pop = &asm[asm.find("__rt_hash_pop_boxed:").unwrap()..];
             assert!(hash_pop.find("__rt_incref").unwrap() < hash_pop.find("__rt_hash_unset").unwrap(), "{name}");
             assert!(hash_pop.contains("__rt_mixed_from_value"), "{name}");
+            let hash_shift = &asm[asm.find("__rt_hash_shift_boxed:").unwrap()..];
+            let shift_unset = hash_shift.find("__rt_hash_unset").unwrap();
+            assert!(hash_shift.find("__rt_incref").unwrap() < shift_unset, "{name}");
+            assert!(hash_shift.find("__rt_mixed_from_value").unwrap() < shift_unset, "{name}");
+            assert!(hash_shift.find("__rt_hash_spread").unwrap() > shift_unset, "{name}");
             if name == "linux-x86_64" {
                 let release = take.find("call __rt_decref_hash").unwrap();
                 let reload = take[..release].rfind("mov rax, QWORD PTR [rbp - 16]").unwrap();

@@ -150,7 +150,12 @@ pub(super) fn lower_hash_reindexing_sort(
             abi::emit_reg_move(ctx.emitter, arg0, result_reg);
             abi::emit_call_label(ctx.emitter, helper);
         }
-        None => emit_mixed_slot_sort(ctx, name)?,
+        None => {
+            // `emit_mixed_slot_sort` reads its array from the first argument register, so move it
+            // there first (a no-op on AArch64, where that is also the result register).
+            abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+            emit_mixed_slot_sort(ctx, name)?;
+        }
     }
 
     // Rebuild a hash keyed 0..n-1 out of the sorted list. `__rt_array_slice_to_hash` reads
