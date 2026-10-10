@@ -609,6 +609,36 @@ try {
     assert_eq!(out, "[] operator not supported for SplFixedArray\n");
 }
 
+/// Verifies `SplFixedArray` offsets coerce a numeric string the way php does.
+///
+/// php converts `"4"` to the integer offset 4 for every ArrayAccess operation, so a string key
+/// reaches the same slot as the number. A negative numeric string reaches the range check, which
+/// php rejects with `OutOfBoundsException: Index invalid or out of range`.
+#[test]
+fn test_spl_fixed_array_numeric_string_offsets_coerce() {
+    let out = compile_and_run(
+        r#"<?php
+$fixed = new SplFixedArray(5);
+for ($i = 0; $i < 5; $i++) {
+    $fixed[$i] = "v$i";
+}
+$fixed->offsetUnset("4");
+var_dump($fixed[4]);
+var_dump($fixed["3"]);
+var_dump(isset($fixed["2"]));
+try {
+    $fixed["-1"];
+} catch (OutOfBoundsException $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nstring(2) \"v3\"\nbool(true)\nIndex invalid or out of range\n"
+    );
+}
+
 // Tests that an SplFixedArray size whose `size * 8` storage payload wraps the machine word is
 // rejected by the shared `__rt_array_new` guard instead of allocating a tiny block behind a header
 // that advertises 2^61 slots. PHP reports the same class of failure as

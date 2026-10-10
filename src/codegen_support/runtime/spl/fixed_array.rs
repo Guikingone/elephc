@@ -383,10 +383,11 @@ fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
 }
 
 /// Emits the common offset validation prefix for aarch64 offset operations.
-/// Saves frame state, unboxes the offset argument, validates it is a non-negative integer
-/// within the fixed array range, and branches to `type_label` on TypeError or `range_label`
-/// on out-of-range. On success, x9 = storage pointer, x10 = integer offset.
-/// Clobbers: x0, x1, x9, x10, x11, x12. Saves and restores x29, x30.
+/// Saves frame state, unboxes the offset argument, accepts a non-negative integer within the
+/// fixed array range, and coerces a numeric-string offset php would convert, branching to
+/// `type_label` on TypeError or `range_label` on out-of-range. On success, x9 = storage pointer,
+/// x10 = integer offset.
+/// Clobbers: x0, x1, x2, x3, x9, x10, x11, x12. Saves and restores x29, x30.
 fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_label: &str) {
     emitter.instruction("sub sp, sp, #64");                                     // reserve common offset frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
@@ -396,7 +397,13 @@ fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_lab
     emit_unbox_saved_offset_aarch64(emitter);
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload offset tag
     emitter.instruction(&format!("cmp x12, #{}", INT_TAG));                     // fixed-array offsets must be integers
-    emitter.instruction(&format!("b.ne {}", type_label));                       // reject non-integer offsets
+    emitter.instruction(&format!("b.eq {}", coerce_label(type_label, "_int")));
+    emitter.instruction("cmp x12, #1");                                         // php coerces a numeric-string offset to its integer value
+    emitter.instruction(&format!("b.ne {}", type_label));                       // any other type is rejected
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload boxed offset for the string payload
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x1 = string pointer, x2 = string length
+    emit_numeric_string_offset_aarch64(emitter, type_label);
+    emitter.label(&coerce_label(type_label, "_int"));
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload integer offset
     emitter.instruction("cmp x10, #0");                                         // reject negative offsets
     emitter.instruction(&format!("b.lt {}", range_label));                      // negative offsets are invalid
@@ -405,6 +412,64 @@ fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_lab
     emitter.instruction("ldr x11, [x9]");                                       // load fixed size
     emitter.instruction("cmp x10, x11");                                        // compare offset against fixed size
     emitter.instruction(&format!("b.hs {}", range_label));                      // reject offsets outside fixed range
+}
+
+/// Builds a coercion label unique to one offset helper from its type-throw label.
+fn coerce_label(type_label: &str, suffix: &str) -> String {
+    format!("{type_label}{suffix}")
+}
+
+/// Emits the aarch64 numeric-string offset coercion.
+///
+/// x1 = string pointer, x2 = string length. An optional leading sign followed by one or more
+/// ASCII digits is parsed into x10 and stored at [sp+#32]; a non-digit, a missing sign prefix, or
+/// a string with no digits at all jumps to `type_label`, php's rejection for an unusable offset.
+/// Clobbers: x1-x3, x9-x12.
+fn emit_numeric_string_offset_aarch64(emitter: &mut Emitter, type_label: &str) {
+    emitter.instruction("mov x3, #0");                                          // sign flag: 0 = positive
+    emitter.instruction("ldrb w9, [x1]");                                       // peek the first byte for a sign
+    emitter.instruction("cmp w9, #0x2D");                                       // '-'
+    emitter.instruction(&format!("b.eq {}", coerce_label(type_label, "_coerce_neg")));
+    emitter.instruction("cmp w9, #0x2B");                                       // '+'
+    emitter.instruction(&format!("b.eq {}", coerce_label(type_label, "_coerce_plus")));
+    emitter.instruction("mov x10, #0");                                         // accumulated value
+    emitter.instruction("mov x11, #0");                                         // byte index
+    emitter.instruction(&format!("b {}", coerce_label(type_label, "_coerce_digits")));
+    emitter.label(&coerce_label(type_label, "_coerce_neg"));
+    emitter.instruction("mov x3, #1");                                          // remember the minus sign
+    emitter.instruction("mov x10, #0");
+    emitter.instruction("mov x11, #1");                                         // skip the sign byte
+    emitter.instruction(&format!("b {}", coerce_label(type_label, "_coerce_digits")));
+    emitter.label(&coerce_label(type_label, "_coerce_plus"));
+    emitter.instruction("mov x3, #0");
+    emitter.instruction("mov x10, #0");
+    emitter.instruction("mov x11, #1");                                         // skip the sign byte
+    emitter.label(&coerce_label(type_label, "_coerce_digits"));
+    emitter.instruction("cmp x11, x2");                                         // consumed every byte?
+    emitter.instruction(&format!("b.hs {}", coerce_label(type_label, "_coerce_done")));
+    emitter.instruction("ldrb w9, [x1, x11]");                                  // load the next digit candidate
+    emitter.instruction("sub w9, w9, #0x30");                                   // ASCII digit -> 0..9
+    emitter.instruction("cmp w9, #9");
+    emitter.instruction(&format!("b.hi {}", type_label));                       // a non-digit cannot be coerced
+    emitter.instruction("mov x12, #10");
+    emitter.instruction("mul x10, x10, x12");                                   // shift the accumulator one decimal place
+    emitter.instruction("add x10, x10, x9");                                    // add the new digit
+    emitter.instruction("add x11, x11, #1");                                    // advance to the next byte
+    emitter.instruction(&format!("b {}", coerce_label(type_label, "_coerce_digits")));
+    emitter.label(&coerce_label(type_label, "_coerce_done"));
+    emitter.instruction("cmp x3, #0");                                          // was a minus sign skipped?
+    emitter.instruction(&format!("b.eq {}", coerce_label(type_label, "_coerce_plain")));
+    emitter.instruction("cmp x2, #2");                                          // "-" alone carried no digits
+    emitter.instruction(&format!("b.lt {}", type_label));
+    emitter.instruction(&format!("b {}", coerce_label(type_label, "_coerce_store")));
+    emitter.label(&coerce_label(type_label, "_coerce_plain"));
+    emitter.instruction("cmp x2, #1");                                          // an empty string carried no digits
+    emitter.instruction(&format!("b.lt {}", type_label));
+    emitter.label(&coerce_label(type_label, "_coerce_store"));
+    emitter.instruction(&format!("cbz x3, {}", coerce_label(type_label, "_coerce_put")));
+    emitter.instruction("neg x10, x10");                                        // a minus sign negates the accumulated value
+    emitter.label(&coerce_label(type_label, "_coerce_put"));
+    emitter.instruction("str x10, [sp, #32]");                                  // store the coerced offset for the caller
 }
 
 /// Emits the aarch64 helper that unboxes the saved boxed offset argument.
@@ -1081,7 +1146,13 @@ fn emit_offset_prefix_x86_64(emitter: &mut Emitter, type_label: &str, range_labe
     emit_unbox_saved_offset_x86_64(emitter);
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload offset tag
     emitter.instruction(&format!("cmp r12, {}", INT_TAG));                      // fixed-array offsets must be integers
-    emitter.instruction(&format!("jne {}", type_label));                        // reject non-integer offsets
+    emitter.instruction(&format!("je {}", coerce_label(type_label, "_int_x86")));
+    emitter.instruction("cmp r12, 1");                                          // php coerces a numeric-string offset to its integer value
+    emitter.instruction(&format!("jne {}", type_label));                        // any other type is rejected
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload boxed offset for the string payload
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = tag, rdi = string pointer, rdx = string length
+    emit_numeric_string_offset_x86_64(emitter, type_label);
+    emitter.label(&coerce_label(type_label, "_int_x86"));
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload integer offset
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction(&format!("jl {}", range_label));                        // negative offsets are invalid
@@ -1090,6 +1161,60 @@ fn emit_offset_prefix_x86_64(emitter: &mut Emitter, type_label: &str, range_labe
     emitter.instruction("mov r11, QWORD PTR [r9]");                             // load fixed size
     emitter.instruction("cmp r10, r11");                                        // compare offset against fixed size
     emitter.instruction(&format!("jae {}", range_label));                       // reject offsets outside fixed range
+}
+
+/// Emits the x86_64 numeric-string offset coercion.
+///
+/// rdi = string pointer, rdx = string length. An optional leading sign followed by one or more
+/// ASCII digits is parsed and stored at [rbp-40]; a non-digit, a missing sign prefix, or a string
+/// with no digits at all jumps to `type_label`, php's rejection for an unusable offset.
+/// Clobbers: rdi, rsi, rdx, rcx, r8-r11.
+fn emit_numeric_string_offset_x86_64(emitter: &mut Emitter, type_label: &str) {
+    emitter.instruction("mov rsi, rdi");                                        // park the string pointer in rsi for the scan
+    emitter.instruction("mov r9, 0");                                           // sign flag: 0 = positive
+    emitter.instruction("movzx r10d, BYTE PTR [rsi]");                          // peek the first byte for a sign
+    emitter.instruction("cmp r10b, 0x2D");                                      // '-'
+    emitter.instruction(&format!("je {}", coerce_label(type_label, "_coerce_neg_x86")));
+    emitter.instruction("cmp r10b, 0x2B");                                      // '+'
+    emitter.instruction(&format!("je {}", coerce_label(type_label, "_coerce_plus_x86")));
+    emitter.instruction("mov r8, 0");                                           // accumulated value
+    emitter.instruction("mov rcx, 0");                                          // byte index
+    emitter.instruction(&format!("jmp {}", coerce_label(type_label, "_coerce_digits_x86")));
+    emitter.label(&coerce_label(type_label, "_coerce_neg_x86"));
+    emitter.instruction("mov r9, 1");                                           // remember the minus sign
+    emitter.instruction("mov r8, 0");
+    emitter.instruction("mov rcx, 1");                                          // skip the sign byte
+    emitter.instruction(&format!("jmp {}", coerce_label(type_label, "_coerce_digits_x86")));
+    emitter.label(&coerce_label(type_label, "_coerce_plus_x86"));
+    emitter.instruction("mov r9, 0");
+    emitter.instruction("mov r8, 0");
+    emitter.instruction("mov rcx, 1");                                          // skip the sign byte
+    emitter.label(&coerce_label(type_label, "_coerce_digits_x86"));
+    emitter.instruction("cmp rcx, rdx");                                        // consumed every byte?
+    emitter.instruction(&format!("jae {}", coerce_label(type_label, "_coerce_done_x86")));
+    emitter.instruction("movzx r10d, BYTE PTR [rsi + rcx]");                    // load the next digit candidate
+    emitter.instruction("sub r10b, 0x30");                                      // ASCII digit -> 0..9
+    emitter.instruction("cmp r10b, 9");
+    emitter.instruction(&format!("ja {}", type_label));                         // a non-digit cannot be coerced
+    emitter.instruction("mov r11, 10");
+    emitter.instruction("imul r8, r11");                                        // shift the accumulator one decimal place
+    emitter.instruction("add r8, r10");                                         // add the new digit
+    emitter.instruction("add rcx, 1");                                          // advance to the next byte
+    emitter.instruction(&format!("jmp {}", coerce_label(type_label, "_coerce_digits_x86")));
+    emitter.label(&coerce_label(type_label, "_coerce_done_x86"));
+    emitter.instruction("test r9, r9");                                         // was a minus sign skipped?
+    emitter.instruction(&format!("je {}", coerce_label(type_label, "_coerce_plain_x86")));
+    emitter.instruction("cmp rdx, 2");                                          // "-" alone carried no digits
+    emitter.instruction(&format!("jl {}", type_label));
+    emitter.instruction(&format!("jmp {}", coerce_label(type_label, "_coerce_store_x86")));
+    emitter.label(&coerce_label(type_label, "_coerce_plain_x86"));
+    emitter.instruction("cmp rdx, 1");                                          // an empty string carried no digits
+    emitter.instruction(&format!("jl {}", type_label));
+    emitter.label(&coerce_label(type_label, "_coerce_store_x86"));
+    emitter.instruction(&format!("jz {}", coerce_label(type_label, "_coerce_put_x86")));
+    emitter.instruction("neg r8");                                              // a minus sign negates the accumulated value
+    emitter.label(&coerce_label(type_label, "_coerce_put_x86"));
+    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // store the coerced offset for the caller
 }
 
 /// Emits the x86_64 helper that unboxes the saved boxed offset argument.
