@@ -121,3 +121,26 @@ echo 'done';
     assert_eq!(out.stdout, "5|12|9|zzzzzzzzzzzz,9,aaaaaaaaaaaa,b,3|3|".repeat(4) + "done", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A nested mutating argument republishes the receiver's table; `array_unshift` must reload it and
+/// stay heap-balanced.
+#[test]
+fn test_core_concrete_mixed_hash_unshift_reloads_receiver_after_argument_mutation() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 4; $i++) {
+    $items = ["k1" => str_repeat('a', 12), "k2" => "y", "z" => 3];
+    array_unshift($items, array_shift($items));
+    echo count($items), '|', strlen($items[0]), '|', implode(',', $items), '|';
+    unset($items);
+}
+echo 'done';
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "3|12|aaaaaaaaaaaa,y,3|".repeat(4) + "done",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

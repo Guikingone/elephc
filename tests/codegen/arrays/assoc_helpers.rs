@@ -749,3 +749,20 @@ var_dump($copy);
 array(2) {\n  [\"x\"]=>\n  int(1)\n  [\"y\"]=>\n  string(1) \"s\"\n}\n"
     );
 }
+
+/// A mutating argument expression must not leave `array_unshift` using the stale receiver snapshot
+/// the EIR took before argument evaluation: the nested call republishes the receiver's table.
+#[test]
+fn test_array_unshift_mixed_valued_hash_reloads_receiver_after_argument_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["k1" => "x", "k2" => "y", "z" => 3];
+array_unshift($a, array_shift($a));
+echo count($a), "|", implode(",", $a), "\n";
+$b = ["k1" => "x", "k2" => "y", "z" => 3];
+array_unshift($b, array_pop($b), count($b));
+echo count($b), "|", implode(",", $b), "\n";
+"#,
+    );
+    assert_eq!(out, "3|x,y,3\n4|3,2,x,y\n");
+}

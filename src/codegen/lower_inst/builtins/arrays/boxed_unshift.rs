@@ -16,11 +16,15 @@ pub(super) fn lower_boxed_array_unshift(
     inst: &Instruction,
     array: ValueId,
 ) -> Result<()> {
-    ReceiverPlace::resolve(ctx, array)?.require_writable("array_unshift")?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable("array_unshift")?;
     validate_receiver(ctx, array)?;
     emit_prefix(ctx, &inst.operands[1..])?;
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result);
+    // An argument expression may have mutated the receiver after the EIR receiver load, so
+    // re-materialize the local before the cell is separated.
+    receiver.reload_local_value(ctx, array)?;
     // Prefix values can themselves contain the original cell. Separate only
     // after retaining them so prepending the receiver snapshots its old value.
     super::boxed_mutation::prepare_boxed_array_receiver(ctx, array, "array_unshift")?;
@@ -71,6 +75,9 @@ pub(super) fn lower_assoc_array_unshift(
     let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_push_reg(ctx.emitter, result);                                    // park the owned prefix at stack offset 0
+    // An argument expression may have mutated the receiver after the EIR receiver load, so
+    // re-materialize the local before the split and merge read it.
+    receiver.reload_local_value(ctx, array)?;
     receiver.prepare_consuming_storeback(ctx, array)?;
     super::sort_dispatch::ensure_unique_hash_sort_source(ctx, array)?;
     ctx.load_value_to_reg(array, result)?;                                      // borrow the concrete hash being replaced
