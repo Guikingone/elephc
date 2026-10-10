@@ -318,7 +318,11 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-/// Lowers `fputcsv(stream, fields, separator?, enclosure?)` for string arrays.
+/// Lowers `fputcsv(stream, fields, separator?, enclosure?, ...)` for string arrays.
+///
+/// The configured separator and enclosure travel to `__rt_fputcsv` as pointer/length pairs. php
+/// defaults both when the caller omits them, so zero-length sentinels are emitted first and only
+/// string-typed arguments overwrite them; the escape and end-of-line controls keep their defaults.
 pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fputcsv", 2, 6)?;
     let stream = expect_operand(inst, 0)?;
@@ -333,6 +337,24 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         return Err(CodegenIrError::unsupported(format!(
             "fputcsv fields for PHP type {fields_ty:?}"
         )));
+    }
+    let (sep_ptr, sep_len, enc_ptr, enc_len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x2", "x3", "x4", "x5"),
+        Arch::X86_64 => ("rdx", "rcx", "r8", "r9"),
+    };
+    // Zero-length sentinels select php's `","` / `"\""` defaults inside the helper.
+    abi::emit_load_int_immediate(ctx.emitter, sep_ptr, 0);
+    abi::emit_load_int_immediate(ctx.emitter, sep_len, 0);
+    abi::emit_load_int_immediate(ctx.emitter, enc_ptr, 0);
+    abi::emit_load_int_immediate(ctx.emitter, enc_len, 0);
+    for (slot, (ptr_reg, len_reg)) in
+        [(2usize, (sep_ptr, sep_len)), (3usize, (enc_ptr, enc_len))]
+    {
+        if let Some(&value) = inst.operands.get(slot) {
+            if ctx.value_php_type(value)?.codegen_repr() == PhpType::Str {
+                ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+            }
+        }
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
