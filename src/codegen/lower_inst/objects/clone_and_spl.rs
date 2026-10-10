@@ -117,6 +117,25 @@ pub(super) fn is_spl_doubly_linked_list_family(class_name: &str) -> bool {
     matches!(class_name, "SplDoublyLinkedList" | "SplStack" | "SplQueue")
 }
 
+/// Returns true when `class_name` is, or descends from, `ancestor`.
+///
+/// A subclass inherits its ancestor's runtime-managed payload, so the specialized constructor
+/// must serve it too; the generic object path only knows the declared-property layout.
+pub(super) fn class_extends(ctx: &FunctionContext<'_>, class_name: &str, ancestor: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        if name == ancestor {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(&name)
+            .and_then(|info| info.parent.clone());
+    }
+    false
+}
+
 /// Returns true for object classes whose payload is not the generic declared-property layout.
 pub(super) fn is_runtime_managed_object_clone_class(class_name: &str) -> bool {
     let class_name = class_name.trim_start_matches('\\');
@@ -158,8 +177,13 @@ pub(super) fn lower_spl_doubly_linked_list_new(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `new SplFixedArray($size = 0)` through the runtime-backed payload allocator.
-pub(super) fn lower_spl_fixed_array_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+/// Lowers `new SplFixedArray($size = 0)` and property-free subclasses through the runtime-backed
+/// payload allocator, stamping the concrete class id so subclass instances report their own class.
+pub(super) fn lower_spl_fixed_array_new(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+) -> Result<()> {
     if inst.operands.len() > 1 {
         return Err(CodegenIrError::unsupported(format!(
             "SplFixedArray constructor with {} EIR operands",
@@ -169,9 +193,11 @@ pub(super) fn lower_spl_fixed_array_new(ctx: &mut FunctionContext<'_>, inst: &In
     let class_id = ctx
         .module
         .class_infos
-        .get("SplFixedArray")
+        .get(class_name)
         .map(|info| info.class_id)
-        .ok_or_else(|| CodegenIrError::unsupported("unknown class SplFixedArray"))?;
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!("unknown class {class_name}"))
+        })?;
     if let Some(size) = inst.operands.first().copied() {
         ctx.load_value_to_result(size)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));

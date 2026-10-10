@@ -30,8 +30,18 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     if is_spl_doubly_linked_list_family(&class_name) {
         return lower_spl_doubly_linked_list_new(ctx, inst, &class_name);
     }
-    if class_name == "SplFixedArray" {
-        return lower_spl_fixed_array_new(ctx, inst);
+    // A property-free SplFixedArray subclass reuses the runtime fixed-array payload; a subclass
+    // that declares properties would place them where the backing storage lives, so it stays on
+    // the generic path (and is reported) until that layout conflict is resolved.
+    if class_name == "SplFixedArray"
+        || (class_extends(ctx, &class_name, "SplFixedArray")
+            && ctx
+                .module
+                .class_infos
+                .get(&class_name)
+                .is_some_and(|info| info.properties.is_empty()))
+    {
+        return lower_spl_fixed_array_new(ctx, inst, &class_name);
     }
     if let Some(class_id) = throwable_payload_class_id(ctx, &class_name) {
         return lower_builtin_throwable_new(ctx, inst, &class_name, class_id);
