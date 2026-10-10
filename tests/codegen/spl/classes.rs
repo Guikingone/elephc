@@ -800,6 +800,36 @@ try {
     assert_eq!(out, "bool(false)\nCalled current() on invalid iterator\n");
 }
 
+/// Verifies `SplObjectStorage::seek()` rejects an out-of-range position.
+///
+/// php raises `OutOfBoundsException: Seek position N is out of range` for a negative offset or one
+/// at/past the storage length, and leaves the current position untouched.
+#[test]
+fn test_spl_object_storage_seek_out_of_range_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplObjectStorage();
+$s[new stdClass()] = 1;
+try {
+    $s->seek(1);
+} catch (OutOfBoundsException $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    $s->seek(-1);
+} catch (OutOfBoundsException $e) {
+    echo $e->getMessage(), "\n";
+}
+$s->seek(0);
+var_dump($s->key());
+"#,
+    );
+    assert_eq!(
+        out,
+        "Seek position 1 is out of range\nSeek position -1 is out of range\nint(0)\n"
+    );
+}
+
 /// Verifies that ordinary SplFixedArray allocation is unaffected by the storage-size guard.
 #[test]
 fn test_spl_fixed_array_normal_size_still_works() {

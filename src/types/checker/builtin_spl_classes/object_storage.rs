@@ -348,9 +348,34 @@ fn next_body() -> Vec<Stmt> {
     )]
 }
 
-/// Moves the iterator position to a requested offset.
+/// Moves the iterator position to a requested offset, rejecting an out-of-range one.
+///
+/// php raises `OutOfBoundsException: Seek position N is out of range` for a negative offset or one
+/// at/past the storage length, leaving the current position untouched.
 fn seek_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(this_expr(), "position", var_expr("offset"))]
+    vec![
+        if_stmt(
+            binary_expr(
+                binary_expr(var_expr("offset"), BinOp::Lt, int_expr(0)),
+                BinOp::Or,
+                binary_expr(var_expr("offset"), BinOp::GtEq, count_expr(objects_expr())),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "OutOfBoundsException",
+                vec![binary_expr(
+                    binary_expr(
+                        string_expr("Seek position "),
+                        BinOp::Concat,
+                        var_expr("offset"),
+                    ),
+                    BinOp::Concat,
+                    string_expr(" is out of range"),
+                )],
+            ))],
+            None,
+        ),
+        property_assign_stmt(this_expr(), "position", var_expr("offset")),
+    ]
 }
 
 /// Returns info attached to a specific object, rejecting an object that is not stored.
