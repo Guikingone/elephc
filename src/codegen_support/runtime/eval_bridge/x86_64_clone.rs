@@ -39,6 +39,16 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r11", "_class_gc_desc_count", 0);
     emitter.instruction("cmp rax, r11");                                        // is this class id inside the descriptor table?
     emitter.instruction("jae __rt_object_clone_shallow_boxed_null_x86");        // unknown class layouts cannot be cloned by the eval bridge
+    // -- an intrinsic container supplies its own clone adapter --
+    abi::emit_symbol_address(emitter, "r11", "_class_clone_adapter_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load this class's clone adapter, or 0
+    emitter.instruction("test r11, r11");                                       // does this class have a clone adapter?
+    emitter.instruction("jz __rt_object_clone_shallow_boxed_generic_x86");      // no adapter: fall through to the generic property copy
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the source payload to the adapter
+    emitter.instruction("call r11");                                            // adapter returns the finished clone payload
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone payload for the shared boxing step
+    emitter.instruction("jmp __rt_object_clone_shallow_boxed_box_x86");         // box the adapter's clone
+    emitter.label("__rt_object_clone_shallow_boxed_generic_x86");
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");
     emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the class property-tag descriptor pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save descriptor pointer for the property-copy loop

@@ -662,6 +662,38 @@ var_dump($b);
     );
 }
 
+/// Verifies `clone` copies the runtime-managed payload of the SPL containers.
+///
+/// These classes keep their elements outside the declared-property layout, so the generic
+/// shallow-clone adapter could not copy them and the operation was rejected. The per-class
+/// adapters duplicate the backing storage, so mutating the clone never reaches the original.
+#[test]
+fn test_spl_container_clone_isolates_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$dll = new SplDoublyLinkedList();
+$dll->push(1);
+$dll->push(2);
+$clone = clone $dll;
+$clone->pop();
+echo count($dll), "|", count($clone), "\n";
+
+$fixed = new SplFixedArray(3);
+$fixed[0] = "a";
+$fixedClone = clone $fixed;
+$fixedClone->setSize(1);
+echo $fixed->getSize(), "|", $fixedClone->getSize(), "\n";
+
+$stack = new SplStack();
+$stack->push("x");
+$stackClone = clone $stack;
+$stackClone->pop();
+echo count($stack), "|", count($stackClone), "\n";
+"#,
+    );
+    assert_eq!(out, "2|1\n3|1\n1|0\n");
+}
+
 /// Verifies that ordinary SplFixedArray allocation is unaffected by the storage-size guard.
 #[test]
 fn test_spl_fixed_array_normal_size_still_works() {

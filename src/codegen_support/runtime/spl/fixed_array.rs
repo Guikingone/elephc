@@ -54,6 +54,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_from_array_aarch64(emitter);
     emit_unserialize_aarch64(emitter);
     emit_copy_from_array_aarch64(emitter);
+    emit_clone_adapter_aarch64(emitter);
 }
 
 /// Emits `__rt_spl_fixed_new` on aarch64: constructs an initialized SplFixedArray object.
@@ -739,6 +740,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_from_array_x86_64(emitter);
     emit_unserialize_x86_64(emitter);
     emit_copy_from_array_x86_64(emitter);
+    emit_clone_adapter_x86_64(emitter);
 }
 
 /// Emits `__rt_spl_fixed_new` on x86_64: constructs an initialized SplFixedArray object.
@@ -1464,4 +1466,62 @@ fn emit_throw_exception_x86_64(
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emitter.instruction("jmp __rt_throw_current");                              // enter the standard exception unwinder
+}
+
+/// Emits `__rt_clone_spl_fixed` on aarch64: x0 = source SplFixedArray payload.
+///
+/// Allocates a same-class payload and duplicates the fixed storage with
+/// `__rt_array_clone_shallow`, so shrinking or writing one array never reaches the other.
+/// Returns the clone payload in x0.
+fn emit_clone_adapter_aarch64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_clone_spl_fixed");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve source and clone spill slots
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the clone-adapter frame
+    emitter.instruction("str x0, [sp, #0]");                                    // save the source payload
+    emitter.instruction(&format!("mov x0, #{}", SPL_FIXED_OBJECT_SIZE));        // request a same-size fixed-array object payload
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the clone payload
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the clone as an object instance
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the clone to its PHP object handle
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source payload
+    emitter.instruction("ldr x10, [x9]");                                       // load the source runtime class id
+    emitter.instruction("str x10, [x0]");                                       // copy the class id onto the clone
+    emitter.instruction("str x0, [sp, #8]");                                    // save the clone payload
+    emitter.instruction(&format!("ldr x0, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load the source fixed storage
+    emitter.instruction("bl __rt_array_clone_shallow");                         // duplicate the storage so the clone mutates independently
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the clone payload
+    emitter.instruction(&format!("str x0, [x10, #{}]", SPL_FIXED_STORAGE_OFFSET)); // install the cloned storage
+    emitter.instruction("mov x0, x10");                                         // return the clone payload
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the clone-adapter frame
+    emitter.instruction("ret");                                                 // return to the clone wrapper
+}
+
+/// Emits `__rt_clone_spl_fixed` on x86_64: rdi = source SplFixedArray payload.
+///
+/// Mirrors the aarch64 adapter: allocate a same-class payload and duplicate the fixed storage.
+fn emit_clone_adapter_x86_64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_clone_spl_fixed");
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the clone-adapter frame
+    emitter.instruction("sub rsp, 16");                                         // reserve source and clone spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source payload
+    emitter.instruction(&format!("mov rax, {}", SPL_FIXED_OBJECT_SIZE));        // request a same-size fixed-array object payload
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the clone payload
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the clone as an object instance
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the clone to its PHP object handle
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source payload
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the source runtime class id
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // copy the class id onto the clone
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone payload
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); // load the source fixed storage
+    emitter.instruction("call __rt_array_clone_shallow");                       // duplicate the storage so the clone mutates independently
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the clone payload
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); // install the cloned storage
+    emitter.instruction("mov rax, r10");                                        // return the clone payload
+    emitter.instruction("mov rsp, rbp");                                        // release the clone-adapter frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the clone wrapper
 }

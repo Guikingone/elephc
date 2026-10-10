@@ -39,6 +39,16 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // load the number of emitted class descriptors
     emitter.instruction("cmp x11, x10");                                        // is this class id inside the descriptor table?
     emitter.instruction("b.hs __rt_object_clone_shallow_boxed_null");           // unknown class layouts cannot be cloned by the eval bridge
+    // -- an intrinsic container supplies its own clone adapter --
+    abi::emit_symbol_address(emitter, "x10", "_class_clone_adapter_ptrs");
+    emitter.instruction("lsl x12, x11, #3");                                    // scale class id to an 8-byte adapter pointer slot
+    emitter.instruction("ldr x2, [x10, x12]");                                  // load this class's clone adapter, or 0
+    emitter.instruction("cbz x2, __rt_object_clone_shallow_boxed_generic");     // no adapter: fall through to the generic property copy
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the source payload to the adapter
+    emitter.instruction("blr x2");                                              // adapter returns the finished clone payload
+    emitter.instruction("str x0, [sp, #8]");                                    // save the clone payload for the shared boxing step
+    emitter.instruction("b __rt_object_clone_shallow_boxed_box");               // box the adapter's clone
+    emitter.label("__rt_object_clone_shallow_boxed_generic");
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_ptrs");
     emitter.instruction("lsl x12, x11, #3");                                    // scale class id to an 8-byte descriptor pointer slot
     emitter.instruction("ldr x10, [x10, x12]");                                 // load the class property-tag descriptor pointer

@@ -77,6 +77,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_iterator_mode_aarch64(emitter);
     emit_stack_iterator_mode_aarch64(emitter);
     emit_queue_iterator_mode_aarch64(emitter);
+    emit_clone_adapter_aarch64(emitter);
     emit_serialize_aarch64(emitter);
     emit_unserialize_aarch64(emitter);
     emit_serialize_array_aarch64(emitter);
@@ -400,6 +401,41 @@ fn emit_queue_iterator_mode_aarch64(emitter: &mut Emitter) {
         "_spl_dll_frozen_mode_msg",
         SPL_DLL_FROZEN_MODE_MSG_LEN,
     );
+}
+
+/// Emits `__rt_clone_spl_dll` on ARM64: x0 = source SplDoublyLinkedList-family payload.
+///
+/// Allocates a same-class object payload, duplicates the internal storage with
+/// `__rt_array_clone_shallow` (so mutating one list never reaches the other), and copies the
+/// iterator index and mode. Returns the clone payload in x0.
+fn emit_clone_adapter_aarch64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_clone_spl_dll");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve source and clone spill slots
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the clone-adapter frame
+    emitter.instruction("str x0, [sp, #0]");                                    // save the source payload
+    emitter.instruction(&format!("mov x0, #{}", SPL_DLL_OBJECT_SIZE));          // request a same-size list object payload
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the clone payload
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the clone as an object instance
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the clone to its PHP object handle
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source payload
+    emitter.instruction("ldr x10, [x9]");                                       // load the source runtime class id
+    emitter.instruction("str x10, [x0]");                                       // copy the class id onto the clone
+    emitter.instruction("str x0, [sp, #8]");                                    // save the clone payload
+    emitter.instruction(&format!("ldr x0, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // load the source internal storage
+    emitter.instruction("bl __rt_array_clone_shallow");                         // duplicate the storage so the clone mutates independently
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source payload
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the clone payload
+    emitter.instruction(&format!("str x0, [x10, #{}]", SPL_DLL_STORAGE_OFFSET)); // install the cloned storage
+    emitter.instruction(&format!("ldr x11, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // load the source iterator index
+    emitter.instruction(&format!("str x11, [x10, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // copy the iterator index onto the clone
+    emitter.instruction(&format!("ldr x11, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load the source iterator mode
+    emitter.instruction(&format!("str x11, [x10, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // copy the iterator mode onto the clone
+    emitter.instruction("mov x0, x10");                                         // return the clone payload
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the clone-adapter frame
+    emitter.instruction("ret");                                                 // return to the clone wrapper
 }
 
 /// Emits `__rt_spl_dll_serialize_array` on ARM64: receiver in x0. Copies internal storage
@@ -1338,6 +1374,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_iterator_mode_x86_64(emitter);
     emit_stack_iterator_mode_x86_64(emitter);
     emit_queue_iterator_mode_x86_64(emitter);
+    emit_clone_adapter_x86_64(emitter);
     emit_serialize_x86_64(emitter);
     emit_unserialize_x86_64(emitter);
     emit_serialize_array_x86_64(emitter);
@@ -1658,6 +1695,40 @@ fn emit_queue_iterator_mode_x86_64(emitter: &mut Emitter) {
         "_spl_dll_frozen_mode_msg",
         SPL_DLL_FROZEN_MODE_MSG_LEN,
     );
+}
+
+/// Emits `__rt_clone_spl_dll` on x86_64: rdi = source SplDoublyLinkedList-family payload.
+///
+/// Mirrors the AArch64 adapter: allocate a same-class payload, duplicate the internal storage
+/// with `__rt_array_clone_shallow`, and copy the iterator index and mode.
+fn emit_clone_adapter_x86_64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_clone_spl_dll");
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the clone-adapter frame
+    emitter.instruction("sub rsp, 16");                                         // reserve source and clone spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source payload
+    emitter.instruction(&format!("mov rax, {}", SPL_DLL_OBJECT_SIZE));          // request a same-size list object payload
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the clone payload
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the clone as an object instance
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the clone to its PHP object handle
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source payload
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the source runtime class id
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // copy the class id onto the clone
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone payload
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); // load the source internal storage
+    emitter.instruction("call __rt_array_clone_shallow");                       // duplicate the storage so the clone mutates independently
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the clone payload
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // install the cloned storage
+    emitter.instruction(&format!("mov r11, QWORD PTR [r9 + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // load the source iterator index
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", SPL_DLL_ITER_INDEX_OFFSET)); // copy the iterator index onto the clone
+    emitter.instruction(&format!("mov r11, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load the source iterator mode
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", SPL_DLL_ITER_MODE_OFFSET)); // copy the iterator mode onto the clone
+    emitter.instruction("mov rax, r10");                                        // return the clone payload
+    emitter.instruction("mov rsp, rbp");                                        // release the clone-adapter frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the clone wrapper
 }
 
 /// Emits `__rt_spl_dll_serialize_array` on x86_64: receiver in rdi. Copies internal storage

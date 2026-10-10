@@ -319,6 +319,26 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Per-class shallow-clone adapter table. A zero entry means the generic declared-property
+    // clone applies; a non-zero entry points at a helper that copies a runtime-managed payload
+    // (the SPL doubly-linked-list family and SplFixedArray) that the property walk cannot see.
+    out.push_str(".globl _class_clone_adapter_ptrs\n_class_clone_adapter_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let adapter = match class_name_by_id.get(&class_id).map(|name| name.as_str()) {
+                Some("SplDoublyLinkedList" | "SplStack" | "SplQueue") => {
+                    Some("__rt_clone_spl_dll")
+                }
+                Some("SplFixedArray") => Some("__rt_clone_spl_fixed"),
+                _ => None,
+            };
+            match adapter {
+                Some(adapter) => out.push_str(&format!("    .quad {adapter}\n")),
+                None => out.push_str("    .quad 0\n"),
+            }
+        }
+    }
+
     // Per-class print_r / var_export descriptor pointer table — read by
     // `__rt_print_r_object` and by the `__elephc_object_prop_*` prelude helpers.
     // Same rows as `_class_vd_desc_ptrs`, different key spellings.
