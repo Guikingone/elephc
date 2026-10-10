@@ -325,7 +325,15 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let fields = expect_operand(inst, 1)?;
     load_stream_fd_to_result(ctx, stream, "fputcsv")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    require_string_array(ctx.load_value_to_result(fields)?.codegen_repr(), "fputcsv fields")?;
+    // A `Str` array reads its 16-byte string slots directly; a `Mixed` array (a literal mixing
+    // strings and numbers, say) is rendered by `__rt_fputcsv`'s per-element string cast.
+    let fields_ty = ctx.load_value_to_result(fields)?.codegen_repr();
+    if !matches!(&fields_ty, PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Str | PhpType::Mixed))
+    {
+        return Err(CodegenIrError::unsupported(format!(
+            "fputcsv fields for PHP type {fields_ty:?}"
+        )));
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // pass the string-array pointer to the fputcsv runtime helper

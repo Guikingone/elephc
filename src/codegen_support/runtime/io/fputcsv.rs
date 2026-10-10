@@ -56,6 +56,13 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x1]");                                        // load array length from header
     emitter.instruction("str x9, [sp, #32]");                                   // save array length
 
+    // -- classify the element layout: a Mixed array casts each element, a Str array reads slots --
+    emitter.instruction("ldr x9, [x1, #-8]");                                   // load the packed array kind word
+    emitter.instruction("lsr x9, x9, #8");                                      // move the element value_type into the low bits
+    emitter.instruction("and x9, x9, #0x0f");                                   // isolate the element value_type
+    emitter.instruction("str x9, [sp, #64]");                                   // save the element value_type for the field loop
+    emitter.instruction("str xzr, [sp, #72]");                                  // no owned cast field yet
+
     // -- main loop: iterate over array elements --
     emitter.label("__rt_fputcsv_loop");
     emitter.instruction("ldr x9, [sp, #24]");                                   // load current index
@@ -78,10 +85,33 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.label("__rt_fputcsv_field");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload current index
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload array pointer
+    emitter.instruction("ldr x11, [sp, #64]");                                  // reload the element value_type
+    emitter.instruction("cmp x11, #7");                                         // is this a boxed Mixed array?
+    emitter.instruction("b.eq __rt_fputcsv_field_mixed");                       // Mixed elements cast to a string per field
     emitter.instruction("lsl x11, x9, #4");                                     // byte offset = index * 16
     emitter.instruction("add x11, x10, x11");                                   // element address = array + offset
     emitter.instruction("ldr x3, [x11, #24]");                                  // load string pointer (skip 24-byte header)
     emitter.instruction("ldr x4, [x11, #32]");                                  // load string length
+    emitter.instruction("str xzr, [sp, #72]");                                  // a borrowed string slot owns nothing to free
+    emitter.instruction("b __rt_fputcsv_field_ready");                          // the field is loaded
+
+    emitter.label("__rt_fputcsv_field_mixed");
+    emitter.instruction("add x11, x10, #24");                                   // skip the 24-byte array header
+    emitter.instruction("ldr x0, [x11, x9, lsl #3]");                           // load the boxed Mixed cell pointer
+    emitter.instruction("cbnz x0, __rt_fputcsv_field_cast");                    // a present cell is cast to a string
+    emitter.instruction("mov x3, #0");                                          // a null cell renders as an empty field
+    emitter.instruction("mov x4, #0");                                          // with zero length
+    emitter.instruction("str xzr, [sp, #72]");                                  // nothing to free for a null cell
+    emitter.instruction("b __rt_fputcsv_field_ready");                          // the empty field is loaded
+
+    emitter.label("__rt_fputcsv_field_cast");
+    emitter.instruction("bl __rt_mixed_cast_string");                           // x1=string ptr, x2=string length for the boxed value
+    emitter.instruction("mov x3, x1");                                          // field pointer = cast string pointer
+    emitter.instruction("mov x4, x2");                                          // field length = cast string length
+    emitter.instruction("mov x9, #1");                                          // mark the cast result owned (heap_free ignores scratch)
+    emitter.instruction("str x9, [sp, #72]");                                   // save the owned-field flag for the next step
+
+    emitter.label("__rt_fputcsv_field_ready");
 
     // -- check if field needs quoting (contains comma, quote, or newline) --
     emitter.instruction("stp x3, x4, [sp, #40]");                               // save field ptr and len
@@ -180,6 +210,12 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
 
     // -- advance to next element --
     emitter.label("__rt_fputcsv_next");
+    emitter.instruction("ldr x9, [sp, #72]");                                   // was the field a cast result we own?
+    emitter.instruction("cbz x9, __rt_fputcsv_next_advance");                   // borrowed string slots are never freed
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the cast field pointer
+    emitter.instruction("bl __rt_heap_free");                                   // release the cast result (a no-op for scratch pointers)
+    emitter.instruction("str xzr, [sp, #72]");                                  // clear the owned-field flag
+    emitter.label("__rt_fputcsv_next_advance");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload current index
     emitter.instruction("add x9, x9, #1");                                      // increment index
     emitter.instruction("str x9, [sp, #24]");                                   // save updated index
@@ -236,13 +272,18 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fputcsv() keeps stream and field state in stack slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the file descriptor, array pointer, and CSV writer bookkeeping
-    emitter.instruction("sub rsp, 80");                                         // reserve aligned stack space for the CSV writer state across repeated __rt_fd_write() calls
+    emitter.instruction("sub rsp, 96");                                         // reserve aligned stack space for the CSV writer state across repeated __rt_fd_write() calls
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the destination file descriptor across all field-scan and write helper steps
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the source string-array pointer across repeated field loads
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // total written bytes start at zero before any CSV separator or field bytes are emitted
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // current field index starts at zero before iterating the source array
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source string-array logical length before entering the CSV writer loop
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the source string-array length for the loop termination check
+    emitter.instruction("mov r10, QWORD PTR [rsi - 8]");                        // load the packed array kind word before classifying the element layout
+    emitter.instruction("shr r10, 8");                                          // move the element value_type into the low bits
+    emitter.instruction("and r10, 0x0f");                                       // isolate the element value_type
+    emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // save the element value_type for the field loop
+    emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // no owned cast field yet
 
     emitter.label("__rt_fputcsv_loop_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current field index before checking loop completion
@@ -259,11 +300,33 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fputcsv_field_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current field index before loading the next string slot from the array
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the source string-array pointer before computing the current field slot address
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 7");                         // is this a boxed Mixed array?
+    emitter.instruction("je __rt_fputcsv_field_mixed_x86");                     // Mixed elements cast to a string per field
     emitter.instruction("mov rcx, r10");                                        // copy the field index before scaling it into the 16-byte string-slot offset
     emitter.instruction("shl rcx, 4");                                          // convert the field index into the byte offset of the current 16-byte string slot
     emitter.instruction("lea rcx, [r11 + rcx + 24]");                           // compute the current string-slot address inside the source array payload region
     emitter.instruction("mov r8, QWORD PTR [rcx]");                             // load the current field string pointer from the source array slot
     emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // load the current field string length from the source array slot
+    emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // a borrowed string slot owns nothing to free
+    emitter.instruction("jmp __rt_fputcsv_field_ready_x86");                    // the field is loaded
+
+    emitter.label("__rt_fputcsv_field_mixed_x86");
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8 + 24]");             // load the boxed Mixed cell pointer for this field
+    emitter.instruction("test rax, rax");                                       // is the cell present?
+    emitter.instruction("jnz __rt_fputcsv_field_cast_x86");                     // a present cell is cast to a string
+    emitter.instruction("xor r8d, r8d");                                        // a null cell renders as an empty field
+    emitter.instruction("xor r9d, r9d");                                        // with zero length
+    emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // nothing to free for a null cell
+    emitter.instruction("jmp __rt_fputcsv_field_ready_x86");                    // the empty field is loaded
+
+    emitter.label("__rt_fputcsv_field_cast_x86");
+    emitter.instruction("mov rdi, rax");                                        // pass the boxed Mixed cell to the string cast helper
+    emitter.instruction("call __rt_mixed_cast_string");                         // rax=string ptr, rdx=string length for the boxed value
+    emitter.instruction("mov r8, rax");                                         // field pointer = cast string pointer
+    emitter.instruction("mov r9, rdx");                                         // field length = cast string length
+    emitter.instruction("mov QWORD PTR [rbp - 88], 1");                         // mark the cast result owned (heap_free ignores scratch)
+
+    emitter.label("__rt_fputcsv_field_ready_x86");
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // preserve the current field string pointer across the quote scan and repeated write() calls
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // preserve the current field string length across the quote scan and repeated write() calls
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // needs_quote starts false before scanning the current field payload
@@ -336,6 +399,12 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the plain field byte count into the running CSV write total
 
     emitter.label("__rt_fputcsv_next_x86");
+    emitter.instruction("cmp QWORD PTR [rbp - 88], 0");                         // was the field a cast result we own?
+    emitter.instruction("je __rt_fputcsv_next_advance_x86");                    // borrowed string slots are never freed
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the cast field pointer
+    emitter.instruction("call __rt_heap_free");                                 // release the cast result (a no-op for scratch pointers)
+    emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // clear the owned-field flag
+    emitter.label("__rt_fputcsv_next_advance_x86");
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance to the next field index before looping back to the CSV field iterator
     emitter.instruction("jmp __rt_fputcsv_loop_x86");                           // continue emitting the remaining CSV fields from the source string array
 
@@ -346,7 +415,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_fd_write");                                  // emit the trailing newline through __rt_fd_write()
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the trailing newline byte count into the running CSV write total
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the total number of bytes that fputcsv() emitted through __rt_fd_write()
-    emitter.instruction("add rsp, 80");                                         // release the CSV writer spill slots before returning to the caller
+    emitter.instruction("add rsp, 96");                                         // release the CSV writer spill slots before returning to the caller
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 CSV writer completes
     emitter.instruction("ret");                                                 // return the total written byte count in the x86_64 integer result register
 

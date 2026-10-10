@@ -733,6 +733,41 @@ rmdir("root");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `fputcsv` accepts an array mixing strings and numbers, casting each element.
+///
+/// A literal such as `['field1', 'field2', 5]` is `Array(Mixed)`, which the lowering used to
+/// reject. The runtime now renders each boxed element through `__rt_mixed_cast_string`, so the
+/// number is written as its string form and read back by `SplFileObject::fgetcsv`.
+#[test]
+fn test_fputcsv_mixed_fields_cast_to_strings() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("csv.txt", "");
+$fp = fopen("csv.txt", "w+");
+fputcsv($fp, ["field1", "field2", 5], escape: "");
+fclose($fp);
+$fo = new SplFileObject("csv.txt");
+$fo->setCsvControl(escape: "");
+var_dump($fo->fgetcsv());
+unlink("csv.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(3) {\n",
+            "  [0]=>\n",
+            "  string(6) \"field1\"\n",
+            "  [1]=>\n",
+            "  string(6) \"field2\"\n",
+            "  [2]=>\n",
+            "  string(1) \"5\"\n",
+            "}\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies the directory and glob iterators reject an empty path with php's `ValueError`.
 ///
 /// Each concrete class names itself and its parameter in the message, so the shared directory
