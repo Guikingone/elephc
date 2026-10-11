@@ -10,6 +10,37 @@
 use super::super::*;
 use super::support::*;
 
+/// Named count-only calls reject conflicting order bits and unsupported flag bits.
+#[test]
+fn execute_program_preg_third_review_omitted_invalid_flags() {
+    let program = parse_fragment(br#"
+foreach ([3, 4, 7, -1] as $flag) { echo preg_match_all('/(a)/', 'aaa', flags: $flag), '|'; }
+return preg_match_all('/(a)/', 'aaa', flags: PREG_OFFSET_CAPTURE);
+"#).expect("parse omitted capture fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute omitted captures");
+    assert_eq!(values.output, "0|0|0|0|");
+    assert_eq!(values.get(result), FakeValue::Int(3));
+}
+
+/// Unsupported flags clear aliased captures instead of aborting the eval program.
+#[test]
+fn execute_program_preg_third_review_extra_flag_bits() {
+    let program = parse_fragment(br#"
+$matches = ['old']; $alias =& $matches;
+foreach ([4, -1, PREG_SET_ORDER | 4] as $flag) {
+    echo preg_match_all('/(a)/', 'aaa', $alias, $flag), ':', count($matches), '|';
+}
+return true;
+"#).expect("parse unsupported flags fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute unsupported flags");
+    assert_eq!(values.output, "0:0|0:0|0:0|");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Global regex iteration retains UTF-8 progress, terminal empty matches and prefix context.
 #[test]
 fn execute_program_preg_review_empty_match_progression() {

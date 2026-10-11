@@ -15,6 +15,10 @@ fn verify(target: &str) {
 function collect(array &$matches): int {
     return preg_match_all('/a|(?<=a)b/', 'ab', $matches, PREG_OFFSET_CAPTURE);
 }
+function count_flags(int $flags): int {
+    return preg_match_all('/(a)/', 'aaa', flags: $flags);
+}
+echo count_flags(3), count_flags(4);
 $matches = []; echo collect($matches);
 $previous = 42;
 $flags = PREG_SET_ORDER;
@@ -30,6 +34,13 @@ $named_subject = 'ab'; echo preg_match_all(matches: $named_subject, subject: $na
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__rt_preg_match_all_capture"));
     assert!(assembly.contains("__rt_decref_array"), "the replaced output owns its old captures");
+    assert!(assembly.contains("preg_match_all_count_invalid"),
+        "count-only calls validate flags before executing the count helper");
+    let mask = match target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => "bic x9, x5, x9",
+        crate::codegen_support::platform::Arch::X86_64 => "and r9, -772",
+    };
+    assert!(assembly.contains(mask), "count-only validation rejects every unsupported flag bit");
 }
 
 /// Keeps every target independently scheduled under the CI timeout.
