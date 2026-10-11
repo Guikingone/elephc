@@ -106,6 +106,38 @@ echo $ai->y, "\n";
     assert_eq!(out, "7\nbool(true)\nbool(false)\n8\n");
 }
 
+/// Verifies `disable_functions` makes calling a disabled internal container method a catchable Error.
+///
+/// php consults the ini at the call and only for internal functions and methods, so a disabled
+/// `asort` raises `Error: Cannot call method asort when function asort is disabled` while a user
+/// method of the same name is unaffected.
+#[test]
+fn test_disable_functions_rejects_internal_container_method() {
+    elephc::codegen_support::set_ini_overrides(vec![(
+        "disable_functions".to_string(),
+        "asort".to_string(),
+    )]);
+    let out = compile_and_run(
+        r#"<?php
+$ao = new ArrayObject([3, 1, 2]);
+try {
+    $ao->asort();
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+class Mine {
+    public function asort() { return "user method unaffected"; }
+}
+echo (new Mine())->asort(), "\n";
+"#,
+    );
+    elephc::codegen_support::set_ini_overrides(Vec::new());
+    assert_eq!(
+        out,
+        "Cannot call method asort when function asort is disabled\nuser method unaffected\n"
+    );
+}
+
 /// Verifies that array iterator iterates associative keys and values.
 #[test]
 fn test_array_iterator_iterates_associative_keys_and_values() {
