@@ -336,20 +336,23 @@ fn lower_dynamic_prop_unset(
 }
 
 /// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
+/// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
 /// state, or `None` when the uninitialized marker is a faithful encoding for it.
 ///
 /// Used only for the diagnostic text; the ordering matters because a slot can be both
 /// undeclared and by-reference, and the by-reference storage is the more specific
 /// obstacle to report.
+///
+/// The two distinct layouts are packed class fields and by-reference cells. Everything else —
+/// a typed slot's uninitialized-error state, and an untyped property's "removed" state, whether
+/// or not its default narrowed the slot to a concrete type — is the same two-word uninitialized
+/// marker, so the removal is faithful for all of them.
 fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
     if slot.is_packed {
         return Some("packed class field");
     }
     if slot.is_reference {
         return Some("by-reference property");
-    }
-    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
-        return Some("untyped property slot");
     }
     None
 }
