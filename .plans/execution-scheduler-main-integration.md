@@ -11,7 +11,7 @@
 - [x] Regenerate builtin documentation from the reconciled contracts and bindings.
 - [ ] Compile and run focused scheduler, binding/ownership, native/eval and target
       controls on the integrated source; previous-parent checks are historical.
-- [ ] Commit and push the validated merge, then verify PR #958's exact head/CI state.
+- [x] Commit and push the validated WIP merge, then verify PR #958's exact head/CI state.
 - [x] Restore the inherited local vendor state without including it in the merge.
 
 ## Exact state and recovery
@@ -2285,3 +2285,63 @@ stash change set matches exactly, and the index is empty. They remain outside
 publication and recoverable from tracked Git versions. Local .codex, .kioku,
 .mcp.json and scratchpad remain untracked and unpublished. Push/PR readback is
 the next action, not an asserted outcome here.
+
+### Published exact head and live CI readback, 2026-10-11
+
+The docs-only handoff commit is **f0d4e7dfed2d01dee2e352c2292e86beb8c57281**.
+A normal push to fork/spike/runtime-ctx-register succeeded from 516dea0b36 to
+that exact SHA. GitHub PR #958 reports the same exact head, **draft=true** and
+**MERGEABLE**, replacing its previous conflicting state. Tracking comment:
+https://github.com/illegalstudio/elephc/pull/958#issuecomment-6108933034 .
+
+Actual CI now runs on this head, including architecture build/archive jobs,
+managed packages, iOS curl/XML checks, frame assertions and PDO live drivers.
+The fresh readback shows Builtins docs, RustSec, Action pins, image stubs and PR
+classification successful; architecture/PDO/full runtime jobs are still active or
+queued. CI run **38138507612** is the exact-head compiler workflow. Do not replace
+those pending results with the earlier label-classifier-only success or claim
+complete CI. This post-push log remains local pending the next work commit, to
+avoid restarting the current CI solely for bookkeeping.
+
+The goal remains active with complete PHP-array ABI/consumer/ref semantics,
+scoped I/O queue/provider work, remaining complete target evidence and dedicated
+Codex/Kimi/GLM/DeepSeek exact-artifact consensus still required. Heartbeat remains
+discussion-only. Vendor deletions stay unstaged and excluded; the source tested
+above is exactly the published source despite the stats/docs-only follow-ups.
+
+### First exact-head CI failure and retained array-return blocker, 2026-10-11
+
+On published head f0d4e7dfed, CI Curl feature coverage completes **6/7** cross-
+backend parity tests. Catalog coverage and Magician eval bindings pass, but
+`non_registry_surfaces_have_complete_backend_contracts` expects 409 exceptional
+surfaces and observes 410. The completed job's direct logs were fetched through
+the jobs API (the run-level gh log interface refuses an unfinished workflow).
+Exact job: **114467274289**; log:
+`/tmp/elephc-pr958-curl-parity-job-20261011.log`.
+The same local curl-enabled parity command reproduces **6/7**.
+
+The catalog diff against origin/main identifies the exact additional surface:
+`elephc\\async\\run`, a PreludeProvided Elephc extension with one Callable body
+and Mixed result. No missing/duplicate runtime binding is established by this
+count-only failure. The test now expects 410 total / 347 prelude surfaces and
+explicitly requires this precise Async contract, its extension marker and its
+signature. Language constructs, dedicated syntax, transforms, rewrites and zero
+unsupported-route checks are unchanged. Curl/default parity and curl compiler-
+prelude parity are under serialized replay; no new success/commit/push is claimed.
+
+The remaining approved PHP-array transport gate is freshly reproduced against
+the published compiler: `declared-array-forwarding.php` in the reducer directory
+packages named variadic args in a mixed frame and returns `$frame['args']` from a
+declared array function. PHP 8.5.10 prints `{"label":42}`; Elephc --check reports
+`Function 'forwardedArgs' return type expects array, got mixed`. This is an open
+full-array contract blocker, not subsumed by the green reference-retirement tests.
+The goal remains active and the PR remains draft, not accepted.
+
+The reconciled parity checks now pass **7/7 with curl**, **7/7 without curl** and
+**7/7 compiler prelude parity with curl**. Logs:
+`/tmp/elephc-pr958-{curl-parity-reconciled,default-parity-reconciled,curl-prelude-parity}-20261011.log`.
+Only the test's audited inventory and explicit Async contract assertions changed;
+the implementation/catalog/public signature are unchanged, so the already-green
+generated-docs result remains applicable. Hygiene checks pass. The follow-up
+commit/push will supersede f0d4e7dfed for CI observation; retain its failed run as
+historical evidence, not success on the new head.
