@@ -160,6 +160,25 @@ pub(super) fn promote_captured_reference_argument(ctx: &mut LoweringContext<'_, 
     }
 }
 
+/// Prepares a write-only output in source order without changing later pre-call reads.
+pub(super) fn prepare_captured_output_argument(
+    ctx: &mut LoweringContext<'_, '_>, arg: &Expr, output_type: &PhpType,
+) -> Option<(String, PhpType)> {
+    let ExprKind::Variable(name) = &arg.kind else { return None; };
+    let previous = ctx.local_type(name);
+    if ctx.local_slots.get(name).is_some_and(|slot| ctx.slot_is_initialized(*slot)) {
+        // Existing aliases already share the final boxed frame representation.
+        // Reboxing their payload here would replace that shared cell's value.
+        if previous.codegen_repr() != output_type.codegen_repr() {
+            ctx.set_local_type(name, PhpType::Mixed);
+        }
+        Some((name.clone(), previous))
+    } else {
+        promote_captured_reference_argument(ctx, arg);
+        None
+    }
+}
+
 /// Detaches a mutable boxed cell or retains a heap payload until its by-value call consumes it.
 pub(super) fn capture_call_argument_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -896,7 +915,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     args: &[Expr],
     trim_trailing_defaults: bool,
     capture_values: bool,
-    capture_output_index: Option<usize>,
+    capture_output_index: Option<(usize, PhpType)>,
 ) -> Vec<crate::ir::ValueId> {
     if sig.is_some() && !args.is_empty() {
         return super::arg_evaluation::protect_argument_evaluation(ctx, args[0].span, |ctx| {
@@ -939,7 +958,9 @@ fn lower_args_with_signature_options_inner(
         );
         return coerce_operands_to_params(ctx, sig, operands);
     }
-    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args, None, capture_values) {
+    if let Some(operands) = lower_positional_spread_args_with_signature(
+        ctx, sig, args, None, capture_values, capture_output_index.as_ref(),
+    ) {
         return operands;
     }
     let static_spread_args = if has_static_call_spread_args(args) {
@@ -975,10 +996,12 @@ fn lower_args_with_signature_options_inner(
             .iter()
             .enumerate()
             .map(|(index, arg)| {
-                if capture_output_index == Some(index) {
-                    promote_captured_reference_argument(ctx, arg);
-                }
+                let previous = capture_output_index.as_ref().filter(|(output, _)| *output == index)
+                    .and_then(|(_, ty)| if capture_values {
+                        promote_captured_reference_argument(ctx, arg); None
+                    } else { prepare_captured_output_argument(ctx, arg, ty) });
                 let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
+                if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
                 if !capture_values && index + 1 < args.len() {
                     root_prior_argument_preserving_reference_place(
                         ctx, sig, index, arg, value,
@@ -994,10 +1017,12 @@ fn lower_args_with_signature_options_inner(
         .iter()
         .enumerate()
         .map(|(index, arg)| {
-            if capture_output_index == Some(index) {
-                promote_captured_reference_argument(ctx, arg);
-            }
+            let previous = capture_output_index.as_ref().filter(|(output, _)| *output == index)
+                .and_then(|(_, ty)| if capture_values {
+                    promote_captured_reference_argument(ctx, arg); None
+                } else { prepare_captured_output_argument(ctx, arg, ty) });
             let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
+            if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
             if !capture_values && index + 1 < args.len() {
                 root_prior_argument_preserving_reference_place(
                     ctx, sig, index, arg, value,
