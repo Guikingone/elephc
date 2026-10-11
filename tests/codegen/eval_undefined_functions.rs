@@ -17,25 +17,45 @@ fn test_eval_undefined_functions_are_catchable() {
 $source = $argc > 0 ? '
     $n = 0;
     function bump() { global $n; $n++; return $n; }
-    try { isseet(bump()); } catch (Error $e) {
+    try { IsSeEt(bump()); } catch (Error $e) {
         echo get_class($e), ": ", $e->getMessage(), "\n";
     }
     echo $n, "\n";
 ' : '';
 eval($source);
-$source = $argc > 0 ? 'namespace replcheck; isseet();' : '';
+$source = $argc > 0 ? 'namespace ReplCheck; IsSeEt();' : '';
 try { eval($source); } catch (Error $e) {
     echo get_class($e), ": ", $e->getMessage(), "\n";
 }
-$source = $argc > 0 ? 'namespace replcheck; echo strlen("ok"), "\n";' : '';
+$source = $argc > 0 ? 'namespace ReplCheck; echo StRlEn("ok"), "\n";' : '';
 eval($source);
 echo "alive\n";
 "#);
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, concat!(
-        "Error: Call to undefined function isseet()\n",
+        "Error: Call to undefined function IsSeEt()\n",
         "0\n",
-        "Error: Call to undefined function replcheck\\isseet()\n",
+        "Error: Call to undefined function ReplCheck\\IsSeEt()\n",
         "2\nalive\n",
     ));
+}
+
+/// Source-preserving direct calls still find native callbacks and native namespace fallbacks.
+#[test]
+fn test_eval_mixed_case_direct_native_calls() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+namespace NativeRepl {
+    function MixedName(int $value): int { return $value + 1; }
+}
+namespace {
+    function GlobalReplTarget(int $value): int { return $value + 2; }
+    $source = $argc > 0 ? '
+        namespace NativeRepl;
+        echo mIxEdNaMe(40), ":", GlObAlRePlTaRgEt(40), ":", \\NATIVEREPL\\MIXEDNAME(42);
+    ' : '';
+    eval($source);
+}
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "41:42:43");
 }

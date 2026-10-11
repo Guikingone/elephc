@@ -330,7 +330,12 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // `SG(request_info).path_translated`, the ENTRY script — not the executing file), and the
     // manifest deliberately drops entries it cannot stat, so its first element is not a
     // dependable stand-in. See `opcache_prelude::restrict_api_denies`.
-    let opcache_entry_path = opcache_prelude::canonical_entry_path(filename);
+    // The embedded REPL entry is virtual, so only its project directory exists on disk.
+    let opcache_entry_path = if repl_output.is_some() {
+        crate::repl::canonical_entry_path(filename)
+    } else {
+        opcache_prelude::canonical_entry_path(filename)
+    };
     // The SAME verdict for the eval bridge: an OPcache call hidden in a runtime-provided
     // `eval()` source gets no native body, so the interpreter must refuse it itself.
     codegen::set_opcache_api_restricted(opcache_prelude::restrict_api_denies(

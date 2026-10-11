@@ -18,6 +18,13 @@ use std::path::Path;
 use std::process::Command;
 use std::io::{self, IsTerminal};
 
+/// Resolves the project directory while keeping the embedded host's entry file virtual.
+pub(crate) fn canonical_entry_path(source: &str) -> Option<String> {
+    let source = Path::new(source);
+    source.parent()?.canonicalize().ok()?.join(source.file_name()?)
+        .to_str().map(str::to_owned)
+}
+
 /// Runs the requested session or builds its host in an isolated compiler subprocess.
 pub(crate) fn run(command: ReplCommand) -> i32 {
     if command.help { print!("{HELP}"); return 0; }

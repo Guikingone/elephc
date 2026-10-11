@@ -213,7 +213,7 @@ impl Parser {
             }
             let args = self.parse_call_args()?;
             return Ok(EvalExpr::Call {
-                name: name.to_ascii_lowercase(),
+                name,
                 args,
             });
         }

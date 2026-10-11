@@ -18,6 +18,8 @@ use std::process::{Child, Command, Output, Stdio};
 mod terminal;
 #[path = "repl_prebuilt.rs"]
 mod prebuilt;
+#[path = "repl_review.rs"]
+mod review;
 
 /// Uses authoritative build-job archives for both piped and terminal sessions in CI.
 fn repl_cli_command(directory: &Path) -> Command {

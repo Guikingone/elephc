@@ -9,6 +9,7 @@
 - [x] Recover reported eval failures at the submission boundary and cover repeated errors without losing session state.
 - [x] Make PTY setup portable to Apple libc and preserve warm cache reuse with archived CI bridges.
 - [x] Drain terminal output during exit and close the PTY before waiting during failure cleanup.
+- [x] Resolve OPcache restrictions against the virtual project entry and retain function spelling in errors.
 
 ## Execution
 
@@ -91,3 +92,20 @@ the master before waiting for the child, and close-on-exec flags prevent the chi
 from retaining the original PTY descriptors. A large-output shutdown regression
 reproduces the previous exit timeout on Linux and covers both complete output
 collection and dropping a session with queued output.
+
+OPcache restriction checks for the embedded host resolve the project directory
+and append the logical entry filename. Ordinary compiler entries still require
+the file itself to resolve. The regression checks allowing and denying prefixes
+without creating a project entry file.
+
+Direct eval calls retain resolved source spelling through parsing and normalize
+only their lookup keys. Undefined-function diagnostics preserve capitalization
+across unqualified, fully qualified, namespaced, and imported function calls.
+Lowercase lookup keys remain borrowed rather than allocated. The parsed-script
+cache version advances because older entries discarded the original spelling.
+Tests cover REPL recovery, interpreter lookup, and native callback dispatch.
+Both review regressions failed on the reviewed head before the corrections.
+Validation passed with 17 REPL integration tests, 2 native eval call tests,
+222 parser tests, 47 dynamic-call tests, 150 script-cache tests (one existing
+ignored test), and 6 compiler OPcache path/restriction tests. The compiler and
+Magician build completed without warnings.

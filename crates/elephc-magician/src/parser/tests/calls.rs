@@ -207,7 +207,7 @@ fn parse_fragment_accepts_isset_source() {
     assert_eq!(
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::Call {
-            name: "isset".to_string(),
+            name: "ISSET".to_string(),
             args: vec![
                 EvalCallArg::positional(EvalExpr::LoadVar("x".to_string())),
                 EvalCallArg::positional(EvalExpr::ArrayGet {
@@ -225,7 +225,7 @@ fn parse_fragment_accepts_empty_source() {
     assert_eq!(
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::Call {
-            name: "empty".to_string(),
+            name: "EMPTY".to_string(),
             args: vec![EvalCallArg::positional(EvalExpr::ArrayGet {
                 array: Box::new(EvalExpr::LoadVar("items".to_string())),
                 index: Box::new(EvalExpr::Const(EvalConst::String("k".to_string()))),

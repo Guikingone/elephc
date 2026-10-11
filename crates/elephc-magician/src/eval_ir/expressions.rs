@@ -18,6 +18,7 @@ pub enum EvalExpr {
         index: Box<EvalExpr>,
     },
     Call {
+        /// Resolved source spelling, normalized only when looking up the function.
         name: String,
         args: Vec<EvalCallArg>,
     },
@@ -109,6 +110,7 @@ pub enum EvalExpr {
     },
     Clone(Box<EvalExpr>),
     NamespacedCall {
+        /// Qualified source spelling, retained if namespace and global lookup both fail.
         name: String,
         fallback_name: String,
         args: Vec<EvalCallArg>,

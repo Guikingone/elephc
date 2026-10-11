@@ -60,6 +60,8 @@ Invalid submissions report a syntax error and return to the prompt. Escaping PHP
 `Throwable` values report their class and message and also return to the prompt.
 An undefined function, such as `isseet()` instead of `isset()`, raises a catchable
 `Error` naming the function and leaves the session available for the next command.
+The diagnostic preserves the resolved name's original capitalization, including
+namespaces and `use function` imports; function lookup remains case-insensitive.
 Errors returned by the eval interpreter also abort only the current submission.
 This includes unknown constants such as `das`, unsupported operations, invalid
 nested eval source, and `trigger_error(..., E_USER_ERROR)`. The REPL reports the
@@ -95,6 +97,10 @@ elephc repl --php-version 8.4 --strict-php
 elephc repl --ini precision=10 --heap-size=16777216
 elephc repl --with-pdo
 ```
+
+`opcache.restrict_api` compares its prefix with `.elephc-repl.php` under the
+canonical project directory. An allowing project prefix works without creating
+that logical file; a nonmatching prefix denies OPcache API calls.
 
 Dynamic input is unavailable to compile-time feature detection. Enable optional
 capabilities before starting the session. Managed native packages must already be
