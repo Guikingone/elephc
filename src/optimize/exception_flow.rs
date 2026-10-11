@@ -22,6 +22,7 @@ use std::rc::Rc;
 mod callables;
 mod destruction;
 mod hierarchy;
+mod method_defaults;
 mod property_defaults;
 mod string_conversion;
 mod types;
@@ -58,6 +59,10 @@ pub(super) struct ExceptionFlowAnalysis {
     instance_method_object_ref_checks: HashMap<String, bool>,
     /// Class initialization or an omitted trait constructor default can raise Error before its body.
     constructor_default_errors: HashSet<String>,
+    static_method_error_defaults: HashMap<String, FunctionSig>,
+    instance_method_error_defaults: HashMap<String, FunctionSig>,
+    static_method_unresolved_defaults: HashMap<String, bool>,
+    instance_method_unresolved_defaults: HashMap<String, bool>,
     function_returns: HashMap<String, PhpType>,
     static_method_returns: HashMap<String, PhpType>,
     instance_method_returns: HashMap<String, PhpType>,
@@ -341,6 +346,12 @@ impl ExceptionFlowAnalysis {
         let function_bodies = attach_class_contexts(function_bodies, &class_contexts);
         let static_method_bodies = attach_class_contexts(static_method_bodies, &class_contexts);
         let instance_method_bodies = attach_class_contexts(instance_method_bodies, &class_contexts);
+        let mut static_method_unresolved_defaults = HashMap::new();
+        let mut instance_method_unresolved_defaults = HashMap::new();
+        if type_metadata.is_none() {
+            method_defaults::collect_unresolved(program,
+                &mut static_method_unresolved_defaults, &mut instance_method_unresolved_defaults);
+        }
         let mut analysis = Self {
             hierarchy,
             function_throws: empty_summaries(function_bodies.keys()),
@@ -349,6 +360,12 @@ impl ExceptionFlowAnalysis {
             function_object_ref_checks,
             static_method_object_ref_checks,
             instance_method_object_ref_checks,
+            static_method_error_defaults: type_metadata
+                .map(|(_, classes, _)| method_defaults::collect(classes, true)).unwrap_or_default(),
+            instance_method_error_defaults: type_metadata
+                .map(|(_, classes, _)| method_defaults::collect(classes, false)).unwrap_or_default(),
+            static_method_unresolved_defaults,
+            instance_method_unresolved_defaults,
             constructor_default_errors: type_metadata.map(|(_, classes, _)| {
                 classes.iter().filter(|(_, class)| {
                     class.deferred_property_default_error.is_some()
@@ -797,6 +814,14 @@ impl ExceptionFlowAnalysis {
                     .expr_list_throws(args, bindings, class_context)
                     .combined(self.operand_cleanup_throws(args, class_context));
                 if let Some(class_name) = resolve_exception_receiver(receiver, class_context) {
+                    if self.resolve_method_value(&class_name, method, &self.static_method_unresolved_defaults) == Some(true) {
+                        thrown = thrown.combined(ThrownTypes::unknown());
+                    }
+                    if self.resolve_method_value(&class_name, method, &self.static_method_error_defaults)
+                        .is_some_and(|signature| method_defaults::can_throw(&signature, args, expr.span))
+                    {
+                        thrown = thrown.combined(ThrownTypes::exact("Error"));
+                    }
                     if self.resolve_method_value(
                         &class_name,
                         method,
@@ -834,6 +859,14 @@ impl ExceptionFlowAnalysis {
                     // A `(new C())->m()` receiver temporary is retired by this call site.
                     .combined(self.temporary_destruction_throws(object, class_context));
                 if let Some(class_name) = exact_receiver_class(object, class_context) {
+                    if self.resolve_method_value(&class_name, method, &self.instance_method_unresolved_defaults) == Some(true) {
+                        thrown = thrown.combined(ThrownTypes::unknown());
+                    }
+                    if self.resolve_method_value(&class_name, method, &self.instance_method_error_defaults)
+                        .is_some_and(|signature| method_defaults::can_throw(&signature, args, expr.span))
+                    {
+                        thrown = thrown.combined(ThrownTypes::exact("Error"));
+                    }
                     if self.resolve_method_value(
                         &class_name,
                         method,

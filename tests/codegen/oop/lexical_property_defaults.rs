@@ -10,6 +10,61 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Exact instance calls retain handlers for omitted defaults, including static and dynamic unpacks.
+#[test]
+fn test_property_default_fourth_review_exact_instance_calls() {
+    let out = compile_and_run(r#"<?php
+class Consumer { public function value(int $value = parent::A, int $other = 2): int { return $value + $other; } }
+class Child extends Consumer {}
+try { (new Consumer())->value(); } catch (Error $error) { echo 'instance|'; }
+try { (new Child())->value(...[]); } catch (Error $error) { echo 'inherited|'; }
+try { (new Consumer())->value(other: 4); } catch (Error $error) { echo 'named|'; }
+$args = $argc > 100 ? [8] : [];
+try { (new Consumer())->value(...$args); } catch (Error $error) { echo 'dynamic|'; }
+echo (new Consumer())->value(5), '|', (new Consumer())->value(...[7]);
+"#);
+    assert_eq!(out, "instance|inherited|named|dynamic|7|9");
+}
+
+/// Exact static calls retain lazy-default handlers without evaluating a supplied default.
+#[test]
+fn test_property_default_fourth_review_exact_static_calls() {
+    let out = compile_and_run(r#"<?php
+class Consumer { public static function value(int $value = parent::A, int $other = 2): int { return $value + $other; } }
+class Child extends Consumer {}
+try { Consumer::value(); } catch (Error $error) { echo 'static|'; }
+try { Child::value(...[]); } catch (Error $error) { echo 'inherited|'; }
+try { Consumer::value(other: 4); } catch (Error $error) { echo 'named|'; }
+$args = $argc > 100 ? [8] : [];
+try { Consumer::value(...$args); } catch (Error $error) { echo 'dynamic|'; }
+echo Consumer::value(value: 5), '|', Consumer::value(...[7]);
+"#);
+    assert_eq!(out, "static|inherited|named|dynamic|7|9");
+}
+
+/// Caller arguments and temporary receivers unwind once when a named omission selects an Error.
+#[test]
+fn test_property_default_fourth_review_named_argument_ownership() {
+    let out = compile_and_run(r#"<?php
+class Payload {}
+class Consumer {
+    public function value(int $value = parent::A, ?Payload $payload = null): int { return $value; }
+    public static function staticValue(int $value = parent::A, ?Payload $payload = null): int { return $value; }
+    public function positional(Payload $payload, int $value = parent::A): int { return $value; }
+    public static function staticPositional(Payload $payload, int $value = parent::A): int { return $value; }
+    public function text(int $value = parent::A): string { return 'v' . $value; }
+}
+function argument(): Payload { echo 'S'; return new Payload(); }
+try { (new Consumer())->value(payload: argument()); } catch (Error $error) { echo 'E|'; }
+try { Consumer::staticValue(payload: argument()); } catch (Error $error) { echo 'E'; }
+echo '|';
+try { (new Consumer())->positional(argument()); } catch (Error $error) { echo 'E|'; }
+try { Consumer::staticPositional(argument()); } catch (Error $error) { echo 'E'; }
+echo '|', (new Consumer())->text(7);
+"#);
+    assert_eq!(out, "SE|SE|SE|SE|v7");
+}
+
 /// Mixed parent constant/name arrays in trait properties and signatures keep their lazy first error.
 #[test]
 fn test_property_default_third_review_trait_parent_arrays_remain_lazy() {

@@ -36,6 +36,13 @@ $value = (new ReflectionClass(Valid::class))->newInstanceWithoutConstructor();
 echo $value->value;
 $source = $argv[1];
 eval($source);
+class MethodConsumer {
+    public function value(int $value = parent::A): int { return $value; }
+    public static function staticValue(int $value = parent::A): int { return $value; }
+}
+try { (new MethodConsumer())->value(); } catch (Error $error) { echo 'instance'; }
+try { MethodConsumer::staticValue(); } catch (Error $error) { echo 'static'; }
+echo (new MethodConsumer())->value(7), MethodConsumer::staticValue(value: 8);
 "#;
     let module = super::lower_source_at_for_target(source, Path::new("main.php"), Path::new("."),
         Target::parse(target_name).unwrap());
@@ -144,6 +151,34 @@ try { new Consumer(); } catch (Error $e) { echo 'new'; }
 try { Consumer::$valid = 'value'; } catch (Error $e) { echo 'write'; }
 "#;
     let parsed = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let check = crate::types::check(&parsed).unwrap();
+    let optimizer = crate::optimize::PostTypecheckOptimizer::new_with_type_metadata(
+        &parsed, &check.functions, &check.classes, &check.interfaces,
+    );
+    let optimized = optimizer.eliminate_dead_code(parsed, check.local_binding_decision_spans());
+    assert_eq!(optimized.iter().filter(|statement| {
+        matches!(&statement.kind, crate::parser::ast::StmtKind::Try { catches, .. } if !catches.is_empty())
+    }).count(), 2);
+}
+
+/// Metadata-aware DCE preserves omitted-default handlers while pruning supplied clean calls.
+#[test]
+fn property_default_fourth_review_method_catch_reachability() {
+    let source = r#"<?php
+class Consumer {
+    public function value(int $value = parent::A): int { return $value; }
+    public static function staticValue(int $value = parent::A): int { return $value; }
+}
+try { (new Consumer())->value(); } catch (Error $error) { echo 'instance'; }
+try { Consumer::staticValue(); } catch (Error $error) { echo 'static'; }
+try { (new Consumer())->value(9); } catch (Error $error) { echo 'bad'; }
+try { Consumer::staticValue(value: 9); } catch (Error $error) { echo 'bad'; }
+"#;
+    let parsed = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let compatibility = crate::optimize::eliminate_dead_code(parsed.clone(), Default::default());
+    assert_eq!(compatibility.iter().filter(|statement| {
+        matches!(&statement.kind, crate::parser::ast::StmtKind::Try { catches, .. } if !catches.is_empty())
+    }).count(), 4, "AST-only defaults must remain conservative without checker metadata");
     let check = crate::types::check(&parsed).unwrap();
     let optimizer = crate::optimize::PostTypecheckOptimizer::new_with_type_metadata(
         &parsed, &check.functions, &check.classes, &check.interfaces,

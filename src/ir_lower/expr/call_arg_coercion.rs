@@ -848,7 +848,11 @@ pub(super) fn lower_args_with_signature_options_for_capture(
                 promote_captured_reference_argument(ctx, arg);
             }
             let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
-            if !capture_values && index + 1 < args.len() {
+            // Omitted defaults execute after every caller expression, including the last one.
+            let deferred_default = !trim_trailing_defaults
+                && sig.defaults.iter().take(regular_param_count).skip(fixed_arg_count)
+                    .flatten().any(|default| matches!(default.kind, ExprKind::Throw(_)));
+            if !capture_values && (index + 1 < args.len() || deferred_default) {
                 root_prior_argument_preserving_reference_place(
                     ctx, sig, index, arg, value,
                 )
