@@ -40,6 +40,13 @@ pub(super) fn apply_properties(
     let mut default_errors: [Option<String>; 4] = [None, None, None, None];
     for prop in &class.properties {
         let normalized = prop.default.as_ref().map(|default| {
+            let validation_parent = class.extends.as_deref().or_else(|| {
+                checker.trait_imported_properties.get(&class.name)
+                    .is_some_and(|names| names.contains(&prop.name)).then_some(class.name.as_str())
+            });
+            super::constants::validate_compile_time_default_in_scope(
+                default, &class.name, validation_parent,
+            )?;
             super::constants::normalize_property_default_in_scope(
                 default, &class.name, class.extends.as_deref(),
             )

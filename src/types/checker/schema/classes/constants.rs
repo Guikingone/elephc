@@ -9,6 +9,7 @@
 //! Key details:
 //! - Class constant values are later re-inferred and emitted outside the declaring class scope.
 //! - `static::` is rejected in compile-time constants to match PHP's early-bound rules.
+//! - Validation-only scopes walk past lazy parent constants without binding parent class names.
 
 use crate::errors::CompileError;
 use crate::names::{Name, NameKind};
@@ -17,6 +18,21 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 use crate::types::traits::FlattenedClass;
+
+/// Separates real lexical binding from a discarded pass over lazy parent constant accesses.
+#[derive(Clone, Copy)]
+enum ParentScope<'a> {
+    Bound(&'a str),
+    Missing,
+    ValidateLazyConstants,
+}
+
+impl<'a> From<Option<&'a str>> for ParentScope<'a> {
+    /// Retains the actual parent scope for normalization and emitted default trees.
+    fn from(parent: Option<&'a str>) -> Self {
+        parent.map(Self::Bound).unwrap_or(Self::Missing)
+    }
+}
 
 /// Normalizes a class-constant value expression by resolving lexical `self::` and
 /// `parent::` constant receivers to their concrete class names. Rejects `static::`
@@ -29,7 +45,7 @@ pub(super) fn resolve_lexical_class_constant_value(
     value: &Expr,
     class: &FlattenedClass,
 ) -> Result<Expr, CompileError> {
-    rewrite_expr(value, &class.name, class.extends.as_deref()).map_err(|mut error| {
+    rewrite_expr(value, &class.name, class.extends.as_deref().into()).map_err(|mut error| {
         if is_missing_parent_default_error(&error) {
             error.message = format!("Class '{}' has no parent class", class.name);
         }
@@ -52,7 +68,18 @@ pub(crate) fn normalize_property_default_in_scope(
     class_name: &str,
     parent_name: Option<&str>,
 ) -> Result<Expr, CompileError> {
-    rewrite_expr(value, class_name, parent_name)
+    rewrite_expr(value, class_name, parent_name.into())
+}
+
+/// Checks hard default errors without letting an earlier lazy parent constant stop the walk.
+pub(crate) fn validate_compile_time_default_in_scope(
+    value: &Expr,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> Result<(), CompileError> {
+    let parent = parent_name.map(ParentScope::Bound).unwrap_or(ParentScope::ValidateLazyConstants);
+    // The placeholder receiver is discarded here, never installed into a stored default.
+    rewrite_expr(value, class_name, parent).map(|_| ())
 }
 
 /// Identifies errors that can remain lazy in imported or ordinary constant defaults.
@@ -76,7 +103,7 @@ pub(crate) fn deferred_default_error(message: String, span: Span) -> Expr {
 fn rewrite_expr(
     expr: &Expr,
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
 ) -> Result<Expr, CompileError> {
     let kind = match &expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
@@ -410,7 +437,7 @@ fn rewrite_expr(
 fn rewrite_expr_list(
     exprs: &[Expr],
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
 ) -> Result<Vec<Expr>, CompileError> {
     exprs
         .iter()
@@ -423,7 +450,7 @@ fn rewrite_expr_list(
 fn rewrite_instanceof_target(
     target: &InstanceOfTarget,
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
 ) -> Result<InstanceOfTarget, CompileError> {
     match target {
         InstanceOfTarget::Name(name) => Ok(InstanceOfTarget::Name(name.clone())),
@@ -444,7 +471,7 @@ fn rewrite_instanceof_target(
 fn rewrite_callable_target(
     target: &CallableTarget,
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
 ) -> Result<CallableTarget, CompileError> {
     match target {
         CallableTarget::Function(name) => Ok(CallableTarget::Function(name.clone())),
@@ -465,7 +492,7 @@ fn rewrite_callable_target(
 fn rewrite_constant_receiver(
     receiver: &StaticReceiver,
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
     span: Span,
     class_name_resolution: bool,
 ) -> Result<StaticReceiver, CompileError> {
@@ -481,16 +508,17 @@ fn rewrite_constant_receiver(
         ),
         StaticReceiver::Named(name) => Ok(StaticReceiver::Named(name.clone())),
         StaticReceiver::Self_ => Ok(StaticReceiver::Named(fqn_name(class_name))),
-        StaticReceiver::Parent => parent_name
-            .map(fqn_name)
-            .map(StaticReceiver::Named)
-            .ok_or_else(|| {
-                CompileError::new(span, if class_name_resolution {
-                    "Cannot use \"parent\" when current class scope has no parent"
-                } else {
-                    "Cannot access \"parent\" when current class scope has no parent"
-                })
-            }),
+        StaticReceiver::Parent => match parent_name {
+            ParentScope::Bound(parent) => Ok(StaticReceiver::Named(fqn_name(parent))),
+            ParentScope::ValidateLazyConstants if !class_name_resolution => {
+                Ok(StaticReceiver::Named(fqn_name(class_name)))
+            }
+            _ => Err(CompileError::new(span, if class_name_resolution {
+                "Cannot use \"parent\" when current class scope has no parent"
+            } else {
+                "Cannot access \"parent\" when current class scope has no parent"
+            })),
+        },
         StaticReceiver::Static => Err(CompileError::new(
             span,
             "\"static::\" is not allowed in compile-time constants",

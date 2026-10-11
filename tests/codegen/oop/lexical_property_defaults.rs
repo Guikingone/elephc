@@ -10,6 +10,42 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Mixed parent constant/name arrays in trait properties and signatures keep their lazy first error.
+#[test]
+fn test_property_default_third_review_trait_parent_arrays_remain_lazy() {
+    let out = compile_and_run(r#"<?php
+trait Properties { public array $names = [parent::A, parent::class]; }
+trait Methods { public function value(array $names = [parent::A, parent::class]): array { return $names; } }
+trait Promotion { public function __construct(public array $names = [parent::A, parent::class]) {} }
+class PropertyConsumer { use Properties; }
+class MethodConsumer { use Methods; }
+class PromotedConsumer { use Promotion; }
+echo 'declared|';
+try { new PropertyConsumer(); } catch (Error $error) { echo $error->getMessage(), '|'; }
+$method = new MethodConsumer(); echo json_encode($method->value([9])), '|';
+try { $method->value(); } catch (Error $error) { echo $error->getMessage(), '|'; }
+$promoted = new PromotedConsumer([9]); echo json_encode($promoted->names), '|';
+try { new PromotedConsumer(); } catch (Error $error) { echo $error->getMessage(); }
+"#);
+    let message = "Cannot access \"parent\" when current class scope has no parent";
+    assert_eq!(out, format!("declared|{message}|[9]|{message}|[9]|{message}"));
+}
+
+/// A real parent binds every member of the same promoted and ordinary method defaults.
+#[test]
+fn test_property_default_third_review_bound_parent_arrays() {
+    let out = compile_and_run(r#"<?php
+class Base { public const A = 1; }
+class Consumer extends Base {
+    public function __construct(public array $promoted = [parent::A, parent::class]) {}
+    public function value(array $names = [parent::A, parent::class]): array { return $names; }
+}
+$value = new Consumer();
+echo json_encode($value->promoted), '|', json_encode($value->value());
+"#);
+    assert_eq!(out, "[1,\"Base\"]|[1,\"Base\"]");
+}
+
 /// Trait declaration order determines the first instance-default error instead of error wording.
 #[test]
 fn test_property_default_second_review_trait_error_order() {

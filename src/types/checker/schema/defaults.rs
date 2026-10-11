@@ -111,22 +111,10 @@ fn validate_direct_class_name_defaults(program: &Program, errors: &mut Vec<Compi
         for method in methods {
             for (_, _, default, _) in &method.params {
                 let Some(default) = default else { continue };
-                if let Err(error) = super::classes::normalize_property_default_in_scope(
+                if let Err(error) = super::classes::validate_compile_time_default_in_scope(
                     default, name, parent,
                 ) {
-                    // A lazy parent constant must not hide a later forbidden static
-                    // receiver in the same default tree. Discard this placeholder tree.
-                    let error = if error.message == "Cannot access \"parent\" when current class scope has no parent" {
-                        super::classes::normalize_property_default_in_scope(default, name, Some(name))
-                            .err().unwrap_or(error)
-                    } else { error };
-                    if matches!(error.message.as_str(),
-                        "Cannot use \"parent\" when current class scope has no parent"
-                        | "static::class cannot be used for compile-time class name resolution"
-                        | "\"static::\" is not allowed in compile-time constants")
-                    {
-                        errors.push(error);
-                    }
+                    errors.push(error);
                 }
             }
         }

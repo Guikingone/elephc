@@ -10,6 +10,51 @@
 
 use super::*;
 
+/// A lazy parent constant cannot mask a later hard parent class-name error in method defaults.
+#[test]
+fn test_property_default_third_review_method_parent_masking() {
+    for default in ["[parent::A, parent::class]", "[parent::A, [parent::class]]",
+        "[parent::A => parent::class]"] {
+        for source in [
+            format!("<?php class Probe {{ public function value($names = {default}) {{}} }}"),
+            format!("<?php interface Probe {{ public function value($names = {default}); }}"),
+            format!("<?php enum Probe {{ case Item; public function value($names = {default}) {{}} }}"),
+            format!("<?php namespace Named {{ class Probe {{ public static function value($names = {default}) {{}} }} }}"),
+        ] {
+            expect_error(&source, "Cannot use \"parent\" when current class scope has no parent");
+        }
+    }
+}
+
+/// Direct instance and static property arrays inspect the entire default before deferring errors.
+#[test]
+fn test_property_default_third_review_property_parent_masking() {
+    for default in ["[parent::A, parent::class]", "[parent::A, [parent::class]]",
+        "[parent::A => parent::class]"] {
+        for modifier in ["", "static "] {
+            let source = format!("<?php class Probe {{ public {modifier}array $names = {default}; }}");
+            expect_error(&source, "Cannot use \"parent\" when current class scope has no parent");
+        }
+    }
+}
+
+/// A direct promoted default rejects hard scope errors after an otherwise lazy parent access.
+#[test]
+fn test_property_default_third_review_promoted_parent_masking() {
+    for default in ["[parent::A, parent::class]", "[parent::A, [parent::class]]",
+        "[parent::A => parent::class]"] {
+        let source = format!("<?php class Probe {{ public function __construct(public array $names = {default}) {{}} }}");
+        expect_error(&source, "Cannot use \"parent\" when current class scope has no parent");
+    }
+}
+
+/// A bound parent keeps mixed constant/name property arrays valid in the frontend.
+#[test]
+fn test_property_default_third_review_bound_property_scope() {
+    check_source("<?php class Base { const A = 1; } class Probe extends Base { public array $names = [parent::A, parent::class]; }")
+        .expect("both parent receivers have a declaration scope");
+}
+
 /// Ordinary method defaults reject late-static class names and constants on all class-like owners.
 #[test]
 fn test_property_default_second_review_method_late_static() {
