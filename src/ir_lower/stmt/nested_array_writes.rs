@@ -496,7 +496,13 @@ fn lower_local_parent_fetch_for_write_inner(
                             Op::ArrayToHash.default_effects(), Some(span),
                         );
                         return Some(lower_hash_parent_fetch_for_write_with_key(
-                            ctx, name, hash, assoc_ty, key, span,
+                            ctx,
+                            name,
+                            hash,
+                            assoc_ty,
+                            key,
+                            span,
+                            key_already_diagnosed,
                         ));
                     }
                     // A nested write needs the attached child cell even for a typed string
@@ -530,11 +536,10 @@ fn lower_local_parent_fetch_for_write_inner(
                     release_persisted_string_operand(ctx, key, span);
                     Some(cell)
                 }
-                PhpType::Str => {
-                    // A literal string key on an indexed local is always a
-                    // hash key: promote the local to a Mixed-valued hash
-                    // first (mirrors `lower_array_key_hash_promotion`),
-                    // then ensure the element through the hash path. The
+                PhpType::Str | PhpType::Mixed => {
+                    // A string or runtime-boxed key can select a hash key:
+                    // promote to a Mixed-valued hash, whose key conversion
+                    // preserves both string and numeric runtime keys. The
                     // promoted hash flows straight into the ensure call and
                     // is stored back exactly once at the end.
                     let array_value = ctx.load_local(name, Some(span));
@@ -548,7 +553,7 @@ fn lower_local_parent_fetch_for_write_inner(
                         Op::ArrayToHash.default_effects(),
                         Some(span),
                     );
-                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
+                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span, key_already_diagnosed))
                 }
                 _ => None,
             }
@@ -559,7 +564,7 @@ fn lower_local_parent_fetch_for_write_inner(
             // Fetch-for-write normalizes typed entries in place and returns their attached
             // Mixed cells. Declare that result contract before publishing the changed hash.
             ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
-            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span))
+            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span, key_already_diagnosed))
         }
         _ => None,
     }
@@ -607,9 +612,18 @@ pub(super) fn lower_hash_parent_fetch_for_write(
     assoc_ty: PhpType,
     index: &Expr,
     span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let key = lower_expr(ctx, index);
-    lower_hash_parent_fetch_for_write_with_key(ctx, name, hash_value, assoc_ty, key, span)
+    lower_hash_parent_fetch_for_write_with_key(
+        ctx,
+        name,
+        hash_value,
+        assoc_ty,
+        key,
+        span,
+        key_already_diagnosed,
+    )
 }
 
 /// Uses an already evaluated hash key for both the ensure and stored-cell read, then retires it.
@@ -620,11 +634,16 @@ fn lower_hash_parent_fetch_for_write_with_key(
     assoc_ty: PhpType,
     key: LoweredValue,
     span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![hash_value.value, key.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        Some(Immediate::RuntimeCall(if key_already_diagnosed {
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+        } else {
+            RuntimeCallTarget::ArrayFetchForWrite
+        })),
         assoc_ty.clone(),
         effects_lookup::runtime_effects(),
         Some(span),
