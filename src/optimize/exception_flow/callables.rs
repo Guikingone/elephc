@@ -10,6 +10,7 @@
 //! - Only executable class method bodies participate; declarations themselves do not throw.
 
 use crate::names::php_symbol_key;
+use crate::types::PhpType;
 use crate::optimize::effect_analysis::method_effect_key;
 use crate::parser::ast::{Stmt, StmtKind, TypeExpr};
 use std::collections::{HashMap, HashSet};
@@ -21,25 +22,34 @@ pub(super) struct ExceptionClassContext {
     pub(super) parent_name: Option<String>,
 }
 
-/// A callable body plus optional lexical class context.
-#[derive(Clone, Copy)]
+/// A callable body, its declared return type, and an optional lexical class context.
+#[derive(Clone)]
 pub(super) struct ExceptionBody<'a> {
     pub(super) body: &'a [Stmt],
+    pub(super) declared_return_type: Option<PhpType>,
     pub(super) class_context: Option<&'a ExceptionClassContext>,
 }
 
-/// Collects callable bodies and per-class lexical contexts from the AST.
+/// Collects callable bodies, their declared return types, and per-class lexical contexts.
 pub(super) fn collect_exception_bodies<'a>(
     stmts: &'a [Stmt],
-    functions: &mut HashMap<String, &'a [Stmt]>,
-    static_methods: &mut HashMap<String, (&'a [Stmt], String)>,
-    instance_methods: &mut HashMap<String, (&'a [Stmt], String)>,
+    functions: &mut HashMap<String, (&'a [Stmt], Option<PhpType>)>,
+    static_methods: &mut HashMap<String, (&'a [Stmt], Option<PhpType>, String)>,
+    instance_methods: &mut HashMap<String, (&'a [Stmt], Option<PhpType>, String)>,
     class_contexts: &mut HashMap<String, ExceptionClassContext>,
 ) {
     for stmt in stmts {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, body, .. } => {
-                functions.insert(name.clone(), body);
+            StmtKind::FunctionDecl {
+                name,
+                body,
+                return_type,
+                ..
+            } => {
+                let declared = return_type
+                    .as_ref()
+                    .map(crate::ir_lower::type_expr_to_php_type);
+                functions.insert(name.clone(), (body, declared));
             }
             StmtKind::ClassDecl {
                 name,
@@ -55,7 +65,15 @@ pub(super) fn collect_exception_bodies<'a>(
                     },
                 );
                 for method in methods.iter().filter(|method| method.has_body) {
-                    let entry = (&method.body[..], php_symbol_key(name));
+                    let declared = method
+                        .return_type
+                        .as_ref()
+                        .map(crate::ir_lower::type_expr_to_php_type);
+                    let entry = (
+                        &method.body[..],
+                        declared,
+                        php_symbol_key(name),
+                    );
                     if method.is_static {
                         static_methods.insert(method_effect_key(name, &method.name), entry);
                     } else {
@@ -143,13 +161,28 @@ pub(super) trait IntoExceptionBody<'a> {
 }
 
 impl<'a> IntoExceptionBody<'a> for &'a [Stmt] {
-    /// Converts a free-function body with no class context.
+    /// Converts a free-function body with no declared return type and no class context.
     fn into_exception_body(
         self,
         _class_contexts: &'a HashMap<String, ExceptionClassContext>,
     ) -> ExceptionBody<'a> {
         ExceptionBody {
             body: self,
+            declared_return_type: None,
+            class_context: None,
+        }
+    }
+}
+
+impl<'a> IntoExceptionBody<'a> for (&'a [Stmt], Option<PhpType>) {
+    /// Converts a free-function body with its declared return type and no class context.
+    fn into_exception_body(
+        self,
+        _class_contexts: &'a HashMap<String, ExceptionClassContext>,
+    ) -> ExceptionBody<'a> {
+        ExceptionBody {
+            body: self.0,
+            declared_return_type: self.1,
             class_context: None,
         }
     }
@@ -163,7 +196,22 @@ impl<'a> IntoExceptionBody<'a> for (&'a [Stmt], String) {
     ) -> ExceptionBody<'a> {
         ExceptionBody {
             body: self.0,
+            declared_return_type: None,
             class_context: class_contexts.get(&self.1),
+        }
+    }
+}
+
+impl<'a> IntoExceptionBody<'a> for (&'a [Stmt], Option<PhpType>, String) {
+    /// Converts a method body with its declared return type and resolves its owning class context.
+    fn into_exception_body(
+        self,
+        class_contexts: &'a HashMap<String, ExceptionClassContext>,
+    ) -> ExceptionBody<'a> {
+        ExceptionBody {
+            body: self.0,
+            declared_return_type: self.1,
+            class_context: class_contexts.get(&self.2),
         }
     }
 }

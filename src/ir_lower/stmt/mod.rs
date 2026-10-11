@@ -72,6 +72,7 @@ use typed_foreach::*;
 use switches::*;
 use includes::*;
 use exceptions::*;
+pub(crate) use control_exit::lower_static_type_error;
 use control_exit::*;
 use declarations::*;
 use instance_property_writes::*;

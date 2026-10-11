@@ -609,6 +609,30 @@ pub(crate) fn lower_throw_access_error(
     terminate_throw(ctx, error_value.value);
 }
 
+/// Lowers a statically-decided return-coverage violation as a catchable `TypeError` throw.
+///
+/// php compiles a body that does not return on every path and raises
+/// `TypeError: X(): Return value must be of type Y, none returned` at run time when a path
+/// completes without a value. Builds a synthetic `new TypeError($message)` expression, lowers it,
+/// and terminates the block with the throw.
+pub(crate) fn lower_static_type_error(ctx: &mut LoweringContext<'_, '_>, message: &str) {
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("TypeError"),
+            args: vec![Expr::new(
+                ExprKind::StringLiteral(message.to_string()),
+                crate::span::Span::dummy(),
+            )],
+        },
+        crate::span::Span::dummy(),
+    );
+    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    terminate_throw(ctx, error_value.value);
+}
+
 /// Lowers a statically-decided access violation as a catchable `Error` throw in
 /// expression position and returns a placeholder null value.
 ///

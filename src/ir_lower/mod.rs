@@ -38,6 +38,7 @@ pub(crate) mod tests;
 pub(crate) use expr::body_contains_eval_call;
 #[allow(unused_imports)] // used by the binary's pipeline only
 pub(crate) use program::module_runs_interpreted_code;
+pub(crate) use context::type_expr_to_php_type;
 
 use std::fmt;
 use std::path::Path;

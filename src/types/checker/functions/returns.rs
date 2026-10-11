@@ -326,30 +326,21 @@ impl Checker {
     }
 
     /// Checks that a function or closure body ends with a return on every control-flow path
-    /// when the declared return type is not Void or Never. Uses the shared function-exit analysis,
-    /// extended with checker-known `never` calls, to determine if the body always exits; emits a
-    /// "must return a value" error if not.
+    /// when the declared return type is not Void or Never.
+    ///
+    /// php COMPILES such a body and raises a catchable
+    /// `TypeError: X(): Return value must be of type Y, none returned` at run time when a path
+    /// completes without a value, so there is nothing to refuse here: the implicit fall-through
+    /// raises that TypeError when lowering. `require_compatible_return_type` still checks every
+    /// return statement that IS present.
     pub(crate) fn require_declared_return_coverage(
         &self,
-        declared_ret: &PhpType,
-        body: &[Stmt],
-        span: crate::span::Span,
-        context: &str,
+        _declared_ret: &PhpType,
+        _body: &[Stmt],
+        _span: crate::span::Span,
+        _context: &str,
     ) -> Result<(), CompileError> {
-        if matches!(declared_ret, PhpType::Void | PhpType::Never) {
-            return Ok(());
-        }
-
-        if crate::termination::block_guarantees_function_exit_with_divergence(body, &|expr| {
-            self.expr_is_declared_never_call(expr)
-        }) {
-            Ok(())
-        } else {
-            Err(CompileError::new(
-                span,
-                &format!("{} must return a value on every path", context),
-            ))
-        }
+        Ok(())
     }
 
     /// Checks that an actual return type is compatible with the declared return type.

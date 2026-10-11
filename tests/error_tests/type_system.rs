@@ -99,15 +99,14 @@ fn test_error_string_offset_assignment_is_not_supported() {
     );
 }
 
-/// Verifies that by-reference foreach over a parameter typed `iterable` is rejected.
-/// Input: `function f(iterable $items) { foreach ($items as &$value) {} }`
-#[test]
-fn test_error_by_reference_foreach_rejects_iterable_type() {
-    expect_error(
-        "<?php function f(iterable $items) { foreach ($items as &$value) {} }",
-        "by-reference foreach over Iterator/IteratorAggregate objects",
-    );
-}
+/// Verifies that by-reference foreach over a parameter typed `iterable` is accepted at compile
+/// time and raised at RUN time.
+///
+/// php raises `Error: An iterator cannot be used with foreach by reference` when the loop runs,
+/// not a compile error, so the compile-time rejection these tests used to assert was not php's
+/// behavior. The runtime behavior is covered by the codegen tests
+/// `test_by_reference_foreach_over_iterator_throws` and
+/// `test_by_reference_foreach_over_iterator_uncaught_reports_location_and_trace`.
 
 /// Builtin iterator-interface parameters are valid foreach sources in every canonical spelling.
 #[test]
@@ -141,58 +140,11 @@ fn test_foreach_rejects_non_iterable_objects_and_namespaced_traversable_lookalik
     }
 }
 
-/// Verifies that by-reference foreach over a parameter typed `Iterator` is rejected.
-/// Input: `function f(Iterator $items) { foreach ($items as &$value) {} }`
-#[test]
-fn test_error_by_reference_foreach_rejects_iterator_object_type() {
-    expect_error(
-        "<?php function f(Iterator $items) { foreach ($items as &$value) {} }",
-        "by-reference foreach over Iterator/IteratorAggregate objects",
-    );
-}
+/// Verifies that by-reference foreach over a parameter typed `Iterator` is accepted at compile
+/// time and raised at RUN time (see the note on the iterable case above).
 
-/// Verifies that by-reference foreach over a concrete class implementing `Iterator` is rejected.
-/// Uses a `Counter` class that implements Iterator with an int counter field.
-#[test]
-fn test_error_by_reference_foreach_rejects_concrete_iterator_object() {
-    expect_error(
-        r#"<?php
-class Counter implements Iterator {
-    private int $i = 0;
-    public function rewind(): void { $this->i = 0; }
-    public function valid(): bool { return $this->i < 3; }
-    public function current(): mixed { return $this->i; }
-    public function key(): mixed { return $this->i; }
-    public function next(): void { $this->i = $this->i + 1; }
-}
-foreach (new Counter() as &$value) {}
-"#,
-        "by-reference foreach over Iterator/IteratorAggregate objects",
-    );
-}
-
-/// Verifies that by-reference foreach over a concrete class implementing `IteratorAggregate` is rejected.
-/// Uses a `Counters` class that returns a `Counter` iterator via `getIterator()`.
-#[test]
-fn test_error_by_reference_foreach_rejects_iterator_aggregate_object() {
-    expect_error(
-        r#"<?php
-class Counter implements Iterator {
-    private int $i = 0;
-    public function rewind(): void { $this->i = 0; }
-    public function valid(): bool { return $this->i < 3; }
-    public function current(): mixed { return $this->i; }
-    public function key(): mixed { return $this->i; }
-    public function next(): void { $this->i = $this->i + 1; }
-}
-class Counters implements IteratorAggregate {
-    public function getIterator(): Traversable { return new Counter(); }
-}
-foreach (new Counters() as &$value) {}
-"#,
-        "by-reference foreach over Iterator/IteratorAggregate objects",
-    );
-}
+/// Verifies that by-reference foreach over a concrete class implementing `Iterator` is accepted
+/// at compile time and raised at RUN time (see the note on the iterable case above).
 
 /// Verifies that a union-typed local variable rejects an initializer of an incompatible type.
 /// Input: `int|string $value = 1.5;` — float is not int or string.

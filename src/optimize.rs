@@ -14,6 +14,7 @@ use crate::parser::ast::{
     InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
 use crate::span::Span;
+use crate::types::PhpType;
 use crate::codegen_support::platform::Target;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
@@ -627,6 +628,8 @@ struct InstanceDispatchMetadata {
 struct FunctionEffectBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
+    /// The declared return type, when the declaration spells one.
+    declared_return_type: Option<PhpType>,
 }
 
 /// Holds the body, class context, and never-return metadata for a static method during effect analysis.
@@ -635,6 +638,8 @@ struct StaticMethodBody<'a> {
     context: ClassEffectContext,
     body: &'a [Stmt],
     declared_never: bool,
+    /// The declared return type, when the declaration spells one.
+    declared_return_type: Option<PhpType>,
 }
 
 /// Holds callable summaries and dispatch metadata shared by optimizer passes.

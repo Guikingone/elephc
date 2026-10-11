@@ -405,9 +405,28 @@ impl ExceptionFlowAnalysis {
         bodies
             .iter()
             .map(|(name, body)| {
+                // A body that does not return a value on every path raises php's catchable
+                // `TypeError: X(): Return value must be of type Y, none returned` when such a
+                // path completes, even when the body's own statements throw nothing. Without
+                // it a call to that callable looked like it threw nothing and a `try` around
+                // the call lost its handler.
+                let coverage = body
+                    .declared_return_type
+                    .as_ref()
+                    .filter(|declared| !matches!(declared, PhpType::Void | PhpType::Never | PhpType::Mixed))
+                    .filter(|declared| !crate::optimize::effect_analysis::declared_type_accepts_null(declared))
+                    .filter(|_| {
+                        !crate::termination::block_guarantees_function_exit_with_divergence(
+                            body.body,
+                            &|_| false,
+                        )
+                    })
+                    .map(|_| ThrownTypes::exact("TypeError"))
+                    .unwrap_or_default();
                 (
                     name.clone(),
                     self.block_throws(body.body, &HashMap::new(), body.class_context)
+                        .combined(coverage)
                         .combined(self.scope_cleanup_throws(name)),
                 )
             })

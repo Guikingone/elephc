@@ -1884,6 +1884,21 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
         ctx.builder.terminate(Terminator::Return { value: None });
         return;
     }
+    if ctx.return_type_is_declared
+        && !declared_return_type_accepts_null(&ctx.return_php_type)
+    {
+        // php compiles a body that does not return on every path and raises a catchable
+        // TypeError at RUN time when a path completes without a value. The implicit
+        // fall-through is exactly such a path, so it raises here instead of handing the
+        // caller a null the declared type cannot hold.
+        let message = format!(
+            "{}(): Return value must be of type {}, none returned",
+            ctx.owner_name(),
+            php_type_spelling(&ctx.return_php_type),
+        );
+        crate::ir_lower::stmt::lower_static_type_error(ctx, &message);
+        return;
+    }
     if ctx.by_ref_return {
         // A by-reference result is a raw CELL ADDRESS the caller dereferences and may alias.
         // A fallthrough has no accepted reference to transport, and the default placeholder
@@ -1900,6 +1915,38 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
     let value = emit_default_return_value(ctx);
     ctx.builder
         .terminate(Terminator::Return { value: Some(value) });
+}
+
+/// Returns whether the declared return type holds php's implicit `null` return.
+fn declared_return_type_accepts_null(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed | PhpType::Void => true,
+        PhpType::Union(members) => members.iter().any(declared_return_type_accepts_null),
+        _ => false,
+    }
+}
+
+/// Returns the type name php spells in its TypeError messages.
+fn php_type_spelling(ty: &PhpType) -> String {
+    match ty {
+        PhpType::Bool => "bool".to_string(),
+        PhpType::False => "false".to_string(),
+        PhpType::Int => "int".to_string(),
+        PhpType::Float => "float".to_string(),
+        PhpType::Str => "string".to_string(),
+        PhpType::Mixed => "mixed".to_string(),
+        PhpType::Void => "void".to_string(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
+        PhpType::Object(name) => name.trim_start_matches('\\').to_string(),
+        PhpType::Union(members) => members
+            .iter()
+            .map(|member| php_type_spelling(member))
+            .collect::<Vec<_>>()
+            .join("|"),
+        PhpType::Iterable => "Traversable|array".to_string(),
+        PhpType::Callable => "callable".to_string(),
+        _ => "mixed".to_string(),
+    }
 }
 
 /// Emits a placeholder value compatible with the function return storage type.
