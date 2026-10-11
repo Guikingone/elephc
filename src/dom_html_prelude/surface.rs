@@ -54,7 +54,11 @@ function __elephc_dom_starts_markup(string $html, int $i): bool {
                 && (__elephc_dom_is_ws(__elephc_dom_char($html, $i + 9))
                     || __elephc_dom_char($html, $i + 9) === ">"));
     }
-    return __elephc_dom_is_letter($_next) || $_next === "/" || $_next === "?";
+    if ($_next === "/") {
+        $_name_start = __elephc_dom_char($html, $i + 2);
+        return __elephc_dom_is_letter($_name_start) || $_name_start === "_" || $_name_start === ":";
+    }
+    return __elephc_dom_is_letter($_next) || $_next === "?";
 }
 
 function __elephc_dom_is_boolean_attr(string $name): bool {
@@ -116,7 +120,7 @@ function __elephc_dom_read_attr_value(string $html, int $i): mixed {
         while ($i < $_len && __elephc_dom_char($html, $i) !== $_q) {
             $i = $i + 1;
         }
-        $_val = html_entity_decode(substr($html, $_start, $i - $_start));
+        $_val = __elephc_dom_decode_entities(substr($html, $_start, $i - $_start));
         if ($i < $_len) {
             $i = $i + 1;
         }
@@ -130,7 +134,7 @@ function __elephc_dom_read_attr_value(string $html, int $i): mixed {
         }
         $i = $i + 1;
     }
-    return [html_entity_decode(substr($html, $_start, $i - $_start)), $i];
+    return [__elephc_dom_decode_entities(substr($html, $_start, $i - $_start)), $i];
 }
 
 function __elephc_dom_read_attrs(string $html, int $i): mixed {
@@ -201,10 +205,18 @@ function __elephc_dom_tokenize(string $html, int $flags): mixed {
     while ($_i < $_len) {
         if (!__elephc_dom_starts_markup($html, $_i)) {
             $_start = $_i;
+            $_text = "";
             while ($_i < $_len && !__elephc_dom_starts_markup($html, $_i)) {
+                if (substr($html, $_i, 2) === "</") {
+                    // Legacy libxml drops the invalid closing delimiter, not its following text.
+                    $_text = $_text . substr($html, $_start, $_i - $_start);
+                    $_i = $_i + 2;
+                    $_start = $_i;
+                    continue;
+                }
                 $_i = $_i + 1;
             }
-            $_text = html_entity_decode(substr($html, $_start, $_i - $_start));
+            $_text = __elephc_dom_decode_entities($_text . substr($html, $_start, $_i - $_start));
             if ($_text !== "") {
                 $_tokens[] = ["k" => "text", "v" => $_text];
             }
@@ -261,12 +273,29 @@ function __elephc_dom_tokenize(string $html, int $flags): mixed {
             $_self = 1;
         }
         $_tokens[] = ["k" => "start", "n" => $_name, "a" => $_attrs, "void" => $_self];
+        if ($_self === 0 && ($_name === "script" || $_name === "style")) {
+            $_start = $_i;
+            while ($_i < $_len) {
+                if (substr($html, $_i, 2) === "</"
+                    && strtolower(substr($html, $_i + 2, strlen($_name))) === $_name) {
+                    $_after = __elephc_dom_char($html, $_i + 2 + strlen($_name));
+                    if ($_after === ">" || $_after === "/" || __elephc_dom_is_ws($_after)) {
+                        break;
+                    }
+                }
+                $_i++;
+            }
+            $_raw = substr($html, $_start, $_i - $_start);
+            if ($_raw !== "") {
+                $_tokens[] = ["k" => "cdata", "v" => $_raw];
+            }
+        }
     }
     return $_tokens;
 }
 
 function __elephc_dom_text_of(mixed $node): string {
-    if ($node["kind"] === "text") {
+    if ($node["kind"] === "text" || $node["kind"] === "cdata") {
         return (string) $node["value"];
     }
     if ($node["kind"] === "comment") {
@@ -303,8 +332,8 @@ function __elephc_dom_build_forest(mixed $tokens): mixed {
     $_roots = [];
     foreach ($tokens as $_tok) {
         $_k = $_tok["k"];
-        if ($_k === "text") {
-            $_node = __elephc_dom_new_node("text", "#text", (string) $_tok["v"], [], []);
+        if ($_k === "text" || $_k === "cdata") {
+            $_node = __elephc_dom_new_node($_k, "#text", (string) $_tok["v"], [], []);
             if (count($_stack) === 0) {
                 $_roots[] = $_node;
             } else {
@@ -393,15 +422,20 @@ function __elephc_dom_parse_html(string $html, int $flags): mixed {
 }
 
 function __elephc_dom_escape(string $s): string {
-    return htmlspecialchars($s, ENT_NOQUOTES);
+    return str_replace("\r", "&#13;", htmlspecialchars($s, ENT_NOQUOTES));
 }
 
 function __elephc_dom_escape_attr(string $s): string {
-    return htmlspecialchars($s, ENT_COMPAT);
+    $_escaped = str_replace("\r", "&#13;", htmlspecialchars($s, ENT_COMPAT));
+    $_escaped = str_replace("\n", "&#10;", $_escaped);
+    return str_replace("\t", "&#9;", $_escaped);
 }
 
 function __elephc_dom_serialize_node(mixed $node): string {
     if ($node instanceof DOMText) {
+        if ($node->__elephc_raw_text) {
+            return "<![CDATA[" . str_replace("]]>", "]]]]><![CDATA[>", (string) $node->nodeValue) . "]]>";
+        }
         return __elephc_dom_escape((string) $node->nodeValue);
     }
     if ($node instanceof DOMComment) {
@@ -500,9 +534,14 @@ function __elephc_dom_make_children(DOMDocument $doc, DOMNode $parent, mixed $tr
 
 function __elephc_dom_make_node(DOMDocument $doc, mixed $tree): mixed {
     $_kind = (string) $tree["kind"];
-    if ($_kind === "text") {
+    if ($_kind === "text" || $_kind === "cdata") {
         $_text = new DOMText();
-        $_text->nodeName = "#text";
+        if ($_kind === "cdata") {
+            $_text->nodeName = "#cdata-section";
+            $_text->__elephc_raw_text = true;
+        } else {
+            $_text->nodeName = "#text";
+        }
         $_text->nodeValue = (string) $tree["value"];
         $_text->ownerDocument = $doc;
         $_text->childNodes = new DOMNodeList([]);
@@ -624,14 +663,14 @@ class DOMDocument extends DOMNode {
         $this->nodeName = "#document";
         $this->nodeValue = null;
         $this->childNodes = new DOMNodeList([]);
-        $this->ownerDocument = $this;
+        $this->ownerDocument = null;
     }
 
     public function loadHTML(string $source, int $options = 0): bool {
         $this->__elephc_flags = $options;
         $_tree = __elephc_dom_parse_html($source, $options);
         $this->nodeName = "#document";
-        $this->ownerDocument = $this;
+        $this->ownerDocument = null;
         $_kids = __elephc_dom_make_children($this, $this, $_tree["children"]);
         $this->childNodes = new DOMNodeList($_kids);
         $this->nodeValue = null;
@@ -654,6 +693,7 @@ class DOMCharacterData extends DOMNode {
 }
 
 class DOMText extends DOMCharacterData {
+    public bool $__elephc_raw_text = false;
 }
 
 class DOMComment extends DOMCharacterData {

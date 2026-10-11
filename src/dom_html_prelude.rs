@@ -20,6 +20,7 @@
 //!   supported target gets the same walk with no new assembly.
 
 mod detect;
+mod entities;
 mod surface;
 
 use std::sync::OnceLock;
@@ -34,7 +35,7 @@ static PARSED_PRELUDE: OnceLock<Program> = OnceLock::new();
 fn parsed_prelude() -> Program {
     PARSED_PRELUDE
         .get_or_init(|| {
-            let source = format!("<?php\n{}", surface::SRC);
+            let source = format!("<?php\n{}\n{}", entities::SRC, surface::SRC);
             let tokens = crate::lexer::tokenize(&source).expect("dom html prelude must tokenize");
             crate::parser::parse_internal(&tokens).expect("dom html prelude must parse")
         })

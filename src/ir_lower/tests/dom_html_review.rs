@@ -21,6 +21,11 @@ $div = $doc->getElementsByTagName('div')->item(0);
 foreach ($div->childNodes as $child) { echo $child->nodeValue; }
 echo $doc->saveXML($div);
 echo $doc->nodeValue === null ? 'N' : 'bad';
+$doc->loadHTML("<div title=\"&euro;&#x1F600;\r\n\">a&nbsp;\r\n<script>a<b&amp;]]></SCRIPT>x</ div>y</div>");
+$div = $doc->getElementsByTagName('div')->item(0);
+echo $div->getAttribute('title'), $div->nodeValue, $doc->saveXML($div);
+echo $doc->ownerDocument === null ? 'N' : 'bad';
+echo $div->ownerDocument === $doc ? 'O' : 'bad';
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
