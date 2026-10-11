@@ -260,6 +260,10 @@ pub(crate) const UNKNOWN_NAMED_PARAMETER_PREFIX: &str = "Unknown named parameter
 /// Nothing runtime-dependent appears in it, so the Throwable points straight at these bytes.
 pub(crate) const POSITIONAL_AFTER_NAMED_MSG: &str =
     "Cannot use positional argument after named argument";
+/// PHP's refusal of `unset($scalar['k'])` — the fatal the mixed-container unset raises.
+///
+/// Nothing runtime-dependent appears in it, so the Throwable points straight at these bytes.
+pub(crate) const CANNOT_UNSET_NON_ARRAY_MSG: &str = "Cannot unset offset in a non-array variable";
 /// Prefix for PHP's catchable object-to-string conversion Error in an allowed-class list.
 pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = "Object of class ";
 /// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list.

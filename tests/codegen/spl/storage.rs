@@ -508,3 +508,37 @@ echo "Done\n";
         )
     );
 }
+
+/// Verifies that a keyed `unset()` through a `mixed` receiver reaches the wrapped object.
+///
+/// php defers the receiver's shape to run time: `unset($m['k'])` removes the entry from an array
+/// or calls `ArrayAccess::offsetUnset()` on an object. elephc used to refuse to compile that
+/// shape; the runtime container dispatch now answers for both, and the refused shapes raise
+/// php's own fatal instead of dropping the write.
+#[test]
+fn test_array_object_mixed_receiver_unset_reaches_the_backing_object() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+class C { public $b = 2; public $a = 1; }
+function drop($m, $key) { unset($m[$key]); return $m; }
+$o = new C();
+$ao = new ArrayObject($o);
+drop($ao, 'a');
+var_dump(array_key_exists('a', get_object_vars($o)));
+var_dump(count($ao));
+var_dump(drop(['k' => 1, 'j' => 2], 'k'));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(false)\n",
+            "int(1)\n",
+            "array(1) {\n",
+            "  [\"j\"]=>\n",
+            "  int(2)\n",
+            "}\n",
+        )
+    );
+}

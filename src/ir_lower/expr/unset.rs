@@ -9,6 +9,8 @@
 
 use super::*;
 
+use crate::ir_lower::stmt::load_array_local_for_write;
+
 /// Lowers supported `unset(...)` targets without evaluating them as ordinary call args.
 pub(super) fn lower_unset_locals(
     ctx: &mut LoweringContext<'_, '_>,
@@ -49,6 +51,7 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
                 || unset_array_access_has_property_array_receiver(ctx, array)
+                || unset_array_access_has_mixed_receiver(ctx, array)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -178,6 +181,12 @@ pub(super) fn lower_unset_array_access(
             return;
         }
     }
+    if let ExprKind::Variable(name) = &array.kind {
+        if unset_array_access_has_mixed_receiver(ctx, array) {
+            lower_unset_mixed_local_element(ctx, name, array.span, index, expr);
+            return;
+        }
+    }
     let synthetic = Expr::new(
         ExprKind::MethodCall {
             object: Box::new(array.clone()),
@@ -187,6 +196,58 @@ pub(super) fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Returns true when an array-access unset receiver is a `mixed`/union LOCAL the lowering cannot
+/// statically type.
+///
+/// php defers the shape to run time: the receiver may be an array or an `ArrayAccess` object. The
+/// lowering routes the removal through `Op::MixedArrayUnset`, whose runtime helper dispatches on
+/// the payload tag, so a by-reference binding is excluded (its slot is the caller's storage and
+/// the mixed ladder would republish a copy).
+pub(super) fn unset_array_access_has_mixed_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    if ctx.is_ref_bound_local(name) {
+        return false;
+    }
+    matches!(
+        ctx.local_type(name).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    )
+}
+
+/// Removes `$mixed[$key]` through the runtime container dispatch, then stores the mutated
+/// container back into the local.
+///
+/// The key is rooted across the removal the way the array-element path roots it, because the
+/// `ArrayAccess` arm can call a user-visible `offsetUnset()` that outlives the key temp.
+fn lower_unset_mixed_local_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let index_value = lower_expr(ctx, index);
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
+    let array_value = load_array_local_for_write(ctx, name, array_span);
+    let result = ctx.emit_value(
+        Op::MixedArrayUnset,
+        vec![array_value.value, index_value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedArrayUnset.default_effects(),
+        Some(expr.span),
+    );
+    ctx.store_mutated_local(name, result, PhpType::Mixed, Some(expr.span));
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.

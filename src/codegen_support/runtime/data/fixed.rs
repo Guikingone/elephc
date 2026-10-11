@@ -20,7 +20,8 @@ use super::{
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
     SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
-    CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
+    CANNOT_UNSET_NON_ARRAY_MSG, CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG,
+    UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
@@ -135,6 +136,9 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     out.push_str(&format!(
         ".globl _positional_after_named_msg\n_positional_after_named_msg:\n    .ascii {POSITIONAL_AFTER_NAMED_MSG:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _cannot_unset_non_array_msg\n_cannot_unset_non_array_msg:\n    .ascii {CANNOT_UNSET_NON_ARRAY_MSG:?}\n"
     ));
     out.push_str(&format!(
         ".globl _unser_object_string_error_prefix\n_unser_object_string_error_prefix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_PREFIX:?}\n"

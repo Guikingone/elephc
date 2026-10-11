@@ -52,6 +52,7 @@ pub(super) fn check_property_assign(
     // miss helper, which dropped it with no diagnostic anywhere.
     if matches!(obj_ty.codegen_repr(), PhpType::Mixed) {
         scope_dynamic_storage::record_scope_dynamic_mixed_receiver_mutation(checker, property);
+        scope_dynamic_storage::record_mixed_receiver_widen_targets(checker, property);
     }
     if let PhpType::Pointer(Some(class_name)) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;

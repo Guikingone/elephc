@@ -837,6 +837,17 @@ fn validate_opcode_rules(
                 "Heap(Mixed)",
             )
         }
+        MixedArrayUnset => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(
+                function,
+                inst_id,
+                inst,
+                0,
+                IrType::Heap(IrHeapKind::Mixed),
+                "Heap(Mixed)",
+            )
+        }
         HashLen | HashGet | HashGetSilent | HashIsset | HashSet | HashAppend | HashEnsureUnique
         | HashCloneShallow | DescriptorArgSet | DescriptorArgKeyExists => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")

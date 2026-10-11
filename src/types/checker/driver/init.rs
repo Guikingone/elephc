@@ -115,6 +115,7 @@ impl Checker {
             clone_override_destinations: Default::default(),
             property_unset_destinations: Default::default(),
             scope_dynamic_mutation_targets: Default::default(),
+            scope_dynamic_widen_targets: Default::default(),
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
             boxed_reference_outputs: HashMap::new(),

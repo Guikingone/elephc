@@ -912,6 +912,12 @@ pub enum Op {
     OffsetExists,
     /// Removes an offset from a detached boxed PHP array cell, preserving sparse keys and aliases.
     OffsetUnset,
+    /// Removes an offset from a boxed `Mixed` container the lowering cannot statically type.
+    ///
+    /// The runtime helper dispatches on the payload tag: arrays promote to sparse storage and
+    /// drop the key, `ArrayAccess` objects reach `offsetUnset()`, and every other shape answers
+    /// php's refusal. The container is mutated in place and the (unchanged) cell is the result.
+    MixedArrayUnset,
     ListUnpack,
     IterStart,
     IterCurrentKey,
@@ -1329,6 +1335,12 @@ impl Op {
             // the hash removal can reallocate the table.
             HashUnset | PropUnset | DynamicPropUnset | OffsetUnset => E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
+            // `MixedArrayUnset` reaches the same consequences through the runtime dispatch: the
+            // array arm promotes to sparse storage and removes through the hash, the `ArrayAccess`
+            // arm calls a user-visible `offsetUnset()` that can throw or observe globals, and the
+            // refused shapes raise php's non-array fatal.
+            MixedArrayUnset => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP | E::WRITES_HEAP
+                | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
             | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -1650,6 +1662,7 @@ impl Op {
             ArrayKeyExists => "array_key_exists",
             OffsetExists => "offset_exists",
             OffsetUnset => "offset_unset",
+            MixedArrayUnset => "mixed_array_unset",
             ListUnpack => "list_unpack",
             IterStart => "iter_start",
             IterCurrentKey => "iter_current_key",

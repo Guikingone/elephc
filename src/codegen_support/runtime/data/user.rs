@@ -618,6 +618,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_class_count_ptrs", "Countable", "count", PhpType::Int),
         ("_class_offsetget_ptrs", "ArrayAccess", "offsetGet", PhpType::Mixed),
         ("_class_offsetset_ptrs", "ArrayAccess", "offsetSet", PhpType::Void),
+        ("_class_offsetunset_ptrs", "ArrayAccess", "offsetUnset", PhpType::Void),
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {

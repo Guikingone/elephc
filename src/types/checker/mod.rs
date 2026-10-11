@@ -305,6 +305,11 @@ pub(crate) struct Checker {
     /// every declared slot, while a strict ancestor's private name becomes a distinct dynamic
     /// property outside its declaring scope. Both need per-instance hash storage.
     pub scope_dynamic_mutation_targets: scope_dynamic_storage::ScopeDynamicMutationTargets,
+    /// Classes whose refined UNTYPED property slots must widen to boxed `Mixed` because a
+    /// mixed-receiver write (`$o->name = v` with `$o` only known at run time) can store any
+    /// value into any of them. php's untyped properties accept every value; the refined slot
+    /// shapes used to refuse the whole write once the runtime class arm matched.
+    pub scope_dynamic_widen_targets: std::collections::HashSet<String>,
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
     ///

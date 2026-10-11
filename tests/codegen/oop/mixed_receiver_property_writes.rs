@@ -61,23 +61,24 @@ var_dump($t->s, $t->f);
     assert_eq!(out, "string(1) \"z\"\nfloat(2.5)\n");
 }
 
-/// Refined untyped slots fail closed when their runtime storage representation is ambiguous.
+/// Refined untyped slots widen to boxed `Mixed` when a mixed-receiver write can reach them.
+///
+/// php's untyped properties accept every value: `$o->u = 9` on `class T { public $u = 1; }`
+/// stores the integer. The slot's storage was once refined from its default and the whole write
+/// refused at run time; the mixed-receiver write now widens the slot instead, which is php's
+/// answer.
 #[test]
-fn test_mixed_receiver_write_refuses_an_untyped_refined_property() {
-    let out = compile_and_run_capture(
+fn test_mixed_receiver_write_widens_an_untyped_refined_property() {
+    let out = compile_and_run(
         r#"<?php
 class T { public $u = 1; }
 function write(mixed $o): void { $o->u = 9; }
-        write(new T());
+$t = new T();
+write($t);
+var_dump($t->u);
 "#,
     );
-    let diagnostic = format!("{}{}", out.stdout, out.stderr);
-    assert!(!out.success, "untyped refined property write unexpectedly succeeded");
-    assert!(
-        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property T::$u"),
-        "output: {}",
-        diagnostic
-    );
+    assert_eq!(out, "int(9)\n");
 }
 
 /// Two classes declaring the same property name is what makes this a runtime dispatch rather than

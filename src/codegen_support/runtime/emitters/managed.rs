@@ -255,6 +255,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_throw_serialization_denied(emitter);
     objects::emit_throw_unserialization_denied(emitter);
     objects::emit_mixed_array_set(emitter);
+    objects::emit_mixed_array_unset(emitter);
     objects::emit_mixed_array_append(emitter);
     objects::emit_mixed_array_fetch_for_write(emitter);
     objects::emit_new_by_name(emitter);

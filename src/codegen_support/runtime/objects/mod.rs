@@ -19,6 +19,7 @@ mod mixed_array_fetch_for_write;
 mod mixed_array_get;
 mod object_not_array;
 mod mixed_array_set;
+mod mixed_array_unset;
 mod mixed_cell_autovivify;
 mod new_by_name;
 mod object_vars;
@@ -47,6 +48,7 @@ pub(crate) use object_not_array::{
     emit_throw_object_not_array, emit_throw_serialization_denied, emit_throw_unserialization_denied,
 };
 pub(crate) use mixed_array_set::emit_mixed_array_set;
+pub(crate) use mixed_array_unset::emit_mixed_array_unset;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;
 pub(crate) use object_vars::emit_object_to_hash;
