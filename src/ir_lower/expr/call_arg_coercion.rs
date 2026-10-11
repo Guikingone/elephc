@@ -945,7 +945,7 @@ fn lower_args_with_signature_options_inner(
     args: &[Expr],
     trim_trailing_defaults: bool,
     capture_values: bool,
-    capture_output_index: Option<usize>,
+    capture_output_index: Option<(usize, PhpType)>,
 ) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
