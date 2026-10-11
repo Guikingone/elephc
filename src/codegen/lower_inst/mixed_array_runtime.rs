@@ -95,7 +95,8 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            let tag: i64 = if matches!(receiver_ty, PhpType::Array(_)) {
+            let indexed = matches!(receiver_ty, PhpType::Array(_));
+            let tag: i64 = if indexed {
                 4
             } else {
                 5
@@ -105,14 +106,35 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
                     hashes::materialize_hash_key_aarch64(ctx, key)?;
                     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
                     ctx.load_value_to_reg(receiver, "x0")?;
-                    abi::emit_load_int_immediate(ctx.emitter, "x1", tag);
+                    if indexed {
+                        abi::emit_push_reg(ctx.emitter, "x0");
+                        abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+                        ctx.emitter.instruction("cmp x0, #3");                  // a runtime-promoted array must be fetched through associative storage
+                        ctx.emitter.instruction("mov x1, #4");                  // indexed payloads keep their normal fetch tag
+                        ctx.emitter.instruction("mov x9, #5");                  // hashes use the associative payload tag
+                        ctx.emitter.instruction("csel x1, x9, x1, eq");         // select the actual container shape instead of its static Array type
+                        abi::emit_pop_reg(ctx.emitter, "x0");
+                    } else {
+                        abi::emit_load_int_immediate(ctx.emitter, "x1", tag);
+                    }
                     abi::emit_pop_reg_pair(ctx.emitter, "x2", "x3");
                 }
                 Arch::X86_64 => {
                     hashes::materialize_hash_key_x86_64(ctx, key)?;
                     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
                     ctx.load_value_to_reg(receiver, "rdi")?;
-                    abi::emit_load_int_immediate(ctx.emitter, "rsi", tag);
+                    if indexed {
+                        abi::emit_push_reg(ctx.emitter, "rdi");
+                        ctx.emitter.instruction("mov rax, rdi");                // heap-kind queries take their payload in the integer result register
+                        abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+                        ctx.emitter.instruction("cmp rax, 3");                  // a runtime-promoted array must be fetched through associative storage
+                        ctx.emitter.instruction("mov rsi, 4");                  // indexed payloads keep their normal fetch tag
+                        ctx.emitter.instruction("mov r10, 5");                  // hashes use the associative payload tag
+                        ctx.emitter.instruction("cmove rsi, r10");              // select the actual container shape instead of its static Array type
+                        abi::emit_pop_reg(ctx.emitter, "rdi");
+                    } else {
+                        abi::emit_load_int_immediate(ctx.emitter, "rsi", tag);
+                    }
                     abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
                 }
             }

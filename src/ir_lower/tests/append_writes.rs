@@ -46,6 +46,17 @@ function writeStringKey(&...$values): void {
     $values["1"] = 'Q'; echo strlen($values[1]), $values[0], $values[1];
 }
 $a = 'A'; $b = 'B'; writeStringKey($a, $b); echo $b;
+function makeParentName(string $suffix): string { return 'k' . $suffix; }
+function writeCopiedKeys(string $suffix, &...$values): void {
+    $copy = $values; $copy["1"] = 'Q'; echo $copy[0], $copy[1];
+    $values["key"]["x"] = 1; $values["key"]["y"] = 2;
+    $values["group"][] = 3; $values["group"][] = 4;
+    $values[makeParentName($suffix)]["z"] = 5;
+    echo $values[0], $values[1], json_encode($values);
+}
+$copied = writeCopiedKeys(...); $copied('ey', $a, $b);
+$plain = ['A', 'B', 'C']; $plain["key"]["x"] = 1;
+echo json_encode($plain);
 function hashReturn(string $key, mixed $value): array {
     $items = [$value]; $items[$key] = $value; return $items;
 }

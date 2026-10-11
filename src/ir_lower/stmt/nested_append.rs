@@ -275,7 +275,16 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     // base the new pointer would never reach the property and it would be left stale. A property
     // base therefore keeps the auto-vivification and stays quadratic.
     if let BaseKind::Local(name) = &group.base {
-        if matches!(ctx.local_type(name), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        let local_ty = ctx.local_type(name).codegen_repr();
+        // Mixed-slot indexed locals can be runtime-promoted hashes or carry invoker markers.
+        // The raw indexed SlotDetach writer cannot republish either shape safely. Preserve
+        // the ordinary read/push/write-back COW path for them, including reference variadics.
+        let polymorphic_indexed = matches!(&local_ty,
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed)
+            && (ctx.is_ref_bound_local(name)
+                || super::index_expr_key_type(ctx, group.index).codegen_repr() != PhpType::Int);
+        if !polymorphic_indexed
+            && matches!(local_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
             // Re-load the container and key: they were emitted in a predecessor block, and the
             // vivification may have republished a grown or copy-on-write-split container pointer into
             // the local. A `LoadLocal` is pure, and the key is either replayable or already hoisted into
