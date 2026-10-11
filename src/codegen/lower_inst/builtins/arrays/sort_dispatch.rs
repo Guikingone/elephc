@@ -123,6 +123,7 @@ pub(super) fn lower_hash_reindexing_sort(
         }
     };
 
+    super::boxed_mutation::require_non_null_hash_receiver(ctx, array, name)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable(name)?;
     // Same opening as the key-preserving hash sorts: drop the slot's ownership and split a shared

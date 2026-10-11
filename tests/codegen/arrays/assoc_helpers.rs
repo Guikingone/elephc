@@ -766,3 +766,21 @@ echo count($b), "|", implode(",", $b), "\n";
     );
     assert_eq!(out, "3|x,y,3\n4|3,2,x,y\n");
 }
+
+/// A miss-read receiver keeps the array shape but holds PHP's null; the four builtins must raise
+/// PHP's TypeError instead of dereferencing the in-band null-container sentinel.
+#[test]
+fn test_mixed_valued_hash_builtins_reject_null_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+$conf = ["a" => ["x" => 1, "y" => "s"]];
+$opts = $conf["missing"];
+try { array_unshift($opts, 1); } catch (TypeError $e) { echo "u\n"; }
+try { array_unshift($opts); } catch (TypeError $e) { echo "u0\n"; }
+try { array_shift($opts); } catch (TypeError $e) { echo "s\n"; }
+try { $r = array_reverse($opts); } catch (TypeError $e) { echo "r\n"; }
+try { rsort($opts); } catch (TypeError $e) { echo "k\n"; }
+"#,
+    );
+    assert_eq!(out, "u\nu0\ns\nr\nk\n");
+}

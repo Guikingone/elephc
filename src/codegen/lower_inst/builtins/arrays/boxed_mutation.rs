@@ -26,6 +26,35 @@ pub(super) fn lower_boxed_array_take(
     store_if_result(ctx, inst)
 }
 
+/// Rejects a null or in-band null-container receiver with PHP's TypeError.
+///
+/// A miss-read (`$opts = $conf[$key]`) stores the in-band null-container sentinel into a variable
+/// the checker still types as the array shape, so a raw hash helper would dereference the sentinel
+/// header. PHP raises `TypeError` for a `null` receiver; match it instead of faulting.
+pub(super) fn require_non_null_hash_receiver(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    name: &str,
+) -> Result<()> {
+    ctx.load_value_to_result(array)?;
+    let null_label = ctx.next_label("hash_receiver_null");
+    let valid_label = ctx.next_label("hash_receiver_valid");
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        abi::secondary_scratch_reg(ctx.emitter),
+        &null_label,
+    );
+    abi::emit_jump(ctx.emitter, &valid_label);
+    ctx.emitter.label(&null_label);
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &format!("{name}(): Argument #1 ($array) must be of type array, null given"),
+    );
+    ctx.emitter.label(&valid_label);
+    Ok(())
+}
+
 /// Removes the insertion-order tail from a concrete associative array.
 pub(super) fn lower_assoc_array_pop(
     ctx: &mut FunctionContext<'_>,
@@ -55,6 +84,7 @@ pub(super) fn lower_assoc_array_shift(
     array: ValueId,
 ) -> Result<()> {
     super::shift::require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
+    require_non_null_hash_receiver(ctx, array, "array_shift")?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable("array_shift")?;
     receiver.prepare_consuming_storeback(ctx, array)?;

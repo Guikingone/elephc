@@ -50,6 +50,7 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
     // every value, so only a hash that already stores Mixed values keeps its representation.
     if let PhpType::AssocArray { value, .. } = ctx.value_php_type(array)?.codegen_repr() {
         require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
+        super::boxed_mutation::require_non_null_hash_receiver(ctx, array, "array_unshift")?;
         if inst.operands.len() == 1 {
             // No values to prepend: the array is unchanged, so only its count is needed.
             ctx.load_value_to_result(array)?;

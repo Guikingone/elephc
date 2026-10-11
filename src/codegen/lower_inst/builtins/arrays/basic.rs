@@ -385,6 +385,7 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
                 value.codegen_repr()
             )));
         }
+        super::boxed_mutation::require_non_null_hash_receiver(ctx, array, "array_reverse")?;
         let preserve_keys = match inst.operands.get(1).copied() {
             None => false,
             Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
