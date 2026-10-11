@@ -19,6 +19,24 @@ pub(in crate::interpreter) fn execute_statements(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    let mut registered: Vec<(String, bool)> = Vec::new();
+    for stmt in statements {
+        if let EvalStmt::GenericDecl(template) = stmt {
+            if !context.define_generic_template(template.as_ref().clone()) {
+                for (name, is_function) in &registered { context.remove_generic_template(name, *is_function); }
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            registered.push((template.name.clone(), matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. })));
+        }
+    }
+    for stmt in statements {
+        if let EvalStmt::GenericDecl(template) = stmt {
+            if let Err(error) = verify_generic_variance(template, context, values) {
+                for (name, is_function) in &registered { context.remove_generic_template(name, *is_function); }
+                return Err(error);
+            }
+        }
+    }
     for stmt in statements {
         eval_pcntl_maybe_dispatch(context, values)?;
         match execute_stmt(stmt, context, scope, values)? {
@@ -36,7 +54,10 @@ pub(in crate::interpreter) fn execute_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    let specialized = specialize_static_storage_statement(stmt, context, scope, values)?;
+    let stmt = specialized.as_ref().unwrap_or(stmt);
     match stmt {
+        EvalStmt::GenericDecl(_) => Ok(EvalControl::None),
         EvalStmt::ArrayAppendVar { name, value } => {
             eval_array_append_var_stmt(name, value, context, scope, values)?;
             Ok(EvalControl::None)
@@ -112,6 +133,7 @@ pub(in crate::interpreter) fn execute_stmt(
             body,
         } => {
             let key = name.to_ascii_lowercase();
+            if context.generic_function_template(name).is_some() { return Err(EvalStatus::RuntimeFatal); }
             let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
                 .with_attributes(attributes.clone())
                 .with_parameter_attributes(parameter_attributes.clone())
@@ -191,8 +213,24 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_static_var_stmt(name, init, context, scope, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::TypedVar { name, declared, value } => {
+            let value = eval_owned_expr(value, context, scope, values)?;
+            let checked = validate_generic_local(declared, name, value, context, values);
+            if let Err(error) = checked { let _ = eval_release_value(context, values, value); return Err(error); }
+            scope.declare_local_type(name.clone(), declared.clone());
+            for replaced in set_owned_scope_cell(context, scope, name.clone(), value, values)? {
+                eval_release_value(context, values, replaced)?;
+            }
+            Ok(EvalControl::None)
+        }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_owned_expr(value, context, scope, values)?;
+            if let Some(declared) = scope.local_type(name).cloned() {
+                if let Err(error) = validate_generic_local(&declared, name, value, context, values) {
+                    let _ = eval_release_value(context, values, value);
+                    return Err(error);
+                }
+            }
             for replaced in set_owned_scope_cell(
                 context,
                 scope,

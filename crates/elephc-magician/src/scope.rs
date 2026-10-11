@@ -141,6 +141,7 @@ impl ScopeEntry {
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
+    local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     aot_visible_names: HashSet<String>,
     global_aliases: HashMap<String, String>,
     reference_targets: HashMap<String, EvalReferenceTarget>,
@@ -152,11 +153,22 @@ impl ElephcEvalScope {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            local_types: HashMap::new(),
             aot_visible_names: HashSet::new(),
             global_aliases: HashMap::new(),
             reference_targets: HashMap::new(),
             generation: 0,
         }
+    }
+
+    /// Pins the contract of one explicitly typed local.
+    pub(crate) fn declare_local_type(&mut self, name: String, declared: crate::eval_ir::EvalParameterType) {
+        self.local_types.insert(name, declared);
+    }
+
+    /// Returns the contract of an explicitly typed local.
+    pub(crate) fn local_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
+        self.local_types.get(name)
     }
 
     /// Returns the current scope generation counter.

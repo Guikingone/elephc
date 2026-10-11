@@ -16,8 +16,12 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    let parents = interface.parents().iter().map(|name| ensure_generic_class(name, None, "", context, scope, values)).collect::<Result<_, _>>()?;
+    let concrete = interface.clone().with_parents(parents);
+    let interface = &concrete;
     let name = interface.name().trim_start_matches('\\');
-    if context.has_interface(name)
+    if context.generic_template(name).is_some()
+        || context.has_interface(name)
         || context.has_class(name)
         || context.has_enum(name)
         || eval_runtime_interface_exists(name, values)?
@@ -63,8 +67,13 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    let traits: Vec<String> = trait_decl.traits().iter().map(|name| ensure_generic_class(name, None, "", context, scope, values)).collect::<Result<_, _>>()?;
+    let adaptations = concrete_trait_adaptations(trait_decl.trait_adaptations(), &traits);
+    let concrete = trait_decl.clone().with_traits(traits, adaptations);
+    let trait_decl = &concrete;
     let name = trait_decl.name().trim_start_matches('\\');
-    if context.has_trait(name)
+    if context.generic_template(name).is_some()
+        || context.has_trait(name)
         || context.has_class(name)
         || context.has_interface(name)
         || context.has_enum(name)

@@ -254,6 +254,35 @@ callable invocation. This mode is separate from the nested-write fetch, which
 COW-normalizes the outer container and detaches the selected zval before
 mutation.
 
+## Runtime generic specialization
+
+`crates/elephc-generics` owns structural type terms, conflict detection, written argument binding,
+dependent defaults, and the specialization depth limit shared by the compiler and Magician.
+Compiler adapters live in `src/generics/shared.rs`; runtime dispatch lives in
+`crates/elephc-magician/src/interpreter/generics/` and its parent module.
+
+The Magician parser retains an `EvalGenericTemplate` containing a declaration prototype, lexer
+tokens, lexical imports/namespace, and the token indexes of actual type-parameter uses. Replay
+substitutes those positions only, preserving unrelated identifiers and literal bytes. Constructor
+slots have separate lexical identities so promotion and shadowing remain correct.
+
+Runtime dispatch borrows arguments after their single source-order evaluation, completes bindings,
+checks bounds, and replays a concrete ordinary declaration. Functions and classes enter the normal
+context registries; method specializations are cached by declaring class and concrete method name.
+Class relation registration instantiates generic parents, interfaces, and traits before ordinary
+validation. A recursion guard rejects cyclic generic inheritance, and type growth is bounded.
+
+Generated-code context calls and callable dispatch use the same specialization resolver before
+ordinary binding. The public context-call entry points live in `interpreter/context_calls.rs`;
+first-class function callables may retain a template name until arguments determine its slots.
+
+Structural `EvalParameterTypeVariant::Generic` contracts validate boxed arrays and typed callbacks
+at existing argument and return boundaries. Typed local writes validate before mutation. No new
+value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
+mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
+format 12 includes the retained templates, tokens, imports, structural types, and typed locals;
+its fingerprint guard covers every corresponding serialized type source.
+
 ## Parsing and cache
 
 Dynamic source is parsed into Magician's immutable EvalIR. The process-wide

@@ -86,6 +86,37 @@ Two rules are worth knowing before you start:
 - Everything here is an elephc extension except the docblock form. `--strict-php` rejects the
   native syntax and accepts the annotations.
 
+## Generics in Magician
+
+Dynamic `eval()`, runtime includes, and the REPL accept generic functions, classes, interfaces,
+traits, methods, and constructor templates. Written arguments, inference, bounds, dependent
+defaults, variance, `array<T>`, `array<K, V>`, and typed callable signatures use the same binding
+rules as AOT. Enums may implement concrete generic interfaces and declare generic methods;
+they do not declare their own template parameters.
+
+```php
+<?php
+$source = $argc > 1 ? $argv[1] :
+    'function identity<T>(T $value): T { return $value; } echo identity(42);';
+eval($source);   // 42, through the runtime interpreter
+```
+
+Magician specializes from already evaluated argument values. It retains each template's lexical
+namespace, imports, source lines, and type positions, then registers concrete declarations in
+the persistent eval context. Repeated calls reuse function, class, and method specializations;
+subsequent eval calls in that context can use the same templates. Generic classes retain separate
+identities and static storage, just as in AOT.
+
+Missing or conflicting arguments, violated bounds, invalid variance declarations, and rejected
+specialized argument/return contracts raise catchable `TypeError` values. Native generic syntax
+is rejected before execution under `--strict-php`; supported PHPDoc annotations work in both
+modes. Typed local declarations also retain their substituted contracts during assignment.
+
+Execution still uses Magician's boxed runtime cells. AOT's native storage and performance figures
+below apply to compiled code. Generic syntax does not extend other parts of the
+[supported eval subset](../php/eval.md#current-limitations); use an ordinary typed closure for
+callback inference in Magician. See `examples/eval-generics/main.php` for a complete example.
+
 ## Why it matters
 
 Elephc already specializes an untyped `array` parameter to the element type it sees at the

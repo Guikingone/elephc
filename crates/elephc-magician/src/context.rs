@@ -17,6 +17,7 @@ mod classlike_objects;
 mod closure_metadata;
 mod core;
 mod functions;
+mod generics;
 mod global_registry;
 mod native_defaults;
 mod native_function;

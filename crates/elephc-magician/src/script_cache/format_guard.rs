@@ -33,6 +33,10 @@ mod tests {
         ("callable", include_str!("../eval_ir/callable.rs")),
         ("classes", include_str!("../eval_ir/classes.rs")),
         ("enums", include_str!("../eval_ir/enums.rs")),
+        ("generics", include_str!("../eval_ir/generics.rs")),
+        ("generic-types", include_str!("../../../elephc-generics/src/lib.rs")),
+        ("tokens", include_str!("../lexer/token.rs")),
+        ("namespace-imports", include_str!("../parser/state.rs")),
         ("expressions", include_str!("../eval_ir/expressions.rs")),
         ("interfaces", include_str!("../eval_ir/interfaces.rs")),
         ("methods", include_str!("../eval_ir/methods.rs")),
@@ -80,7 +84,9 @@ mod tests {
     /// while the serialized shape stays unchanged. Older entries must be reparsed.
     /// BUMPED TO 13 with the same fingerprint: first-class function callable names
     /// also retain source spelling without changing the serialized shape.
-    const RECORDED_FINGERPRINT: u64 = 17666271573136969314;
+    /// BUMPED TO 14: retained generic templates, structural types, and typed locals are serialized
+    /// alongside main's source-spelling semantics. The combined layout has a fresh cache identity.
+    const RECORDED_FINGERPRINT: u64 = 7340873381526035986;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

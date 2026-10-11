@@ -394,7 +394,8 @@ pub(super) fn eval_non_object_array_append_var_stmt(
     } else {
         values.array_new(1)?
     };
-    let array = eval_array_append_value(array, value, context, scope, values)?;
+    let declared = scope.local_type(name).cloned();
+    let array = eval_array_append_value_with_type(array, value, declared.as_ref(), context, scope, values)?;
     for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership, values)? {
         values.release(replaced)?;
     }
@@ -458,6 +459,7 @@ pub(super) fn eval_non_object_array_set_var_stmt(
         operands.push(index);
         let value = eval_owned_expr(value, context, scope, values)?;
         operands.push(value);
+        validate_generic_local_element(scope.local_type(name).cloned().as_ref(), index, value, context, values)?;
         let replacement = eval_array_set_target_for_index(array, index, values)?;
         if replacement != array {
             operands.push(replacement);
