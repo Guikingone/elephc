@@ -62,6 +62,7 @@ pub(super) fn lower_assoc_array_pop(
     array: ValueId,
 ) -> Result<()> {
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
+    require_non_null_hash_receiver(ctx, array, "array_pop")?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable("array_pop")?;
     receiver.prepare_consuming_storeback(ctx, array)?;

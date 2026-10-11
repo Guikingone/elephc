@@ -784,3 +784,21 @@ try { rsort($opts); } catch (TypeError $e) { echo "k\n"; }
     );
     assert_eq!(out, "u\nu0\ns\nr\nk\n");
 }
+
+/// The concrete hash `array_pop` and link sorts must also reject a null receiver with PHP's
+/// TypeError rather than silently succeeding.
+#[test]
+fn test_mixed_valued_hash_pop_and_link_sorts_reject_null_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+$conf = ["a" => ["x" => 1, "y" => "s"]];
+$opts = $conf["missing"];
+try { $r = array_pop($opts); } catch (TypeError $e) { echo "p\n"; }
+try { ksort($opts); } catch (TypeError $e) { echo "ks\n"; }
+try { asort($opts); } catch (TypeError $e) { echo "as\n"; }
+try { krsort($opts); } catch (TypeError $e) { echo "krs\n"; }
+try { arsort($opts); } catch (TypeError $e) { echo "ars\n"; }
+"#,
+    );
+    assert_eq!(out, "p\nks\nas\nkrs\nars\n");
+}
