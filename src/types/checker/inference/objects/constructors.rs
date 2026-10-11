@@ -209,8 +209,12 @@ impl Checker {
                     &constructor_label,
                     class_name.as_str(),
                 )?;
+                let mut backing_arg_ty: Option<PhpType> = None;
                 for (i, arg) in normalized_args.iter().enumerate() {
                     let arg_ty = self.infer_type(arg, env)?;
+                    if i == 0 && is_object_backing_storage_class(&class_name) {
+                        backing_arg_ty = Some(arg_ty.clone());
+                    }
                     if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
                         let param_has_declared_type =
                             declared_flags.get(i).copied().unwrap_or(false);
@@ -221,6 +225,18 @@ impl Checker {
                             param_has_declared_type,
                         );
                     }
+                }
+                // An `ArrayObject`/`ArrayIterator` constructor KEEPS an object argument as its
+                // backing store and later writes `$store->{$name} = $value` on it from the
+                // synthetic keyed-write body. That write lowers through the mixed ladder, which
+                // dispatches on the RUNTIME class, so the wrapped object's class must reserve
+                // its dynamic-property hash even though no write is visible to the checker here.
+                // This is the same record the ordinary `$o->{$k} = v` site makes.
+                if let Some(backing_ty) = backing_arg_ty {
+                    crate::types::checker::scope_dynamic_storage::record_scope_dynamic_runtime_name_receiver_mutation(
+                        self,
+                        &backing_ty,
+                    );
                 }
                 return Ok(PhpType::Object(class_name));
             } else if !args.is_empty() {
@@ -1310,6 +1326,14 @@ fn is_reflection_owner_class(class_name: &str) -> bool {
 /// Returns `true` if `class_name` is backed by the PHAR bridge.
 fn is_phar_archive_class(class_name: &str) -> bool {
     matches!(class_name, "Phar" | "PharData")
+}
+
+/// Returns `true` if `class_name` keeps an object constructor argument as its backing store.
+///
+/// `ArrayObject` and `ArrayIterator` write through such a store with a runtime-named dynamic
+/// property write, so their construction sites reserve the wrapped class's dynamic hash.
+pub(super) fn is_object_backing_storage_class(class_name: &str) -> bool {
+    matches!(class_name, "ArrayObject" | "ArrayIterator")
 }
 
 /// Returns `true` if the attribute name/arg slices are mismatched or any

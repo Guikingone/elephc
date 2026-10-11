@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 
-use crate::parser::ast::{BinOp, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr};
+use crate::parser::ast::{
+    BinOp, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, TypeExpr,
+};
 use crate::types::traits::FlattenedClass;
 
 use super::common::*;
@@ -161,6 +163,52 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             array_iterator_construct_body(),
         ),
+        method_with_body(
+            "__elephcStorageArray",
+            Vec::new(),
+            Some(mixed_type()),
+            storage_array_body(),
+        ),
+        method_with_body(
+            "__elephcStorageArrayOf",
+            vec![param("store", mixed_type())],
+            Some(mixed_type()),
+            storage_array_of_body(),
+        ),
+        method_with_body(
+            "__elephcStorageRawStore",
+            Vec::new(),
+            Some(mixed_type()),
+            storage_raw_body(),
+        ),
+        method_with_body(
+            "__elephcWriteStoreProperty",
+            vec![
+                param("store", mixed_type()),
+                param("name", mixed_type()),
+                param("value", mixed_type()),
+            ],
+            Some(TypeExpr::Void),
+            storage_write_property_body(),
+        ),
+        method_with_body(
+            "__elephcUnsetStoreProperty",
+            vec![param("store", mixed_type()), param("name", TypeExpr::Str)],
+            Some(TypeExpr::Void),
+            storage_unset_property_body(),
+        ),
+        method_with_body(
+            "__elephcWriteStorageOffset",
+            vec![param("offset", mixed_type()), param("value", mixed_type())],
+            Some(TypeExpr::Void),
+            storage_offset_write_body(),
+        ),
+        method_with_body(
+            "__elephcRemoveStorageOffset",
+            vec![param("offset", mixed_type())],
+            Some(TypeExpr::Void),
+            storage_offset_remove_body(),
+        ),
         method_with_body("current", Vec::new(), Some(mixed_type()), array_current_body()),
         method_with_body("key", Vec::new(), Some(mixed_type()), array_key_body()),
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), array_next_body()),
@@ -258,6 +306,52 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             array_object_ctor_body(),
         ),
+        method_with_body(
+            "__elephcStorageArray",
+            Vec::new(),
+            Some(mixed_type()),
+            storage_array_body(),
+        ),
+        method_with_body(
+            "__elephcStorageArrayOf",
+            vec![param("store", mixed_type())],
+            Some(mixed_type()),
+            storage_array_of_body(),
+        ),
+        method_with_body(
+            "__elephcStorageRawStore",
+            Vec::new(),
+            Some(mixed_type()),
+            storage_raw_body(),
+        ),
+        method_with_body(
+            "__elephcWriteStoreProperty",
+            vec![
+                param("store", mixed_type()),
+                param("name", mixed_type()),
+                param("value", mixed_type()),
+            ],
+            Some(TypeExpr::Void),
+            storage_write_property_body(),
+        ),
+        method_with_body(
+            "__elephcUnsetStoreProperty",
+            vec![param("store", mixed_type()), param("name", TypeExpr::Str)],
+            Some(TypeExpr::Void),
+            storage_unset_property_body(),
+        ),
+        method_with_body(
+            "__elephcWriteStorageOffset",
+            vec![param("offset", mixed_type()), param("value", mixed_type())],
+            Some(TypeExpr::Void),
+            storage_offset_write_body(),
+        ),
+        method_with_body(
+            "__elephcRemoveStorageOffset",
+            vec![param("offset", mixed_type())],
+            Some(TypeExpr::Void),
+            storage_offset_remove_body(),
+        ),
         method_with_body("getIterator", Vec::new(), Some(named_type("Iterator")), array_object_get_iterator_body()),
         method_with_body(
             "asort",
@@ -348,6 +442,223 @@ fn storage_expr() -> Expr {
     property_access(this_expr(), "storage")
 }
 
+/// Builds `$object->{$name}`, a dynamic property access on a runtime-named property.
+fn dynamic_property_access(object: Expr, name: Expr) -> Expr {
+    expr(ExprKind::DynamicPropertyAccess {
+        object: Box::new(object),
+        property: Box::new(name),
+    })
+}
+
+/// Builds the AST expression for the backing store projected as an array.
+///
+/// `__elephcStorageArray()` answers an array store unchanged and projects an object store through
+/// `get_object_vars()`, so every reader works for both backing shapes.
+fn storage_array_expr() -> Expr {
+    method_call(this_expr(), "__elephcStorageArray", Vec::new())
+}
+
+/// Builds `__elephcStorageArray()`, the array view of the backing store.
+fn storage_array_body() -> Vec<Stmt> {
+    vec![return_stmt(method_call(
+        this_expr(),
+        "__elephcStorageArrayOf",
+        vec![storage_expr()],
+    ))]
+}
+
+/// Builds `__elephcStorageArrayOf($store)`, the array view of one backing store value.
+///
+/// The store arrives as a PARAMETER because the lowering context types parameters from the
+/// checker's environment, while a property expression falls through the syntactic inference
+/// (which cannot see declared property types) to its Int fallback.
+///
+/// php's object backing follows an `ArrayObject`/`ArrayIterator` store to ITS OWN backing
+/// (recursively, so nested wrappers land on the innermost array) and projects any other object
+/// through `get_object_vars()`. A SELF-backed store (`parent::__construct($this, ...)`) stops the
+/// follow at the identity — php reads the property table there, and php's `storage` is a
+/// synthesized var_dump entry rather than a real property, so the projection drops the key the
+/// elephc layout declares.
+fn storage_array_of_body() -> Vec<Stmt> {
+    vec![
+        while_stmt(
+            binary_expr(
+                function_call("is_object", vec![var_expr("store")]),
+                BinOp::And,
+                binary_expr(
+                    binary_expr(var_expr("store"), BinOp::StrictNotEq, this_expr()),
+                    BinOp::And,
+                    binary_expr(
+                        instanceof_expr(var_expr("store"), "ArrayObject"),
+                        BinOp::Or,
+                        instanceof_expr(var_expr("store"), "ArrayIterator"),
+                    ),
+                ),
+            ),
+            vec![
+                assign_stmt(
+                    "raw",
+                    method_call(var_expr("store"), "__elephcStorageRawStore", Vec::new()),
+                ),
+                if_stmt(
+                    binary_expr(var_expr("raw"), BinOp::StrictNotEq, var_expr("store")),
+                    vec![assign_stmt("store", var_expr("raw"))],
+                    None,
+                ),
+            ],
+        ),
+        if_stmt(
+            function_call("is_object", vec![var_expr("store")]),
+            vec![
+                assign_stmt(
+                    "props",
+                    function_call("get_object_vars", vec![var_expr("store")]),
+                ),
+                if_stmt(
+                    binary_expr(var_expr("store"), BinOp::StrictEq, this_expr()),
+                    vec![
+                        // php synthesizes its internal state into var_dump output instead of
+                        // declaring it as properties, so a self-backed projection drops the
+                        // elephc-internal keys php's property table never carried.
+                        expr_stmt(function_call(
+                            "unset",
+                            vec![array_access(
+                                var_expr("props"),
+                                string_expr("storage"),
+                            )],
+                        )),
+                        expr_stmt(function_call(
+                            "unset",
+                            vec![array_access(
+                                var_expr("props"),
+                                string_expr("__elephc_flags"),
+                            )],
+                        )),
+                        expr_stmt(function_call(
+                            "unset",
+                            vec![array_access(
+                                var_expr("props"),
+                                string_expr("__elephc_iteratorClass"),
+                            )],
+                        )),
+                        expr_stmt(function_call(
+                            "unset",
+                            vec![array_access(
+                                var_expr("props"),
+                                string_expr("__elephc_position"),
+                            )],
+                        )),
+                    ],
+                    None,
+                ),
+                return_stmt(var_expr("props")),
+            ],
+            None,
+        ),
+        return_stmt(var_expr("store")),
+    ]
+}
+
+/// Builds `__elephcStorageRawStore()`, the RAW backing store without any projection.
+///
+/// `__elephcStorageArrayOf()` walks an `ArrayObject`-shaped store through this accessor to reach
+/// the wrapped value one level down, so the two helpers must stay recursive over the same shape.
+fn storage_raw_body() -> Vec<Stmt> {
+    vec![return_stmt(storage_expr())]
+}
+
+/// Builds `__elephcWriteStoreProperty($store, $name, $value)`, the keyed write for an object store.
+///
+/// The receiver is a PARAMETER so the dynamic property write lowers through the mixed ladder.
+/// php delegates the write to the wrapped object's property table, so a declared slot is written
+/// and an undeclared one is created (with php's dynamic-property deprecation).
+fn storage_write_property_body() -> Vec<Stmt> {
+    vec![expr_stmt(expr(ExprKind::Assignment {
+        target: Box::new(dynamic_property_access(
+            var_expr("store"),
+            var_expr("name"),
+        )),
+        value: Box::new(var_expr("value")),
+        result_target: None,
+        prelude: Vec::new(),
+        conditional_value_temp: None,
+    }))]
+}
+
+/// Builds `__elephcUnsetStoreProperty($store, string $name)`, the keyed removal for an object store.
+///
+/// `unset($store->$name)` lowers through `Op::DynamicPropUnset`, whose runtime ladder needs both
+/// operands typed by the lowering context, so the store and the string name arrive as parameters.
+fn storage_unset_property_body() -> Vec<Stmt> {
+    vec![expr_stmt(function_call(
+        "unset",
+        vec![dynamic_property_access(var_expr("store"), var_expr("name"))],
+    ))]
+}
+
+/// Builds `__elephcWriteStorageOffset($offset, $value)`, the keyed write for either backing shape.
+///
+/// An object store receives the write as a property named by the offset; an array store is
+/// copied, updated and written back because a `mixed` property cannot be written through directly.
+fn storage_offset_write_body() -> Vec<Stmt> {
+    vec![if_stmt(
+        function_call("is_object", vec![storage_expr()]),
+        vec![expr_stmt(method_call(
+            this_expr(),
+            "__elephcWriteStoreProperty",
+            vec![storage_expr(), var_expr("offset"), var_expr("value")],
+        ))],
+        Some(vec![
+            assign_stmt("__storage", storage_expr()),
+            array_assign_stmt("__storage", var_expr("offset"), var_expr("value")),
+            property_assign_stmt(this_expr(), "storage", var_expr("__storage")),
+        ]),
+    )]
+}
+
+/// Builds `__elephcRemoveStorageOffset($offset)`, the keyed removal for either backing shape.
+///
+/// An object store drops the property through `unset()` on a string-typed name; an array store is
+/// rebuilt without the key from its `array_keys`/`array_values` projection, which preserves PHP's
+/// key hole for an indexed array (the surviving keys are not renumbered).
+fn storage_offset_remove_body() -> Vec<Stmt> {
+    let key_at_i = || array_access(var_expr("__keys"), var_expr("__i"));
+    vec![if_stmt(
+        function_call("is_object", vec![storage_expr()]),
+        vec![expr_stmt(method_call(
+            this_expr(),
+            "__elephcUnsetStoreProperty",
+            vec![
+                storage_expr(),
+                cast_expr(CastType::String, var_expr("offset")),
+            ],
+        ))],
+        Some(vec![
+            assign_stmt("__keys", function_call("array_keys", vec![storage_array_expr()])),
+            assign_stmt("__values", function_call("array_values", vec![storage_array_expr()])),
+            assign_stmt("__new", empty_array_expr()),
+            assign_stmt("__i", int_expr(0)),
+            assign_stmt("__limit", count_expr(storage_array_expr())),
+            while_stmt(
+                binary_expr(var_expr("__i"), BinOp::Lt, var_expr("__limit")),
+                vec![
+                    if_stmt(
+                        not_expr(binary_expr(key_at_i(), BinOp::StrictEq, var_expr("offset"))),
+                        vec![array_assign_stmt(
+                            "__new",
+                            key_at_i(),
+                            array_access(var_expr("__values"), var_expr("__i")),
+                        )],
+                        None,
+                    ),
+                    increment_stmt("__i"),
+                ],
+            ),
+            property_assign_stmt(this_expr(), "storage", var_expr("__new")),
+        ]),
+    )]
+}
+
 /// Builds the AST expression for position.
 fn position_expr() -> Expr {
     property_access(this_expr(), "__elephc_position")
@@ -358,14 +669,20 @@ fn flags_expr() -> Expr {
     property_access(this_expr(), "__elephc_flags")
 }
 
-/// Builds `array_keys($this->storage)[$index]`, the key at a positional index.
+/// Builds `array_keys($this->__elephcStorageArray())[$index]`, the key at a positional index.
 fn key_at(index: Expr) -> Expr {
-    array_access(function_call("array_keys", vec![storage_expr()]), index)
+    array_access(
+        function_call("array_keys", vec![storage_array_expr()]),
+        index,
+    )
 }
 
-/// Builds `array_values($this->storage)[$index]`, the value at a positional index.
+/// Builds `array_values($this->__elephcStorageArray())[$index]`, the value at a positional index.
 fn value_at(index: Expr) -> Expr {
-    array_access(function_call("array_values", vec![storage_expr()]), index)
+    array_access(
+        function_call("array_values", vec![storage_array_expr()]),
+        index,
+    )
 }
 
 /// Normalizes an `array|object` backing argument to an array in place.
@@ -374,21 +691,19 @@ fn value_at(index: Expr) -> Expr {
 /// its PUBLIC properties as the backing entries. PHP also emits the object-backing deprecation
 /// named by `deprecation` first.
 pub(super) fn storage_normalize_stmt(deprecation: &str) -> Stmt {
+    // php KEEPS an object as the backing store (its properties are the entries, read and written
+    // through) and reports the deprecation named by `deprecation`. `__elephcStorageArrayOf()`
+    // projects an object store for the readers, and the keyed writers route through the
+    // `__elephc*StoreProperty` helpers.
     crate::synthetic_class::s_if(
         function_call("is_object", vec![var_expr("array")]),
-        vec![
-            expr_stmt(function_call(
-                "trigger_error",
-                vec![
-                    string_expr(deprecation),
-                    crate::synthetic_class::e_const("E_USER_DEPRECATED"),
-                ],
-            )),
-            crate::synthetic_class::s_assign(
-                "array",
-                function_call("get_object_vars", vec![var_expr("array")]),
-            ),
-        ],
+        vec![expr_stmt(function_call(
+            "trigger_error",
+            vec![
+                string_expr(deprecation),
+                crate::synthetic_class::e_const("E_USER_DEPRECATED"),
+            ],
+        ))],
         vec![],
         None,
     )
@@ -448,12 +763,16 @@ fn array_rewind_body() -> Vec<Stmt> {
 
 /// Builds the synthetic method body for array valid.
 fn array_valid_body() -> Vec<Stmt> {
-    return_body(binary_expr(position_expr(), BinOp::Lt, count_expr(storage_expr())))
+    return_body(binary_expr(
+        position_expr(),
+        BinOp::Lt,
+        count_expr(storage_array_expr()),
+    ))
 }
 
 /// Builds the synthetic method body for array count.
 fn array_count_body() -> Vec<Stmt> {
-    return_body(count_expr(storage_expr()))
+    return_body(count_expr(storage_array_expr()))
 }
 
 /// Builds the synthetic method body for array append.
@@ -469,13 +788,13 @@ fn array_append_body() -> Vec<Stmt> {
 fn array_offset_exists_body() -> Vec<Stmt> {
     return_body(function_call(
         "array_key_exists",
-        vec![var_expr("offset"), storage_expr()],
+        vec![var_expr("offset"), storage_array_expr()],
     ))
 }
 
 /// Builds the synthetic method body for array offset get.
 fn array_offset_get_body() -> Vec<Stmt> {
-    return_body(array_access(storage_expr(), var_expr("offset")))
+    return_body(array_access(storage_array_expr(), var_expr("offset")))
 }
 
 /// Builds the synthetic method body for array offset set.
@@ -493,9 +812,11 @@ fn array_offset_set_body() -> Vec<Stmt> {
             ],
             None,
         ),
-        assign_stmt("__storage", storage_expr()),
-        array_assign_stmt("__storage", var_expr("offset"), var_expr("value")),
-        property_assign_stmt(this_expr(), "storage", var_expr("__storage")),
+        expr_stmt(method_call(
+            this_expr(),
+            "__elephcWriteStorageOffset",
+            vec![var_expr("offset"), var_expr("value")],
+        )),
     ]
 }
 
@@ -506,35 +827,16 @@ fn array_offset_set_body() -> Vec<Stmt> {
 /// `array_keys`/`array_values` projection. That also preserves PHP's key hole for an indexed
 /// array (the surviving keys are not renumbered).
 fn array_offset_unset_body() -> Vec<Stmt> {
-    let key_at_i = || array_access(var_expr("__keys"), var_expr("__i"));
-    vec![
-        assign_stmt("__keys", function_call("array_keys", vec![storage_expr()])),
-        assign_stmt("__values", function_call("array_values", vec![storage_expr()])),
-        assign_stmt("__new", empty_array_expr()),
-        assign_stmt("__i", int_expr(0)),
-        assign_stmt("__limit", count_expr(storage_expr())),
-        while_stmt(
-            binary_expr(var_expr("__i"), BinOp::Lt, var_expr("__limit")),
-            vec![
-                if_stmt(
-                    not_expr(binary_expr(key_at_i(), BinOp::StrictEq, var_expr("offset"))),
-                    vec![array_assign_stmt(
-                        "__new",
-                        key_at_i(),
-                        array_access(var_expr("__values"), var_expr("__i")),
-                    )],
-                    None,
-                ),
-                increment_stmt("__i"),
-            ],
-        ),
-        property_assign_stmt(this_expr(), "storage", var_expr("__new")),
-    ]
+    vec![expr_stmt(method_call(
+        this_expr(),
+        "__elephcRemoveStorageOffset",
+        vec![var_expr("offset")],
+    ))]
 }
 
 /// Builds the synthetic method body for array copy.
 fn array_copy_body() -> Vec<Stmt> {
-    return_body(storage_expr())
+    return_body(storage_array_expr())
 }
 
 /// Builds the synthetic method body for `exchangeArray()`.
@@ -546,7 +848,14 @@ fn array_exchange_body() -> Vec<Stmt> {
         assign_stmt("old", storage_expr()),
         storage_normalize_stmt(&object_backing_deprecation("ArrayObject", "exchangeArray")),
         property_assign_stmt(this_expr(), "storage", var_expr("array")),
-        return_stmt(var_expr("old")),
+        // php answers the old CONTENTS as an array: an object store contributes its properties
+        // (or, for an ArrayObject-shaped store, the array it follows), an array store answers
+        // itself. `__elephcStorageArrayOf()` is exactly that projection.
+        return_stmt(method_call(
+            this_expr(),
+            "__elephcStorageArrayOf",
+            vec![var_expr("old")],
+        )),
     ]
 }
 
@@ -554,7 +863,7 @@ fn array_exchange_body() -> Vec<Stmt> {
 fn array_object_get_iterator_body() -> Vec<Stmt> {
     vec![return_stmt(new_object_expr(
         "ArrayIterator",
-        vec![storage_expr()],
+        vec![storage_array_expr()],
     ))]
 }
 

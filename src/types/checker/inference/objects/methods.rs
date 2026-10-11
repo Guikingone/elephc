@@ -543,6 +543,21 @@ impl Checker {
                 self.infer_type(arg, env)?
             });
         }
+        // An `ArrayObject::exchangeArray()` argument REPLACES the backing store, and the
+        // synthetic keyed-write body later writes `$store->{$name} = $value` on it. The write
+        // lowers through the mixed ladder, which dispatches on the RUNTIME class, so the
+        // replacement object's class must reserve its dynamic-property hash exactly like a
+        // construction site does.
+        if method_key == "exchangearray"
+            && super::constructors::is_object_backing_storage_class(class_name)
+        {
+            if let Some(backing_ty) = arg_types.first() {
+                crate::types::checker::scope_dynamic_storage::record_scope_dynamic_runtime_name_receiver_mutation(
+                    self,
+                    backing_ty,
+                );
+            }
+        }
 
         let impl_class_name = self
             .classes

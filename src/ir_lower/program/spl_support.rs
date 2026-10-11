@@ -123,6 +123,13 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
         "ArrayIterator" => matches!(
             method_key,
             "__construct"
+                | "__elephcstoragearray"
+                | "__elephcstoragearrayof"
+                | "__elephcstoragerawstore"
+                | "__elephcwritestoreproperty"
+                | "__elephcunsetstoreproperty"
+                | "__elephcwritestorageoffset"
+                | "__elephcremovestorageoffset"
                 | "current"
                 | "key"
                 | "next"
@@ -146,6 +153,13 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
         "ArrayObject" => matches!(
             method_key,
             "__construct"
+                | "__elephcstoragearray"
+                | "__elephcstoragearrayof"
+                | "__elephcstoragerawstore"
+                | "__elephcwritestoreproperty"
+                | "__elephcunsetstoreproperty"
+                | "__elephcwritestorageoffset"
+                | "__elephcremovestorageoffset"
                 | "getiterator"
                 | "count"
                 | "getflags"
