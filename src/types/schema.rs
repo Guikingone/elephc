@@ -276,6 +276,12 @@ pub struct ClassInfo {
     /// Codegen routes undeclared property storage through a per-object
     /// side-table when this flag is set.
     pub allow_dynamic_properties: bool,
+    /// `true` when creating a dynamic property on this class is reported by php rather than free.
+    ///
+    /// Builtin SPL containers grant the dynamic-property storage the attribute-driven path needs
+    /// while still reporting php 8.5's `Creation of dynamic property C::$n is deprecated`, which
+    /// is what php does for every class without `#[\AllowDynamicProperties]`.
+    pub dynamic_property_creation_deprecated: bool,
     /// EIR reserves a GC-visible property hash for subclasses declared by opaque eval.
     /// This is a storage capability, not PHP's permission to create dynamic properties.
     pub eval_property_storage: bool,
@@ -710,13 +716,15 @@ impl ClassInfo {
 
     /// Returns whether CREATING a dynamic property on an instance is deprecated rather than free.
     ///
-    /// The clone-override hash is reserved by the compiler, not requested by the program, so php
-    /// 8.5 still reports `Creation of dynamic property C::$n is deprecated` for every class that
-    /// carries neither `#[\AllowDynamicProperties]` nor stdClass's engine exemption. Eval's own
-    /// reserved storage keeps its established behavior and is deliberately not consulted here.
+    /// Builtin SPL containers carry elephc's own marker and always report, and the clone-override
+    /// hash is reserved by the compiler rather than requested by the program, so php 8.5 reports
+    /// `Creation of dynamic property C::$n is deprecated` for every class that carries neither
+    /// `#[\AllowDynamicProperties]` nor stdClass's engine exemption. Eval's own reserved storage
+    /// keeps its established behavior and is deliberately not consulted here.
     pub fn dynamic_property_creation_is_deprecated(&self) -> bool {
-        (self.clone_override_property_storage || self.scope_dynamic_property_storage)
-            && !self.allow_dynamic_properties
+        self.dynamic_property_creation_deprecated
+            || ((self.clone_override_property_storage || self.scope_dynamic_property_storage)
+                && !self.allow_dynamic_properties)
     }
 
     /// Returns whether an UNDECLARED property name addresses this class's hash directly.

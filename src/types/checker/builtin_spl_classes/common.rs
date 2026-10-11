@@ -11,9 +11,28 @@
 
 use crate::names::Name;
 use crate::parser::ast::{
-    BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind,
-    InstanceOfTarget, PropertyHooks, StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
+    Attribute, AttributeGroup, BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr,
+    ExprKind, InstanceOfTarget, PropertyHooks, StaticReceiver, Stmt, StmtKind, TypeExpr,
+    Visibility,
 };
+use crate::span::Span;
+
+/// Builds elephc's internal `#[\ElephcDeprecatedDynamicProperties]` attribute group.
+///
+/// Builtin SPL containers grant the dynamic-property storage the attribute-driven path needs
+/// while still reporting php 8.5's `Creation of dynamic property C::$n is deprecated`, which is
+/// what php does for every class without `#[\AllowDynamicProperties]`. The marker is internal:
+/// user code never writes it.
+pub(super) fn deprecated_dynamic_properties_attribute() -> AttributeGroup {
+    AttributeGroup {
+        attributes: vec![Attribute {
+            name: Name::unqualified("ElephcDeprecatedDynamicProperties"),
+            args: Vec::new(),
+            span: Span::dummy(),
+        }],
+        span: Span::dummy(),
+    }
+}
 
 /// Provides the Method helper used by the common module.
 pub(super) fn method(

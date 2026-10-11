@@ -81,6 +81,31 @@ try {
     );
 }
 
+/// Verifies dynamic property creation on a builtin SPL container behaves like php's.
+///
+/// php accepts `$ao->x = 7` on an `ArrayObject` the way it does on every class: the write creates
+/// the property and reports php 8.5's `Creation of dynamic property ArrayObject::$x is deprecated`
+/// (stripped from the captured stdout by this harness), a read answers the stored value, `isset()`
+/// probes the hash, and `unset()` removes it.
+#[test]
+fn test_array_object_dynamic_properties_report_phps_deprecation() {
+    let out = compile_and_run(
+        r#"<?php
+$ao = new ArrayObject([1]);
+$ao->x = 7;
+echo $ao->x, "\n";
+var_dump(isset($ao->x));
+unset($ao->x);
+var_dump(isset($ao->x));
+
+$ai = new ArrayIterator([2]);
+$ai->y = 8;
+echo $ai->y, "\n";
+"#,
+    );
+    assert_eq!(out, "7\nbool(true)\nbool(false)\n8\n");
+}
+
 /// Verifies that array iterator iterates associative keys and values.
 #[test]
 fn test_array_iterator_iterates_associative_keys_and_values() {

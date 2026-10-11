@@ -54,7 +54,8 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             is_readonly_class: false,
             properties: array_iterator_properties(),
             methods: spl_array_iterator_methods(),
-            attributes: Vec::new(),
+            // php accepts dynamic property creation on every container with its 8.5 deprecation.
+            attributes: vec![deprecated_dynamic_properties_attribute()],
             constants: Vec::new(),
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
@@ -77,7 +78,8 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             is_readonly_class: false,
             properties: array_object_properties(),
             methods: spl_array_object_methods(),
-            attributes: Vec::new(),
+            // php accepts dynamic property creation on every container with its 8.5 deprecation.
+            attributes: vec![deprecated_dynamic_properties_attribute()],
             constants: vec![
                 class_const("STD_PROP_LIST", 1),
                 class_const("ARRAY_AS_PROPS", 2),

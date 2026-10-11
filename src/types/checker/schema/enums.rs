@@ -508,6 +508,7 @@ pub(crate) fn insert_enum_metadata(
             is_final: true,
             is_readonly_class: true,
             allow_dynamic_properties: false,
+            dynamic_property_creation_deprecated: false,
             eval_property_storage: false,
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
