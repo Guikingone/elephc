@@ -143,6 +143,7 @@ pub(super) fn emit_rooted_expr_call(
         Some(span),
     );
     stage_call_result(ctx, result_staging.as_ref(), call, span);
+    let call = discard_result_before_callback(ctx, result_staging.as_ref(), call, callback_owner, span);
     if let Some(slot) = callback_owner {
         retire_owned_call_operand(ctx, slot, span);
     }
@@ -585,8 +586,8 @@ pub(super) struct RootedDescriptorCallback {
 
 /// Publishes a descriptor invocation's result staging and then its callback.
 ///
-/// A borrowed callback, such as a plain local load, owns nothing and is handed through
-/// unchanged, which keeps the backend's view of the callback's identity exactly as it was.
+/// A borrowed callback receives an independent value/descriptor lease before arguments run,
+/// because those arguments may replace its source local or mutable boxed callable cell.
 /// Taking `result_type` here rather than at the invocation is what guarantees the staged slot
 /// and the emitted call agree on one storage type.
 pub(super) fn root_descriptor_callback(
@@ -596,6 +597,11 @@ pub(super) fn root_descriptor_callback(
     span: Span,
 ) -> RootedDescriptorCallback {
     let result = prepublish_call_result(ctx, &result_type, span);
+    let callback = if ctx.value_needs_release_after_use(callback) {
+        callback
+    } else {
+        crate::ir_lower::ownership::copy_for_php_value_binding(ctx, callback, Some(span))
+    };
     let (value, owner) = root_owned_call_operand(ctx, callback, span);
     RootedDescriptorCallback { value, owner, result_type, result }
 }
@@ -638,6 +644,7 @@ pub(super) fn emit_callable_descriptor_invoke(
     } else if ctx.value_is_owning_temporary(arg_container) {
         crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
     }
+    let result = discard_result_before_callback(ctx, result_staging.as_ref(), result, callback_owner, span);
     if let Some(slot) = callback_owner {
         retire_owned_call_operand(ctx, slot, span);
     }

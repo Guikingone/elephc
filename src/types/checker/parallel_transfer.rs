@@ -155,6 +155,12 @@ impl Checker {
         let Some(task) = args.first() else {
             return Ok(());
         };
+        // Named/spread normalization owns cloned AST nodes. Check this exact closure body
+        // before consulting address-keyed return-site proofs; the original argument's
+        // earlier check cannot establish ownership/alias facts for its normalized copy.
+        if matches!(task.kind, ExprKind::Closure { .. }) {
+            self.infer_type(task, env)?;
+        }
         if matches!(
             task.kind,
             ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::StaticMethod { .. })
@@ -492,12 +498,27 @@ impl Checker {
         signature: &crate::types::FunctionSig,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
-        if parallel_transfer_return_rejection(&signature.return_type).is_none() {
+        let tracked_closure = matches!(&task.kind,
+            ExprKind::Variable(name) if self.callable_captures.contains_key(name));
+        if parallel_transfer_return_rejection(&signature.return_type).is_none()
+            && !matches!(task.kind, ExprKind::Closure { .. })
+            && !tracked_closure
+        {
             return Ok(());
         }
         if let ExprKind::Variable(name) = &task.kind {
             if self.parallel_transfer_safe_callable_returns.contains(name) {
                 return Ok(());
+            }
+            if tracked_closure {
+                // The cached proof also covers hidden object/array shapes. A failed proof
+                // remains the shared unknown-shape diagnostic, not a new alias-only claim.
+                return Self::require_parallel_transferable(
+                    &PhpType::Mixed,
+                    task.span,
+                    "task return value",
+                    false,
+                );
             }
         }
         let ExprKind::Closure { body, .. } = &task.kind else {
@@ -516,8 +537,25 @@ impl Checker {
         for statement in body {
             self.collect_return_infos(statement, &task_env, &mut returns);
         }
+        // A checked scalar/array return contract can narrow an erased expression at the
+        // callee's own return boundary. Inspect local alias risk first, but do not re-infer
+        // that expression in its parent's storage/callable context afterwards.
+        if let Some(returned) = returns.iter().find(|returned| returned.reference_aliased_array) {
+            return Err(CompileError::new(
+                returned.expr.as_ref().map_or(task.span, |expr| expr.span),
+                "Elephc\\Parallel\\TaskGroup::spawn(): task return value cannot cross an isolated runtime context: reference-aliased arrays may contain cycles",
+            ));
+        }
+        if parallel_transfer_return_rejection(&signature.return_type).is_none() {
+            return Ok(());
+        }
         for returned in returns {
             if let Some(expr) = returned.expr {
+                if parallel_transfer_return_rejection(&returned.ty).is_none() {
+                    // This type belongs to the checked return site, not the parent
+                    // environment. Worker locals must not be re-read in that parent.
+                    continue;
+                }
                 self.require_parallel_expr_transferable(
                     &expr,
                     &task_env,
@@ -544,12 +582,12 @@ impl Checker {
     }
 
     /// Identifies tracked reference aliases whose array representation can carry cross-context cycles.
-    fn is_reference_aliased_array(&self, name: &str, ty: &PhpType) -> bool {
+    pub(crate) fn is_reference_aliased_array(&self, name: &str, ty: &PhpType) -> bool {
         self.ref_aliased_locals.contains(name)
-            && matches!(
+            && (ty.is_php_array() || matches!(
                 ty.codegen_repr(),
                 PhpType::Array(_) | PhpType::AssocArray { .. }
-            )
+            ))
     }
 }
 

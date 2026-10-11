@@ -7,8 +7,190 @@
 //! Key details:
 //! - Array copies must detach zval cells while reference parameters remain aliased.
 //! - Objects and resources preserve identity; every normal or exceptional owner is released.
+//! - ELEPHC_PHP_CHECK makes this group require a successful, matching PHP execution.
 
 use crate::support::*;
+
+/// Retiring the last foreach alias cannot free the reference cell still owned by its hash entry.
+#[test]
+fn mixed_value_copies_foreach_alias_unset_preserves_entry_through_allocation() {
+    assert_clean_copy(r#"
+function readReferenceItems(mixed $items): void {
+    foreach ($items as $element) { echo $element; }
+}
+$source = ["u" => 1];
+foreach ($source as &$value) {}
+unset($value);
+echo json_encode($source), '|';
+readReferenceItems($source);
+echo '|', json_encode($source);
+unset($source);
+"#, "{\"u\":1}|1|{\"u\":1}");
+}
+
+/// Empty indexed arrays preserve PHP null tags when appending literal or void-call results.
+#[test]
+fn mixed_value_copies_null_only_append_preserves_runtime_tags() {
+    assert_clean_copy(r#"
+function voidAppendPayload(): void {}
+$values = [];
+$values[] = null;
+$values[] = voidAppendPayload();
+echo json_encode($values), '|', gettype($values[0]), '|', gettype($values[1]);
+unset($values);
+"#, "[null,null]|NULL|NULL");
+}
+
+/// Inline ReflectionClass construction keeps the concrete receiver for authorized private reflection.
+#[test]
+fn mixed_value_copies_inline_reflection_factory_keeps_private_property_authority() {
+    assert_clean_copy(r#"
+class InlineReflectedOwner {
+    private int $value = 1;
+    public function value(): int { return $this->value; }
+}
+$owner = (new ReflectionClass(InlineReflectedOwner::class))->newInstanceWithoutConstructor();
+(new ReflectionProperty(InlineReflectedOwner::class, 'value'))->setValue($owner, 7);
+echo $owner->value();
+unset($owner);
+"#, "7");
+}
+
+/// A nested call result remains owned until a throwing capture is retired and unwound.
+#[test]
+fn mixed_value_copies_nested_result_is_not_discarded_before_callback_cleanup() {
+    assert_clean_copy(r#"
+class ThrowingNestedCapture { public function __destruct() { echo 'capture|'; throw new RuntimeException('capture'); } }
+class NestedResult { public function __destruct() { echo 'result|'; } }
+function dropNestedHolder(array &$slot): int { $slot = []; return 1; }
+function consumeNestedResult(NestedResult $result): void { echo 'used|'; }
+function exerciseNestedResult(): void {
+    $held = [new ThrowingNestedCapture()];
+    try {
+        consumeNestedResult((function (int $ignored) use ($held): NestedResult { return new NestedResult(); })(dropNestedHolder($held)));
+    } catch (RuntimeException $error) { echo 'caught'; }
+}
+exerciseNestedResult();
+"#, "capture|result|caught");
+}
+
+/// A selected captured callable stays alive while a later argument replaces its source local.
+#[test]
+fn mixed_value_copies_captured_callable_survives_argument_replacement() {
+    assert_clean_copy(r#"
+function rewriteCapturedCallable(callable &$callback): int {
+    $callback = static function (int $ignored): string { return 'new'; };
+    return 1;
+}
+function exerciseCapturedCallable(): string {
+    $value = boxed(['name' => 'old']);
+    $callback = static function (int $ignored) use ($value): string { return $value['name']; };
+    $result = $callback(rewriteCapturedCallable($callback));
+    unset($callback); unset($value);
+    return $result;
+}
+echo exerciseCapturedCallable();
+"#, "old");
+}
+
+/// A static callable array surviving a branch join crosses a positional parameter as a descriptor.
+#[test]
+fn mixed_value_copies_joined_static_callable_array_uses_descriptor_parameter_storage() {
+    assert_clean_copy(r#"
+class JoinedCallableTarget { public static function hit(): int { return 7; } }
+function consumeJoinedCallable(callable $callback): int { return $callback(); }
+function invokeJoinedCallable(int $choice): int {
+    if ($choice > 0) { $callback = [JoinedCallableTarget::class, 'hit']; }
+    else { $callback = [JoinedCallableTarget::class, 'hit']; }
+    return consumeJoinedCallable($callback);
+}
+echo invokeJoinedCallable($argc), "|", invokeJoinedCallable($argc - 1);
+"#, "7|7");
+}
+
+/// A captured instance callable keeps its receiver through a joined positional parameter binding.
+#[test]
+fn mixed_value_copies_joined_instance_callable_array_keeps_descriptor_receiver() {
+    assert_clean_copy(r#"
+class PrejoinedCallableTarget { public function hit(): int { return 7; } }
+function consumePrejoinedCallable(callable $callback): int { return $callback(); }
+function invokePrejoinedCallable(int $choice): int {
+    $callback = [new PrejoinedCallableTarget(), 'hit'];
+    if ($choice > 0) { $marker = 1; } else { $marker = 2; }
+    return consumePrejoinedCallable($callback) + $marker;
+}
+echo invokePrejoinedCallable($argc), "|", invokePrejoinedCallable($argc - 1);
+"#, "8|9");
+}
+
+/// Parameter declaring-function and union-type boxes retire all nested creator leases.
+#[test]
+fn mixed_value_copies_reflection_parameter_metadata_releases_creator_leases() {
+    assert_clean_copy(r#"
+function reflection_parameter_target(int|string $value = 1): int { return 1; }
+$function = new ReflectionFunction("reflection_parameter_target");
+$parameters = $function->getParameters();
+$parameter = $parameters[0];
+$type = $parameter->getType();
+$declaring = $parameter->getDeclaringFunction();
+echo $type->allowsNull() ? "nullable|" : "nonnull|";
+echo $declaring->getName();
+unset($declaring); unset($type); unset($parameter); unset($parameters); unset($function);
+"#, "nonnull|reflection_parameter_target");
+}
+
+/// Nested declaring-class, parent, prototype and constructor boxes consume their fresh owners.
+#[test]
+fn mixed_value_copies_nested_reflection_metadata_releases_creator_leases() {
+    assert_clean_copy(r#"
+class ReflectionParent {
+    public function __construct() {}
+    public function value(): int { return 1; }
+}
+class ReflectionChild extends ReflectionParent {
+    public function value(): int { return 2; }
+}
+$class = new ReflectionClass(ReflectionChild::class);
+$method = $class->getMethod("value");
+$prototype = $method->getPrototype();
+$declaring = $method->getDeclaringClass();
+$parent = $class->getParentClass();
+$constructor = $class->getConstructor();
+unset($method); unset($class);
+echo $declaring->getName(), "|", $parent->getName(), "|", $prototype->getName(), "|";
+echo $constructor->getName();
+unset($constructor); unset($parent); unset($declaring); unset($prototype);
+"#, "ReflectionChild|ReflectionParent|value|__construct");
+}
+
+/// Terminal argument cleanup lowering must not erase a surviving ReflectionMethod association.
+#[test]
+fn mixed_value_copies_reflection_target_survives_unrelated_argument_guard() {
+    assert_clean_copy(r#"
+class ReflectionTarget { public function value(): int { return 42; } }
+class ArgumentHolder { public function __construct(public string $text) {} }
+$reflected = new ReflectionMethod(ReflectionTarget::class, "value");
+$holder = new ArgumentHolder(str_repeat("x", 2));
+$target = new ReflectionTarget();
+echo $reflected->invoke($target);
+unset($reflected); unset($holder); unset($target);
+"#, "42");
+}
+
+/// Post-evaluation fact restoration must retain a genuine reference-call target replacement.
+#[test]
+fn mixed_value_copies_argument_guard_keeps_post_evaluation_callable_target() {
+    assert_clean_copy(r#"
+function first_target(): int { return 1; }
+function second_target(): int { return 2; }
+function replace_target(callable &$callback): int { $callback = second_target(...); return 0; }
+function consume_ignored(int $ignored): void {}
+$callback = first_target(...);
+consume_ignored(replace_target($callback));
+echo $callback();
+unset($callback);
+"#, "2");
+}
 
 /// Requires complete source evaluation before fixed and variadic Stringable binding.
 #[test]
@@ -355,7 +537,25 @@ unset($copy); unset($callback); unset($source);
     );
 }
 
-/// Runs one boxed-copy fixture and requires its expected representation and clean heap teardown.
+/// Executes the exact tagged source in PHP and fails on missing PHP, fatal errors or differing output.
+fn assert_php_copy_oracle(source: &str, native_stdout: &str) {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("elephc_copy_oracle_{}_{}.php", std::process::id(), id));
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&path)
+        .expect("create isolated PHP copy-oracle source");
+    std::io::Write::write_all(&mut file, source.as_bytes()).expect("write PHP copy-oracle source");
+    drop(file);
+    let result = Command::new("php").arg(&path).output();
+    fs::remove_file(&path).expect("remove owned PHP copy-oracle source");
+    let output = result.expect("ELEPHC_PHP_CHECK requires a runnable PHP executable");
+    assert!(output.status.success(), "PHP copy oracle failed: {:?}\n{}", output.status,
+        String::from_utf8_lossy(&output.stderr));
+    assert_eq!(native_stdout, String::from_utf8_lossy(&output.stdout).as_ref(),
+        "PHP copy oracle differs; stderr: {}", String::from_utf8_lossy(&output.stderr));
+    eprintln!("PHP copy oracle verified");
+}
+
+/// Requires expected native output, clean heap teardown and an opt-in strict PHP oracle.
 fn assert_clean_copy(body: &str, expected: &str) {
     let source = format!(
         "<?php\nfunction boxed(mixed $value): mixed {{ return $value; }}\n{body}\n"
@@ -363,6 +563,9 @@ fn assert_clean_copy(body: &str, expected: &str) {
     let out = compile_and_run_with_heap_debug(&source);
     assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    if std::env::var_os("ELEPHC_PHP_CHECK").is_some() {
+        assert_php_copy_oracle(&source, &out.stdout);
+    }
 }
 
 /// Requires ordinary boxed-array assignment to detach mutable value cells.

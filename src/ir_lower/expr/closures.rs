@@ -188,6 +188,7 @@ pub(super) fn lower_closure_with_context(
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
     let mut by_value_capture_views = Vec::with_capacity(captures.len());
+    let mut snapshot_slots = Vec::new();
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
         let ref_cell_must_be_mixed = by_ref
@@ -246,14 +247,15 @@ pub(super) fn lower_closure_with_context(
             (captured, php_type)
         };
         // A by-value Mixed capture is a snapshot, not another reference to the source zval.
-        // Keep its owner in an ordinary private slot so static-call capture operands are
-        // borrowed loads, not already-released owning temporaries. The descriptor also
-        // retains it, allowing the closure to outlive this frame.
+        // Stage its owner in a private slot so capture operands are borrowed loads.
+        // ClosureNew retains that same cell; retire the creator's slot afterwards so
+        // descriptor destruction is not delayed until this frame exits.
         let captured = if !by_ref
             && matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         {
             let snapshot = format!("{}#capture{}", capture, ctx.builder.value_count());
             ctx.store_local(&snapshot, captured, php_type.clone(), Some(expr.span));
+            snapshot_slots.push(ctx.local_slots[&snapshot]);
             ctx.load_local(&snapshot, Some(expr.span))
         } else {
             captured
@@ -370,12 +372,6 @@ pub(super) fn lower_closure_with_context(
         .iter()
         .map(|capture| capture.value)
         .collect::<Vec<_>>();
-    ctx.set_pending_static_callable_result(StaticCallableBinding::Closure {
-        name,
-        signature,
-        captures: captured_values,
-        return_alias,
-    });
     let closure = ctx.emit_value(
         Op::ClosureNew,
         closure_operands,
@@ -384,12 +380,30 @@ pub(super) fn lower_closure_with_context(
         Op::ClosureNew.default_effects(),
         Some(expr.span),
     );
+    for slot in snapshot_slots {
+        // The descriptor already holds the same cell, so this cannot be its last
+        // owner. Keep the canonical slot-retirement effects: the validator does
+        // not permit a per-site refinement of this opcode's cleanup contract.
+        ctx.emit_void(
+            Op::ReleaseLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(),
+            Some(expr.span),
+        );
+    }
     // A later store can widen a captured local to Mixed, making its narrower load an owned
     // unbox. Retire that view after the descriptor retains it. Ownership finalization prunes
     // borrowed-load releases, and explicit releases prevent ClosureNew from stealing a view.
     for view in by_value_capture_views {
         crate::ir_lower::ownership::release_if_owned(ctx, view, Some(expr.span));
     }
+    ctx.set_pending_static_callable_result(StaticCallableBinding::Closure {
+        name,
+        signature,
+        captures: captured_values,
+        return_alias,
+    });
     if let Some(capture) = self_ref_callable_capture {
         ctx.set_local_logical_type(capture, PhpType::Callable);
     }

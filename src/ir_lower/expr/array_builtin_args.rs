@@ -454,6 +454,13 @@ fn lower_callback_builtin_args_in_source_order(
         }
         lowered.push(value);
     }
+    let materialize_defaults = crate::builtins::registry::lookup(canonical).is_some_and(|definition| {
+        definition.spec.semantics.argument_lowering
+            == crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
+    });
+    if materialize_defaults {
+        materialize_positional_argument_defaults(ctx, sig, args.len(), &mut lowered);
+    }
     Some(lowered)
 }
 

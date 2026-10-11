@@ -249,7 +249,9 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
         StmtKind::ExprStmt(expr) => {
+            let previous = ctx.discarded_result_depth.replace(ctx.expression_depth + 1);
             let value = lower_expr(ctx, expr);
+            ctx.discarded_result_depth = previous;
             release_expr_statement_result(ctx, value, expr.span);
         }
         StmtKind::NamespaceDecl { name: _ } => lower_noop(ctx, stmt.span),

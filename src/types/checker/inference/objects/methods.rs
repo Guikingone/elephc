@@ -42,7 +42,7 @@ impl Checker {
             }
             let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
             return Ok(self
-                .tracked_reflection_class_method_return_type(object, method)
+                .tracked_reflection_class_method_return_type(object, method, env)
                 .unwrap_or(return_ty));
         }
         // Method calls on a union object type are allowed when the union has a
@@ -70,7 +70,7 @@ impl Checker {
                 let return_ty =
                     self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
                 return Ok(self
-                    .tracked_reflection_class_method_return_type(object, method)
+                    .tracked_reflection_class_method_return_type(object, method, env)
                     .unwrap_or(return_ty));
             }
             // Union of two or more distinct object classes (`A|B`, `A|B|false`):
@@ -196,11 +196,12 @@ impl Checker {
         &self,
         object: &Expr,
         method: &str,
+        env: &TypeEnv,
     ) -> Option<PhpType> {
-        let ExprKind::Variable(name) = &object.kind else {
-            return None;
+        let reflected_class = match &object.kind {
+            ExprKind::Variable(name) => self.reflection_class_targets.get(name)?.clone(),
+            _ => self.reflection_class_constructor_target(object, env)?,
         };
-        let reflected_class = self.reflection_class_targets.get(name)?;
         match php_symbol_key(method).as_str() {
             "newinstance" | "newinstanceargs" | "newinstancewithoutconstructor" => {
                 Some(PhpType::Object(reflected_class.clone()))

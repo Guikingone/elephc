@@ -81,6 +81,11 @@ pub(super) fn lower_arg_source_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
+        // Capture a proven callable target in the descriptor ABI before later source effects.
+        // The PHP local stays an array; only this by-value parameter operand is materialized.
+        return snapshot_call_argument(ctx, lowered, false, arg.span);
+    }
     let lowered = lower_expr(ctx, arg);
     snapshot_call_argument(ctx, lowered, sig.ref_params.get(index).copied().unwrap_or(false), arg.span)
 }
@@ -1003,12 +1008,7 @@ fn lower_args_with_signature_options_inner(
         })
         .collect();
     if !trim_trailing_defaults {
-        for idx in fixed_arg_count..regular_param_count {
-            let Some(Some(default)) = sig.defaults.get(idx) else {
-                break;
-            };
-            operands.push(lower_arg_with_signature(ctx, sig, idx, default));
-        }
+        materialize_positional_argument_defaults(ctx, sig, fixed_arg_count, &mut operands);
     }
     if sig.variadic.is_some() {
         let tail = if args.len() > regular_param_count {
@@ -1025,4 +1025,17 @@ fn lower_args_with_signature_options_inner(
         return operands;
     }
     coerce_operands_to_params(ctx, sig, operands)
+}
+
+/// Materializes omitted positional defaults through the shared signature and parameter binding.
+pub(super) fn materialize_positional_argument_defaults(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    supplied: usize,
+    operands: &mut Vec<crate::ir::ValueId>,
+) {
+    for index in supplied..crate::types::call_args::regular_param_count(sig) {
+        let Some(Some(default)) = sig.defaults.get(index) else { break; };
+        operands.push(lower_arg_with_signature(ctx, sig, index, default));
+    }
 }

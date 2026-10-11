@@ -39,14 +39,26 @@ pub(super) fn coerce_to_return_type(
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
             ctx.box_value_as_mixed(value, ctx.return_php_type.clone(), span)
         }
-        IrType::Heap(_) => ctx.emit_value(
-            Op::RuntimeCall,
-            vec![value.value],
-            None,
-            ctx.return_php_type.clone(),
-            effects_lookup::runtime_effects(),
-            span,
-        ),
+        IrType::Heap(_) => {
+            let source_is_boxed = matches!(
+                ctx.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            );
+            let coerced = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                ctx.return_php_type.clone(),
+                effects_lookup::runtime_effects(),
+                span,
+            );
+            // Concrete heap extraction retains the returned payload independently. Retire an
+            // owning source box after extraction; a borrowed local or parameter remains live.
+            if source_is_boxed && ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+            }
+            coerced
+        }
         IrType::Void => value,
     }
 }

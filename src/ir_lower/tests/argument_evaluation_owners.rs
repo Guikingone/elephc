@@ -1034,6 +1034,27 @@ replace($value);
     }
 }
 
+/// Named by-value sources receive an evaluation snapshot before later reference mutation.
+#[test]
+fn named_argument_value_snapshot_precedes_later_reference_call_on_all_targets() {
+    let source = r#"<?php
+function mutate(mixed &$value): int { $value["x"] = 2; return 0; }
+function take(mixed $value, int $ignored): mixed { return $value; }
+function invoke(mixed $source): mixed { return take(value: $source, ignored: mutate($source)); }
+echo json_encode(invoke(["x" => 1]));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter().find(|function| function.name == "invoke").unwrap();
+        let first_call = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call)
+            .expect("later reference mutation call");
+        assert!(function.instructions[..first_call].iter().any(|inst| {
+            inst.op == crate::ir::Op::MixedClone && inst.span.is_some_and(|span| span.line == 4)
+        }), "{target}: parameter entry copies alone cannot replace a named source snapshot");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Frame metadata retains its initialized named snapshot before and after EIR optimization.
 #[test]
 fn named_backtrace_snapshot_survives_frontend_optimization_on_all_targets() {

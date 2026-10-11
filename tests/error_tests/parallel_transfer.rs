@@ -89,36 +89,8 @@ $tasks->spawn(static function (): int {
     );
 }
 
-/// Keeps TaskGroup scope authority unique by rejecting its private clone operation.
-#[test]
-fn parallel_task_group_clone_cannot_duplicate_scope_authority() {
-    expect_parallel_surface_error(
-        r#"
-use Elephc\Parallel\TaskGroup;
-use function Elephc\Parallel\run;
-run(static function (TaskGroup $tasks): void {
-    $duplicate = clone $tasks;
-});
-"#,
-        "Cannot access private method: Elephc\\Parallel\\TaskGroup::__clone",
-    );
-}
-
-/// Prevents cloning a Future from duplicating ownership of a native job.
-#[test]
-fn parallel_future_clone_cannot_duplicate_native_job_ownership() {
-    expect_parallel_surface_error(
-        r#"
-use Elephc\Parallel\TaskGroup;
-use function Elephc\Parallel\run;
-run(static function (TaskGroup $tasks): void {
-    $future = $tasks->spawn(static fn (): int => 7);
-    $duplicate = clone $future;
-});
-"#,
-        "Cannot access private method: Elephc\\Parallel\\Future::__clone",
-    );
-}
+// Private TaskGroup/Future clone refusal is catchable at runtime, as in PHP. Its authority
+// and original-job lifetime gate lives in parallel_execution's heap-debug clone regression.
 
 /// Rejects object arguments that would retain pointers into the parent's PHP heap.
 #[test]
@@ -181,6 +153,45 @@ $tasks = new \Elephc\Parallel\TaskGroup();
 $tasks->spawn(static fn (): \stdClass => new \stdClass());
 "#,
         "task return value cannot cross an isolated runtime context: object of class stdClass",
+    );
+}
+
+/// Typed worker-local arrays retain their reference-alias refusal at the exact return site.
+#[test]
+fn parallel_rejects_reference_aliased_worker_local_array_return() {
+    expect_parallel_surface_error(
+        r#"
+use function Elephc\Parallel\run;
+run(static function (\Elephc\Parallel\TaskGroup $tasks): int {
+    $tasks->spawn(static function (): array {
+        $values = [1];
+        $alias =& $values;
+        return $values;
+    });
+    return 0;
+});
+"#,
+        "task return value cannot cross an isolated runtime context: reference-aliased arrays may contain cycles",
+    );
+}
+
+/// A closure variable cannot bypass a failed local alias proof through its declared array type.
+#[test]
+fn parallel_rejects_reference_aliased_worker_return_through_a_closure_variable() {
+    expect_parallel_surface_error(
+        r#"
+use function Elephc\Parallel\run;
+run(static function (\Elephc\Parallel\TaskGroup $tasks): int {
+    $worker = static function (): array {
+        $values = [1];
+        $alias =& $values;
+        return $values;
+    };
+    $tasks->spawn($worker);
+    return 0;
+});
+"#,
+        "task return value cannot cross an isolated runtime context: mixed value whose runtime shape is not proven",
     );
 }
 

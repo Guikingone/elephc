@@ -13,6 +13,8 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+mod callable_flow;
+
 use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Function, Immediate, IrType, LocalKind,
     LocalSlotId, Op, Ownership, ValueId,
@@ -187,6 +189,7 @@ pub(crate) struct LoweringSnapshot {
     speculating: bool,
     closure_count: usize,
     expression_depth: usize,
+    discarded_result_depth: Option<usize>,
     reference_call_context: Option<ReferenceCallContext>,
     refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
@@ -261,6 +264,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub local_types: TypeEnv,
     /// Nested expression depth separates a reference-assignment call from its argument calls.
     pub(crate) expression_depth: usize,
+    /// Exact expression depth whose result the enclosing expression statement ignores.
+    pub(crate) discarded_result_depth: Option<usize>,
     /// Staging published by the enclosing reference assignment, if one is being lowered.
     ///
     /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
@@ -557,6 +562,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             argument_snapshot_scopes: Vec::new(),
             argument_strict_types: false,
             expression_depth: 0,
+            discarded_result_depth: None,
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
             argument_guards: HashMap::new(),
@@ -607,6 +613,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             closure_counter: self.closure_counter,
             hidden_temp_counter: self.hidden_temp_counter,
             expression_depth: self.expression_depth,
+            discarded_result_depth: self.discarded_result_depth,
             reference_call_context: self.reference_call_context.clone(),
             // Refusals recorded by a speculative region must not outlive it: the region is
             // always lowered again for real, and that pass records its refusals again.
@@ -681,6 +688,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.closure_counter = snapshot.closure_counter;
         self.hidden_temp_counter = snapshot.hidden_temp_counter;
         self.expression_depth = snapshot.expression_depth;
+        self.discarded_result_depth = snapshot.discarded_result_depth;
         self.reference_call_context = snapshot.reference_call_context;
         crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
@@ -1036,14 +1044,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let borrowed = self.load_local(name, span);
-        let value = if php_type.codegen_repr() == PhpType::Mixed {
-            self.emit_owned_value(
-                Op::MixedClone, vec![borrowed.value], None, PhpType::Mixed,
-                Op::MixedClone.default_effects(), span,
-            )
-        } else {
-            borrowed
-        };
         let shadow = self.builder.add_local(
             Some(format!("{}#cow", name)),
             value_ir_type(php_type),
@@ -1053,7 +1053,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_slots.insert(name.to_string(), shadow);
         self.local_kinds
             .insert(name.to_string(), LocalKind::PhpLocal);
-        self.store_local(name, value, php_type.clone(), span);
+        // The ordinary PHP binding store clones boxed cells and retains concrete
+        // containers. Pre-cloning here would detach the same parameter twice.
+        self.store_local(name, borrowed, php_type.clone(), span);
     }
 
     /// Marks a local slot as initialized by caller or synthetic setup.

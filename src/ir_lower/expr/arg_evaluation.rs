@@ -33,6 +33,10 @@ pub(super) fn protect_argument_evaluation(
         ctx.clear_owned_hidden_temp(slot, Some(span));
     }
     branch_to(ctx, after);
+    // This continuation has one real predecessor: the completed source/binding evaluation.
+    // Capture its current facts, including genuine mutation invalidations, before emitting
+    // a cleanup path that ends in rethrow and can never flow back into this continuation.
+    let successful_facts = ctx.snapshot_callable_flow_facts();
 
     ctx.builder.position_at_end(handler);
     ctx.clear_static_callable_locals();
@@ -48,7 +52,7 @@ pub(super) fn protect_argument_evaluation(
     );
     ctx.builder.terminate(Terminator::Throw { value: current.value });
     ctx.builder.position_at_end(after);
-    ctx.clear_static_callable_locals();
+    ctx.restore_callable_flow_facts(successful_facts);
     values
 }
 

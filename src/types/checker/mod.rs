@@ -369,7 +369,8 @@ pub(crate) struct Checker {
     /// would be applied to returns that execute before it, silently accepting a nullable
     /// return. The address key is exact because both passes borrow the same immutable AST; the
     /// span is carried alongside so a recycled address can never be mistaken for a hit.
-    pub flow_typed_returns: HashMap<usize, (Span, PhpType)>,
+    /// The boolean records reference-array alias risk before the local scope is restored.
+    pub flow_typed_returns: HashMap<usize, (Span, PhpType, bool)>,
     /// Whether the statements being checked belong to the top-level (global) scope rather than a
     /// function, method, or closure body. `with_local_storage_context` clears it for every local
     /// scope, so `null_probe` only records deferred roots for the scope whose environment

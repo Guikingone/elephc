@@ -11,6 +11,26 @@
 
 use crate::support::*;
 
+/// Runtime clone validation cannot duplicate scope authority or a Future's original native job.
+#[test]
+fn parallel_private_clone_guards_preserve_original_scope_and_job() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+use Elephc\Parallel\TaskGroup;
+use function Elephc\Parallel\run;
+run(static function (TaskGroup $tasks): void {
+    try { $groupDuplicate = clone $tasks; echo 'group-cloned|'; }
+    catch (Error $error) { echo str_contains($error->getMessage(), 'private') ? 'group|' : 'wrong-group|'; }
+    $future = $tasks->spawn(static fn (): int => 7);
+    try { $futureDuplicate = clone $future; echo 'future-cloned|'; }
+    catch (Error $error) { echo str_contains($error->getMessage(), 'private') ? 'future|' : 'wrong-future|'; }
+    echo $future->join();
+});
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "group|future|7", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A worker-local Fiber keeps worker GC/heap state instead of entering the main runtime context.
 #[test]
 fn parallel_worker_local_fiber_inherits_worker_runtime_context() {

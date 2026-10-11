@@ -1202,3 +1202,1063 @@ integration checkpoint. Its publication does not close the follow-up 9df main
 integration, typed-array return/consumer coverage, I/O provider or exact-artifact
 review consensus. Preserve the reserved vendor stash until both merge commits
 are finished and its inherited local state can be restored without publication.
+
+### Original integration committed; pinned follow-up under validation
+
+The ordinary integration commit is
+027c82fa89bcd77cd1e8fb5c23dfaf9067203603, with parents 516dea0b36 and afe32d3efe.
+The staged source/docs manifest excluded .codex/.kioku/.mcp.json/graft/scratchpad
+and inherited vendor paths. Cached diff hygiene additionally caught four new
+blank EOF lines in existing incoming test files; only those trailing blank lines
+were normalized before the commit. This commit is not pushed or accepted yet.
+
+A second ordinary no-commit merge now has MERGE_HEAD
+9df6d3bd7ad066484a9c21c4eb1f54dbdfa2fbf3. Its only conflict was adjacent insertions
+in src/monitor/exact.rs: our scheduler table and main's sampled/generic declaration
+attribution helpers. Both implementations are retained, with their own complete
+function scopes. Conflict stages are empty and cached/working diff checks pass.
+New loop, CFG, range, LICM and liveness code arrived through the ordinary merge;
+the old original parent was not rewritten.
+
+The post-follow-up validation queue (exec session 1110) is active and fail-fast:
+EIR pass unit tests, argument-owner controls, monitor unit tests, native canonical
+loop controls and the public Async behavior family. Logs use
+/tmp/elephc-main-followup-{ir-passes,argument-owners,monitor,loop-native,async-native}-20261010.log.
+Do not infer completion of a later group if an earlier one fails. Commit/push the
+follow-up only after relevant terminal results; then restore the reserved vendor
+stash and verify the exact fork/PR head while keeping final review gates open.
+
+Post-follow-up unit results now prove 223/223 tests under ir_passes::tests:: and
+14/14 argument-owner controls. The narrower pass filter does not include every
+analysis-local unit outside that tests module. Likewise the attempted library
+monitor::tests:: filter selected only the runtime async_monitor hook (1/1), not
+the CLI monitor renderer: monitor is wired in src/main.rs and must be tested
+through --bin elephc. Correct both scopes after the still-live native loop/Async
+queue (1110), without restarting it. Current function-doc inventory remains zero.
+Cargo workspace/CLI-target metadata parses successfully (21 workspace members).
+The first nextest TOML attempt failed because this shell's python3 lacks tomllib;
+its combined shell exit did not prove that check passed. Retry with an installed
+newer interpreter or nextest's own configuration loader before reporting success.
+
+The native loop group completed 7/10, exit 101, stopping the fail-fast queue
+before public Async execution. Its three failures are structural: ordinary
+numeric assignment now emits MixedClone instead of the old Acquire scaffold,
+but CheckedIntSink recognizes only Acquire. Loop counters remain boxed, preventing
+scalar promotion/coalescing. The overflow/example assertions remain unchanged.
+Current evidence is /tmp/elephc-main-followup-loop-native-20261010.log.
+
+CheckedIntSink now accepts non-pinned numeric value copies only within its
+already-proven integer use/slot graph. Copies exposed to output, boxed readers,
+terminators or unknown uses still reject specialization. Four new focused unit
+controls cover copied numeric retirement, observable retired slots, escaped copy
+output and cast-justified overflow mode. They are validating in exec session
+82447, log /tmp/elephc-copied-integer-sink-unit-20261010.log. Do not publish the
+follow-up until unchanged native loop regressions and neighboring ownership
+controls pass.
+
+Configuration validation was recovered without global tool installation: a
+standalone Rust diagnostic used the already-built TOML crate and from_str's
+document parser. It parsed 44 default and 44 CI overrides and verified the
+single shared Linux eval-family override in each profile. Log
+/tmp/elephc-followup-toml-validated-20261010.log. Python tomllib and cargo-nextest
+are unavailable in this shell; full nextest filter/config loading is not claimed.
+
+The copied-integer unit run completed 15/16, exit 101. Positive slot/cast
+specialization and the existing refusal controls passed; the new escaped-output
+fixture tried to append an instruction after a terminator and failed in Builder
+before exercising the pass. The fixture now temporarily takes/restores its
+original terminator around that observation; its rejection assertion is unchanged.
+New fail-fast queue 66140 runs 16 unit controls, the broader ir_passes:: filter,
+then the unchanged native loop family. Logs
+/tmp/elephc-copied-integer-sink-unit-retry-20261010.log,
+/tmp/elephc-copied-integer-pass-neighbors-20261010.log and
+/tmp/elephc-copied-integer-loop-native-20261010.log. Follow-up remains uncommitted.
+Kioku recorded gotcha-independent-numeric-value-copies-must-participat-7f76d144
+with the original 7/10 native evidence and conservative proof requirements.
+
+The corrected fixture/unit retry completed exit 0, 16/16, including the
+escaped-output refusal. The broader ir_passes:: replay completed 242/242,
+including analysis-local tests excluded from the earlier 223-test selection.
+Logs /tmp/elephc-copied-integer-sink-unit-retry-20261010.log and
+/tmp/elephc-copied-integer-pass-neighbors-20261010.log. Native canonical loop
+validation remains active in the same queue 66140 and retains all original
+coalescing, overflow-mode, execution-order and supported-target assertions.
+
+The unchanged native loop group now completes exit 0, 10/10, log
+/tmp/elephc-copied-integer-loop-native-20261010.log. Equal counter coalescing,
+cast/fatal overflow modes, zero-trip/conditional behavior and all supported
+target emitters retain their original assertions. This reconciles the 7/10
+integration failure without weakening the tests. Refusal controls remain green.
+
+The corrected neighboring queue is now active: CLI monitoring is tested through
+--bin elephc, followed by argument-owner controls, native Mixed copy fixtures and
+the public Async family. Logs /tmp/elephc-followup-cli-monitor-20261010.log,
+followup-copy-proof-owners, followup-mixed-copy-native and
+followup-public-async-native. Do not infer those results from the loop group;
+publication and full final acceptance remain open until their own gates run.
+
+Current neighbor validation runs in exec session 68448 (CLI-monitor Cargo PID
+4546 confirmed live, parent queue 4545). Its source is unchanged while compiling.
+Kioku replacement bug_fix-checked-integer-sink-specialization-preserves-nu-92c90af7
+supersedes gotcha-independent-numeric-value-copies-must-participat-7f76d144 with
+the verified 16/242/10 results, while keeping broader neighbors and acceptance open.
+The same contribution-relative function-doc inventory remains zero, and the
+238-file backend comment audit reports all comments aligned. No source conflict,
+commit/push or inherited-vendor restoration is inferred from a still-running job.
+
+The corrected CLI monitor group completed 82/82, including scheduler rendering
+and main's source/generic attribution tests. Argument-owner replay is 14/14.
+The next native Mixed-copy group completed 29/31, stopping before Async: named
+source snapshots produce a poisoned result after later reference mutation, and
+partial named variadic conversion leaks 2 blocks/80 bytes. Both reproduce with
+ELEPHC_IR_OPT=off, so neither failure depends on the new integer specialization.
+Logs /tmp/elephc-followup-{cli-monitor,copy-proof-owners,mixed-copy-native}-20261010.log,
+/tmp/elephc-named-snapshot-no-ir-opt-20261010.log and
+/tmp/elephc-named-variadic-no-ir-opt-20261010.log.
+
+Retained CLI fixtures and off-mode EIR are in
+/tmp/elephc-named-copy-debug.dFHjN8. The named fixed-argument call loads the source
+box before change_later but creates no snapshot; a later mutation retires that
+box before take_first consumes its pointer. Planned named source lowering now
+uses the same by-value snapshot primitive and protected evaluation ledger as
+positional lowering. Reference places/variadic reference markers remain on their
+existing path. The existing source-order and heap assertions are unchanged.
+A new structural check requires the named snapshot before the later reference
+call on all supported targets. Native copy validation and the structural replay
+are running serially in exec session 22944, logs
+/tmp/elephc-named-source-snapshot-fix-20261010.log and
+/tmp/elephc-named-source-owner-proof-20261010.log. Outcomes are pending.
+
+The first shared-snapshot correction completes the native copy family 31/31,
+exit 0, and both isolated no-IR-opt controls 1/1 with unchanged heap-clean
+assertions. Logs /tmp/elephc-named-source-snapshot-fix-20261010.log,
+/tmp/elephc-named-snapshot-no-ir-opt-fixed-20261010.log and
+/tmp/elephc-named-variadic-no-ir-opt-fixed-20261010.log. Kioku records the
+original failure as gotcha-planned-named-value-sources-need-the-shared-posi-84c08f3c.
+
+The first structural replay is 14/15: the new named snapshot check passes on
+five targets, but the existing static/method source-evaluation check still
+requires an unwind root before the later argument call. That assertion was not
+weakened. Earlier named by-value snapshots now retain the existing evaluation
+root publication. release_if_owned already calls clear_consumed_argument_snapshot,
+clearing its former protected ledger slot when ownership moves to that root;
+the two ledgers therefore do not both retire the same live lease.
+
+Fresh fail-fast queue 31839 now tests the 15 owner controls, 31 native copy
+fixtures, 12 reference-variadic neighbors, 17 descriptor neighbors and the public
+Async family. Logs /tmp/elephc-named-source-{published-owners,published-copies,
+reference-neighbors,descriptor-neighbors,public-async}-20261010.log. Results remain
+pending. The second merge, fork push and inherited vendor restoration remain
+uncommitted/unperformed; full PHP-array/I/O/target/review acceptance is unchanged.
+
+The corrected publication-root structural group completes 15/15, exit 0, log
+/tmp/elephc-named-source-published-owners-20261010.log. It includes the unchanged
+static/method pre-call unwind-root assertion and the new five-target named
+snapshot-before-reference-mutation check. The same queue 31839 continues with
+fresh native copies and reference/descriptor/Async neighbors; no later result
+is inferred yet. Working diff hygiene and touched function-doc scans pass.
+
+The publication-root native replay is 31/31 copies, 12/12 reference neighbors
+and 17/17 descriptor bindings. Public Async is 66/67: the internal generation
+reuse probe produces no result through ReflectionMethod::invoke. Its retained
+instrumented CLI fixture /tmp/elephc-stale-generation-debug.Khn0n5 prints
+start|after-first|after-second|NULL, never entering either reflected callback.
+runRoot still returns mixed directly; this is not an internal return-wrapper API
+change and its expected stale-generation assertion remains unchanged.
+
+Argument-evaluation guard lowering builds a rethrowing alternate cleanup path
+then clears every callable/reflection association at the success continuation.
+That continuation has only the already-lowered successful predecessor, so handler
+construction must not erase its valid post-evaluation ReflectionMethod target.
+A small context/callable_flow.rs leaf now snapshots the actual success facts after
+argument effects and their invalidations, and restores only those association
+maps after emitting the terminal cleanup path. IR, slot/owner ledgers and mutation
+generations are not rewound. The change does not retain pre-evaluation identities
+across real retargeting.
+
+Fresh queue 55653 tests 33 native copy/flow fixtures (including a ReflectionMethod
+survival case and a reference-call retargeting refusal control), the unchanged
+stale-generation probe, then the 15 supported-target owner controls. Logs
+/tmp/elephc-argument-success-{flow-facts,stale-generation,owner-proofs}-20261010.log.
+Results are pending. No tracking push or full acceptance is inferred yet.
+
+Flow-fact native replay is 32/33. The actual retargeting control and all prior
+copy controls pass; the ReflectionMethod survival fixture returns the required
+42 but fails its unchanged heap assertion with 33 blocks/8328 bytes retained.
+The original stale-generation probe independently passes 1/1 with EIR optimization
+off, log /tmp/elephc-flow-facts-stale-isolated-20261010.log. Its assertion was not
+changed, and the reflected callback now executes.
+
+The fail-fast queue stopped before owner-proof replay. Reflection cleanup is
+isolated in /tmp/elephc-reflection-owner-debug.3x7qfn: a baseline consisting only
+of ReflectionMethod construction/unset retains the identical 33 blocks/8328
+bytes, without invoking a method or creating an argument guard. The full flow
+fixture and baseline have retained PHP, binaries, stdout/stderr, and full EIR/
+assembly for the main fixture. Its EIR explicitly releases and zeroes the
+ReflectionMethod slot. Attribute the remaining leak to construction/cleanup
+only after checking its actual ownership path; do not blame the successful
+flow restoration or weaken the new heap assertion. Follow-up remains uncommitted.
+
+Reflection leak diagnosis follows the actual creator lease. Fresh nested
+ReflectionClass/Method/Enum owners were boxed with the borrowed-value helper,
+which retained a child without retiring its creator reference. Five confirmed
+member/prototype/parent/declaring/enum sites now use the existing owned boxer.
+The first run improved 33 blocks/8328 bytes to 6 blocks/2376 bytes but remained
+red (32/34 controls). That improvement is not acceptance.
+
+The baseline with only ReflectionMethod construction/unset retains the same six
+remaining blocks, so the earlier speculative "holder" attribution is withdrawn.
+The remaining matching sites are fresh constants/default Hash arrays and fresh
+ReflectionNamedType/UnionType/IntersectionType or parameter declaring-owner
+objects. Nine additional confirmed sites transfer their creator lease using the
+same owned boxer. Borrowed static-property values and global enum singleton
+values intentionally retain the ordinary borrowed boxer.
+
+New heap-debug coverage exercises nested parent/prototype/constructor/declaring
+owners and parameter declaring-function/union-type owners with expected PHP
+names/nullability unchanged. Current queue 89803 runs 35 native copy/flow/
+reflection controls, the unchanged stale-generation probe and owner proofs.
+Logs /tmp/elephc-reflection-{creator-transfers,transfer-stale-generation,
+transfer-owner-proofs}-20261010.log. No result for this expanded fix is asserted.
+All touched Rust function docs, diff hygiene and three reflection emitter comment
+alignment checks pass. Neither final acceptance nor publication has occurred.
+
+### Reflection getter source-box retirement, 2026-10-10
+
+The expanded creator-transfer queue completed with 33/35 native controls passing.
+The two new metadata regressions remained red: nested metadata retained 75 blocks
+(17376 bytes), and function/parameter metadata retained two strings (96 bytes).
+The unchanged stale-generation and owner-proof replays did not start because the
+queue stopped at the failing copy family. These are not passing checkpoints.
+
+Four isolated getters under `/tmp/elephc-reflection-getter-minimal.sxVNq1/`
+split the nested retention exactly: `prototype` retained 42 blocks/9096 bytes;
+`declaring` retained 33 blocks/8280 bytes; `parent` and `constructor` were clean.
+ReflectionClass construction and getMethod alone were already clean. EIR and
+assembly show that the two failing getters retain the concrete object extracted
+from an owned Mixed property read but never release that source box.
+
+The shared heap-return coercion now retires an owning boxed source after concrete
+payload extraction. Borrowed sources remain untouched. An all-five-target EIR
+and assembly regression checks extraction-before-release, exactly one source
+release, transfer of the result, and preservation of the borrowed receiver.
+The native nested-metadata regression now destroys the original reflectors
+before reading the returned objects, checking their independent lifetime.
+
+The two strings are a separate duplicate initializer: ReflectionFunction wrote
+`__short_name` once in the owner-common branch and again in its namespace-aware
+initializer. Removing the earlier write preserves the latter and avoids losing
+the first allocation. Both corrections are awaiting fresh test results; the
+merge remains in progress and neither acceptance nor publication is claimed.
+
+The first five-target return-owner proof passed (1/1). Rebuilding the final
+assertions and replaying `ir_lower::tests::` completed with 297/314 passing and
+17 failing. The final return-owner proof passed in that run, as did the focused
+argument evaluation owner proofs. The broader result is explicitly red.
+The initial fail-fast queue therefore did not start native tests or the build.
+
+Failures require individual reconciliation rather than weaker expectations:
+extra snapshot/evaluation leases change several count or producer-shape probes;
+three callable-flow probes still see physical arrays where descriptors are
+expected; the example corpus helper misses the Async prelude; context-register
+handler assembly no longer necessarily contains a global handler symbol; and
+effect/destructor-handler assumptions require source-level checks. No cause is
+declared settled solely from these observations. Full diagnostics are retained
+in `/tmp/elephc-reflection-return-owner-lowering-20261010.log`.
+
+An independent serialized queue now runs native Mixed copy/Reflection controls
+with IR optimization on and off, then Async, backtrace, descriptor-param binding,
+by-ref variadics and the root build. Those outcomes remain pending. The old CLI
+was copied to `/tmp/elephc-before-owned-mixed-return-20261010` before rebuilding,
+so focused EIR baseline comparisons can avoid mutating the dirty source tree.
+
+The independent Reflection/copy replay completed with **35/35 passing in both
+optimizer modes**. The returned nested objects remain usable after destruction
+of their original reflectors and all focused heaps are clean. This result
+belongs to the source checkpoint before the positional-callable correction
+below, not an accepted final artifact.
+
+The broader `async_scheduler` filter completed with **141/147 passing**. Six
+Fiber ownership regressions remain red: array-stored throw state errors,
+escaped temporary throw, rejected resume with boxed or typed results, rejected
+second start with a Mixed result, and a dropped suspended Fiber owning an object.
+The fail-fast queue did not start backtrace, descriptor, reference or build steps.
+
+Two callable-flow failures were reproduced as native bugs using the saved CLI
+before the Reflection return-box correction: static joined arrays report
+`Unsupported EIR callable_descriptor_invoke callable descriptor without invoker`;
+the joined instance array segfaults. PHP produces `7` and `8`, respectively.
+Artifacts are under `/tmp/elephc-callable-join-baseline.GNzq9q/`. These are not
+merely stale structural assertions and must be corrected before publication.
+
+The positional source-only path omitted `lower_tracked_callable_array_param`,
+already present in the specialized and named paths. It now materializes only a
+proven by-value callable-array target and snapshots that descriptor before later
+source effects. The original PHP local remains an array, by-reference arguments
+remain lvalues, and genuine target invalidation is not suppressed. Two native
+regressions cover both branches and captured receiver lifetime. A serialized
+queue replays unchanged callable-flow proofs, return/evaluation owners, and the
+now-37 native copy controls in both optimizer modes. No result is asserted yet.
+
+The positional-callable queue completed successfully: unchanged callable-flow
+proofs **7/7**, return-owner filters **4/4**, evaluation-owner proofs **15/15**, and
+native Mixed copy/Reflection/callable controls **37/37 in both optimizer modes**.
+The three formerly failing callable-flow proofs pass without assertion changes.
+No aggregate 314-test result is inferred from these focused reruns. The remaining
+lowering failures still need individual reconciliation.
+
+The earlier broader Async replay includes **67/67 passing in the public Async
+namespace**, distinct from its six failing Fiber ownership controls and the full
+147-test filter. This public result is historical evidence before the positional
+correction, not a substitute for its pending current-source Fiber checks.
+The current queue runs root build, backtrace, descriptor-param binding, by-ref
+variadics and the focused rejected/escaped/dropped Fiber controls. Outcomes are
+not asserted until the respective logs and process completion are checked.
+
+### Suspended-coroutine cleanup register restoration, 2026-10-10
+
+The retained LLDB replay for the dropped suspended Fiber stops in
+`__rt_object_free_deep` immediately after `__rt_exception_cleanup_frames`:
+`x0` is zero and the next instruction loads the Fiber stack-base field through
+it. The helper explicitly set x0 to zero to unwind the entire parked activation
+chain and never restored the saved coroutine pointer. The x86_64 Fiber arm has
+the same caller-saved-result assumption after its cleanup helper call.
+
+The shared suspended-frame cleanup exit now reloads the coroutine object from
+its existing saved stack slot on both architectures, including the no-chain
+path. Caller and coroutine cleanup-chain ownership/order are unchanged. An
+emitter regression checks the common exit for Fiber and Generator prefixes on
+all five supported targets. Assembly comment alignment and diff hygiene pass;
+the new unit/native checks remain pending, so this is not a claimed fix result.
+
+This runtime edit followed the 37/37 both-mode checkpoint. The live neighboring
+queue may rebuild before later steps; no pre-edit build result is claimed as
+proof for the modified runtime. The five-target emitter test and dropped-Fiber
+native regression must be explicitly replayed against the correction.
+
+The coroutine-pointer correction is now verified: object-deep-free emitter
+tests **4/4**, including the common exit on all five targets; unchanged dropped
+Fiber native regression **1/1**, output `dropYdone` and clean heap; Mixed copy/
+Reflection/callable controls **37/37** after the runtime edit; fresh root build
+warning-free. Backtrace controls passed **20/20**, descriptor-param binding
+**17/17**, and by-ref variadics including eval **16/16**. The focused nine Fiber
+controls completed **4/9**: the dropped-Fiber case is fixed, five state-error/
+escaped-throw cases remain red. Logs retain the precise checkpoint; no global
+matrix or review acceptance is inferred.
+
+### Fiber helpers must not consume published caller operands, 2026-10-10
+
+An owned `/tmp/elephc-fiber-state-owner.a89J2d/` probe reproduces rejected resume
+with a fresh object argument. CLI symbols are stripped by default, so the first
+two LLDB breakpoints did not resolve; rebuilding with `--keep-symbols` made the
+throw helper visible. `rethrow-lldb.log` shows the first FiberError alive with
+refcount one and class ID seven, then the same pointer with refcount zero and
+freed-memory poison at the rethrow. The EIR publishes the argument value in a
+call-operand slot whose `ReleaseLocalSlot` remains responsible for retirement.
+The backend's rejected-resume path freed that value before constructing the
+FiberError; allocator reuse let the published slot free the new exception.
+
+Fiber start/resume state guards now release only references that the shared
+`value_can_transfer_ownership_to_consumer` predicate permits them to consume.
+Receiver transfer additionally preserves the existing expression-temporary
+restriction. Direct and Mixed-dispatched `throw` use the same predicate for the
+Throwable ownership flag, instead of treating `Owned` alone as permission to
+consume it. Published caller leases retain their ordinary success/unwind cleanup;
+unrooted transferable temporaries keep the existing eager-release behavior.
+
+Two target-emission regressions check start/resume rejection paths and both
+private throw ownership flags on all five targets. The new unit and unchanged
+nine-case native Fiber replay are running in a serialized queue. These edits
+remain uncommitted and no passing outcome is asserted before that queue finishes.
+
+The first two new emitter fixtures failed their assumptions (0/2), not the
+native assertion: their function-scoped start argument was transferable, and
+the temporary receiver genuinely transferred ownership. The final fixtures now
+use the reproduced main-scope owner shapes and assert their EIR precondition:
+each tested method argument is stored in a slot, published, and paired with
+`ReleaseLocalSlot`. The throw control uses a caller-local receiver instead of
+claiming its temporary is rooted. The unchanged nine native regressions pass
+**9/9**, including all five formerly red cases, with clean heaps.
+
+The final two emitter proofs, nine native cases with IR optimization off, broad
+Async replay, 37 copy controls and root build are queued serially. Their result
+is pending. The old 0/2 fixture log is retained as diagnosis, and the fresh retry
+log is distinct; no assertion is weakened to accept double retirement.
+
+### Complete synthesized FiberError payload, 2026-10-10
+
+On resumption, session 93577 had terminated with exit 101. Its emitter retry
+passed the throw-owner control but failed the start/resume fixture precondition
+(1/2). Because the queue used `set -e`, the following no-optimization/native,
+Async, copy and build commands did not execute. The fixture previously chose
+the first StoreLocal for an argument; the same value can also have a published
+owner slot. It now requires one matching slot with both publication and release,
+without requiring every auxiliary store to be an owner.
+
+The emitted IR for the exact fixture also shows that the main-scope Mixed
+call result is genuinely transferred (`UnsetLocal` before MethodCall, then
+`ReleaseUnlessAliases`), unlike the fresh object argument's published owner.
+The start fixture now uses a fresh object as well; its precondition stays strict.
+The native Mixed call-result regressions remain unchanged and independently
+exercise the transferable case. This is a fixture correction, not permission
+to treat all owned expressions as published roots.
+
+The separate owned probe `details.php` in
+`/tmp/elephc-fiber-state-owner.a89J2d/` confirms a second real defect: native
+output ends at `FiberError|Cannot resume a fiber that is not suspended|64|`
+and the executable exits 139. PHP prints the same prefix with `0|none` and
+returns normally. Both Fiber state-error helpers allocate only 24 bytes and
+stamp ordinary-object heap kind 4. Canonical builtin Throwable allocation in
+`src/codegen/lower_inst/objects/throwable_new.rs` allocates 56 bytes with heap
+kind 6; the previous reader explicitly selects its raw link by that kind.
+
+Both helpers now allocate 56 bytes, select kind 6, initialize code to zero,
+clear the creation line through the existing unknown-line helper, and initialize
+both previous-slot words to zero. A five-target emitter regression checks these
+stores before throwing. A heap-debug native regression reads class, message,
+code and previous and requires PHP-equivalent output plus a clean heap. These
+new results are pending; there is no target execution or consensus claim yet.
+
+Kioku recall was used first and returned the Kioku-standard convention plus
+neighboring scheduler packets, but no compact Throwable layout evidence. The
+available graph lacks unambiguous caller edges for these emitter names because
+scratch review copies share them. Exact checked-out source and scoped reference
+search supplied the missing layout/dispatch evidence; no Kage integration was
+used or changed.
+
+The two subsequent `fiber_` unit replays each completed **9/10**, with the
+five-target compact Throwable layout and throw-owner controls green. The
+remaining failure still concerned the start fixture: even a fresh object is
+transferred before `Fiber::start()` rather than kept in a final published root.
+The unit test is now explicitly a resume published-owner proof, with unchanged
+strict EIR preconditions; it no longer claims a start root the real lowering
+does not produce. The unchanged native start controls cover that separate path.
+Because both queues stopped at this unit failure, their later native commands
+did not run. Final-source tests are being replayed; no aggregate success inferred.
+
+The following native-first queue (session 10829) terminated with exit **143**
+during compilation, without a diagnostic beyond `Compiling elephc`. The runtime
+library artifact exists, but that does not prove the executable regression ran.
+No owned build remained alive on inspection; a separate Cargo build belonged to
+another worktree and was left untouched. The same focused queue was relaunched
+with a distinct `native-retry` log. Source hashes and Git merge state are unchanged.
+
+The native retry completed **10/10**, including the new field-reading regression:
+`FiberError|Cannot resume a fiber that is not suspended|0|none`, with clean heap
+teardown. All unchanged nine state/throw/suspended-frame controls also pass after
+the complete-payload correction. Log:
+`/tmp/elephc-fiber-complete-error-native-retry-20261010.log` (2m17s compilation,
+13.09s test execution). No-optimization, broader Async/copy, final owner-unit and
+build outcomes remain pending until their separate logs complete.
+
+The same ten native controls also pass **10/10 with IR optimization disabled**
+(14.62s). Broader Async public/heap controls complete **148/148**, including the
+new FiberError field probe and all previously red Fiber state/throw/drop cases
+(94.17s). This is the focused macOS native filter, not a full suite, Linux/iOS
+execution or review consensus. Copy controls and final fixture/build validation
+remain separately queued.
+
+Final-source Mixed/callable/Reflection copy controls complete **37/37** (14.81s).
+The corrected `fiber_` unit filter completes **10/10** (0.12s after a 1m06s
+compile), including complete Throwable initialization and the published resume/
+throw owner proofs across all five supported targets. Log:
+`/tmp/elephc-fiber-complete-error-unit-verified-20261010.log`. Kioku records the
+validated layout correction as `bug_fix-construct-fiber-state-errors-with-the-complete-c-09f0511e`
+and caller-owner correction as `bug_fix-fiber-guards-preserve-caller-published-operand-c-e6b6bf15`,
+superseding their diagnosis packets. Assembly-comment checks and diff hygiene
+pass. The CLI build is still running and its success is not assumed.
+
+Next integration work remains the distinct lowering-module failures recorded
+earlier (last broad replay 297/314; not rerun here). Three callable-flow cases
+have focused passing evidence, but no new aggregate is inferred. In particular,
+the corpus helper omits Async/Parallel injection present in the production
+pipeline; ownership/effect/handler assertions must be checked against real IR
+before changing expectations. Complete target execution, typed-array return/
+remaining PHP-array ABI, internal I/O queue and exact-artifact review gates are
+still open. Neither the second merge commit nor its fork push has been made.
+
+The serialized validation queue completed with exit **0**. The fresh CLI
+`cargo build -p elephc` passed in 3m05s without warnings or errors (log
+`/tmp/elephc-fiber-complete-error-build-20261010.log`). Final diff hygiene and
+assembly-comment alignment also pass. No owned build is left running. This
+closes the complete FiberError payload and focused Fiber operand-owner checkpoint;
+it does not close the distinct broad lowering failures or publication/review gates.
+
+### Lowering harness and contract reconciliation, 2026-10-10
+
+The prior goal turn made verified progress (complete FiberError payload and
+native/unit controls), not merely a status restatement. Resumption confirms the
+same dirty worktree and in-progress merge. Kioku recall returns the recent Fiber
+checkpoint and scheduler guard decisions. The graph traces the corpus frontend
+helper, but indexes only six files in the scoped test directory and omits the
+container-parameter caller edge; exact source and retained failure logs provide
+the missing evidence. No Kage call is used.
+
+The unit frontend now injects Async then Parallel at the same point and with the
+same extension eligibility as production. A new regression lowers both structured
+surfaces independently on all five supported targets. The scoped lowering replay
+completes **304/317**, with that regression and the complete example corpus green;
+13 other assertions remain red. Log:
+`/tmp/elephc-lowering-main-reconciliation-20261010.log` (88.16s execution).
+
+Independent CLI EIR/assembly probes in
+`/tmp/elephc-lowering-reconcile.henFXn/` establish these distinctions:
+
+- Parameter privatization clones a Mixed cell, then the normal PHP binding store
+  clones it again. The helper now passes the borrowed parameter to the standard
+  binding store, retaining exactly one detached shadow and preserving container
+  COW/by-reference exclusion. The unit requires one clone, direct shadow adoption,
+  no premature producer release, and the unchanged by-ref return boundary.
+- Reference argument evaluation now detaches the mutable Mixed cell before pinning
+  its staged snapshot. The test verifies the clone, pin provenance and publication
+  before the later reference mutation rather than an obsolete direct LoadRefCell pin.
+- PHP catches were correctly pruned in scalar/quiet-destructor controls, but private
+  `args.eval_cleanup` handlers remain. Tests now distinguish source catch dispatch
+  from private cleanup, and positive destructor controls require an actual PHP catch.
+- Exception handlers load/publish through x28/r14 context offsets, not process-global
+  symbol strings. Tests require the context-specific assembly before setjmp.
+- strlen uses a pinned cast result and its callee summaries conservatively carry
+  WRITES_HEAP/REFCOUNT_OP. Tests retain exact ownership and effect assertions.
+- Descriptor rejection now branches through argument construction before throwing.
+  A CFG-aware test follows only rejection continuations, rejecting writes, cycles
+  and normal escapes instead of demanding Throw in the initial guard block.
+- Array property mutation assertions are scoped to the mutation method rather than
+  counting unrelated generated methods. Boxed call arguments have explicit EIR
+  roots; tests check distinct per-box roots, balanced source-pin republication and
+  retirement order instead of former backend-frame offsets.
+
+These edits are under fresh scoped validation; no passing outcome is assumed.
+Production change is limited to removing the redundant parameter clone. The final
+native copies/array/reference/scheduler regressions must be replayed against it.
+
+The first reconciliation build caught an explicit-lifetime omission in the new
+CFG test helper; it was corrected without production changes. The fresh scoped
+retry then completes **316/317** (142.67s). All parameter-shadow, ref snapshot,
+context-handler, destructor precision, effect and boxing-root controls pass.
+The remaining failure is a second old direct-Throw assertion for invalid unpack
+keys; the rejection guard itself already passes its CFG proof. That invalid-key
+assertion now uses the same no-write/no-cycle/no-normal-escape traversal and
+requires at least one invalid-key block, avoiding vacuous success.
+
+The native commands following that failed scoped module did not execute. A final
+serialized queue replays the entire lowering module, then native copies with PHP
+cross-check, descriptor/ref/callable ownership, Async, Parallel and a fresh CLI
+build. Its outcomes remain pending. No publication mutation has occurred.
+
+Live PR inspection confirms #958 is open/draft at published SHA
+516dea0b36250ec9cc83e09040cbe296a3defb57, still marked CONFLICTING while local merges
+are unpublished. It has no review threads and only the successful PR-label
+classifier check, not runtime CI acceptance. Local HEAD remains 027c82fa89bc;
+MERGE_HEAD and origin/main are pinned at 9df6d3bd7ad0, with zero unresolved Git
+stages. Preserve this distinction when publishing the validated follow-up.
+
+The final scoped lowering replay is **317/317** (129.87s), with all 13 original
+failures reconciled and the single-shadow clone invariant green on all targets.
+No broader suite is implied. The live native queue then starts building copies.
+
+Before calling that a PHP parity result, helper inspection reveals that
+`compile_and_run_with_heap_debug` does not honor `ELEPHC_PHP_CHECK`; the ordinary
+helpers only print mismatches when PHP succeeds and silently ignore unavailable
+or failing PHP. Kioku records this evidence limitation as
+`gotcha-heap-debug-copy-tests-do-not-run-the-advisory-ph-37b1f3e5`.
+
+The copy group's helper now optionally executes its exact tagged source in an
+isolated, exclusively-created temporary PHP file, requires successful PHP exit
+and equal stdout, and removes that owned file before checking process results.
+An executed-match marker supports an auditable count with `--show-output`. Missing
+PHP, PHP fatal errors and mismatches fail the group; the global advisory helper
+is intentionally unchanged. The native queue had already started compilation
+before this test-only refinement, so a fresh strict copy replay is required after
+it, rather than assuming that enabling the environment flag proved any oracle.
+
+The fresh strict copy replay completes **37/37**, with exactly **37**
+`PHP copy oracle verified` markers (19.71s). This is actual successful PHP
+execution/output comparison, distinct from the earlier advisory/no-op flag run.
+
+The neighboring descriptor/reference/callable-owner group completes **53/55**
+(45.89s): two temporary closure-capture destructor controls fail with
+`result|unreached|capture|` followed by an uncaught RuntimeException. That queue
+stops before Async, Parallel or CLI build; no results for those steps are claimed.
+
+Exact owned probes `iife_capture.php` and `descriptor_capture.php` in
+`/tmp/elephc-lowering-reconcile.henFXn/` reproduce the same **exit 255** with the
+previous CLI, which still has the double parameter clone. Thus the new single
+parameter clone did not introduce these failures. PHP exits **0** for both and
+prints `result|capture|caught|ok:result|capture|caught|ok`, also disproving the
+historical tests' `capture|result` ordering as a PHP oracle.
+
+EIR shows a cloned by-value capture stored in a hidden `#capture` PhpLocal; the
+descriptor retains the same cell, but its creator's slot remains live until frame
+exit. This extra owner delays the captured object's destructor beyond the source
+catch. The backend confirms it increments the borrowed capture rather than cloning
+the cell again. Initial correction now retires snapshot slots immediately after
+ClosureNew, using the descriptor's retained-owner proof for non-final cleanup;
+pending static metadata is published after capture-view cleanup. No new opcode or
+descriptor ABI is needed for this owner transfer.
+
+A new five-target unit asserts creator-slot retirement after construction, and a
+new strict native/PHP copy fixture replaces a captured callable in a later argument
+to expose whether direct static calls protect descriptor ownership themselves.
+The focused snapshot-unit/copy/capture-destructor queue is running. It is not a
+claimed complete fix: retained-callable lifetime and PHP-observable discarded-result
+destructor ordering must both be verified, then reconciled before publication.
+
+The first snapshot-retirement unit filter completes **1/3**: the validator
+correctly rejects the proposed narrowed effects on ReleaseLocalSlot. That opcode
+requires its canonical conservative cleanup contract even where this site has a
+retained-owner proof. The implementation and new unit now preserve default effects;
+no validator weakening is introduced. The pending callable hint is still published
+after retirement, so conservative cleanup cannot erase its newly constructed binding.
+The retry is serialized and native steps did not run after that unit failure.
+
+The corrected snapshot-owner unit filter passes **3/3**, including all five-target
+construction/retirement paths. Strict copy replay then completes **37/38**: all
+existing native/PHP controls pass, while the new captured-callable replacement
+probe returns a fatal TypeError (`string, null returned`) instead of `old`.
+This is why removing the compensating creator owner is not accepted alone.
+The old capture-destructor tests did not execute after this new regression failed.
+
+Direct tracked closure variable calls now independently retain and publish their
+selected descriptor before argument evaluation, while retaining static dispatch.
+Generic descriptor calls also snapshot/retain a borrowed callback before arguments
+can replace its local or mutable cell. Result staging remains outside the callback
+owner for unwind-safe retirement. These corrections are under a fresh strict-copy,
+capture-destructor and lowering queue; no passing outcome is asserted yet.
+
+The retained selected-descriptor correction passes **38/38** strict native/PHP
+copy tests, with **38** executed oracle markers (15.15s). The new argument-side
+replacement returns `old` and leaves a clean heap. Independently PHP and the
+previous CLI also return `old` for `captured_replace.php`; the old extra creator
+owner had been masking the missing descriptor lease.
+
+The two capture-destructor tests now pass their historical expected output
+(2/2, 2.36s), showing capture retirement is back inside the source catch. That is
+not PHP ordering acceptance: their historical `capture|result` order contradicts
+the exact PHP probes' `result|capture`. Expectations and Rustdoc now require the
+PHP-observed order. A fresh replay must expose and then fix this remaining
+discarded-result/callback retirement ordering rather than preserving a misleading
+green check. The broader lowering replay after descriptor pinning remains live.
+
+### Direct-call eligibility and discarded result ordering, 2026-10-11
+
+The interrupted turn ended with a terminal lowering replay **314/318**: all four
+failures panic at the newly added `expect("a tracked closure lowers directly")`.
+Captured references already have a supported descriptor path; being tracked is
+not evidence that the static direct path is eligible. The protected branch now
+consults the existing `static_callable_call_lowers_directly` predicate BEFORE
+emitting owner bookkeeping. Existing ref-detach/loop cases and corpus pass again:
+**318/318**, 87.33s, log `/tmp/elephc-capture-direct-eligibility-lowering-20261011.log`.
+
+The ownership/order implementation now marks the exact result depth discarded
+by an expression statement, including full speculative snapshot/restore. Callback
+cleanup can release that staged result BEFORE its callback owner while keeping
+the emptied outer result record published. The latter preserves strict LIFO and
+exception cleanup if either destructor throws. A non-owning null sentinel prevents
+the enclosing statement from releasing the already retired SSA result again.
+Nested operands and used results do not match that depth and retain their ordinary
+result staging. Static, dynamic, immediate and bound closure invocation use the
+shared helper after argument/container cleanup and before callback retirement.
+
+The first native build caught use of a nonexistent PhpType::Null; null expressions
+use PhpType::Void/I64 in this compiler, so the helper follows the canonical lowering.
+This compile failure is retained in its distinct log; it is not a runtime outcome.
+An independent `used_result_capture.php` probe prints **capture|result|caught** in
+PHP, contrasting with **result|capture|caught** for directly discarded results.
+A new strict copy regression pins that nested results are not discarded early.
+Fresh native ordering, strict copies and full lowering-module validation are queued
+serially; none of those new outcomes is claimed yet. No commit/push occurred.
+
+After the result-slot assertion was updated, the whole lowering module passes
+**318/318**, 88.42s. The neighboring native group then completes **54/55**:
+`test_core_closure_call_releases_its_bound_descriptor_on_success_and_on_a_throw`
+panics on Void versus Mixed result staging. RUST_BACKTRACE identifies the outer
+`lower_closure_bind_method` staging an internal descriptor invocation's result.
+That inner value is used by the outer cleanup layer, even though both lowering
+steps share the enclosing PHP expression depth. It must not be discarded there.
+
+The `Closure::call` implementation now temporarily suspends the discarded-result
+marker around that internal invocation, restores it before outer staging/cleanup,
+and applies ignored-result cleanup only to the final outer result. This preserves
+the layering/type contract rather than disabling the staging assertion. The new
+binding/strict-copy/full-lowering/Async/Parallel/build queue is live; outcomes are
+pending and no publication mutation has occurred.
+
+The outer-staging correction's neighboring native group now passes **55/55**
+(44.83s), including the formerly failing Closure::call control, descriptor
+binding, by-reference variadics and callable-owner cleanup. This is focused host
+evidence. Its strict-copy, lowering, Async/Parallel and CLI build steps continue
+serially on the same production-source state; their outcomes remain pending.
+
+The two native discarded-result destructor controls now pass **2/2** with the
+PHP-observed **result|capture|caught** ordering and clean heaps (2.75s).
+Strict copies pass **39/39**, with **39** executed PHP comparison markers
+(11.92s), including selected-callable replacement and the nested-used-result
+counterexample. No discard-mode widening to nested arguments was introduced.
+
+The whole lowering module completes **317/318** (86.54s): one older descriptor
+string test still expects a direct SSA Release. Directly discarded results are
+now adopted by a published staging slot and retired through ReleaseLocalSlot.
+That test now requires one exact adoption slot, one retirement, no second SSA
+release, plus five-target assembly generation. The final lowering/binding/
+Async/Parallel/build queue is running; those outcomes are pending.
+
+### Final host checkpoint and remaining Parallel blockers, 2026-10-11
+
+The bound-call layering correction completes the focused host checkpoints:
+**55/55** descriptor/reference/callable-owner controls (44.83s), **39/39** strict
+native/PHP copy comparisons with **39** executed markers (17.59s), **318/318**
+whole lowering-module tests (91.58s), and **148/148** Async public/heap controls
+(69.56s). Logs use `/tmp/elephc-bound-outer-staging-*-20261011.log`. These validate
+the current production source, not the entire supported runtime matrix.
+
+Parallel completes **51/54**, 59.30s, and stops the serialized queue before the
+CLI build. Its three exact blockers are:
+
+1. `parallel_parent_scope_rejects_fiber_suspend_through_builtin_callbacks`:
+   codegen rejects `array_filter` with `expected 3 args, got 2`. The source uses
+   valid omitted-default/named callback forms; shared normalization/lowering must
+   satisfy the runtime operation contract rather than padding the fixture.
+2. `parallel_worker_resource_ids_remain_unique_under_concurrent_stream_use`:
+   checker reports undefined `$ids` at the append inside a worker loop. The exact
+   source initializes `$ids = []` before that loop. Preserve the seven workers,
+   sixteen streams each and 112-unique-id assertion; diagnose compiler binding/
+   optimization instead of weakening this concurrency coverage.
+3. `parallel_zero_job_id_drains_as_an_infrastructure_failure`: fatal private
+   `Future::$jobId` access. The source already intentionally uses
+   `ReflectionProperty::setValue`, so the initial thought that it used an obsolete
+   direct property write was wrong. Preserve Future privacy and reflection's
+   authorized test route; diagnose reflection lowering/access behavior.
+
+The queue is terminal with exit 101 and no owned heavy build remains live. Diff
+hygiene and touched assembly-comment alignment pass, but the fresh CLI build did
+not run. No merge commit/push or new accepted review artifact has been created.
+Continue with these genuine compiler defects, then replay Parallel and the other
+needed gates. The larger PHP-array ABI, internal I/O, target and absolute-consensus
+requirements remain intact; this checkpoint is not completion or a global blocker.
+
+### Parallel defaults and reflected construction, 2026-10-11
+
+The prior turn made verified source/test progress. Kioku recall returns the final
+host checkpoint and the three exact Parallel blockers. The callback-special builtin
+argument path exits before the ordinary MaterializeDefaults strategy. Its first
+attempt consulted regular slots of CallArgPlan, but positional plans intentionally
+use passthrough_args and leave regular_args empty; temporary diagnostics proved
+args=2, params=3 and regular_count=0. The diagnostics have been removed.
+
+Positional default materialization is now one shared helper reused by ordinary
+calls and guarded callbacks, driven by the builtin's existing semantic strategy.
+The new profiled/unprofiled filter regression passes **1/1** across Async/Parallel
+and all five targets. The unchanged native builtin callback-suspension guard also
+passes, without padding its source or altering evaluation order.
+
+The concurrent resource worker body passes --check standalone and in a non-Parallel
+loop of closures, but fails with the original Parallel::spawn construction. Its
+112-unique-id workload remains unchanged. A temporary trace at missing array pushes
+did not fire, so the undefined read is elsewhere; that trace was removed and a
+temporary variable-inference trace is queued to locate the actual checker caller.
+
+Reflection's inline factory previously retained concrete type only when the reflector
+was assigned to a variable. Constructor target resolution is now shared by assignment
+and inline inference. Native checks still failed private writes, proving inference
+alone insufficient: EIR construction unconditionally returns a boxed Mixed result.
+Known reflected construction now extracts a retained concrete object through the
+existing heap-conversion boundary and retires its owning source box. Dynamic targets
+retain their Mixed path. A new strict-copy regression preserves private reflection
+authority; the Future field is not reopened and its ReflectionProperty setter is
+not replaced by direct access.
+
+The first build caught the changed constructorless lowering signature at direct/
+nullable callers. Both callers now pass their available source expression (Some)
+or absent static information (None). A focused Reflection retry is live, followed
+by the resource checker trace. No Reflection fix result, resource fix result,
+fresh complete Parallel pass, commit or push is claimed yet. Owned probes live in
+`/tmp/elephc-parallel-reconcile.2xczOZ/` and logs retain each failed/successful step.
+
+The constructor alignment now passes the zero-job infrastructure test and produces
+`7` through the new private Reflection setter regression; the latter still fails
+its unchanged heap assertion with 49 live blocks, rooted by a temporary reflector.
+Early reflected-construction/property-access paths now stabilize the result and
+retire owning receivers through the existing common helper. This is under replay,
+not a claimed heap fix yet.
+
+The variable-inference trace locates the actual `$ids` failure in
+require_parallel_task_return_transferable re-inferencing a returned worker local in
+its parent's environment, including speculative outer-loop storage scans. The
+temporary trace is removed. Flow-typed returns now also record reference-array
+alias risk while the worker's local scope is active. Parallel return validation
+uses that exact checked type when transfer-safe, rejects recorded reference-array
+risk, and retains recursive literal validation for rejected/erased shapes. A new
+negative test requires refusal of an aliased typed worker-local array return;
+object/resource/cycle refusals are not relaxed.
+
+The three original Parallel regressions, strict copies and complete Parallel error
+filter are running serially on these changes. Preserve all seven workers and 112
+unique resource IDs. No diagnostics remain in production source. No fresh overall
+pass, build, commit/push or exact-artifact consensus is asserted until completed.
+
+### Verified three-regression checkpoint and clone follow-up, 2026-10-11
+
+The next lifetime retry exposed a double retirement: lower_property_get_from_value
+already consumes an owning ReflectionClass receiver while stabilizing __name.
+The extra outer factory retirement was removed, and class-name temporaries are
+published across allocation/constructor arguments and retired afterwards. The
+ReflectionProperty fast path retires its own unused reflector separately.
+
+The unchanged three original Parallel regressions now pass **3/3**, 27.47s:
+callback guard/defaults, all 112 concurrent resource IDs and the zero-job
+infrastructure drain. Strict copy/PHP/heap controls pass **40/40** with **40**
+executed oracle markers, 17.84s, including the inline private reflection setter.
+Logs: `/tmp/elephc-parallel-three-lifetime-{retry,copies}-20261011.log`.
+
+The Parallel error filter completed **79/82**, exposing a too-early successful
+signature return in transfer validation plus two private-clone compile expectations.
+The early return is now restricted away from closure bodies, so the recorded
+reference-array return risk is always inspected. The new aliased worker-local
+array refusal passes **1/1**, 0.35s, in
+`/tmp/elephc-worker-local-return-alias-refusal-20261011.log`.
+
+Private clone validation has moved to typed runtime CloneWith on main; the checker
+currently accepts the expression. A new heap-debug native guard test is retained
+before changing either existing compile expectation. Its initial fixture reused one
+local for TaskGroup and Future, which the checker rejected; distinct duplicate
+locals remove that unrelated fixture issue. The retry still fails codegen with
+`array_push for PHP type Void`, so runtime clone refusal is NOT established. PHP
+independently confirms a private __clone is a catchable runtime Error. Preserve
+scope/job uniqueness and investigate the new codegen failure rather than deleting
+the clone gates or claiming them accepted.
+
+All owned validation queues above are terminal. No production diagnostic remains,
+no complete Parallel/error/lowering/target replay or fresh CLI build has been
+claimed for this final source, and no merge commit/push occurred. Next work starts
+with the private-clone fixture's Void array-push path and complete refusal replay;
+full PHP-array ABI/I/O/target/review requirements remain active.
+
+### Null append result and private clone allocation ordering, 2026-10-11
+
+The null-only indexed array regression passes natively **1/1**, including the
+strict executed PHP oracle and heap-debug cleanliness, in
+`/tmp/elephc-null-append-native-20261011.log`. The corresponding all-five-target
+emitter test passed **1/1** before a final ARM64 receiver-load ordering adjustment;
+that final source still needs replay. Void call results append PHP null rather
+than being rejected by codegen, and null element tags remain observable.
+
+The private-clone fixture now compiles and exposes a real ownership failure:
+it prints `group|`, then spawning through the original TaskGroup fails with
+`cannot spawn after cancellation has been requested`. Log:
+`/tmp/elephc-private-clone-null-append-20261011.log`. CloneWith allocated and rooted
+a shallow duplicate BEFORE its invocation-scope visibility check; unwinding that
+refusal destroyed the duplicate and cancelled state shared with the original.
+The PHP probe for a private __clone plus visible destructor prints exactly
+`caught|alive|destruct|`, proving no duplicate destructor should run on refusal.
+
+The AOT hook access check is now emitted against the borrowed source before the
+shallow-copy adapter. Eval retains its identity callback path first. The existing
+shared lexical/runtime invocation-scope guard is reused, not replaced by a blanket
+permission, and successful copies keep their unwind root while executing hooks.
+New native heap-debug and all-five-target ordering regressions are added; replay
+is pending. The original two Parallel compile-time refusal tests remain intact
+until the runtime refusal and original scope/job lifetime are verified.
+
+No second merge commit, push, complete target acceptance or review consensus is
+claimed by this checkpoint. Kioku semantic recall served the preceding checkpoint,
+but fresh clone code is missing from its symbol index and historical scratch copies
+pollute symbol results; use the exact worktree source for this correction.
+
+### Private clone fixed; checked return contract reconciliation, 2026-10-11
+
+The new ordinary private-hook destructor regression passes **1/1**, 0.75s,
+heap clean (`/tmp/elephc-clone-private-preallocation-20261011.log`). The Parallel
+combined TaskGroup/Future clone regression also passes with unchanged output
+`group|future|7` and clean heap. Runtime refusal now preserves both original
+owners; the two obsolete compile-time-only clone expectations were replaced by
+this catchable runtime/lifetime gate, not dropped without execution evidence.
+
+The first full Parallel replay was **48/55**. Seven failures came from separately
+validated scalar return contracts being re-inferred against parent storage and
+callable state, after the local alias check was introduced. The checked return
+contract is now accepted AFTER all recorded worker-local alias risks have been
+examined. The replay passes **55/55**, 45.18s, in
+`/tmp/elephc-parallel-return-boundary-replay-20261011.log`.
+
+A further source change closes the corresponding tracked-closure-variable bypass:
+a variable with tracked closure captures must have the cached safe-return proof;
+its declared transferable signature alone cannot override a failed local alias
+proof. A new negative fixture exercises the aliased worker-local array through
+such a variable. This final change is under the serialized error/lowering/native/
+strict-PHP-copy/ordinary-cloning/Async/no-IR/build replay. Do not apply the preceding
+55/55 result to it before that replay completes.
+
+The first final error replay is **80/81**: the new tracked-closure refusal worked,
+but its custom diagnostic changed an existing hidden-object expectation. It now
+reuses the shared Mixed/unknown-shape diagnostic. The next error replay is again
+**80/81**, this time exposing the original inline aliased-array refusal as Ok.
+Neither failure is an accepted checkpoint. Inspection of method inference confirms
+that named/spread argument normalization CLONES the task AST before Parallel safety
+validation, while return-site proofs are keyed on the checked statement address.
+The exact normalized closure is now type-checked in its own local-storage scope
+before transfer validation. This preserves local alias facts without an unreliable
+cross-AST address hit or a parent-environment re-inference. Full replay is pending.
+
+### Exact normalized-task replay and broader clone controls, 2026-10-11
+
+On that source the final focused results are **81/81 Parallel errors**, **321/321
+lowering**, **55/55 native Parallel**, **41/41 strict PHP copy oracles** (41 actual
+markers), **148/148 Async**, and **1/1 Parallel private-clone guard with IR opt off**.
+The CLI build completed without warnings. Logs use the final-* names under /tmp;
+errors use `elephc-parallel-final-errors-normalized-20261011.log`.
+
+The wider ordinary object-cloning control is **76/81**, not green. Two failures
+accept a non-array Mixed override and run the hook; three concern foreach reference
+detachment/COW identity. Exact failed assertions are retained in
+`/tmp/elephc-scheduler-final-cloning-20261011.log`. The first reducer's EIR confirms
+an eager MixedUnbox to array<mixed> before CloneWith, so its runtime tag guard never
+sees the original scalar. Reproducer:
+`/tmp/elephc-clone-reconcile.b6mG9w/mixed-overrides.php`.
+
+CloneWith now selects the existing PreserveValues argument-lowering strategy in
+the central semantic descriptor, retaining public signatures and the shared planner
+but allowing runtime validation of original values before allocation. A new EIR/
+emitter test requires the override operand to remain Mixed on all five targets.
+Full cloning replay and the update-builtin-docs skill's exporter/regeneration/audits
+are queued serially. Those results are pending; the prior focused passes/build are
+historical for this new semantic-descriptor edit. No new commit or push occurred.
+
+The PreserveValues cloning replay is **78/81**, 42.62s:
+`/tmp/elephc-clone-preserved-values-replay-20261011.log`. Both Mixed override
+validation regressions now pass. All five original expected outputs were
+independently confirmed by running the unchanged fixtures with PHP **8.5.10**.
+Three foreach/reference-COW cases remain red; no test expectation was relaxed.
+
+The added emitter fixture initially treated block instruction IDs as instructions,
+which failed Rust compilation. It now reads the function's actual instruction
+arena; retry and generated-docs checks are live in owned session **55052**.
+Logs: `elephc-clone-preserved-values-emitter-retry`, `-exporter`, `-docs` under
+/tmp with the 20261011 suffix. Do not assert emitter or docs success before reading
+their terminal results.
+
+Two smaller native/PHP reducers in `/tmp/elephc-clone-reconcile.b6mG9w/` separate
+the remaining lifetime failure. `foreach-unset.php` prints `{"u":1}` in both
+Elephc and PHP: plain unset is not shown to corrupt the source. In contrast,
+`clone-after-foreach-unset.php` prints native
+`{"u":1}|TypeError:Cannot assign null to property RefBox::$u of type int|{"u":null}`
+but PHP prints `{"u":1}|1|{"u":1}`. Corruption occurs while applying clone
+overrides, with the reference cell/source entry still shared. Investigate generated
+applicator by-value iteration, argument snapshots/cleanup and reference-cell
+ownership before changing ordinary unset behavior. Merge/push remains withheld.
+
+The corrected Mixed-override EIR/emitter regression now passes **1/1**, 0.29s,
+on all five supported targets, in
+`/tmp/elephc-clone-preserved-values-emitter-retry-20261011.log`. The serialized
+owned session **55052** has advanced to the curl-enabled builtin exporter build;
+regeneration and docs audits are not completed yet. Three native cloning/reference
+regressions remain the next correction gate. Goal remains active, second merge
+remains uncommitted, exact vendor recovery SHA remains available, and no push or
+acceptance/review consensus is claimed.
+
+### Live reference-cell ownership diagnosis and single-retirement fix, 2026-10-11
+
+The curl-enabled exporter and the complete update-builtin-docs workflow completed
+successfully. It exported 1185 builtins, 209 classes and 1117 constants, rendered
+2254 pages, audited with **0 errors**, validated **2276** pages and found **0**
+structural EIR inventory errors. Regeneration changed 741 internal pages plus the
+builtin JSON registry: the added semantic-descriptor line moved shared lowering
+source links by one line. Generated files are kept; they were not hand-edited.
+
+The reference corruption also reproduces in an ordinary `mixed` parameter's
+by-value foreach (`foreach-mixed-parameter.php`), without clone. It is unchanged
+with IR optimization off or stack-only register allocation. The earlier conclusion
+that plain unset was safe is **not established**: the first JSON print only read
+freed storage before its reuse.
+
+LLDB stopped twice at `_rt_hash_entry_deref` with `$x5 == 11`, first in the initial
+JSON encoding and then in `values()`'s foreach. Both entries pointed at cell
+`0x10004c338`. At the first stop, its header reported RC **0**, kind **0** (freed),
+while payload `0x10004c310` still looked readable. At the second stop that same
+address was a reused 24-byte Mixed allocation, RC **1**, kind **5**, containing
+`[5, 0x10004c290, 0]` rather than a reference cell. This is live evidence of a
+dangling hash reference after unset, not proof of a clone-only write.
+
+`lower_unset_local` released every nonzero dynamic-state slot as an ordinary
+promoted cell and then `unmark_promoted_ref_cell` released explicit counted state
+again. A managed hash alias has state >1 and two legitimate owners (entry + local);
+both decrements consumed the entry's owner. The ordinary-cell cleanup now applies
+only to state **1**, on both architectures. State **0** skips it and state **>1**
+retires once through the existing counted-state helper. No reference permission,
+ownership contract or COW predicate is weakened.
+
+New strict PHP/heap and five-target emitter regressions are added. The serialized
+owned validation session **34725** runs the new native reducer, full ordinary
+cloning controls and the new emitter gate. Logs use the
+`/tmp/elephc-foreach-alias-single-retire-{native,cloning,emitter}-20261011.log`
+names. These results are pending; no merge commit/push or final acceptance is
+claimed. The preceding goal turn made verified implementation/test progress.
+
+### Single-retirement verification and current native Linux probes, 2026-10-11
+
+The new strict PHP/heap allocation-reuse regression passes **1/1**, 1.79s, with its
+actual oracle marker and clean heap. Full ordinary cloning passes **81/81**,
+40.50s; all three formerly failing reference/COW fixtures are now green. The
+all-five-target state-discrimination emitter test passes **1/1**, 0.15s.
+Logs: `elephc-foreach-alias-single-retire-{native,cloning,emitter}-20261011.log`.
+
+The final-source native replays pass **42/42 strict copy/PHP/heap controls** with
+**42** executed oracle markers, **148/148 Async** and **55/55 Parallel**. The
+no-IR new regression and CLI build are still the last queued checkpoints; inspect
+their terminal logs before claiming them. All selected assembly comments align
+and `git diff --check` passes.
+
+For Linux, a task-owned standalone emitter was compiled against the CURRENT
+default-feature libelephc artifact (`libelephc-29f03d77e3be40dd.rlib`, timestamp
+2026-10-11T13:50:12) using host Rust 1.95.0. It calls the actual public
+`generate_runtime_with_features_mode` with executable boundary, no PIC,
+RuntimeFeatures::none() plus object_clone. The same current compiler
+(`target/debug/elephc`, timestamp 13:51:36) emits all three PHP programs through
+AST/EIR for each Linux target, with heap debug enabled. No mock runtime, foreign
+bridge archive, Cargo target volume or target-only fallback was substituted.
+
+Both matching existing Docker images assembled and linked the fresh user/runtime
+assembly using cc, libm and pthread, with one CPU/512 MiB/--rm. All three programs
+exited successfully with clean heap on **Linux AArch64 and Linux x86_64**. All six
+stdout files were independently compared byte-for-byte with their PHP 8.5.10
+source executions using diff; every comparison succeeded. Bundles:
+`/tmp/elephc-clone-reconcile.b6mG9w/{linux-aarch64,linux-x86_64}`.
+Logs: `/tmp/elephc-reference-linux-{arm64,x86}-20261011.log`.
+The x86 image reports Rust 1.98.1, ARM64 image 1.95.0; neither runs Cargo here.
+An unrelated Docker review build was left untouched.
+
+SHA-256 provenance (runtime, Mixed foreach, clone after unset, clone reference COW):
+
+- AArch64 runtime: ac8c070fea7f00872fb8659886cf8a4759d00acac27d7c1ea778957d76cfd80a
+- AArch64 foreach: 477c34fa47318c7b30f767f60bd92058922d815707ba30336caeaf95b6a76e12
+- AArch64 clone/unset: 760df09fdd903602837ec71fba100a734ec601c8c8fde51637617d07abc9e8f4
+- AArch64 clone/COW: 38c4fc0faef1c69b432642535f67fb1869799f4d1fc7f08d595490ca65fbf897
+- x86_64 runtime: 541d2354f0584decb6419b1274850e4161be20f1a3082398e703e6daeeaf5898
+- x86_64 foreach: d5fab0d8caf3e0bc040ea4923eb7206906a3507178c6050f8b5cbdeaff9c8aae
+- x86_64 clone/unset: 769675f1dcd3cb0b13f51d2733e45e8db4cc53c3a2cc36474e65d83151e31194
+- x86_64 clone/COW: 3c825c6e6e301df9cf08959ca68960ae0249d2320d5e18e70779732c9f18dab7
+
+This proves the scoped reference-retirement/clone/COW regressions on Linux, NOT
+the Rust Parallel bridge, complete PHP-array ABI/I/O contract, full executable
+matrix or iOS SDK/hosted behavior. Those whole-goal gates and exact-artifact
+independent review consensus remain open. Live main is still 748bf44eef (only
+stats ahead of MERGE_HEAD 9df6d3bd7a). No new commit/push is yet claimed.
+
+### WIP merge publication readiness, 2026-10-11
+
+Final-source lowering passes **323/323**, 228.74s, and Parallel refusal controls
+pass **81/81**, 14.27s. The no-IR allocation-reuse regression passes **1/1**,
+3.61s, and `cargo build -p elephc` completes without warnings. Together with the
+current 81 cloning / 42 strict copies / 148 Async / 55 Parallel / two Linux
+three-probe runs / five-target emitter controls / docs audits / hygiene checks,
+this reconciles the relevant red integration regressions for the authorized WIP
+checkpoint. It is NOT full array/I/O/target/review acceptance.
+
+Publication is authorized by the maintainer's tracking exception documented in
+execution-scheduler-publication.md. Stage only the incoming merge, owned source/
+tests/plans and generated builtin links; exclude .codex, .kioku, .mcp.json,
+scratchpad and the seven inherited vendor deletions. Commit the current ordinary
+merge, then integrate the exact current stats-only main 748bf44eef normally.
+Restore the inherited vendor state by exact recovery SHA after merge commits,
+verify that it is not in the index, push the same fork branch without force and
+read back PR #958's exact head/draft/CI state. No new commit/push is asserted by
+this preparation entry; record their actual outcomes separately.

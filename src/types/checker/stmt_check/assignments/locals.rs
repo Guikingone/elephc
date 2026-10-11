@@ -649,29 +649,40 @@ fn reflection_class_assignment_target(
     source: &Expr,
     env: &TypeEnv,
 ) -> Option<String> {
-    let ExprKind::NewObject { class_name, args } = &source.kind else {
-        return None;
-    };
-    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionclass" {
-        return None;
-    }
-    let class_arg = reflection_class_constructor_arg(args)?;
-    match &class_arg.kind {
-        ExprKind::StringLiteral(class_name) => {
-            resolve_class_name(checker, class_name).map(str::to_string)
+    checker.reflection_class_constructor_target(source, env)
+}
+
+impl Checker {
+    /// Resolves a statically known ReflectionClass constructor for assignments and inline calls.
+    pub(crate) fn reflection_class_constructor_target(
+        &self,
+        source: &Expr,
+        env: &TypeEnv,
+    ) -> Option<String> {
+        let ExprKind::NewObject { class_name, args } = &source.kind else {
+            return None;
+        };
+        if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionclass" {
+            return None;
         }
-        ExprKind::ClassConstant { receiver } => {
-            resolve_static_receiver_class(checker, receiver, class_arg.span).ok()
+        let class_arg = reflection_class_constructor_arg(args)?;
+        match &class_arg.kind {
+            ExprKind::StringLiteral(class_name) => {
+                resolve_class_name(self, class_name).map(str::to_string)
+            }
+            ExprKind::ClassConstant { receiver } => {
+                resolve_static_receiver_class(self, receiver, class_arg.span).ok()
+            }
+            _ => match env
+                .get(variable_name(class_arg).unwrap_or_default())
+                .cloned()
+                .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg))
+                .codegen_repr()
+            {
+                PhpType::Object(class_name) if !class_name.is_empty() => Some(class_name),
+                _ => None,
+            },
         }
-        _ => match env
-            .get(variable_name(class_arg).unwrap_or_default())
-            .cloned()
-            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg))
-            .codegen_repr()
-        {
-            PhpType::Object(class_name) if !class_name.is_empty() => Some(class_name),
-            _ => None,
-        },
     }
 }
 

@@ -40,10 +40,10 @@ pub(super) fn emit_throw_state_error(emitter: &mut Emitter) {
     emitter.instruction("mov x19, x0");                                         // x19 = message bytes pointer (callee-saved across __rt_heap_alloc)
     emitter.instruction("mov x20, x1");                                         // x20 = message length (callee-saved across __rt_heap_alloc)
 
-    emitter.instruction("mov x0, #24");                                         // FiberError object size (8 class_id + 16 message property)
+    emitter.instruction("mov x0, #56");                                         // compact Throwable payload includes message, code, creation line, and previous
     emitter.instruction("bl __rt_heap_alloc");                                  // x0 = freshly allocated payload pointer (heap header at -8)
 
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
+    emitter.instruction("mov x9, #6");                                          // heap kind 6 selects compact Throwable cleanup and previous-link storage
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the kind in the uniform heap header
     emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(emitter, "x9", "_fiber_error_class_id", 0);    // x9 = runtime class id of FiberError
@@ -51,6 +51,10 @@ pub(super) fn emit_throw_state_error(emitter: &mut Emitter) {
 
     emitter.instruction("str x19, [x0, #8]");                                   // message property low half = bytes pointer (matches Exception's message slot layout)
     emitter.instruction("str x20, [x0, #16]");                                  // message property high half = byte length
+    emitter.instruction("str xzr, [x0, #24]");                                  // the synthesized FiberError code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
+    emitter.instruction("str xzr, [x0, #40]");                                  // the compact previous-object link defaults to null
+    emitter.instruction("str xzr, [x0, #48]");                                  // clear the unused high half of the previous slot before publication
 
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // _exc_value = the freshly built FiberError, matching the standard `throw` runtime contract
     emitter.instruction("bl __rt_throw_current");                               // unwind into the active try/catch chain (no return)

@@ -90,7 +90,7 @@ pub(super) fn lower_method_call(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(ctx, Some(object_expr), object, args, expr);
     }
     if op == Op::MethodCall {
         if let Some(value) = lower_reflection_class_static_property_value_call(
@@ -114,7 +114,7 @@ pub(super) fn lower_method_call(
         if let Some(value) =
             lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr)
         {
-            return value;
+            return stabilize_borrowed_result_and_release_receiver(ctx, object, value, expr.span);
         }
     }
     if matches!(
@@ -332,7 +332,13 @@ pub(super) fn lower_closure_bind_method(
         let bound = root_descriptor_callback(ctx, bound, PhpType::Mixed, expr.span);
         let arg_container =
             lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span);
-        emit_callable_descriptor_invoke(ctx, bound, arg_container, expr.span)
+        // This invocation feeds the outer bind/call cleanup, even when the PHP
+        // statement ignores the final method result. Keep its value live until
+        // that outer layer has adopted it into its own result staging.
+        let discarded_depth = ctx.discarded_result_depth.take();
+        let result = emit_callable_descriptor_invoke(ctx, bound, arg_container, expr.span);
+        ctx.discarded_result_depth = discarded_depth;
+        result
     } else {
         bound
     };
@@ -340,6 +346,7 @@ pub(super) fn lower_closure_bind_method(
     if let Some(slot) = receiver_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+    let result = discard_result_before_callback(ctx, result_staging.as_ref(), result, closure_owner, expr.span);
     if let Some(slot) = closure_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }

@@ -695,7 +695,8 @@ fn emit_generator_mixed_field_release_x86_64(emitter: &mut Emitter, offset: usiz
 ///
 /// The caller owns the thread's active cleanup chain; a suspended coroutine's chain is parked
 /// in its object. Walk that chain while the coroutine stack remains mapped, then restore the
-/// caller's chain before the object or stack can be reclaimed.
+/// caller's chain before the object or stack can be reclaimed. Reload the saved object into
+/// the integer result register on both paths; cleanup callbacks clobber that register.
 fn emit_suspended_coroutine_frame_cleanup(emitter: &mut Emitter, label_prefix: &str) {
     let call_frame_offset = crate::codegen_support::runtime::fibers::FIBER_OWN_CALL_FRAME_OFFSET;
     let done = format!("__rt_object_free_deep_{}_frame_cleanup_done", label_prefix);
@@ -716,6 +717,7 @@ fn emit_suspended_coroutine_frame_cleanup(emitter: &mut Emitter, label_prefix: &
             emitter.instruction("ldr x10, [sp, #8]");                           // restore the caller's cleanup chain
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
             emitter.label(&done);
+            emitter.instruction("ldr x0, [sp, #0]");                            // restore the coroutine pointer before the caller reads its stack fields
         }
         Arch::X86_64 => {
             emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the coroutine object before checking its parked frame chain
@@ -734,6 +736,7 @@ fn emit_suspended_coroutine_frame_cleanup(emitter: &mut Emitter, label_prefix: &
             emitter.instruction("mov r10, QWORD PTR [rbp - 16]");               // restore the caller's cleanup chain
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_call_frame_top", 0);
             emitter.label(&done);
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // restore the coroutine pointer before the caller reads its stack fields
         }
     }
 }
@@ -850,6 +853,28 @@ mod tests {
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
     use super::*;
+
+    /// Both cleanup and no-chain exits restore the saved coroutine pointer on every target.
+    #[test]
+    fn suspended_coroutine_cleanup_restores_its_object_pointer_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(target).unwrap();
+            for prefix in ["fiber", "generator"] {
+                let mut emitter = Emitter::new(target);
+                emit_suspended_coroutine_frame_cleanup(&mut emitter, prefix);
+                let asm = emitter.output();
+                let label = format!("__rt_object_free_deep_{prefix}_frame_cleanup_done:\n");
+                let (_, exit) = asm.split_once(&label).expect("shared cleanup/no-chain exit");
+                let reload = if target.arch == Arch::X86_64 {
+                    "mov rax, QWORD PTR [rbp - 8]"
+                } else {
+                    "ldr x0, [sp, #0]"
+                };
+                assert!(exit.trim_start().starts_with(reload), "{target:?}/{prefix}: {exit}");
+                assert!(asm.contains("__rt_exception_cleanup_frames"), "{target:?}/{prefix}");
+            }
+        }
+    }
 
     /// Verifies that ARM64 object destruction dispatches callable properties to
     /// the descriptor-aware release helper instead of the generic heap decref.

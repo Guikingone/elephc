@@ -40,6 +40,25 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
             }
         ) && instance_callable_args_need_descriptor_binder(ctx, args);
         if !tracked_instance_descriptor_spread {
+            if matches!(&target, StaticCallableBinding::Closure { .. })
+                && static_callable_call_lowers_directly(ctx, &target)
+            {
+                // Static dispatch still borrows the descriptor's captured environment.
+                // A later argument can replace this local, so retain the selected
+                // descriptor independently before evaluating any argument.
+                let staging = prepublish_static_callable_call_result(ctx, &target, expr.span);
+                let loaded = ctx.load_local(var, Some(expr.span));
+                let selected = crate::ir_lower::ownership::copy_for_php_value_binding(
+                    ctx, loaded, Some(expr.span),
+                );
+                let (_, owner) = root_owned_call_operand(ctx, selected, expr.span);
+                let value = lower_static_callable_call(ctx, target, args, expr)
+                    .expect("a tracked closure lowers directly");
+                stage_call_result(ctx, staging.as_ref(), value, expr.span);
+                let value = discard_result_before_callback(ctx, staging.as_ref(), value, owner, expr.span);
+                if let Some(slot) = owner { retire_owned_call_operand(ctx, slot, expr.span); }
+                return take_prepublished_call_result(ctx, staging, value, expr.span);
+            }
             if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
                 return value;
             }
@@ -228,6 +247,9 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
             let value = lower_static_callable_call(ctx, target, args, expr)
                 .expect("a directly callable static binding lowers its call");
             stage_call_result(ctx, result_staging.as_ref(), value, expr.span);
+            let value = discard_result_before_callback(
+                ctx, result_staging.as_ref(), value, descriptor_owner, expr.span,
+            );
             if let Some(slot) = descriptor_owner {
                 retire_owned_call_operand(ctx, slot, expr.span);
             }

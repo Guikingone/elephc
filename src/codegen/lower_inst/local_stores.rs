@@ -637,11 +637,12 @@ pub(super) fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instructio
         abi::load_at_offset(ctx.emitter, state_reg, state_offset);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cbz {}, {}", state_reg, raw)); // raw locals have no shared cell owner to release
+                ctx.emitter.instruction(&format!("cmp {}, #1", state_reg));     // only ordinary promotion owns a cell through the local value slot
+                ctx.emitter.instruction(&format!("b.ne {}", raw));              // counted hash aliases retire once through their explicit state below
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // inspect whether the closure promotion ran
-                ctx.emitter.instruction(&format!("je {}", raw));                // raw locals have no shared cell owner to release
+                ctx.emitter.instruction(&format!("cmp {}, 1", state_reg));      // only ordinary promotion owns a cell through the local value slot
+                ctx.emitter.instruction(&format!("jne {}", raw));               // counted hash aliases retire once through their explicit state below
             }
         }
         let cell_reg = abi::symbol_scratch_reg(ctx.emitter);

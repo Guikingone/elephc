@@ -413,6 +413,9 @@ pub(super) fn lower_bound_closure_immediate_call(
     let result = lower_static_callable_call(ctx, bound, args, expr)
         .expect("a directly callable bound closure lowers its call");
     stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    let result = discard_result_before_callback(
+        ctx, result_staging.as_ref(), result, descriptor_owner, expr.span,
+    );
     if let Some(slot) = descriptor_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }

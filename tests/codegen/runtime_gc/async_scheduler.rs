@@ -10,6 +10,24 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Reads the complete compact Throwable payload after a rejected Fiber state transition.
+#[test]
+fn fiber_state_error_initializes_code_and_previous() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$fiber = new Fiber(static function (): void {});
+try {
+    $fiber->resume();
+} catch (FiberError $error) {
+    echo get_class($error), "|", $error->getMessage(), "|", $error->getCode(), "|";
+    echo $error->getPrevious() === null ? "none" : "previous";
+}
+unset($fiber);
+"#,
+    );
+    assert_clean(out, "FiberError|Cannot resume a fiber that is not suspended|0|none");
+}
+
 /// Requires both the expected native output and a clean heap-debug teardown for each fixture.
 fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);

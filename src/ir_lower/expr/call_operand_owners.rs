@@ -576,6 +576,33 @@ pub(super) fn take_prepublished_call_result(
     result
 }
 
+/// Settles a directly discarded result before retiring a temporary callable's environment.
+/// The outer owner record stays published with a null slot until callback cleanup completes,
+/// preserving strict LIFO unwinding if either destructor throws. Nested argument results are used
+/// by their parent expression and must never enter this path.
+pub(super) fn discard_result_before_callback(
+    ctx: &mut LoweringContext<'_, '_>,
+    staging: Option<&PrepublishedCallResult>,
+    result: LoweredValue,
+    callback_owner: Option<crate::ir::LocalSlotId>,
+    span: Span,
+) -> LoweredValue {
+    if callback_owner.is_none() || ctx.discarded_result_depth != Some(ctx.expression_depth) {
+        return result;
+    }
+    let Some(staging) = staging else { return result; };
+    ctx.emit_void(
+        Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(staging.slot)),
+        Op::ReleaseLocalSlot.default_effects(), Some(span),
+    );
+    // Only the enclosing expression statement receives this non-owning sentinel.
+    // Returning the freed SSA result would make statement cleanup release it twice.
+    ctx.emit_value(
+        Op::ConstNull, Vec::new(), None, PhpType::Void,
+        Op::ConstNull.default_effects(), Some(span),
+    )
+}
+
 /// Publishes a freshly created container before the expressions that fill it can throw.
 ///
 /// A container built element by element is the only owner of everything already inserted, so it

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Published call-operand slots retain their cleanup duty across Fiber state errors and switches.
 
 use super::*;
 
@@ -129,7 +130,9 @@ fn emit_assert_fiber_not_started(
                 abi::emit_push_reg(ctx.emitter, receiver_reg);
             }
             for value in start_args.iter().rev() {
-                if super::ownership::is_owned_temporary(ctx, *value)? {
+                if super::ownership::is_owned_temporary(ctx, *value)?
+                    && ctx.value_can_transfer_ownership_to_consumer(*value)?
+                {
                     super::ownership::emit_release_value(ctx, *value)?;
                 }
             }
@@ -151,7 +154,9 @@ fn emit_assert_fiber_not_started(
                 abi::emit_push_reg(ctx.emitter, receiver_reg);
             }
             for value in start_args.iter().rev() {
-                if super::ownership::is_owned_temporary(ctx, *value)? {
+                if super::ownership::is_owned_temporary(ctx, *value)?
+                    && ctx.value_can_transfer_ownership_to_consumer(*value)?
+                {
                     super::ownership::emit_release_value(ctx, *value)?;
                 }
             }
@@ -177,6 +182,11 @@ fn emit_assert_fiber_suspended(
     resume_value: Option<ValueId>,
 ) -> Result<()> {
     let ready = ctx.next_label("fiber_resume_suspended");
+    let resume_value = if let Some(value) = resume_value {
+        ctx.value_can_transfer_ownership_to_consumer(value)?.then_some(value)
+    } else {
+        None
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("ldr x9, [{receiver_reg}, #{}]", runtime::FIBER_STATE_OFFSET)); // read the receiver lifecycle after argument evaluation
@@ -226,9 +236,10 @@ fn emit_assert_fiber_suspended(
     Ok(())
 }
 
-/// Mirrors lowering's rule: a Fiber receiver temporary transfers its owned reference, but a local does not.
+/// Transfers an owning receiver temporary only when no caller cleanup retains its lease.
 fn fiber_receiver_is_transferred(ctx: &FunctionContext<'_>, object: ValueId) -> Result<bool> {
-    super::ownership::is_owned_temporary(ctx, object)
+    Ok(super::ownership::is_owned_temporary(ctx, object)?
+        && ctx.value_can_transfer_ownership_to_consumer(object)?)
 }
 
 /// Lowers `Fiber::resume($value = null)` through the shared runtime helper.
@@ -324,8 +335,8 @@ pub(super) fn lower_fiber_throw(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 3),
-        i64::from(ctx.value_ownership(thrown)? == Ownership::Owned),
-    ); // transfer a temporary Throwable so a state error can release it before throwing
+        i64::from(ctx.value_can_transfer_ownership_to_consumer(thrown)?),
+    ); // transfer only an unrooted Throwable; published caller slots retain their cleanup duty
     abi::emit_call_label(ctx.emitter, "__rt_fiber_throw");
     store_if_result(ctx, inst)
 }
@@ -364,8 +375,8 @@ pub(super) fn lower_mixed_fiber_throw_from_reg(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 3),
-        i64::from(ctx.value_ownership(args[0])? == Ownership::Owned),
-    ); // release an owned Throwable argument if the target Fiber is not suspended
+        i64::from(ctx.value_can_transfer_ownership_to_consumer(args[0])?),
+    ); // transfer only an unrooted Throwable so state errors do not retire published slots twice
     abi::emit_call_label(ctx.emitter, "__rt_fiber_throw");
     store_if_result(ctx, inst)
 }
