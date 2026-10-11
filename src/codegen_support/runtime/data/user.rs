@@ -1322,6 +1322,10 @@ pub(crate) fn emit_runtime_data_user(
                 class_info.class_id, row_index
             ));
             out.push_str(&format!("    .quad {}\n", row.type_name.len())); // declared type-name byte length
+            out.push_str(&format!(
+                "    .quad {}\n",
+                u64::from(row.typed) // php hides an absent UNTYPED property from var_dump
+            ));
         }
 
         // print_r / var_export property table: the SAME rows (and therefore the
@@ -3327,6 +3331,11 @@ struct VarDumpRow {
     tag: u64,
     /// Declared type name `uninitialized(...)` prints.
     type_name: String,
+    /// Whether the property carries a DECLARED PHP type.
+    ///
+    /// php hides an absent UNTYPED property from `var_dump` entirely while an absent TYPED one
+    /// renders `uninitialized(TYPE)`, so the body walker needs this per row.
+    typed: bool,
 }
 
 /// Builds the `var_dump` rows for a class: the `__debugInfo()` projection when the
@@ -3355,6 +3364,7 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
                         .unwrap_or(8 + layout_index * 16),
                     tag: prop_value_tag(class_info, &prop_name, prop_ty),
                     type_name: var_dump_property_type_name(prop_ty),
+                    typed: class_info.property_slot_is_declared(layout_index, &prop_name),
                 })
             })
             .collect();
@@ -3375,6 +3385,7 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
                 .unwrap_or(8 + layout_index * 16),
             tag: prop_value_tag(class_info, prop_name, prop_ty),
             type_name: var_dump_property_type_name(prop_ty),
+            typed: class_info.property_slot_is_declared(layout_index, prop_name),
         })
         .collect()
 }

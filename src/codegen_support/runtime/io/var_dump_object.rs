@@ -30,7 +30,9 @@
 //!   `8 + index * 16` — low word = payload, high word = string length / the
 //!   uninitialized-typed-property marker. The descriptor carries the byte offset
 //!   outright so this walker never recomputes it.
-//! - A typed property declared without a default carries
+//! - An absent UNTYPED property is HIDDEN like php's: the descriptor row carries a typed
+//!   flag, and the body walker skips a sentinel slot whose property has no declared type. A
+//!   typed property declared without a default carries
 //!   `UNINITIALIZED_TYPED_PROPERTY_SENTINEL` (`0x7fff_ffff_ffff_fffd`) in its
 //!   slot's HIGH word, the same marker `emit_typed_property_initialized_bool`
 //!   tests. Such a property renders `uninitialized(TYPE)` and is EXCLUDED from
@@ -81,7 +83,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 const VD_SEEN_CAPACITY: u64 = 256;
 
 /// Byte width of one `_class_vd_desc_*` property row.
-const VD_DESC_ROW_BYTES: u64 = 48;
+const VD_DESC_ROW_BYTES: u64 = 56;
 
 /// Materializes the uninitialized-typed-property sentinel into an AArch64 register.
 ///
@@ -331,7 +333,7 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.label("__rt_vd_obj_count_loop");
     emitter.instruction("cmp x4, x3");                                          // inspected every declared property?
     emitter.instruction("b.ge __rt_vd_obj_count_done");                         // tally complete
-    emitter.instruction(&format!("mov x7, #{}", VD_DESC_ROW_BYTES));            // each descriptor row occupies 48 bytes
+    emitter.instruction(&format!("mov x7, #{}", VD_DESC_ROW_BYTES));            // each descriptor row occupies 56 bytes (the typed flag closes the row)
     emitter.instruction("mul x7, x4, x7");                                      // byte offset of this property's descriptor row
     emitter.instruction("add x7, x2, x7");                                      // advance into the descriptor
     emitter.instruction("add x7, x7, #8");                                      // skip the leading property-count word
@@ -394,7 +396,7 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, rdx");                                        // inspected every declared property?
     emitter.instruction("jge __rt_vd_obj_count_done_x86");                      // tally complete
     emitter.instruction("mov r10, rcx");                                        // copy the index for row-offset scaling
-    emitter.instruction(&format!("imul r10, r10, {}", VD_DESC_ROW_BYTES));      // each descriptor row occupies 48 bytes
+    emitter.instruction(&format!("imul r10, r10, {}", VD_DESC_ROW_BYTES));      // each descriptor row occupies 56 bytes (the typed flag closes the row)
     emitter.instruction("add r10, rsi");                                        // advance into the descriptor
     emitter.instruction("add r10, 8");                                          // skip the leading property-count word
     emitter.instruction("mov r10, QWORD PTR [r10 + 16]");                       // load the property's byte offset within the object
@@ -886,7 +888,7 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
 
     // -- resolve this property's 48-byte descriptor row --
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the descriptor pointer
-    emitter.instruction(&format!("mov x12, #{}", VD_DESC_ROW_BYTES));           // each descriptor row occupies 48 bytes
+    emitter.instruction(&format!("mov x12, #{}", VD_DESC_ROW_BYTES));           // each descriptor row occupies 56 bytes (the typed flag closes the row)
     emitter.instruction("mul x12, x9, x12");                                    // byte offset of this property's row
     emitter.instruction("add x11, x11, x12");                                   // advance into the descriptor
     emitter.instruction("add x11, x11, #8");                                    // skip the leading property-count word
@@ -897,6 +899,16 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [sp, #0]");                                   // reload the object pointer
     emitter.instruction("add x13, x14, x13");                                   // resolve the absolute property slot address
     emitter.instruction("str x13, [sp, #40]");                                  // save the slot pointer across the calls
+
+    // -- an uninitialized UNTYPED property is HIDDEN like php's, key line
+    //    included: the sentinel and the row's typed flag decide BEFORE the key --
+    emitter.instruction("ldr x14, [x13, #8]");                                  // load the slot's high word (the init marker)
+    emit_uninit_sentinel_aarch64(emitter, "x15");                               // materialize the uninitialized-property marker
+    emitter.instruction("cmp x14, x15");                                        // is this property still uninitialized?
+    emitter.instruction("b.ne __rt_vd_obj_present");                            // initialized properties render key and value
+    emitter.instruction("ldr x10, [x11, #48]");                                 // load the row's typed flag
+    emitter.instruction("cbz x10, __rt_vd_obj_next");                           // an absent UNTYPED property renders nothing
+    emitter.label("__rt_vd_obj_present");
 
     // -- emit `<indent>[KEY]=>\n` --
     emitter.instruction("ldr x1, [x11]");                                       // load the pre-rendered key pointer
@@ -985,7 +997,7 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_vd_obj_done_x86");                            // walk complete
 
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the descriptor pointer
-    emitter.instruction(&format!("imul r9, r9, {}", VD_DESC_ROW_BYTES));        // each descriptor row occupies 48 bytes
+    emitter.instruction(&format!("imul r9, r9, {}", VD_DESC_ROW_BYTES));        // each descriptor row occupies 56 bytes (the typed flag closes the row)
     emitter.instruction("add r11, r9");                                         // advance into the descriptor
     emitter.instruction("add r11, 8");                                          // skip the leading property-count word
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the row pointer across the calls
@@ -993,6 +1005,17 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r11 + 16]");                       // load the property's byte offset within the object
     emitter.instruction("add r10, QWORD PTR [rbp - 8]");                        // resolve the absolute property slot address
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the slot pointer across the calls
+
+    // -- an uninitialized UNTYPED property is HIDDEN like php's, key line
+    //    included: the sentinel and the row's typed flag decide BEFORE the key --
+    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load the slot's high word (the init marker)
+    emitter.instruction("movabs r11, 0x7ffffffffffffffd");                      // materialize the uninitialized-property marker
+    emitter.instruction("cmp r10, r11");                                        // is this property still uninitialized?
+    emitter.instruction("jne __rt_vd_obj_present_x86");                         // initialized properties render key and value
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
+    emitter.instruction("cmp QWORD PTR [r11 + 48], 0");                         // load the row's typed flag
+    emitter.instruction("je __rt_vd_obj_next_x86");                             // an absent UNTYPED property renders nothing
+    emitter.label("__rt_vd_obj_present_x86");
 
     emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the pre-rendered key pointer
     emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");                        // load the pre-rendered key length
@@ -1004,6 +1027,7 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, r11");                                        // is this property still uninitialized?
     emitter.instruction("jne __rt_vd_obj_value_x86");                           // initialized properties render their value
 
+    // -- an uninitialized typed property renders `uninitialized(TYPE)` --
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
     emitter.instruction("mov rdi, QWORD PTR [r11 + 32]");                       // load the declared type-name pointer
     emitter.instruction("mov rsi, QWORD PTR [r11 + 40]");                       // load the declared type-name length
