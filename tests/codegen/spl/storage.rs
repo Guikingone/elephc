@@ -381,3 +381,130 @@ echo get_class($o), ":", $o[0], $o[1];
     );
     assert_eq!(out, "SplFixedArray:79");
 }
+
+/// Verifies that an object-backed `ArrayObject` keeps the wrapped object live.
+///
+/// php keeps the object as the backing store: iteration reads its properties, a keyed write
+/// creates a dynamic property ON the wrapped object (observable through it afterwards), and a
+/// keyed removal drops that property.
+#[test]
+fn test_array_object_object_backing_writes_reach_the_wrapped_object() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+class C { public $b = 2; public $a = 1; }
+$o = new C();
+$ao = new ArrayObject($o);
+foreach ($ao as $k => $v) { echo "$k=$v "; } echo "\n";
+$ao['zz'] = 5;
+foreach ($ao as $k => $v) { echo "$k=$v "; } echo "\n";
+var_dump(count($ao));
+var_dump(array_key_exists('zz', get_object_vars($o)));
+$ao->offsetUnset('a');
+foreach ($ao as $k => $v) { echo "$k=$v "; } echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "b=2 a=1 \n",
+            "b=2 a=1 zz=5 \n",
+            "int(3)\n",
+            "bool(true)\n",
+            "b=2 zz=5 \n",
+        )
+    );
+}
+
+/// Verifies that `exchangeArray()` answers the OLD store's contents as an array.
+///
+/// For an object store the old contents are the wrapped object's properties; for an
+/// `ArrayObject`-shaped store they are the array that object follows.
+#[test]
+fn test_array_object_exchange_array_returns_object_store_contents() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+class C { public $b = 2; }
+$o = new C();
+$ao = new ArrayObject($o);
+var_dump($ao->exchangeArray(['x' => 9]));
+var_dump($ao->getArrayCopy());
+$inner = new ArrayObject(['x' => 1]);
+$outer = new ArrayObject($inner);
+var_dump($outer->getArrayCopy());
+$nest = new ArrayIterator(new ArrayIterator(['y' => 2]));
+var_dump($nest->getArrayCopy());
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(1) {\n",
+            "  [\"b\"]=>\n",
+            "  int(2)\n",
+            "}\n",
+            "array(1) {\n",
+            "  [\"x\"]=>\n",
+            "  int(9)\n",
+            "}\n",
+            "array(1) {\n",
+            "  [\"x\"]=>\n",
+            "  int(1)\n",
+            "}\n",
+            "array(1) {\n",
+            "  [\"y\"]=>\n",
+            "  int(2)\n",
+            "}\n",
+        )
+    );
+}
+
+/// Verifies php's bug #41691 shape: a SELF-backed `ArrayObject` subclass.
+///
+/// `parent::__construct($this, ...)` keeps the object itself as the store; `exchangeArray()`
+/// answers the property table with uninitialized declared properties as NULL and without the
+/// internal backing key php never declared.
+#[test]
+fn test_array_object_self_backed_exchange_array_answers_property_table() {
+    let (raw, _dir) = compile_and_run_in_dir(
+        r#"<?php
+class A extends ArrayObject {
+    public function __construct($dummy, $flags) {
+        parent::__construct($this, $flags);
+    }
+    public $a;
+    public $b;
+    public $c;
+}
+$a = new A(null, ArrayObject::ARRAY_AS_PROPS);
+var_dump($a->exchangeArray(array('a' => 1, 'b' => 1, 'c' => 1)));
+echo "Done\n";
+"#,
+    );
+    // php's deprecation reaches stdout with the run's own file path, so strip the display line
+    // and assert the remainder exactly (the corpus runner asserts the full line separately).
+    assert_eq!(
+        raw.matches(
+            "Deprecated: ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants in "
+        )
+        .count(),
+        1,
+        "expected exactly one object-backing deprecation: {raw}"
+    );
+    let out = strip_php_display_lines(&raw);
+    assert_eq!(
+        out,
+        concat!(
+            "array(3) {\n",
+            "  [\"a\"]=>\n",
+            "  NULL\n",
+            "  [\"b\"]=>\n",
+            "  NULL\n",
+            "  [\"c\"]=>\n",
+            "  NULL\n",
+            "}\n",
+            "Done\n",
+        )
+    );
+}
