@@ -8,6 +8,7 @@
 - [x] Complete focused build, regression, and hygiene validation.
 - [x] Recover reported eval failures at the submission boundary and cover repeated errors without losing session state.
 - [x] Make PTY setup portable to Apple libc and preserve warm cache reuse with archived CI bridges.
+- [x] Drain terminal output during exit and close the PTY before waiting during failure cleanup.
 
 ## Execution
 
@@ -82,3 +83,11 @@ is type-checked against both targets during focused verification.
 All 14 REPL integration tests passed after the CI fixes. The archived-cache
 regression also passed with a relative target directory after first reproducing
 the original warm-cache failure. The compiler build and diff hygiene checks passed.
+
+Terminal shutdown keeps consuming output and answering cursor queries until the
+child exits and its final bytes have been collected. On macOS a controlling PTY
+can block process exit until the master drains its output. Failure cleanup closes
+the master before waiting for the child, and close-on-exec flags prevent the child
+from retaining the original PTY descriptors. A large-output shutdown regression
+reproduces the previous exit timeout on Linux and covers both complete output
+collection and dropping a session with queued output.

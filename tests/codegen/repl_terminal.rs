@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Bounded polling prevents a broken prompt from hanging the test indefinitely.
+//! - Exit waits keep draining output; macOS may wait for PTY output during process exit.
 //! - RAII closes descriptors, reaps children, and removes the fixture on failure.
 
 use super::{repl_cli_command, fs, Child, Fixture, Stdio};
@@ -21,10 +22,14 @@ mod screen;
 /// Owns the session process and the terminal master used to send real editing keys.
 struct Terminal {
     child: Child,
-    master: File,
+    master: Option<File>,
     pending: String,
     screen: screen::Screen,
 }
+
+/// Distinguishes received bytes, a live quiet terminal, and a closed slave endpoint.
+#[derive(PartialEq, Eq)]
+enum OutputRead { Data, Pending, Closed }
 
 impl Terminal {
     /// Creates a controlling terminal with a known size and a normal ANSI terminal profile.
@@ -36,6 +41,18 @@ impl Terminal {
             std::ptr::null_mut(), &mut size) }, 0, "openpty: {}", io::Error::last_os_error());
         let master = unsafe { File::from_raw_fd(master) };
         let slave = unsafe { File::from_raw_fd(slave) };
+        // Only the duplicated standard streams belong in the child. Inheriting the
+        // master would keep the terminal alive after the parent closes it on failure.
+        for descriptor in [master.as_raw_fd(), slave.as_raw_fd()] {
+            let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+            assert!(flags >= 0, "fcntl: {}", io::Error::last_os_error());
+            assert_eq!(unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) },
+                0, "fcntl: {}", io::Error::last_os_error());
+        }
+        let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0, "fcntl: {}", io::Error::last_os_error());
+        assert_eq!(unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0, "fcntl: {}", io::Error::last_os_error());
         let mut command = repl_cli_command(&fixture.0);
         command.args(["repl", "--php-version=8.5"]).args(args).env("TERM", "xterm-256color")
             .stdin(Stdio::from(slave.try_clone().unwrap()))
@@ -48,8 +65,39 @@ impl Terminal {
                 Ok(())
             });
         }
-        Self { child: command.spawn().expect("start terminal REPL"), master,
+        Self { child: command.spawn().expect("start terminal REPL"), master: Some(master),
             pending: String::new(), screen: screen::Screen::default() }
+    }
+
+    /// Polls one output chunk and services cursor queries, including during shutdown.
+    fn read_output(&mut self, timeout_ms: i32) -> io::Result<OutputRead> {
+        let Some(master) = self.master.as_mut() else { return Ok(OutputRead::Closed); };
+        let mut poll = libc::pollfd { fd: master.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        let ready = unsafe { libc::poll(&mut poll, 1, timeout_ms) };
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            return if error.kind() == io::ErrorKind::Interrupted { Ok(OutputRead::Pending) }
+                else { Err(error) };
+        }
+        if ready == 0 { return Ok(OutputRead::Pending); }
+        if poll.revents & libc::POLLNVAL != 0 {
+            return Err(io::Error::from_raw_os_error(libc::EBADF));
+        }
+        let mut bytes = [0_u8; 4096];
+        let count = match master.read(&mut bytes) {
+            Ok(0) => return Ok(OutputRead::Closed),
+            Ok(count) => count,
+            Err(error) if matches!(error.kind(), io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock) => {
+                return Ok(OutputRead::Pending);
+            }
+            // Linux reports a closed PTY slave as EIO; Apple can return ordinary EOF.
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => return Ok(OutputRead::Closed),
+            Err(error) => return Err(error),
+        };
+        let responses = self.screen.observe(&bytes[..count]);
+        self.pending.push_str(&String::from_utf8_lossy(&bytes[..count]));
+        master.write_all(&responses)?;
+        Ok(OutputRead::Data)
     }
 
     /// Returns output through a marker, retaining later bytes for the next assertion.
@@ -60,35 +108,34 @@ impl Terminal {
                 return self.pending.drain(..index + marker.len()).collect();
             }
             assert!(Instant::now() < deadline, "timed out waiting for {marker:?}: {:?}", self.pending);
-            let mut poll = libc::pollfd { fd: self.master.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-            let ready = unsafe { libc::poll(&mut poll, 1, 100) };
-            if ready < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted { continue; }
-            assert!(ready >= 0, "poll: {}", io::Error::last_os_error());
-            if ready == 0 { continue; }
-            let mut bytes = [0_u8; 4096];
-            let count = self.master.read(&mut bytes).unwrap_or_else(|error| {
+            let output = self.read_output(100).unwrap_or_else(|error| {
                 panic!("terminal closed waiting for {marker:?}: {error}; {:?}", self.pending)
             });
-            assert_ne!(count, 0, "terminal closed waiting for {marker:?}: {:?}", self.pending);
-            let responses = self.screen.observe(&bytes[..count]);
-            self.master.write_all(&responses).unwrap();
-            self.pending.push_str(&String::from_utf8_lossy(&bytes[..count]));
+            assert!(output != OutputRead::Closed, "terminal closed waiting for {marker:?}: {:?}", self.pending);
         }
     }
 
     /// Sends literal terminal keys, including editing and signal-control bytes.
-    fn send(&mut self, input: &[u8]) { self.master.write_all(input).unwrap(); }
+    fn send(&mut self, input: &[u8]) { self.master.as_mut().unwrap().write_all(input).unwrap(); }
 
-    /// Waits for normal exit without blocking forever if EOF handling regresses.
+    /// Drains final output while waiting for exit, retaining the EOF recovery deadline.
     fn exited(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(10);
+        let mut status = None;
         loop {
-            if let Some(status) = self.child.try_wait().unwrap() {
-                assert!(status.success(), "terminal session: {status}; {:?}", self.pending);
-                return;
+            if status.is_none() { status = self.child.try_wait().unwrap(); }
+            let output = self.read_output(100).expect("read terminal output during exit");
+            if output != OutputRead::Data {
+                if let Some(status) = status {
+                    assert!(status.success(), "terminal session: {status}; {:?}", self.pending);
+                    return;
+                }
             }
-            assert!(Instant::now() < deadline, "terminal session did not exit");
-            std::thread::sleep(Duration::from_millis(10));
+            assert!(Instant::now() < deadline,
+                "terminal session did not exit; {} output bytes pending", self.pending.len());
+            if output == OutputRead::Closed {
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
     }
 }
@@ -138,8 +185,32 @@ fn test_repl_terminal_echo_preserves_visible_output() {
 }
 
 impl Drop for Terminal {
-    /// Reaps the owned child even if an output or history assertion fails.
-    fn drop(&mut self) { let _ = self.child.kill(); let _ = self.child.wait(); }
+    /// Disconnects the terminal before reaping, so macOS cannot wait on unread PTY output.
+    fn drop(&mut self) {
+        drop(self.master.take());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Exit drains a full output queue, while dropping an active session closes the PTY first.
+#[test]
+fn test_repl_terminal_shutdown_with_pending_output() {
+    let fixture = Fixture::new();
+    let mut terminal = Terminal::start(&fixture, &["--quiet", "--no-history"]);
+    terminal.expect(">>> ");
+    terminal.send(b"echo str_repeat('x', 262144); exit(0);\r");
+    terminal.exited();
+    assert!(terminal.pending.contains(&"x".repeat(262144)), "exit output was truncated");
+
+    let mut interrupted = Terminal::start(&fixture, &["--quiet", "--no-history"]);
+    interrupted.expect(">>> ");
+    interrupted.send(b"echo str_repeat('y', 262144); exit(0);\r");
+    interrupted.expect(&"y".repeat(128));
+    // Enough output remains to block a writer or a macOS controlling-terminal exit.
+    let start = Instant::now();
+    drop(interrupted);
+    assert!(start.elapsed() < Duration::from_secs(10), "terminal cleanup stalled");
 }
 
 /// Exercises continuation, cancellation, editing, history recall, persistence, and clean EOF.
