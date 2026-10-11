@@ -2840,8 +2840,12 @@ jobs:
       - name: Cache managed Windows Oniguruma
         uses: actions/cache@v6
         with:
-          path: .ci/elephc-oniguruma-windows-x86_64
-          key: managed-oniguruma-windows-x86_64-${{ hashFiles('Cargo.lock', 'examples/date-json-regex/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h') }}
+          path: ${{ runner.temp }}/eo
+          key: managed-oniguruma-windows-x86_64-short-v2-${{ hashFiles('Cargo.lock', 'examples/date-json-regex/elephc.lock', 'scripts/ci/prepare_oniguruma_tests.py', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h') }}
+
+      - name: Verify Windows managed Oniguruma workflow configuration
+        shell: bash
+        run: python scripts/ci/test_windows_oniguruma_workflow.py
 
       - name: Build bridge staticlibs with the native MSVC toolchain
         shell: bash
@@ -2891,20 +2895,21 @@ jobs:
         run: |
           python scripts/ci/prepare_oniguruma_tests.py \
             target/debug/elephc.exe \
-            .ci/elephc-oniguruma-windows-x86_64 \
+            "$RUNNER_TEMP/eo" \
+            --cache "$RUNNER_TEMP/eo/c" \
             --target windows-x86_64
-          ELEPHC_NATIVE_CACHE=.ci/elephc-oniguruma-windows-x86_64/cache \
+          ELEPHC_NATIVE_CACHE="$RUNNER_TEMP/eo/c" \
             target/debug/elephc.exe native prune --target windows-x86_64
           python - <<'PY'
           import os
           import tomllib
           from pathlib import Path
 
-          bundle = Path('.ci/elephc-oniguruma-windows-x86_64')
+          bundle = Path(os.environ['RUNNER_TEMP']) / 'eo'
           lock = tomllib.loads((bundle / 'project/elephc.lock').read_text(encoding='utf-8'))
           package = next(package for package in lock['package'] if package['name'] == 'oniguruma')
           target = next(target for target in package['target'] if target['name'] == 'windows-x86_64')
-          root = (bundle / 'cache/artifacts/oniguruma' / package['version']
+          root = (bundle / 'c/artifacts/oniguruma' / package['version']
                   / f"r{package['recipe']}" / package['source']['sha256'] / target['name'])
           archives = list(root.glob('*/*/lib/libelephc_oniguruma_shim.a'))
           if len(archives) != 1:

@@ -142,7 +142,9 @@ class ContractPipelineTests(unittest.TestCase):
     def test_host_only_process_availability_keeps_eval_independent(self) -> None:
         """Label iOS AOT refusal without implying the Magician path is target-gated."""
         rendered = render._availability_section(self.render_by_name["system"])
-        self.assertIn("three executable/release hosts", rendered)
+        self.assertIn("four executable/release hosts", rendered)
+        self.assertIn("Windows x86_64", rendered)
+        self.assertIn("macOS ARM64, Linux ARM64, Linux x86_64", rendered)
         self.assertIn("refused at compile time for iOS library targets", rendered)
         self.assertIn("`eval()` (magician interpreter)**: supported", rendered)
 

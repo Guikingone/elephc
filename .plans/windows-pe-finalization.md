@@ -82,6 +82,14 @@ retire the planner's owned default ArrayNew, not leak one array per call.
 
 Additional shared PHP-parity gaps remain distinct from Windows ABI repairs:
 
+- Transport capability reporting must reflect linked TLS support and preserve
+  PHP registration order. Native PHP Windows 8.5.6 reports `tcp,udp` with `-n`,
+  and `tcp,udp,ssl,tls,tlsv1.0,tlsv1.1,tlsv1.2,tlsv1.3` with its pinned OpenSSL
+  module loaded. Elephc's lowerer currently reports TLS even without requiring
+  its bridge, and lists tls before ssl. Compare matching extension/capability
+  profiles; absence from `-n` alone is not a blanket unsupported-function bug.
+  Unix/udg absence is correct on Windows: php-src explicitly excludes AF_UNIX.
+
 - PHP compiles the regex before validating flags; an invalid regex leaves an
   existing matches destination unchanged and returns false. The current guard
   order and integer-only return contract do not implement this behavior fully.
