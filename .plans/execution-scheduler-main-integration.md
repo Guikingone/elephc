@@ -12,7 +12,7 @@
 - [ ] Compile and run focused scheduler, binding/ownership, native/eval and target
       controls on the integrated source; previous-parent checks are historical.
 - [ ] Commit and push the validated merge, then verify PR #958's exact head/CI state.
-- [ ] Restore the inherited local vendor state without including it in the merge.
+- [x] Restore the inherited local vendor state without including it in the merge.
 
 ## Exact state and recovery
 
@@ -2262,3 +2262,26 @@ Restore the inherited vendor state by exact recovery SHA after merge commits,
 verify that it is not in the index, push the same fork branch without force and
 read back PR #958's exact head/draft/CI state. No new commit/push is asserted by
 this preparation entry; record their actual outcomes separately.
+
+### Merge commits and inherited-state restoration, 2026-10-11
+
+The second ordinary merge is committed as
+**172338a8929c46b1de7b7dec53c7c56efb5a2dd7**, with parents 027c82fa89 and
+9df6d3bd7a. It contains the incoming loop/monitor changes, owned regression fixes,
+new leaves/tests and generated source-link updates (837 files, 6561 insertions,
+2211 deletions). No excluded tool configuration, Kioku packet, scratch artifact
+or inherited vendor deletion was staged.
+
+The live stats-only main was then merged normally as
+**b669488089b508c3ccf0a9a075b4a9da57def95f**, with parents 172338a892 and
+748bf44eef. Exactly the four expected .github/traffic files changed; src, crates,
+tests and Cargo files are byte-identical to the tested integration commit.
+748bf44eef is an ancestor of the current branch. No force/rebase was used.
+
+Recovery stash 46b10c28d5f6c08e10fa3fb8a78f317dde039fdc was applied by exact SHA
+without popping/removing it. Its seven inherited vendor deletions are restored
+as **unstaged** local changes. A diff of their path set against the original
+stash change set matches exactly, and the index is empty. They remain outside
+publication and recoverable from tracked Git versions. Local .codex, .kioku,
+.mcp.json and scratchpad remain untracked and unpublished. Push/PR readback is
+the next action, not an asserted outcome here.
