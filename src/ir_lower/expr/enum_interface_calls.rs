@@ -52,16 +52,28 @@ pub(super) fn lower_enum_interface_call(
         });
         ctx.builder.position_at_end(selected);
         let signature = ctx.classes.get(&class)
-            .and_then(|info| info.methods.get(&php_symbol_key(method)));
+            .and_then(|info| info.methods.get(&php_symbol_key(method))).cloned();
         if let Some(signature) = signature {
             let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
-                signature, args, expr.span, crate::types::call_args::regular_param_count(signature),
+                &signature, args, expr.span, crate::types::call_args::regular_param_count(&signature),
                 false, signature.variadic.is_some()
-                    && !crate::func_args::sig_collects_surplus_args(signature),
+                    && !crate::func_args::sig_collects_surplus_args(&signature),
                 &assoc_spread_sources(ctx, args),
             );
-            if let Err(error) = plan {
-                terminate_enum_argument_error(ctx, method, args, error, expr.span);
+            let error = match plan {
+                Ok(plan) => plan.statically_missing_positionals(&signature).map(|(provided, required)| {
+                    let bound = if signature.variadic.is_some()
+                        || required < crate::types::call_args::regular_param_count(&signature) {
+                        "at least"
+                    } else { "exactly" };
+                    ("ArgumentCountError", format!(
+                        "Too few arguments to function {class}::{method}(), {provided} passed and {bound} {required} expected"
+                    ))
+                }),
+                Err(error) => Some(enum_argument_error(&class, method, &signature, error)),
+            };
+            if let Some((exception_class, message)) = error {
+                terminate_enum_argument_error(ctx, args, exception_class, message, expr.span);
                 ctx.builder.position_at_end(next);
                 continue;
             }
@@ -105,27 +117,37 @@ pub(super) fn lower_enum_interface_call(
 
 /// Evaluates rejected branch arguments once and throws through ordinary operand-owner cleanup.
 fn terminate_enum_argument_error(
-    ctx: &mut LoweringContext<'_, '_>, method: &str, args: &[Expr],
-    error: crate::types::call_args::CallArgPlanError, span: Span,
+    ctx: &mut LoweringContext<'_, '_>, args: &[Expr],
+    exception_class: &str, message: String, span: Span,
 ) {
-    let message = match error {
-        crate::types::call_args::CallArgPlanError::UnknownNamed { name, .. } => {
-            format!("Unknown named parameter ${name}")
-        }
-        crate::types::call_args::CallArgPlanError::Duplicate { name, .. } => {
-            format!("Named parameter ${name} overwrites previous argument")
-        }
-        _ => format!("Invalid arguments to enum method {method}()"),
-    };
     for arg in args {
         let value = lower_call_source_arg(ctx, arg);
         let value = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
         let _ = root_owned_call_operand(ctx, value, arg.span);
     }
     let exception = Expr::new(ExprKind::NewObject {
-        class_name: Name::unqualified("Error"),
+        class_name: Name::unqualified(exception_class),
         args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
     }, span);
     let exception = lower_expr(ctx, &exception);
     ctx.builder.terminate(Terminator::Throw { value: exception.value });
+}
+
+/// Maps shared binding failures to PHP's selected implementation exception and diagnostic.
+fn enum_argument_error(
+    class: &str, method: &str, signature: &FunctionSig,
+    error: crate::types::call_args::CallArgPlanError,
+) -> (&'static str, String) {
+    use crate::types::call_args::CallArgPlanError;
+    match error {
+        CallArgPlanError::MissingRequired { param_idx, .. } => (
+            "ArgumentCountError", format!("{class}::{method}(): Argument #{} (${}) not passed",
+                param_idx + 1, signature.params[param_idx].0),
+        ),
+        CallArgPlanError::UnknownNamed { name, .. } =>
+            ("Error", format!("Unknown named parameter ${name}")),
+        CallArgPlanError::Duplicate { name, .. } =>
+            ("Error", format!("Named parameter ${name} overwrites previous argument")),
+        _ => ("Error", format!("Invalid arguments to enum method {method}()")),
+    }
 }

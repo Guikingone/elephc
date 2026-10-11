@@ -127,6 +127,18 @@ enum PrefixAbsorbValue implements PrefixAbsorbContract {
 }
 function prefix_absorb(PrefixAbsorbContract $value): int { return $value->f(1, 2, 3); }
 echo prefix_absorb(PrefixAbsorbValue::A);
+interface RequiredContract { public function f(int $x): int; }
+enum OptionalRequiredValue implements RequiredContract {
+    case A; public function f(int $x = 1, int $y = 2): int { return $x + $y; }
+}
+enum RequiredValue implements RequiredContract {
+    case A; public function f(int $x, int $y = 3): int { return $x + $y; }
+}
+function missing_positional(RequiredContract $value): int { return $value->f(); }
+function missing_named(RequiredContract $value): int { return $value->f(y: 4); }
+echo missing_positional(OptionalRequiredValue::A), missing_named(OptionalRequiredValue::A);
+try { missing_positional(RequiredValue::A); } catch (\ArgumentCountError $error) { echo $error->getMessage(); }
+try { missing_named(RequiredValue::A); } catch (\ArgumentCountError $error) { echo $error->getMessage(); }
 debug_print_backtrace();
 "#;
     let module = super::lower_source_at_for_target(

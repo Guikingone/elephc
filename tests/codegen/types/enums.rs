@@ -9,6 +9,50 @@
 
 use super::*;
 
+/// A missing positional argument throws only for the selected required enum implementation.
+#[test]
+fn test_enum_fourth_review_missing_positionals() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x): int; }
+enum E implements I { case A; public function f(int $x = 10): int { return $x; } }
+enum F implements I { case A; public function f(int $x): int { return $x; } }
+function invoke(I $value): int { return $value->f(); }
+function unpack(I $value): int { return $value->f(...[]); }
+echo 'E', invoke(E::A), '|';
+try { echo invoke(F::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
+echo '|E', unpack(E::A), '|';
+try { echo unpack(F::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
+echo '|', F::A->f(8);
+"#);
+    assert_eq!(out, "E10|Too few arguments to function F::f(), 0 passed and exactly 1 expected|E10|Too few arguments to function F::f(), 0 passed and exactly 1 expected|8");
+}
+
+/// Named omissions retain the implementation/parameter diagnostic and release rejected owners.
+#[test]
+fn test_enum_fourth_review_missing_named_ownership() {
+    for iterations in [1, 30] {
+        let run = |body: &str| compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function f(int $x): int; }}
+class Payload {{ public function __destruct() {{ echo 'D'; }} }}
+enum E implements I {{ case A; public function f(int $x = 1, ?Payload $y = null): int {{ return $x; }} }}
+enum F implements I {{ case A; public function f(int $x, ?Payload $y = null): int {{ return $x; }} }}
+function argument(): Payload {{ echo 'Y'; return new Payload(); }}
+function invoke(I $value): int {{ return $value->f(y: argument()); }}
+for ($i = 0; $i < {iterations}; $i++) {{ {body} }}
+"#));
+        let direct = run("echo E::A->f(y: argument()), '|', F::A->f(4, argument()), '|';");
+        let rejected = run("echo invoke(E::A), '|'; try { echo invoke(F::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); unset($error); } echo '|';");
+        assert!(direct.success && rejected.success, "{}\n{}", direct.stderr, rejected.stderr);
+        assert_eq!(direct.stdout, "YD1|YD4|".repeat(iterations));
+        assert_eq!(rejected.stdout, "YD1|YDF::f(): Argument #1 ($x) not passed|".repeat(iterations));
+        for metric in ["live_blocks=", "live_bytes="] {
+            let retained = |stderr: &str| stderr.lines().next().unwrap().split_whitespace()
+                .find(|field| field.starts_with(metric)).unwrap()[metric.len()..].parse::<usize>().unwrap();
+            assert_eq!(retained(&rejected.stderr), retained(&direct.stderr), "{metric}: {}\n{}", rejected.stderr, direct.stderr);
+        }
+    }
+}
+
 /// Surplus positionals still release owned temporaries after a shorter implementation returns.
 #[test]
 fn test_enum_third_review_surplus_argument_ownership() {

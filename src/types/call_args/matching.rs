@@ -123,6 +123,12 @@ pub(crate) fn regular_param_count(sig: &FunctionSig) -> usize {
     ))
 }
 
+/// Counts required caller-visible slots, excluding variadic and hidden argument collectors.
+pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
+    sig.defaults.iter().take(regular_param_count(sig))
+        .filter(|default| default.is_none()).count()
+}
+
 /// Searches for a parameter named `name` among the first `regular_param_count` parameters.
 ///
 /// Returns its index within those parameters, or `None` if no visible parameter matches.
