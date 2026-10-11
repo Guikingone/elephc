@@ -29,15 +29,16 @@ pub(super) fn validate_eval_readonly_property_write(
     if !property.is_readonly() {
         return Ok(());
     }
-    if clone_target.is_some_and(|(identity, storage_property)| {
-        !context.dynamic_property_is_initialized(identity, storage_property)
-    }) {
-        return Ok(());
-    }
-    if clone_target.is_some_and(|(identity, storage_property)| {
-        context.consume_clone_reinitialization(identity, storage_property)
-    }) {
-        return Ok(());
+    if let Some((identity, storage_property)) = clone_target {
+        if context.clone_initialization_is_active(identity) {
+            // First initialization consumes the same one-shot lease as an overwrite.
+            return context.consume_clone_reinitialization(identity, storage_property)
+                .then_some(())
+                .ok_or(EvalStatus::RuntimeFatal);
+        }
+        if !context.dynamic_property_is_initialized(identity, storage_property) {
+            return Ok(());
+        }
     }
     current_eval_method_is_declaring_constructor(declaring_class, context)
         .then_some(())

@@ -209,3 +209,57 @@ $box->initialize();
 try { $box->id = 8; } catch (Error $error) { echo $error->getMessage(), ":", $box->id; }');
 "#, "Cannot modify readonly property NativeBase::$id:7");
 }
+
+/// Runtime eval consumes a readonly clone lease on the first initialization, with balanced owners.
+#[test]
+fn test_readonly_clone_third_review_uninitialized_hook_once() {
+    verify(r#"<?php
+$source = 'class EvalCloneEmptyHook {
+    public readonly int $id;
+    public function __clone() {
+        $this->id = 2;
+        try { $this->id = 3; echo "bad"; }
+        catch (Error $error) { echo $error->getMessage(), "|"; }
+    }
+}
+$original = new EvalCloneEmptyHook();
+$copy = clone $original;
+echo $copy->id;
+unset($copy, $original);' . ' // ' . $argc;
+eval($source);
+"#, "Cannot modify readonly property EvalCloneEmptyHook::$id|2");
+}
+
+/// The clone override phase rejects a second write after a setter initializes an empty slot.
+#[test]
+fn test_readonly_clone_third_review_uninitialized_override_once() {
+    verify(r#"<?php
+$source = 'class EvalCloneEmptyOverride {
+    public public(set) readonly int $id;
+    public int $trigger { set { $this->id = $value; } }
+}
+$original = new EvalCloneEmptyOverride();
+try { clone($original, ["trigger" => 4, "id" => 5]); echo "bad"; }
+catch (Error $error) { echo $error->getMessage(); }
+unset($original);' . ' // ' . $argc;
+eval($source);
+"#, "Cannot modify readonly property EvalCloneEmptyOverride::$id");
+}
+
+/// The post-hook override receives its own lease even when the hook first initialized the property.
+#[test]
+fn test_readonly_clone_third_review_uninitialized_independent_phases() {
+    verify(r#"<?php
+$source = 'class EvalCloneEmptyPhases {
+    public public(set) readonly int $id;
+    public function __clone() { $this->id = 2; }
+}
+$original = new EvalCloneEmptyPhases();
+$copy = clone($original, ["id" => 3]);
+echo $copy->id, "|";
+try { $copy->id = 4; echo "bad"; }
+catch (Error $error) { echo $error->getMessage(); }
+unset($copy, $original);' . ' // ' . $argc;
+eval($source);
+"#, "3|Cannot modify readonly property EvalCloneEmptyPhases::$id");
+}

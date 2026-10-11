@@ -225,6 +225,66 @@ catch (Error $error) { return $source->id; }"#).expect("parse readonly clone acc
     assert_eq!(values.get(result), FakeValue::Int(1));
 }
 
+/// The first initialization in a clone hook consumes the readonly property's rewrite allowance.
+#[test]
+fn execute_program_clone_third_review_uninitialized_hook_once() {
+    let program = parse_fragment(br#"class EvalCloneEmptyHook {
+    public readonly int $id;
+    public function __clone() {
+        $this->id = 2;
+        try { $this->id = 3; echo "bad"; }
+        catch (Error $error) { echo $error->getMessage(), "|"; }
+    }
+}
+$source = new EvalCloneEmptyHook();
+$copy = clone $source;
+echo $copy->id;
+return true;"#).expect("parse uninitialized readonly clone hook");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute clone hook");
+    assert_eq!(values.output, "Cannot modify readonly property EvalCloneEmptyHook::$id|2");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// An override setter initializing an empty readonly slot prevents a second write in that phase.
+#[test]
+fn execute_program_clone_third_review_uninitialized_override_once() {
+    let program = parse_fragment(br#"class EvalCloneEmptyOverride {
+    public public(set) readonly int $id;
+    public int $trigger { set { $this->id = $value; } }
+}
+$source = new EvalCloneEmptyOverride();
+try { clone($source, ["trigger" => 4, "id" => 5]); echo "bad"; }
+catch (Error $error) { echo $error->getMessage(); }
+return true;"#).expect("parse uninitialized readonly clone overrides");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute clone overrides");
+    assert_eq!(values.output, "Cannot modify readonly property EvalCloneEmptyOverride::$id");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// A successful first hook initialization still permits one independent post-hook override.
+#[test]
+fn execute_program_clone_third_review_uninitialized_independent_phases() {
+    let program = parse_fragment(br#"class EvalCloneEmptyPhases {
+    public public(set) readonly int $id;
+    public function __clone() { $this->id = 2; }
+}
+$source = new EvalCloneEmptyPhases();
+$copy = clone($source, ["id" => 3]);
+echo $copy->id, "|";
+try { $copy->id = 4; echo "bad"; }
+catch (Error $error) { echo $error->getMessage(); }
+return true;"#).expect("parse independent readonly clone phases");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute clone phases");
+    assert_eq!(values.output, "3|Cannot modify readonly property EvalCloneEmptyPhases::$id");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies unary clone releases an owned temporary source after the shallow clone is complete.
 #[test]
 fn execute_program_clone_expression_releases_temporary_source() {
