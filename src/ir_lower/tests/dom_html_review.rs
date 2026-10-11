@@ -26,10 +26,18 @@ $div = $doc->getElementsByTagName('div')->item(0);
 echo $div->getAttribute('title'), $div->nodeValue, $doc->saveXML($div);
 echo $doc->ownerDocument === null ? 'N' : 'bad';
 echo $div->ownerDocument === $doc ? 'O' : 'bad';
+$doc->loadHTML('<DIV CLASS="first" class="ignored">a<?One x><?Two?>b</DIV>');
+$div = $doc->getElementsByTagName('div')->item(0);
+echo $div->getAttribute('CLASS'), $doc->getElementsByTagName('DIV')->length;
+foreach ($div->childNodes as $child) {
+    if ($child instanceof DOMProcessingInstruction) { echo $child->target, $child->data; }
+}
+echo $doc->saveXML($div);
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains(&crate::names::method_symbol("DOMNodeList", "valid")), "{target}");
+    assert!(assembly.contains(&crate::names::method_symbol("DOMProcessingInstruction", "__construct")), "{target}: PI construction");
     assert!(assembly.contains("__rt_array_take_boxed") || assembly.contains("__rt_hash_pop_boxed"), "{target}: stack pop path");
 }
 

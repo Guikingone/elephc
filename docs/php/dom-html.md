@@ -6,7 +6,7 @@ sidebar:
 ---
 
 elephc injects a small **HTML-only DOM subset** when a program names `DOMDocument`,
-`DOMNode`, `DOMElement`, `DOMText`, `DOMComment`, `DOMCharacterData`, or
+`DOMNode`, `DOMElement`, `DOMText`, `DOMComment`, `DOMCharacterData`, `DOMProcessingInstruction`, or
 `DOMNodeList` through the global prelude surface. References bound to user-defined
 classes, including namespace and import aliases, keep their own definitions and
 do not trigger conflicting prelude declarations. The surface is enough for Termwind's `HtmlRenderer::parse` to
@@ -39,12 +39,13 @@ foreach ($body->childNodes as $node) {
 |---|---|
 | `new DOMDocument()` | Empty document. Optional constructor args are accepted and ignored. |
 | `loadHTML(string $source, int $options = 0): bool` | Forgiving HTML fragment parse. Wraps content in `html`/`body`; unmatched closing tags are ignored, and a matching ancestor closes its open descendants. Text and attributes decode HTML4 named entities, `&apos;`, and numeric references. Script/style content remains raw until its matching closing tag. This is not full HTML tree-repair semantics. |
-| `getElementsByTagName(string $name): DOMNodeList` | Document-order descendant elements. `*` matches every element. |
+| `getElementsByTagName(string $name): DOMNodeList` | Document-order descendant elements. Names are compared literally after HTML parse lowercases tag names. `*` matches every element. |
 | `DOMNodeList::item(int $index)` / `$length` / `foreach` | Indexed access and `Iterator` traversal. |
-| `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text, excluding comments. Document `nodeValue` remains `null`. A `DOMComment` retains its own comment body and serializes normally. |
+| `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text, excluding comments and processing instructions. Document `nodeValue` remains `null`. A `DOMComment` retains its own comment body and serializes normally. |
 | `childNodes`, `previousSibling`, `nextSibling`, `parentNode`, `ownerDocument` | Wired after parse. The document's `ownerDocument` is `null`; child nodes refer to their document. The tree is treated as immutable. |
-| `DOMElement::getAttribute(string $name): string` | Attribute names are lowercased on parse. Missing attributes return `""`. |
+| `DOMElement::getAttribute(string $name): string` | Attribute names are lowercased on parse; duplicate names keep their first value. Queries are compared literally, so `class` matches parsed `CLASS`, but a query for `CLASS` does not. Missing attributes return `""`. |
 | `instanceof DOMElement` / `DOMText` / `DOMComment` / `DOMDocument` | Class hierarchy matches PHP (`DOMText`/`DOMComment` extend `DOMCharacterData` extend `DOMNode`). |
+| `DOMProcessingInstruction` | Extends `DOMNode`; parsed instructions preserve target case, `target`, `data`, `nodeName`, `nodeValue`, and ordinary node links. Serialization emits `<?target data?>`. Legacy HTML consumes through `>`, retaining a preceding `?` in the data. |
 | `saveXML(?DOMNode $node = null): string` | Serializes a node or the whole document. Text escapes `&`, `<`, `>`, and CR; double-quoted attributes also escape `"`, LF, and TAB, but not `'`. Script/style raw text serializes as safely split CDATA. No XML declaration (Termwind passes `LIBXML_NOXMLDECL`). |
 
 ### `LIBXML_*` flags Termwind uses
@@ -68,11 +69,17 @@ Unknown `<!...>` markup stays text, while a doctype is ignored. This follows
 the legacy libxml HTML tokenizer used by PHP with libxml 2.9.14; newer libxml
 versions can tokenize malformed declarations differently.
 
+Processing instructions follow that same legacy HTML tokenizer. For example,
+`<div>a<?php echo 1; ?>b</div>` has three children and element `nodeValue` `ab`;
+`saveXML()` emits `<div>a<?php echo 1; ??>b</div>`. At end of input a bare
+unterminated target such as `<?foo` becomes text, while an incomplete instruction
+with data is discarded.
+
 - No libxml2 or Lexbor engine, no `elephc-dom` crate, no XML `load()` / `loadXML()`.
 - No modern `Dom\` HTML API (`Dom\HTMLDocument`, `Dom\Element`, …).
 - No XPath, CSS selectors, DTD/schema validation, XInclude, C14N, or token lists.
 - No tree mutation (`appendChild`, `removeChild`, `setAttribute`, `createElement`, …).
-- No `DOMAttr` / `DOMNamedNodeMap`, processing instructions, `DOMCdataSection` / entity-node APIs, or notations. HTML entity decoding and script/style CDATA serialization are supported internally.
+- No `DOMAttr` / `DOMNamedNodeMap`, `DOMCdataSection` / entity-node APIs, or notations. HTML entity decoding and script/style CDATA serialization are supported internally.
 - No `LIBXML_*` constants beyond the five Termwind flags.
 - No SimpleXML and no DOM ↔ SimpleXML import.
 - `loadHTMLFile()`, encoding detection, error collection (`libxml_use_internal_errors`), and default `<head>` insertion are unimplemented.

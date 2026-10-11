@@ -51,6 +51,17 @@ pub fn inject_if_used(
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, force, inventory)
+    })
+}
+
+/// Keeps detector cloning, recursive scanning and prelude construction inside the phase budget.
+fn inject_if_used_on_compiler_stack(
+    program: Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     if !force && !detect::program_uses_dom_html(&program) {
         return program;
     }
@@ -85,6 +96,7 @@ mod tests {
                 "DOMCharacterData",
                 "DOMText",
                 "DOMComment",
+                "DOMProcessingInstruction",
             ]
         );
     }

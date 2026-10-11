@@ -1,7 +1,7 @@
 //! Purpose:
 //! Elephc-PHP source for the Termwind-facing DOM HTML subset: a small HTML
 //! tokenizer/tree builder plus `DOMDocument` / `DOMNode` / `DOMElement` /
-//! `DOMText` / `DOMComment` / `DOMNodeList`.
+//! `DOMText` / `DOMComment` / `DOMProcessingInstruction` / `DOMNodeList`.
 //!
 //! Called from:
 //! - `crate::dom_html_prelude::parsed_prelude`, which tokenizes and
@@ -179,22 +179,52 @@ function __elephc_dom_read_attrs(string $html, int $i): mixed {
         }
         // Indexed [name, value] pairs: nested string-keyed maps lose their
         // keys when stored through mixed tree/token slots.
-        $_attrs[] = [$_name, $_val];
+        if (!__elephc_dom_has_attr($_attrs, $_name)) {
+            $_attrs[] = [$_name, $_val];
+        }
     }
     return [$_attrs, $_self, $i];
+}
+
+// Presence is separate from value: the first empty attribute still suppresses duplicates.
+function __elephc_dom_has_attr(mixed $attrs, string $name): bool {
+    if (!is_array($attrs)) {
+        return false;
+    }
+    foreach ($attrs as $_pair) {
+        if (is_array($_pair) && (string) $_pair[0] === $name) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function __elephc_dom_attr_get(mixed $attrs, string $name): string {
     if (!is_array($attrs)) {
         return "";
     }
-    $_key = strtolower($name);
     foreach ($attrs as $_pair) {
-        if (is_array($_pair) && (string) $_pair[0] === $_key) {
+        if (is_array($_pair) && (string) $_pair[0] === $name) {
             return (string) $_pair[1];
         }
     }
     return "";
+}
+
+// Recovery can split one text run around a discarded delimiter, but not into separate nodes.
+function __elephc_dom_append_text_token(array $tokens, string $text): array {
+    if ($text === "") {
+        return $tokens;
+    }
+    $_count = count($tokens);
+    if ($_count > 0 && $tokens[$_count - 1]["k"] === "text") {
+        $_last = $tokens[$_count - 1];
+        $_last["v"] = (string) $_last["v"] . $text;
+        $tokens[$_count - 1] = $_last;
+    } else {
+        $tokens[] = ["k" => "text", "v" => $text];
+    }
+    return $tokens;
 }
 
 function __elephc_dom_tokenize(string $html, int $flags): mixed {
@@ -217,9 +247,7 @@ function __elephc_dom_tokenize(string $html, int $flags): mixed {
                 $_i = $_i + 1;
             }
             $_text = __elephc_dom_decode_entities($_text . substr($html, $_start, $_i - $_start));
-            if ($_text !== "") {
-                $_tokens[] = ["k" => "text", "v" => $_text];
-            }
+            $_tokens = __elephc_dom_append_text_token($_tokens, $_text);
             continue;
         }
         if (substr($html, $_i, 4) === "<!--") {
@@ -235,7 +263,35 @@ function __elephc_dom_tokenize(string $html, int $flags): mixed {
             $_tokens[] = ["k" => "comment", "v" => $_body];
             continue;
         }
-        if (substr($html, $_i, 2) === "<!" || substr($html, $_i, 2) === "<?") {
+        if (substr($html, $_i, 2) === "<?") {
+            $_i = $_i + 2;
+            $_start = $_i;
+            $_first = __elephc_dom_char($html, $_i);
+            if (!__elephc_dom_is_letter($_first) && $_first !== "_" && $_first !== ":") {
+                continue;
+            }
+            while ($_i < $_len && (__elephc_dom_is_name(__elephc_dom_char($html, $_i))
+                || __elephc_dom_char($html, $_i) === ".")) {
+                $_i = $_i + 1;
+            }
+            $_target = substr($html, $_start, $_i - $_start);
+            if ($_i === $_len) {
+                // libxml keeps a bare unterminated target as text, without its opening delimiter.
+                $_tokens = __elephc_dom_append_text_token($_tokens, $_target);
+                continue;
+            }
+            $_data_start = __elephc_dom_skip_ws($html, $_i);
+            $_pi_end = strpos($html, ">", $_data_start);
+            if ($_pi_end === false) {
+                break;
+            }
+            // Legacy HTML stops at >, so a preceding ? is part of the PI data.
+            $_tokens[] = ["k" => "pi", "n" => $_target,
+                "v" => substr($html, $_data_start, (int) $_pi_end - $_data_start)];
+            $_i = (int) $_pi_end + 1;
+            continue;
+        }
+        if (substr($html, $_i, 2) === "<!") {
             $_decl_end = strpos($html, ">", $_i);
             if ($_decl_end === false) {
                 break;
@@ -262,7 +318,7 @@ function __elephc_dom_tokenize(string $html, int $flags): mixed {
         $_name = (string) $_pair[0];
         $_i = (int) $_pair[1];
         if ($_name === "") {
-            $_tokens[] = ["k" => "text", "v" => "<"];
+            $_tokens = __elephc_dom_append_text_token($_tokens, "<");
             continue;
         }
         $_ap = __elephc_dom_read_attrs($html, $_i);
@@ -298,7 +354,7 @@ function __elephc_dom_text_of(mixed $node): string {
     if ($node["kind"] === "text" || $node["kind"] === "cdata") {
         return (string) $node["value"];
     }
-    if ($node["kind"] === "comment") {
+    if ($node["kind"] === "comment" || $node["kind"] === "pi") {
         return "";
     }
     $_out = "";
@@ -339,8 +395,12 @@ function __elephc_dom_build_forest(mixed $tokens): mixed {
             } else {
                 $_stack = __elephc_dom_append_child($_stack, $_node);
             }
-        } elseif ($_k === "comment") {
-            $_node = __elephc_dom_new_node("comment", "#comment", (string) $_tok["v"], [], []);
+        } elseif ($_k === "comment" || $_k === "pi") {
+            $_name = "#comment";
+            if ($_k === "pi") {
+                $_name = (string) $_tok["n"];
+            }
+            $_node = __elephc_dom_new_node($_k, $_name, (string) $_tok["v"], [], []);
             if (count($_stack) === 0) {
                 $_roots[] = $_node;
             } else {
@@ -441,6 +501,13 @@ function __elephc_dom_serialize_node(mixed $node): string {
     if ($node instanceof DOMComment) {
         return "<!--" . (string) $node->nodeValue . "-->";
     }
+    if ($node instanceof DOMProcessingInstruction) {
+        $_separator = "";
+        if ((string) $node->nodeValue !== "") {
+            $_separator = " ";
+        }
+        return "<?" . $node->nodeName . $_separator . (string) $node->nodeValue . "?>";
+    }
     if ($node instanceof DOMDocument) {
         $_out = "";
         if ($node->childNodes !== null) {
@@ -481,7 +548,7 @@ function __elephc_dom_attach_parent(DOMNode $node, DOMNode $parent, mixed $doc):
     $node->ownerDocument = $doc;
 }
 
-function __elephc_dom_link_prev(int $has_prev, int $prev_kind, DOMElement $prev_el, DOMText $prev_text, DOMComment $prev_comment, DOMNode $right): void {
+function __elephc_dom_link_prev(int $has_prev, int $prev_kind, DOMElement $prev_el, DOMText $prev_text, DOMComment $prev_comment, DOMProcessingInstruction $prev_pi, DOMNode $right): void {
     if ($has_prev !== 1) {
         return;
     }
@@ -489,8 +556,10 @@ function __elephc_dom_link_prev(int $has_prev, int $prev_kind, DOMElement $prev_
         __elephc_dom_link_siblings($prev_el, $right);
     } elseif ($prev_kind === 2) {
         __elephc_dom_link_siblings($prev_text, $right);
-    } else {
+    } elseif ($prev_kind === 3) {
         __elephc_dom_link_siblings($prev_comment, $right);
+    } else {
+        __elephc_dom_link_siblings($prev_pi, $right);
     }
 }
 
@@ -501,12 +570,13 @@ function __elephc_dom_make_children(DOMDocument $doc, DOMNode $parent, mixed $tr
     $_prev_el = new DOMElement();
     $_prev_text = new DOMText();
     $_prev_comment = new DOMComment();
+    $_prev_pi = new DOMProcessingInstruction("");
     foreach ($trees as $_child) {
         $_kid = __elephc_dom_make_node($doc, $_child);
         if ($_kid instanceof DOMElement) {
             $_el_kid = $_kid;
             __elephc_dom_attach_parent($_el_kid, $parent, $doc);
-            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_el_kid);
+            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_prev_pi, $_el_kid);
             $_kids[] = $_el_kid;
             $_prev_el = $_el_kid;
             $_prev_kind = 1;
@@ -514,7 +584,7 @@ function __elephc_dom_make_children(DOMDocument $doc, DOMNode $parent, mixed $tr
         } elseif ($_kid instanceof DOMText) {
             $_text_kid = $_kid;
             __elephc_dom_attach_parent($_text_kid, $parent, $doc);
-            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_text_kid);
+            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_prev_pi, $_text_kid);
             $_kids[] = $_text_kid;
             $_prev_text = $_text_kid;
             $_prev_kind = 2;
@@ -522,10 +592,18 @@ function __elephc_dom_make_children(DOMDocument $doc, DOMNode $parent, mixed $tr
         } elseif ($_kid instanceof DOMComment) {
             $_comment_kid = $_kid;
             __elephc_dom_attach_parent($_comment_kid, $parent, $doc);
-            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_comment_kid);
+            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_prev_pi, $_comment_kid);
             $_kids[] = $_comment_kid;
             $_prev_comment = $_comment_kid;
             $_prev_kind = 3;
+            $_has_prev = 1;
+        } elseif ($_kid instanceof DOMProcessingInstruction) {
+            $_pi_kid = $_kid;
+            __elephc_dom_attach_parent($_pi_kid, $parent, $doc);
+            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_prev_pi, $_pi_kid);
+            $_kids[] = $_pi_kid;
+            $_prev_pi = $_pi_kid;
+            $_prev_kind = 4;
             $_has_prev = 1;
         }
     }
@@ -554,6 +632,11 @@ function __elephc_dom_make_node(DOMDocument $doc, mixed $tree): mixed {
         $_comment->ownerDocument = $doc;
         $_comment->childNodes = new DOMNodeList([]);
         return $_comment;
+    }
+    if ($_kind === "pi") {
+        $_pi = new DOMProcessingInstruction((string) $tree["name"], (string) $tree["value"]);
+        $_pi->ownerDocument = $doc;
+        return $_pi;
     }
     $_el = new DOMElement();
     $_el->nodeName = (string) $tree["name"];
@@ -599,7 +682,7 @@ class DOMNode {
     }
 
     public function getElementsByTagName(string $qualifiedName): DOMNodeList {
-        return new DOMNodeList(__elephc_dom_collect($this, strtolower($qualifiedName)));
+        return new DOMNodeList(__elephc_dom_collect($this, $qualifiedName));
     }
 }
 
@@ -697,5 +780,18 @@ class DOMText extends DOMCharacterData {
 }
 
 class DOMComment extends DOMCharacterData {
+}
+
+class DOMProcessingInstruction extends DOMNode {
+    public string $target = "";
+    public string $data = "";
+
+    public function __construct(string $target, string $data = "") {
+        $this->target = $target;
+        $this->data = $data;
+        $this->nodeName = $target;
+        $this->nodeValue = $data;
+        $this->childNodes = new DOMNodeList([]);
+    }
 }
 "###;

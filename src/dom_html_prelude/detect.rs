@@ -1,7 +1,7 @@
 //! Purpose:
 //! Decides whether a parsed program references the Termwind-facing DOM HTML
 //! surface: `DOMDocument`, `DOMNode`, `DOMElement`, `DOMText`, `DOMComment`,
-//! `DOMCharacterData`, or `DOMNodeList` — so the HTML prelude is injected only
+//! `DOMCharacterData`, `DOMProcessingInstruction`, or `DOMNodeList`, so the prelude is injected only
 //! for programs that actually walk a loaded HTML tree.
 //!
 //! Called from:
@@ -38,6 +38,7 @@ const DOM_HTML_CLASSES: &[&str] = &[
     "DOMElement",
     "DOMText",
     "DOMComment",
+    "DOMProcessingInstruction",
     "DOMCharacterData",
     "DOMNodeList",
 ];
@@ -599,11 +600,17 @@ mod tests {
         crate::parser::parse(&tokens).expect("test source must parse")
     }
 
-    /// `new DOMDocument` is the Termwind entry point and must inject the prelude.
+    /// Global document and PI constructor references inject the prelude independently.
     #[test]
     fn detects_new_dom_document() {
         assert!(program_uses_dom_html(&parse(
             "<?php $dom = new DOMDocument();"
+        )));
+        assert!(program_uses_dom_html(&parse(
+            "<?php $pi = new DOMProcessingInstruction('target', 'data');"
+        )));
+        assert!(program_uses_dom_html(&parse(
+            "<?php if ($node instanceof \\DOMProcessingInstruction) { echo 1; }"
         )));
     }
 

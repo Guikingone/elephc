@@ -11,6 +11,107 @@
 
 use crate::support::*;
 
+/// Consecutive instructions preserve typed PI fields and links across every sibling kind.
+#[test]
+fn dom_html_fourth_review_processing_instruction_fields() {
+    let out = compile_and_run_capture(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<div><?One a&b><?Two?><span>x</span><!--c--><?Three></div>');
+$div = $dom->getElementsByTagName('div')->item(0);
+echo $div->childNodes->length, ':', $div->nodeValue, '|';
+foreach ($div->childNodes as $child) {
+    if ($child instanceof DOMProcessingInstruction) {
+        echo $child->target, ':', $child->data, ':';
+        echo $child->previousSibling === null ? 'N' : $child->previousSibling->nodeName, ':';
+        echo $child->nextSibling === null ? 'N' : $child->nextSibling->nodeName, '|';
+        echo $child instanceof DOMNode ? 'B' : 'bad';
+        echo $child instanceof DOMCharacterData ? 'bad' : 'P';
+    }
+}
+echo '|', $dom->saveXML($div);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5:x|One:a&b:N:Two|BPTwo:?:One:span|BPThree::#comment:N|BP|<div><?One a&b?><?Two ??><span>x</span><!--c--><?Three?></div>", "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
+/// A global user-owned PI name, even case-folded, must not inject a conflicting prelude.
+#[test]
+fn dom_html_fourth_review_user_processing_instruction() {
+    let out = compile_and_run(r#"<?php
+class DOMProcessingInstruction { public string $marker = 'user'; }
+$pi = new \domprocessinginstruction();
+echo $pi->marker;
+"#);
+    assert_eq!(out, "user");
+}
+
+/// Closed HTML processing instructions retain their own value and sibling position, not parent text.
+#[test]
+fn dom_html_fourth_review_processing_instructions() {
+    let out = compile_and_run_capture(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<div>a<?php echo 1; ?>b</div>');
+$div = $dom->getElementsByTagName('div')->item(0);
+echo $div->childNodes->length, '|', $div->nodeValue, '|', $dom->saveXML($div), '|';
+$pi = $div->childNodes->item(1);
+echo get_class($pi), ':', $pi->nodeName, ':', $pi->nodeValue, '|';
+echo $pi->previousSibling->nodeValue, $pi->nextSibling->nodeValue, '|';
+echo $pi->parentNode === $div ? 'P' : 'bad', $pi->ownerDocument === $dom ? 'O' : 'bad';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3|ab|<div>a<?php echo 1; ??>b</div>|DOMProcessingInstruction:php:echo 1; ?|ab|PO", "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
+/// PI targets preserve case and legacy HTML recovery retains unterminated target text.
+#[test]
+fn dom_html_fourth_review_processing_instruction_recovery() {
+    let out = compile_and_run_capture(r#"<?php
+$dom = new DOMDocument();
+foreach (['<div>a<?Target Data>b</div>', '<div>a<?foo>b</div>', '<div>a<?foo?>b</div>', '<div>a<?unclosed', '<div>a<?foo bar', '<div>a<?>b</div>', '<div>a<?1 bad>b</div>'] as $html) {
+    $dom->loadHTML($html);
+    $div = $dom->getElementsByTagName('div')->item(0);
+    echo $div->nodeValue, '|', $div->childNodes->length, '|', $dom->saveXML($div), ';';
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ab|3|<div>a<?Target Data?>b</div>;ab|3|<div>a<?foo?>b</div>;ab|3|<div>a<?foo ??>b</div>;aunclosed|1|<div>aunclosed</div>;a|1|<div>a</div>;a>b|1|<div>a&gt;b</div>;a1 bad>b|1|<div>a1 bad&gt;b</div>;", "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
+/// HTML parse normalizes names, while the caller's tag and attribute queries remain literal.
+#[test]
+fn dom_html_fourth_review_literal_lookups() {
+    let out = compile_and_run_capture(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<DIV CLASS="X"><SPAN TITLE="Y">Hi</SPAN></DIV>');
+$div = $dom->getElementsByTagName('div')->item(0);
+echo $div->nodeName, '|', $div->getAttribute('class'), ':', $div->getAttribute('CLASS'), '|';
+echo $dom->getElementsByTagName('DIV')->length, ':', $dom->getElementsByTagName('div')->length, '|';
+echo $div->getElementsByTagName('SPAN')->length, ':', $div->getElementsByTagName('span')->length, ':', $div->getElementsByTagName('*')->length;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "div|X:|0:1|0:1:1", "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
+/// Duplicate parsed attributes keep the first value, including empty and boolean attributes.
+#[test]
+fn dom_html_fourth_review_duplicate_attributes() {
+    let out = compile_and_run_capture(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<div class="a" CLASS="b" id="1" id="2" title="" title="later">x</div><input disabled="" DISABLED checked checked="no">');
+$div = $dom->getElementsByTagName('div')->item(0);
+$input = $dom->getElementsByTagName('input')->item(0);
+echo $dom->saveXML($div), '|', $div->getAttribute('class'), '|', $div->getAttribute('title'), '|';
+echo $input->getAttribute('disabled'), ':', $input->getAttribute('checked'), '|', $dom->saveXML($input);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "<div class=\"a\" id=\"1\" title=\"\">x</div>|a||:checked|<input disabled=\"\" checked=\"checked\"/>", "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
 /// Entity helper temporaries and the static named table release without constructing a DOM tree.
 #[test]
 fn dom_html_third_review_entity_decoder_heap_clean() {
