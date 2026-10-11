@@ -26,6 +26,10 @@ function updateNullable(ConditionalReadonly $box): void { $box->nullable ??= fal
 function overwrite(ConditionalReadonly $box): void { $box->implicit = fallback(); }
 function initializePublic(ConditionalReadonly $box): void { $box->explicit = fallback(); }
 function initializeUnion(ConditionalReadonly|false $box): void { $box->explicit = fallback(); }
+function coalesceUnion(ConditionalReadonly|false $box): void { $box->explicit ??= fallback(); }
+function coalesceImplicitUnion(ConditionalReadonly|false $box): void { $box->implicit ??= fallback(); }
+class UnionHook { public int $value { get => 7; } }
+function coalesceHookUnion(UnionHook|false $box): int { return $box->value ?? 9; }
 readonly class LegacyReadonly {
     public $id;
     public function __construct(int $id) { $this->id = $id; }
@@ -70,6 +74,18 @@ echo count($properties);
     assert!(union.instructions.iter().any(|inst| inst.op == Op::TypePredicate
         && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object))),
         "{target}: non-object receivers are rejected before inspecting readonly state");
+    for name in ["coalesceUnion", "coalesceImplicitUnion"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert!(function.blocks.iter().any(|block| block.name == "coalesce.property.uninitialized"),
+            "{target}: a boxed union coalesce must suppress the uninitialized value read");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::PropInitialized),
+            "{target}: object and scalar arms use the safe runtime initialization probe");
+    }
+    let hooked = module.functions.iter().find(|function| function.name == "coalesceHookUnion").unwrap();
+    assert!(!hooked.instructions.iter().any(|inst| inst.op == Op::PropInitialized),
+        "{target}: virtual union getters never probe their uninitialized backing slot");
+    assert!(hooked.instructions.iter().any(|inst| inst.op == Op::MixedUnbox),
+        "{target}: the guarded getter borrows no boxed cell as an object pointer");
     for function in [
         module.functions.iter().find(|function| function.name == "initializePublic").unwrap(),
         module.functions.iter().find(|function| function.name == "initializeUnion").unwrap(),

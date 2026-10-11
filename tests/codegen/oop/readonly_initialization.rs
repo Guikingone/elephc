@@ -10,6 +10,51 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Explicit public setters initialize through boxed object unions without an eager value read.
+#[test]
+fn test_readonly_fourth_review_union_public_coalesce() {
+    verify(r#"<?php
+class PublicBox { public public(set) readonly int $id; }
+function box(bool $found): PublicBox|false { echo 'B'; if ($found) { return new PublicBox(); } return false; }
+function fallback(): int { echo 'R'; return 9; }
+$value = box($argc > 0);
+$value->id ??= fallback();
+$value->id ??= fallback();
+echo $value->id, '|';
+$missing = box($argc > 100);
+try { $missing->id ??= fallback(); } catch (Error $error) { echo $error->getMessage(); }
+echo '|'; box($argc > 0)->id ??= fallback();
+"#, "BR9|BRAttempt to assign property \"id\" on false|BR");
+}
+
+/// Restricted union setters evaluate one fallback before rejecting initialization and stay unset.
+#[test]
+fn test_readonly_fourth_review_union_implicit_coalesce() {
+    verify(r#"<?php
+class Box { public readonly int $id; }
+function box(bool $found): Box|false { echo 'B'; if ($found) { return new Box(); } return false; }
+function fallback(): int { echo 'R'; return 9; }
+$value = box($argc > 0);
+try { $value->id ??= fallback(); } catch (Error $error) { echo $error->getMessage(), '|'; }
+echo isset($value->id) ? 'set' : 'unset';
+echo '|';
+try { box($argc > 0)->id ??= fallback(); } catch (Error $error) { echo $error->getMessage(); }
+"#, "BRCannot modify protected(set) readonly property Box::$id from global scope|unset|BRCannot modify protected(set) readonly property Box::$id from global scope");
+}
+
+/// Silent union probes do not bypass a virtual getter to inspect its uninitialized backing slot.
+#[test]
+fn test_readonly_fourth_review_union_hook_control() {
+    verify(r#"<?php
+class Hooked { public int $id { get { echo 'G'; return 7; } } }
+function hooked(bool $found): Hooked|false { if ($found) { return new Hooked(); } return false; }
+$hooked = hooked($argc > 0);
+echo $hooked->id ?? 9;
+$missing = hooked($argc > 100);
+echo '|', $missing->id ?? 9, '|', hooked($argc > 0)->id ?? 9;
+"#, "G7|9|G7");
+}
+
 /// False union receivers throw before readonly initialization or setter permission checks.
 #[test]
 fn test_readonly_oct9_false_receiver_error_precedence() {
