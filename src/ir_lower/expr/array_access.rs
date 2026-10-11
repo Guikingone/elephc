@@ -221,7 +221,19 @@ pub(super) fn lower_array_access_from_value(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
-    let mut index_value = lower_expr(ctx, index);
+    let index_value = lower_expr(ctx, index);
+    lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing)
+}
+
+/// Reads an already evaluated receiver and key, preserving their normal read cleanup.
+pub(crate) fn lower_array_access_from_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    mut index_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let index_ty = lowered_index_expr_key_type(ctx, index, index_value.value);

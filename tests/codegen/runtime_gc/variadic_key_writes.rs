@@ -19,6 +19,39 @@ fn assert_key_write(source: &str, expected: &str) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Computed string and boxed keys install nested parents in typed lists without changing aliases.
+#[test]
+fn test_variadic_fourth_review_typed_list_computed_parent() {
+    assert_key_write(r#"<?php
+function writeString(string $key): void {
+    $items = ["A", "B", "C"]; $copy = $items;
+    $items[$key]["x"] = 1; $items[$key]["y"] = 2;
+    echo json_encode($items), "|", json_encode($copy), "\n";
+}
+function writeMixed(mixed $key): void {
+    $items = [5, 7]; $copy = $items;
+    $items[$key]["x"] = 3;
+    echo json_encode($items), "|", json_encode($copy), "\n";
+}
+writeString("key"); writeMixed("key");
+"#, "{\"0\":\"A\",\"1\":\"B\",\"2\":\"C\",\"key\":{\"x\":1,\"y\":2}}|[\"A\",\"B\",\"C\"]\n{\"0\":5,\"1\":7,\"key\":{\"x\":3}}|[5,7]\n");
+}
+
+/// An owning string call is evaluated once per parent fetch on a typed string list.
+#[test]
+fn test_variadic_fourth_review_typed_list_owned_parent() {
+    assert_key_write(r#"<?php
+function makeKey(string $suffix): string { echo "K"; return "k" . $suffix; }
+function writeOwned(string $suffix): void {
+    $items = ["A", "B"]; $copy = $items;
+    $items[makeKey($suffix)]["x"] = 1;
+    $items[makeKey($suffix)]["y"] = 2;
+    echo json_encode($items), "|", json_encode($copy);
+}
+writeOwned("ey");
+"#, "KK{\"0\":\"A\",\"1\":\"B\",\"key\":{\"x\":1,\"y\":2}}|[\"A\",\"B\"]");
+}
+
 /// A by-value variadic copy retains referenced caller slots and reads their current values.
 #[test]
 fn test_variadic_third_review_copy_numeric_string_key() {

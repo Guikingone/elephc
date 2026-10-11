@@ -55,8 +55,17 @@ function writeCopiedKeys(string $suffix, &...$values): void {
     echo $values[0], $values[1], json_encode($values);
 }
 $copied = writeCopiedKeys(...); $copied('ey', $a, $b);
+function writeConsumingParent(&...$values): void { $values["key"]["x"] = 1; }
+$consuming = writeConsumingParent(...); $consuming($a, $b);
 $plain = ['A', 'B', 'C']; $plain["key"]["x"] = 1;
 echo json_encode($plain);
+function writeTypedParents(string $key, mixed $boxed): void {
+    $strings = ['A', 'B']; $strings[$key]['x'] = 1;
+    $strings[makeParentName('ey')]['y'] = 2;
+    $ints = [5, 7]; $ints[$boxed]['x'] = 3;
+    echo json_encode($strings), json_encode($ints);
+}
+writeTypedParents('key', 'key');
 function hashReturn(string $key, mixed $value): array {
     $items = [$value]; $items[$key] = $value; return $items;
 }
@@ -71,8 +80,13 @@ echo json_encode(hashReturn('key', $argc));
     assert!(returning.blocks.iter().flat_map(|block| &block.instructions)
         .any(|inst| returning.instruction(*inst).is_some_and(|inst| inst.op == crate::ir::Op::ArrayToHash)),
         "ordinary String-key writes must retain their associative storage contract");
-    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    let nested = asm.split("@fn name=writeConsumingParent ").nth(1)
+        .expect("missing reference-variadic assembly body")
+        .split("@endfn name=writeConsumingParent").next().unwrap();
+    assert!(!nested.contains("ref_cell_store_same_pointer"),
+        "{target}: consuming parent fetches publish without retiring their old owner twice");
 }
 
 /// Keeps all target cases separate so one fixture does not accumulate matrix timeouts.

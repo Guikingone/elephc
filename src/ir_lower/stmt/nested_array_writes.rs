@@ -133,12 +133,13 @@ pub(super) fn lower_nested_assign_parent(
 }
 
 /// Lowers `$local[key]` as the parent of a nested assignment when the local
-/// holds a concrete container (`array<mixed>` or a Mixed-valued assoc array):
+/// holds an indexed array or a Mixed-valued assoc array:
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
 /// context, the possibly promoted/reallocated container is stored back into
 /// the local, and the guaranteed-present element is re-read as the parent
-/// cell. Returns `None` for shapes without a concrete for-write lowering
-/// (typed elements under integer keys, non-Int/Str key expressions).
+/// cell. Runtime string/boxed keys can promote any indexed element type; typed numeric
+/// parents retain ordinary read semantics without evaluating their key twice.
+/// Returns `None` for receiver or key shapes without a concrete lowering.
 pub(super) fn lower_local_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -150,8 +151,7 @@ pub(super) fn lower_local_parent_fetch_for_write(
     match local_ty.codegen_repr() {
         PhpType::Array(elem_ty) => {
             match index_expr_key_type(ctx, index) {
-                PhpType::Int if elem_ty.codegen_repr() == PhpType::Mixed
-                    || is_empty_indexed_array_element(elem_ty.as_ref()) => {
+                PhpType::Int => {
                     let array = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
                     if matches!(key.ir_type, IrType::Str
@@ -171,6 +171,15 @@ pub(super) fn lower_local_parent_fetch_for_write(
                         );
                         return Some(lower_hash_parent_fetch_for_write_with_key(
                             ctx, name, hash, assoc_ty, key, span,
+                        ));
+                    }
+                    if elem_ty.codegen_repr() != PhpType::Mixed
+                        && !is_empty_indexed_array_element(elem_ty.as_ref())
+                    {
+                        // Typed numeric parents keep their ordinary read semantics. Reuse
+                        // the evaluated key so a fallback never repeats a computed expression.
+                        return Some(crate::ir_lower::expr::lower_array_access_from_values(
+                            ctx, array, key, index, parent_expr, true,
                         ));
                     }
                     let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
