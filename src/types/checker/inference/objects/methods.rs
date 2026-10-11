@@ -294,8 +294,8 @@ impl Checker {
                     &format!("Undefined method: {}::{}", interface_name, method),
                 )
             })?;
-        // Final native enum implementations decide the actual defaults and arity.
-        // Keep the declaration authoritative for reflection and the return contract.
+        // The interface governs shared calls; enum-specific extensions are allowed when
+        // any concrete signature accepts them. The selected runtime branch owns binding.
         let mut implementations: Vec<_> = self.classes.iter()
             .filter(|(_, info)| info.interfaces.iter().any(|name| name == interface_name))
             .map(|(name, info)| (name.clone(), info.methods.get(&method_key).cloned()))
@@ -304,12 +304,29 @@ impl Checker {
         if !implementations.is_empty()
             && implementations.iter().all(|(name, _)| self.enums.contains_key(name))
         {
-            for (name, implementation) in implementations {
-                let implementation = implementation.expect("validated enum interface method");
-                self.check_user_declared_call(
-                    &implementation, args, expr.span, env,
-                    &format!("Method {name}::{method}"), &name,
-                )?;
+            let shared = self.check_user_declared_call(
+                &sig, args, expr.span, env,
+                &format!("Method {interface_name}::{method}"), interface_name,
+            );
+            if let Err(shared_error) = shared {
+                let mut accepted = false;
+                let mut missing = false;
+                for (name, implementation) in implementations {
+                    let Some(implementation) = implementation else {
+                        // Schema validation already recorded the missing contract. Continue
+                        // collecting diagnostics without turning that error into a panic.
+                        missing = true;
+                        continue;
+                    };
+                    if self.check_user_declared_call(
+                        &implementation, args, expr.span, env,
+                        &format!("Method {name}::{method}"), &name,
+                    ).is_ok() {
+                        accepted = true;
+                        break;
+                    }
+                }
+                if !accepted && !missing { return Err(shared_error); }
             }
         } else {
             self.check_user_declared_call(

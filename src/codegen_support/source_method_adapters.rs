@@ -1,5 +1,5 @@
 //! Purpose:
-//! Plans source-visible method ABI adaptation, including EIR-owned optional-default calls.
+//! Plans source-visible method ABI adaptation, including EIR-owned parameter widening calls.
 //! Emits wrappers for physical methods carrying generated `func_args` slots.
 //! Owns planning, symbols, and target-aware wrapper assembly for these boundaries.
 //!
@@ -11,6 +11,7 @@
 //! - A source variadic keeps its physical entry, and no entry may drop an injected hidden argc.
 //! - The wrapper roots synthesized Mixed arguments and collectors before entering PHP.
 //! - It preserves every return word while releasing temporary owners after the call.
+//! - Shorter variadic implementations use EIR and shared argument planning, not assembly packing.
 
 use std::collections::{HashMap, HashSet};
 
@@ -133,6 +134,9 @@ fn needs_eir_call_adapter(caller: &FunctionSig, physical: &FunctionSig) -> bool 
         }
         source.retain(|index| caller.variadic.as_deref() != Some(caller.params[*index].0.as_str()));
     }
+    if variadic_absorbs_source_parameters(caller, physical, &source, &target) {
+        return true;
+    }
     if target.len() < source.len() { return false; }
     if target.len() == source.len() && !added_reference { return false; }
     let prefix = source.iter().zip(&target).all(|(&source, &target)| {
@@ -153,6 +157,42 @@ fn needs_eir_call_adapter(caller: &FunctionSig, physical: &FunctionSig) -> bool 
             || physical.variadic.as_deref() == Some(physical.params[index].0.as_str())
     });
     prefix && optional_tail
+}
+
+/// Routes fixed source parameters absorbed by a shorter implementation variadic through EIR.
+fn variadic_absorbs_source_parameters(
+    caller: &FunctionSig, physical: &FunctionSig, source: &[usize], target: &[usize],
+) -> bool {
+    let Some(variadic) = physical.variadic.as_deref() else { return false; };
+    if crate::func_args::sig_collects_surplus_args(physical) { return false; }
+    let Some(&collector) = target.last() else { return false; };
+    if physical.params[collector].0 != variadic || target.len() > source.len() { return false; }
+    let PhpType::Array(element) = &physical.params[collector].1 else { return false; };
+    let compatible = |source: usize, target_type: &PhpType, target_ref: bool| {
+        let source_ref = caller.ref_params.get(source).copied().unwrap_or(false);
+        source_ref == target_ref
+            && (same_physical_param_abi(&caller.params[source].1, target_type)
+                || (!source_ref && can_box_param_as_mixed(&caller.params[source].1, target_type)))
+    };
+    if let Some(source_variadic) = caller.variadic.as_deref()
+        .filter(|_| !crate::func_args::sig_collects_surplus_args(caller))
+    {
+        let Some(index) = caller.params.iter().position(|(name, _)| name == source_variadic) else {
+            return false;
+        };
+        let PhpType::Array(source_element) = &caller.params[index].1 else { return false; };
+        let source_ref = caller.ref_params.get(index).copied().unwrap_or(false);
+        if source_ref != physical.ref_params.get(collector).copied().unwrap_or(false)
+            || !(same_physical_param_abi(source_element, element)
+                || (!source_ref && can_box_param_as_mixed(source_element, element)))
+        { return false; }
+    }
+    let prefix = target.len() - 1;
+    source.iter().enumerate().all(|(position, &index)| {
+        let slot = if position < prefix { target[position] } else { collector };
+        let ty = if position < prefix { &physical.params[slot].1 } else { element.as_ref() };
+        compatible(index, ty, physical.ref_params.get(slot).copied().unwrap_or(false))
+    })
 }
 
 /// Selects a source-vtable entry, keeping every source variadic on its raw physical entry.
@@ -586,6 +626,25 @@ mod tests {
             deprecation: None,
             is_generator: false,
         }
+    }
+
+    /// Shorter variadics absorb fixed slots through EIR without accepting incompatible references.
+    #[test]
+    fn planner_routes_absorbed_fixed_parameters_to_eir() {
+        let fixed = signature(vec![("x".into(), PhpType::Int), ("y".into(), PhpType::Int)], None);
+        let source_variadic = signature(vec![("x".into(), PhpType::Int),
+            ("rest".into(), PhpType::Array(Box::new(PhpType::Int)))], Some("rest".into()));
+        let mut physical = signature(vec![("rest".into(), PhpType::Array(Box::new(PhpType::Int)))], Some("rest".into()));
+        assert_eq!(plan_method_abi(&fixed, &physical), Ok(MethodAbiPlan::OptionalDefaults));
+        assert_eq!(plan_method_abi(&source_variadic, &physical), Ok(MethodAbiPlan::OptionalDefaults));
+        physical.ref_params[0] = true;
+        assert!(plan_method_abi(&fixed, &physical).is_err());
+        physical.ref_params[0] = false;
+        let mut incompatible_tail = source_variadic.clone();
+        incompatible_tail.params[1].1 = PhpType::Array(Box::new(PhpType::Str));
+        assert!(plan_method_abi(&incompatible_tail, &physical).is_err());
+        physical.params[0].1 = PhpType::Array(Box::new(PhpType::Str));
+        assert!(plan_method_abi(&fixed, &physical).is_err());
     }
 
     /// Extra optional parameters select EIR adaptation without weakening required or reference shapes.

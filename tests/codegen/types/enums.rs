@@ -9,6 +9,117 @@
 
 use super::*;
 
+/// Surplus positionals still release owned temporaries after a shorter implementation returns.
+#[test]
+fn test_enum_third_review_surplus_argument_ownership() {
+    for iterations in [1, 40] {
+        let run = |body: &str| compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function f(int $x = 1): int; }}
+class Payload {{ public function __destruct() {{ echo 'D'; }} }}
+enum E implements I {{ case A; public function f(int $x = 10, ?Payload $y = null): int {{ return $x; }} }}
+enum F implements I {{ case A; public function f(int $x = 20): int {{ return $x; }} }}
+function invoke(I $value): int {{ return $value->f(4, new Payload()); }}
+for ($i = 0; $i < {iterations}; $i++) {{ {body} }}
+"#));
+        let direct = run("echo E::A->f(4), F::A->f(4);");
+        let adapted = run("echo invoke(E::A), invoke(F::A);");
+        assert!(direct.success && adapted.success, "{}\n{}", direct.stderr, adapted.stderr);
+        assert_eq!(direct.stdout, "44".repeat(iterations));
+        assert_eq!(adapted.stdout, "D4D4".repeat(iterations), "{}", adapted.stderr);
+        for metric in ["live_blocks=", "live_bytes="] {
+            let retained = |stderr: &str| stderr.lines().next().unwrap().split_whitespace()
+                .find(|field| field.starts_with(metric)).unwrap()[metric.len()..].parse::<usize>().unwrap();
+            assert_eq!(retained(&adapted.stderr), retained(&direct.stderr), "{metric}: {}\n{}", adapted.stderr, direct.stderr);
+        }
+    }
+}
+
+/// Rejected argument owners add no retention beyond the same direct enum singleton controls.
+#[test]
+fn test_enum_third_review_rejected_argument_ownership() {
+    for iterations in [1, 40] {
+        let run = |body: &str| compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function f(int $x = 1): int; }}
+class Payload {{ public function __destruct() {{ echo 'D'; }} }}
+enum E implements I {{ case A; public function f(int $x = 10, ?Payload $y = null): int {{ return $x; }} }}
+enum F implements I {{ case A; public function f(int $x = 20): int {{ return $x; }} }}
+function invoke(I $value): int {{ return $value->f(y: new Payload()); }}
+for ($i = 0; $i < {iterations}; $i++) {{ {body} }}
+"#));
+        let direct = run("echo E::A->f(y: new Payload()), '|', F::A->f(), '|done';");
+        assert!(direct.success, "{}", direct.stderr);
+        assert_eq!(direct.stdout, "D10|20|done".repeat(iterations));
+        let out = run("echo invoke(E::A), '|'; try { echo invoke(F::A); } catch (Error $error) { echo $error->getMessage(); unset($error); } echo '|done';");
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "D10|DUnknown named parameter $y|done".repeat(iterations), "{}", out.stderr);
+        for metric in ["live_blocks=", "live_bytes="] {
+            let retained = |stderr: &str| stderr.lines().next().unwrap().split_whitespace()
+                .find(|field| field.starts_with(metric)).unwrap()[metric.len()..].parse::<usize>().unwrap();
+            assert_eq!(retained(&out.stderr), retained(&direct.stderr), "{metric}: {}\n{}", out.stderr, direct.stderr);
+        }
+    }
+}
+
+/// A named extension is checked only on the selected enum, after its argument side effects.
+#[test]
+fn test_enum_third_review_heterogeneous_named_arguments() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): int; }
+enum E implements I { case A; public function f(int $x = 10, int $y = 2): int { return $x + $y; } }
+enum F implements I { case A; public function f(int $x = 20): int { return $x; } }
+function argument(): int { echo 'Y'; return 4; }
+function invoke(I $value): int { return $value->f(y: argument()); }
+echo invoke(E::A), '|';
+try { echo invoke(F::A); } catch (Error $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "Y14|YUnknown named parameter $y");
+}
+
+/// PHP user methods ignore surplus positionals but still evaluate them in source order.
+#[test]
+fn test_enum_third_review_heterogeneous_positionals() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): int; }
+enum E implements I { case A; public function f(int $x = 10, int $y = 2): int { return $x + $y; } }
+enum F implements I { case A; public function f(int $x = 20): int { return $x; } }
+function argument(string $label, int $value): int { echo $label; return $value; }
+function invoke(I $value): int { return $value->f(argument('X', 4), argument('Y', 6)); }
+function defaults(I $value): int { return $value->f(); }
+echo invoke(E::A), '|', invoke(F::A), '|', defaults(E::A), ':', defaults(F::A);
+"#);
+    assert_eq!(out, "XY10|XY4|12:20");
+}
+
+/// A sole variadic implementation absorbs every fixed interface parameter in its EIR adapter.
+#[test]
+fn test_enum_third_review_variadic_absorbs_fixed() {
+    for hook in ["", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int $x, int $y): int; }}
+enum E implements I {{ case A; public function f(int ...$rest): int {{ return count($rest); }} }}
+function invoke(I $value): int {{ return $value->f(1, 2); }}
+{hook}
+echo invoke(E::A);
+"#));
+        assert_eq!(out, "2");
+    }
+}
+
+/// Interface fixed prefixes and variadic tails are repacked into one implementation variadic.
+#[test]
+fn test_enum_third_review_variadic_absorbs_prefix() {
+    for hook in ["", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int $x, int ...$rest): int; }}
+enum E implements I {{ case A; public function f(int ...$rest): int {{ return count($rest); }} }}
+function invoke(I $value): int {{ return $value->f(1, 2, 3); }}
+{hook}
+echo invoke(E::A);
+"#));
+        assert_eq!(out, "3");
+    }
+}
+
 /// Captured optional adapters forward written arguments, never hidden collector addresses.
 #[test]
 fn test_enum_second_review_captured_optional_defaults() {

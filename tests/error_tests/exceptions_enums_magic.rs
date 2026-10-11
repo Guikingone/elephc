@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// Calling a missing enum interface method reports the declaration error without panicking.
+#[test]
+fn test_error_enum_third_review_missing_called_contract() {
+    for body in ["return $v->f();", "return $v?->f();"] {
+        expect_error(&format!("<?php interface I {{ public function f(): int; }} enum E implements I {{ case A; }} function g(I $v): int {{ {body} }}"), "Class E must implement interface method I::f");
+    }
+}
+
 /// Variadic widening still rejects narrowed element types, changed references and required tails.
 #[test]
 fn test_error_enum_second_review_variadic_narrowing() {

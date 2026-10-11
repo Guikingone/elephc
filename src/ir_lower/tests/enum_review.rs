@@ -104,6 +104,29 @@ enum PrefixValue implements PrefixContract {
 }
 function read_prefix(PrefixContract $value): int { return $value->f(1, 2); }
 echo read_prefix(PrefixValue::A);
+interface HeterogeneousContract { public function f(int $x = 1): int; }
+enum WideValue implements HeterogeneousContract {
+    case A; public function f(int $x = 10, int $y = 2): int { return $x + $y; }
+}
+enum ShortValue implements HeterogeneousContract {
+    case A; public function f(int $x = 20): int { return $x; }
+}
+function heterogeneous_named(HeterogeneousContract $value): int { return $value->f(y: 4); }
+function heterogeneous_positional(HeterogeneousContract $value): int { return $value->f(4, 6); }
+echo heterogeneous_named(WideValue::A), heterogeneous_positional(ShortValue::A);
+try { echo heterogeneous_named(ShortValue::A); } catch (\Error $error) { echo $error->getMessage(); }
+interface FixedAbsorbContract { public function f(int $x, int $y): int; }
+enum FixedAbsorbValue implements FixedAbsorbContract {
+    case A; public function f(int ...$rest): int { return count($rest); }
+}
+function fixed_absorb(FixedAbsorbContract $value): int { return $value->f(1, 2); }
+echo fixed_absorb(FixedAbsorbValue::A);
+interface PrefixAbsorbContract { public function f(int $x, int ...$rest): int; }
+enum PrefixAbsorbValue implements PrefixAbsorbContract {
+    case A; public function f(int ...$rest): int { return count($rest); }
+}
+function prefix_absorb(PrefixAbsorbContract $value): int { return $value->f(1, 2, 3); }
+echo prefix_absorb(PrefixAbsorbValue::A);
 debug_print_backtrace();
 "#;
     let module = super::lower_source_at_for_target(

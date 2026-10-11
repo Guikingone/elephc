@@ -142,16 +142,26 @@ pub(crate) fn expand_planned_positional_spreads(args: &[Expr]) -> Option<Vec<Exp
 /// Literal elements are flattened, but dynamic sources remain evaluated exactly once.
 pub(crate) fn coalesce_planned_indexed_spreads(
     args: &[Expr],
+    is_indexed: impl FnMut(&Expr) -> bool,
+) -> Option<Vec<Expr>> {
+    coalesce_planned_indexed_spreads_with_prefix(args, usize::MAX, is_indexed)
+}
+
+/// Includes surplus fixed arguments in a by-value variadic unpack without changing source order.
+pub(crate) fn coalesce_planned_indexed_spreads_with_prefix(
+    args: &[Expr],
+    regular_param_count: usize,
     mut is_indexed: impl FnMut(&Expr) -> bool,
 ) -> Option<Vec<Expr>> {
     if has_named_args(args) {
         return None;
     }
     let first = args.iter().position(|arg| matches!(arg.kind, ExprKind::Spread(_)))?;
-    if args.len() - first < 2 {
+    let prefix = first.min(regular_param_count);
+    if args.len() - first < 2 && prefix == first {
         return None;
     }
-    let mut items = Vec::new();
+    let mut items = args[prefix..first].to_vec();
     for arg in &args[first..] {
         let ExprKind::Spread(inner) = &arg.kind else { return None };
         if !is_indexed(inner) {
@@ -171,7 +181,7 @@ pub(crate) fn coalesce_planned_indexed_spreads(
             Expr::new(ExprKind::ArrayLiteral(items), span),
         )), span)
     };
-    let mut projected = args[..first].to_vec();
+    let mut projected = args[..prefix].to_vec();
     projected.push(tail);
     Some(projected)
 }
@@ -285,6 +295,19 @@ mod tests {
             ))),
             Span::dummy(),
         )
+    }
+
+    /// Variadic projection keeps the fixed prefix and evaluates surplus sources before the unpack.
+    #[test]
+    fn coalesced_indexed_spreads_include_variadic_positionals() {
+        let tail = Expr::new(ExprKind::Spread(Box::new(Expr::var("rest"))), Span::dummy());
+        let args = vec![Expr::var("x"), Expr::var("y"), tail.clone()];
+        let projected = coalesce_planned_indexed_spreads_with_prefix(&args, 1, |_| true).unwrap();
+        assert_eq!(projected[0], args[0]);
+        assert_eq!(projected[1], indexed_spread(vec![args[1].clone(), tail]));
+        assert_eq!(args.len(), 3);
+        assert!(coalesce_planned_indexed_spreads_with_prefix(&args, 1, |_| false).is_none());
+        assert!(coalesce_planned_indexed_spreads_with_prefix(&args, 2, |_| true).is_none());
     }
 
     /// Literal unpacks remain visible to the runtime required-argument guard.

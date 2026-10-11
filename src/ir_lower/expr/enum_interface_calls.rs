@@ -8,6 +8,7 @@
 //! - The receiver is evaluated once; only the selected branch evaluates source arguments.
 //! - Ordinary call planning owns defaults, named/spread arguments and reference returns.
 //! - Interface declarations remain unchanged for reflection and non-enum fallback dispatch.
+//! - Rejected binding throws only in its selected branch after source argument evaluation.
 
 use super::*;
 use super::nullable_method_calls::lower_method_call_with_receiver_direct;
@@ -50,6 +51,21 @@ pub(super) fn lower_enum_interface_call(
             else_target: next, else_args: Vec::new(),
         });
         ctx.builder.position_at_end(selected);
+        let signature = ctx.classes.get(&class)
+            .and_then(|info| info.methods.get(&php_symbol_key(method)));
+        if let Some(signature) = signature {
+            let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+                signature, args, expr.span, crate::types::call_args::regular_param_count(signature),
+                false, signature.variadic.is_some()
+                    && !crate::func_args::sig_collects_surplus_args(signature),
+                &assoc_spread_sources(ctx, args),
+            );
+            if let Err(error) = plan {
+                terminate_enum_argument_error(ctx, method, args, error, expr.span);
+                ctx.builder.position_at_end(next);
+                continue;
+            }
+        }
         let concrete = ctx.emit_value(Op::Borrow, vec![object.value], None,
             PhpType::Object(class), Op::Borrow.default_effects(), Some(expr.span));
         let call = lower_method_call_with_receiver_direct(ctx, concrete, method, args, op, expr);
@@ -85,4 +101,31 @@ pub(super) fn lower_enum_interface_call(
         unregister_owned_call_operand(ctx, ctx.local_slots[&result], expr.span);
         take_owned_temp(ctx, &result, expr.span)
     } else { lower_null(ctx, expr) })
+}
+
+/// Evaluates rejected branch arguments once and throws through ordinary operand-owner cleanup.
+fn terminate_enum_argument_error(
+    ctx: &mut LoweringContext<'_, '_>, method: &str, args: &[Expr],
+    error: crate::types::call_args::CallArgPlanError, span: Span,
+) {
+    let message = match error {
+        crate::types::call_args::CallArgPlanError::UnknownNamed { name, .. } => {
+            format!("Unknown named parameter ${name}")
+        }
+        crate::types::call_args::CallArgPlanError::Duplicate { name, .. } => {
+            format!("Named parameter ${name} overwrites previous argument")
+        }
+        _ => format!("Invalid arguments to enum method {method}()"),
+    };
+    for arg in args {
+        let value = lower_call_source_arg(ctx, arg);
+        let value = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+        let _ = root_owned_call_operand(ctx, value, arg.span);
+    }
+    let exception = Expr::new(ExprKind::NewObject {
+        class_name: Name::unqualified("Error"),
+        args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
+    }, span);
+    let exception = lower_expr(ctx, &exception);
+    ctx.builder.terminate(Terminator::Throw { value: exception.value });
 }
