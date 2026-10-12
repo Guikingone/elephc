@@ -10,6 +10,21 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Native reflected defaults preserve their pending Error instead of becoming values or fatals.
+#[test]
+fn reflected_native_deferred_default_raises_an_owned_error() {
+    let expression = EvalExpr::DeferredDefaultError("missing lexical parent".into());
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    assert_eq!(eval_owned_expr(&expression, &mut context, &mut scope, &mut values),
+        Err(EvalStatus::UncaughtThrowable));
+    let error = context.take_pending_throw().expect("owned pending Error");
+    assert!(!error.is_borrowed());
+    eval_release_value(&mut context, &mut values, error).unwrap();
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+}
+
 /// Verifies ReflectionParameter reports eval constant-default metadata.
 #[test]
 fn execute_program_reflection_parameter_reports_default_constant_metadata() {

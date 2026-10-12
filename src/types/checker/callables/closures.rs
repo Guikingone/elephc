@@ -67,6 +67,10 @@ impl Checker {
         let mut declared_params = Vec::new();
 
         for (idx, (name, type_ann, default, is_ref)) in params.iter().enumerate() {
+            let default = if let Some(owner) = self.current_class.as_deref() {
+                let parent = self.classes.get(owner).and_then(|class| class.parent.as_deref());
+                super::super::schema::normalize_lexical_callable_default(default, owner, parent)?
+            } else { default.clone() };
             let (env_ty, sig_ty) = match type_ann {
                 Some(type_ann) => {
                     let declared_ty = self.resolve_declared_param_type_hint(
@@ -92,7 +96,7 @@ impl Checker {
             closure_env.insert(name.clone(), env_ty);
             param_types.push((name.clone(), sig_ty));
             param_type_exprs.push(type_ann.clone());
-            defaults.push(default.clone());
+            defaults.push(default);
             ref_params.push(*is_ref);
             declared_params.push(type_ann.is_some());
         }

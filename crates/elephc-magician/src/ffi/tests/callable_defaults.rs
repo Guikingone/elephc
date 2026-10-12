@@ -10,6 +10,30 @@
 
 use super::*;
 
+/// Deferred errors register as context-owned defaults and invalid indexes or buffers fail closed.
+#[test]
+fn register_native_deferred_default_errors_preserves_signatures() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"Known::value";
+    let class = b"Known";
+    let message = b"Cannot access parent in this scope";
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_static_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_constructor(&mut context, class.as_ptr(), class.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_method_param_default_error(&mut context, key.as_ptr(), key.len() as u64, 0, message.as_ptr(), message.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_static_method_param_default_error(&mut context, key.as_ptr(), key.len() as u64, 0, message.as_ptr(), message.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_constructor_param_default_error(&mut context, class.as_ptr(), class.len() as u64, 0, message.as_ptr(), message.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_method_param_default_error(&mut context, key.as_ptr(), key.len() as u64, 1, message.as_ptr(), message.len() as u64), 0);
+        assert_eq!(__elephc_eval_register_native_method_param_default_error(&mut context, key.as_ptr(), key.len() as u64, 0, std::ptr::null(), 1), 0);
+        assert_eq!(__elephc_eval_register_native_constructor_param_default_error(std::ptr::null_mut(), class.as_ptr(), class.len() as u64, 0, message.as_ptr(), message.len() as u64), 0);
+    }
+    let expected = NativeCallableDefault::DeferredError(String::from_utf8(message.to_vec()).unwrap());
+    assert_eq!(context.native_method_signature("Known", "value").unwrap().param_default(0), Some(&expected));
+    assert_eq!(context.native_static_method_signature("Known", "value").unwrap().param_default(0), Some(&expected));
+    assert_eq!(context.native_constructor_signature("Known").unwrap().param_default(0), Some(&expected));
+}
+
 /// Verifies native AOT object defaults can carry nested object constructor args.
 #[test]
 fn register_native_object_default_decodes_nested_objects() {

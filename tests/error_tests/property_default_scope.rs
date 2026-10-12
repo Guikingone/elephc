@@ -10,6 +10,16 @@
 
 use super::*;
 
+/// Closure and arrow parent class-name defaults fail at declaration time without a parent.
+#[test]
+fn test_property_default_sixth_review_parentless_closure_default() {
+    for value in ["function(string $name = parent::class): string { return $name; }",
+        "fn(string $name = parent::class): string => $name"] {
+        expect_error(&format!("<?php class Probe {{ public function make(): Closure {{ return {value}; }} }}"),
+            "Cannot use \"parent\" when current class scope has no parent");
+    }
+}
+
 /// A lazy parent constant cannot mask a later hard parent class-name error in method defaults.
 #[test]
 fn test_property_default_third_review_method_parent_masking() {

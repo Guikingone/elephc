@@ -123,6 +123,9 @@ pub(super) fn register_eval_native_constructor(
         ) {
             continue;
         }
+        if register_eval_native_param_default_error(ctx, context_offset,
+            (&class_name_label, class_name_len), index, default.as_ref(),
+            "__elephc_eval_register_native_constructor_param_default_error") { continue; }
         if let Some(default) = default
             .as_ref()
             .and_then(|expr| eval_native_callable_default(expr, &default_context))

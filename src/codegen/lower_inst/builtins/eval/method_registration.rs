@@ -139,6 +139,11 @@ pub(super) fn register_eval_native_method(
         ) {
             continue;
         }
+        let error_symbol = if registration.is_static {
+            "__elephc_eval_register_native_static_method_param_default_error"
+        } else { "__elephc_eval_register_native_method_param_default_error" };
+        if register_eval_native_param_default_error(ctx, context_offset,
+            (&method_key_label, method_key_len), index, default.as_ref(), error_symbol) { continue; }
         if let Some(default) = default
             .as_ref()
             .and_then(|expr| eval_native_callable_default(expr, &default_context))

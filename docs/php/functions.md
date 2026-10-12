@@ -100,6 +100,10 @@ Variables inside a function are separate from the caller.
 
 ## Anonymous functions (closures)
 
+Closure and arrow parameter defaults bind `self::` and `parent::` to the
+enclosing lexical class, not the later caller. A `parent::class` default is
+rejected at declaration time when that class has no parent.
+
 ```php
 <?php
 $double = function(int $x): int {

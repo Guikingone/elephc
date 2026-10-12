@@ -74,7 +74,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// discarded that spelling, so reusing them would keep producing lowercase diagnostics.
 /// BUMPED TO 13 because first-class function callable names now also retain source
 /// spelling. Version-12 entries still discarded capitalization on this expression path.
-pub(crate) const FORMAT_VERSION: u32 = 13;
+/// BUMPED TO 14 because native default metadata can contain a deferred Error expression.
+pub(crate) const FORMAT_VERSION: u32 = 14;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

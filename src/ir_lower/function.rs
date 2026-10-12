@@ -2237,6 +2237,10 @@ fn closure_signature_from_ast(
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
+    if let Some(owner) = ctx.current_class.as_deref() {
+        let parent = ctx.classes.get(owner).and_then(|class| class.parent.as_deref());
+        crate::types::checker::normalize_signature_default_receivers(&mut signature, owner, parent);
+    }
     signature.is_generator = crate::types::checker::yield_validation::body_contains_yield(body);
     if signature.is_generator {
         signature.return_type = PhpType::Object("Generator".to_string());

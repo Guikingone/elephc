@@ -40,6 +40,12 @@ class MethodConsumer {
     public function value(int $value = parent::A): int { return $value; }
     public static function staticValue(int $value = parent::A): int { return $value; }
 }
+interface ParentlessContract { public function value(int $value = parent::A); }
+class LexicalBase { const A = 3; }
+class LexicalChild extends LexicalBase {
+    public function make(): Closure { return fn(string $parent = parent::class, int $value = parent::A): string => $parent . $value; }
+}
+echo (new LexicalChild)->make()();
 try { (new MethodConsumer())->value(); } catch (Error $error) { echo 'instance'; }
 try { MethodConsumer::staticValue(); } catch (Error $error) { echo 'static'; }
 try { call_user_func([MethodConsumer::class, 'staticValue']); }
@@ -76,6 +82,11 @@ echo (new MethodConsumer())->value(7), MethodConsumer::staticValue(value: 8);
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target_name}: {error:?}"));
     assert!(assembly.contains("__elephc_eval_register_native_property_default_error"), "{target_name}");
+    for symbol in ["__elephc_eval_register_native_method_param_default_error",
+        "__elephc_eval_register_native_static_method_param_default_error",
+        "__elephc_eval_register_native_constructor_param_default_error"] {
+        assert!(assembly.contains(symbol), "{target_name}: missing lazy callable default registration {symbol}");
+    }
 }
 
 /// Separates target cases so each keeps CI's normal per-test timeout budget.

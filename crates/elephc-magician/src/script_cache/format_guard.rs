@@ -80,7 +80,8 @@ mod tests {
     /// while the serialized shape stays unchanged. Older entries must be reparsed.
     /// BUMPED TO 13 with the same fingerprint: first-class function callable names
     /// also retain source spelling without changing the serialized shape.
-    const RECORDED_FINGERPRINT: u64 = 17666271573136969314;
+    /// BUMPED TO 14: native default metadata can carry a deferred Error expression.
+    const RECORDED_FINGERPRINT: u64 = 2120681392715851050;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

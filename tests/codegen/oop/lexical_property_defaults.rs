@@ -8,7 +8,138 @@
 //! Key details:
 //! - Stored defaults must preserve declaration scope rather than caller or subclass scope.
 
-use crate::support::compile_and_run_with_heap_debug;
+use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
+
+/// Eval callback default Errors keep identical ownership without EIR optimization.
+#[test]
+fn test_property_default_sixth_review_eval_callable_without_ir_opt() {
+    without_ir_opt(test_property_default_sixth_review_eval_callable);
+}
+
+/// Eval direct-call default Errors keep identical semantics without EIR optimization.
+#[test]
+fn test_property_default_sixth_review_eval_method_without_ir_opt() {
+    without_ir_opt(test_property_default_sixth_review_eval_method);
+}
+
+/// Eval constructor default Errors keep identical semantics without EIR optimization.
+#[test]
+fn test_property_default_sixth_review_eval_constructor_without_ir_opt() {
+    without_ir_opt(test_property_default_sixth_review_eval_constructor);
+}
+
+/// Lexical closure and interface defaults do not depend on EIR optimization.
+#[test]
+fn test_property_default_sixth_review_lexical_without_ir_opt() {
+    without_ir_opt(|| {
+        test_property_default_sixth_review_closure_scope();
+        test_property_default_sixth_review_arrow_scope();
+        test_property_default_sixth_review_interface_parent_constant();
+    });
+}
+
+/// Dynamic eval callable adapters retain a lazy method-default Error and accept explicit values.
+#[test]
+fn test_property_default_sixth_review_eval_callable() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Consumer { public static function value(int $value = parent::A): int { return $value; } }
+function run(string $code): void { try { echo eval($code); } catch (Error $e) { echo get_class($e), ':', $e->getMessage(), '|'; } }
+run('return call_user_func([Consumer::class, "value"]);');
+run('return call_user_func([Consumer::class, "value"], 4);');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Error:Cannot access \"parent\" when current class scope has no parent|4");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Dynamic eval direct static calls materialize the same catchable missing-parent Error.
+#[test]
+fn test_property_default_sixth_review_eval_method() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Consumer { public static function value(int $value = parent::A): int { return $value; } }
+function run(string $code): void { try { echo eval($code); } catch (Error $e) { echo get_class($e), ':', $e->getMessage(), '|'; } }
+run('return Consumer::value();'); run('return Consumer::value(4);');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Error:Cannot access \"parent\" when current class scope has no parent|4");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Dynamic eval constructors defer promoted parameter errors until the argument is omitted.
+#[test]
+fn test_property_default_sixth_review_eval_constructor() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+trait Values { public function __construct(public int $value = parent::A) {} }
+class Consumer { use Values; }
+function run(string $code): void { try { eval($code); } catch (Error $e) { echo get_class($e), ':', $e->getMessage(), '|'; } }
+run('new Consumer();'); run('$object = new Consumer(4); echo $object->value;');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Error:Cannot access \"parent\" when current class scope has no parent|4");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Interface defaults have no parent class scope but remain declared and lazily reflectable.
+#[test]
+fn test_property_default_sixth_review_interface_parent_constant() {
+    let out = crate::support::compile_and_run(r#"<?php
+interface I { public function f(int $a = parent::A); }
+class C implements I { public function f(int $a = 4): int { return $a; } }
+$parameter = new ReflectionParameter([I::class, 'f'], 'a');
+echo $parameter->isDefaultValueAvailable() ? 'available|' : 'missing|';
+try { $parameter->getDefaultValue(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+echo (new C)->f();
+"#);
+    assert_eq!(out, "available|Cannot access \"parent\" when current class scope has no parent|4");
+}
+
+/// Repeated interface default Errors do not grow ReflectionParameter's fixed metadata graph.
+#[test]
+fn test_property_default_sixth_review_interface_default_ownership() {
+    let retained = |iterations| {
+        let source = format!(r#"<?php
+interface I {{ public function f(int $a = parent::A); }}
+class C implements I {{ public function f(int $a = 4): int {{ return $a; }} }}
+$parameter = new ReflectionParameter([I::class, 'f'], 'a');
+for ($i = 0; $i < {iterations}; $i++) {{
+    try {{ $parameter->getDefaultValue(); }} catch (Error $error) {{}}
+}}
+unset($parameter); echo 'done';
+"#);
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "done");
+        let totals = out.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: allocs=")).unwrap();
+        totals.split_once("live_blocks=").unwrap().1.split_once(" peak_live_bytes=").unwrap().0.to_string()
+    };
+    assert_eq!(retained(1), retained(40));
+}
+
+/// Closure defaults bind self and parent in their enclosing lexical class.
+#[test]
+fn test_property_default_sixth_review_closure_scope() {
+    let out = compile_and_run(r#"<?php
+class Base { const A = 3; }
+class Child extends Base {
+    public function make(): Closure { return function(string $parent = parent::class, string $self = self::class, int $value = parent::A): string { return $parent . ':' . $self . ':' . $value; }; }
+}
+echo (new Child)->make()(), '|', (new Child)->make()('other');
+"#);
+    assert_eq!(out, "Base:Child:3|other:Child:3");
+}
+
+/// Arrow defaults use the same lexical scope instead of the descriptor caller's scope.
+#[test]
+fn test_property_default_sixth_review_arrow_scope() {
+    let out = compile_and_run(r#"<?php
+class Base { const A = 3; }
+class Child extends Base {
+    public function make(): Closure { return fn(string $parent = parent::class, string $self = self::class, int $value = parent::A): string => $parent . ':' . $self . ':' . $value; }
+}
+echo (new Child)->make()(), '|', (new Child)->make()('other');
+"#);
+    assert_eq!(out, "Base:Child:3|other:Child:3");
+}
 
 /// Descriptor-backed static calls materialize lazy default Errors inside the caller's handler.
 #[test]

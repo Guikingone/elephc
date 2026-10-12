@@ -278,6 +278,11 @@ A trait consumer without a parent may be declared with a `parent::class` default
 
 `ReflectionProperty::hasDefaultValue()` preserves the presence of a deferred default. `getDefaultValue()` raises its catchable `Error` only when that particular default is materialized, without evaluating other properties in the class. This also applies to native property metadata accessed through `eval()`.
 
+Interface method parameters may also declare a lazy `parent::CONST` default:
+interfaces have no parent class scope, so `ReflectionParameter::getDefaultValue()`
+raises the same catchable missing-parent `Error`. Implementations may supply
+their own valid default without evaluating the interface's default.
+
 Property default values are applied both for the normal `new ClassName()` form and for dynamic `new $variable()` instantiation (and therefore for runtime-instantiated stream wrappers and stream filters). When the class name resolves to a known class, dynamic instantiation follows the same allocation path as direct construction, so constructor arguments are evaluated and `__construct` runs normally.
 
 An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage.

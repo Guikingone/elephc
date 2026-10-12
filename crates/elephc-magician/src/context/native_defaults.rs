@@ -12,6 +12,8 @@ use super::*;
 /// Default value for a native AOT callable parameter visible to eval fragments.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NativeCallableDefault {
+    /// The declared default exists but raises this Error when it is materialized.
+    DeferredError(String),
     Null,
     Bool(bool),
     Int(i64),

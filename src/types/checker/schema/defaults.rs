@@ -190,6 +190,18 @@ pub(crate) fn normalize_signature_default_receivers(
     }
 }
 
+/// Validates lexical closure defaults and normalizes a private copy for callable signatures.
+pub(crate) fn normalize_lexical_callable_default(
+    default: &Option<Expr>, owner_class: &str, parent_class: Option<&str>,
+) -> Result<Option<Expr>, CompileError> {
+    if let Some(value) = default {
+        super::classes::validate_compile_time_default_in_scope(value, owner_class, parent_class)?;
+    }
+    let mut normalized = default.clone();
+    normalize_default_tree(&mut normalized, owner_class, parent_class);
+    Ok(normalized)
+}
+
 /// Keeps unresolved trait parent defaults lazy, independent of the eventual caller scope.
 fn normalize_default_tree(default: &mut Option<Expr>, owner_class: &str, parent_class: Option<&str>) {
     let Some(value) = default.as_ref() else { return };
@@ -359,7 +371,8 @@ fn validate_deferred_default(
     if let (ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Parent, .. }, Some(owner)) =
         (&default.kind, checker.current_class.as_deref())
     {
-        if checker.classes.get(owner).is_some_and(|class| class.parent.is_none()) {
+        if checker.classes.get(owner).is_some_and(|class| class.parent.is_none())
+            || checker.interfaces.contains_key(owner) {
             return;
         }
     }

@@ -683,6 +683,13 @@ null, empty-array, supported array-valued, or supported object-valued default
 values when native signatures are registered. Eval code can also reflect
 supported callable-builtin signatures, including internal origin, parameter
 names, parameter types, and return type metadata.
+
+Generated method and constructor defaults that defer a missing-parent `Error`
+retain that error in eval metadata. Omitting the argument raises a catchable
+`Error` through direct or callback calls from `eval()`, while supplying the
+argument explicitly skips the default. Native reflected defaults retain the
+same lazy behavior.
+
 Eval-declared
 functions and methods expose declared-type presence for parameters and return types, simple
 named type metadata through
