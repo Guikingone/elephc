@@ -59,3 +59,37 @@ namespace {
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "41:42:43");
 }
+
+/// First-class callables retain mixed-case native lookup, namespace fallback, and error spelling.
+#[test]
+fn test_eval_mixed_case_native_function_callables() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+namespace NativeRepl {
+    function MixedName(int $value): int { return $value + 1; }
+}
+namespace {
+    function GlobalReplTarget(int $value): int { return $value + 2; }
+    $source = $argc > 0 ? '
+        namespace NativeRepl;
+        use function NativeRepl\\MixedName as Imported;
+        $local = mIxEdNaMe(...);
+        $fallback = GlObAlRePlTaRgEt(...);
+        $qualified = \\NATIVEREPL\\MIXEDNAME(...);
+        $imported = iMpOrTeD(...);
+        echo $local(40), ":", $fallback(40), ":", $qualified(42), ":", $imported(43), "\n";
+        try { StrLenX(...); } catch (\\Error $e) { echo $e->getMessage(), "\n"; }
+    ' : '';
+    eval($source);
+    $source = $argc > 0 ? 'namespace NativeRepl; StrLenX(...);' : '';
+    try { eval($source); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    echo "alive\n";
+}
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, concat!(
+        "41:42:43:44\n",
+        "Call to undefined function NativeRepl\\StrLenX()\n",
+        "Call to undefined function NativeRepl\\StrLenX()\n",
+        "alive\n",
+    ));
+}

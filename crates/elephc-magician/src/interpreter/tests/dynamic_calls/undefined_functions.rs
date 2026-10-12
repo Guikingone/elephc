@@ -1,5 +1,5 @@
 //! Purpose:
-//! Checks catchable undefined-function errors in direct eval calls.
+//! Checks catchable undefined-function errors in direct eval calls and callable creation.
 //!
 //! Called from:
 //! - The Magician dynamic-call interpreter unit tests.
@@ -73,6 +73,46 @@ fn direct_calls_remain_case_insensitive() {
         "namespace { function MixedName($v) { return $v; } } namespace ReplCheck { return mIxEdNaMe(3); }",
         "namespace Lib { function MixedName($v) { return $v; } } namespace ReplCheck { use function Lib\\MixedName as Imported; return iMpOrTeD(3); }",
         "namespace ReplCheck; function MixedName($v) { return $v; } return \\REPLCHECK\\MIXEDNAME(3);",
+    ] {
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let returned = execute_program(&program, &mut scope, &mut values).unwrap();
+        assert_eq!(values.get(returned), FakeValue::Int(3), "{source}");
+    }
+}
+
+/// Missing first-class callables report the resolved source name through catchable errors.
+#[test]
+fn undefined_function_callables_preserve_source_spelling() {
+    for (declarations, callable, name) in [
+        ("", "StrLenX(...)", "StrLenX"),
+        ("namespace ReplCheck;", "StrLenX(...)", "ReplCheck\\StrLenX"),
+        ("namespace ReplCheck;", "\\StrLenX(...)", "StrLenX"),
+        ("namespace ReplCheck;", "Other\\StrLenX(...)", "ReplCheck\\Other\\StrLenX"),
+        ("namespace ReplCheck; use function Lib\\MissingCall as Nope;", "nOpE(...)", "Lib\\MissingCall"),
+    ] {
+        let source = format!("{declarations} try {{ {callable}; }} catch (\\Error $e) {{ return $e->getMessage(); }}");
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let returned = execute_program(&program, &mut scope, &mut values).unwrap();
+        assert_eq!(values.get(returned), FakeValue::String(format!("Call to undefined function {name}()")), "{source}");
+    }
+}
+
+/// Source spelling does not alter first-class builtin, eval-function, alias, or fallback lookup.
+#[test]
+fn function_callables_remain_case_insensitive() {
+    for source in [
+        "$fn = StRlEn(...); return $fn('abc');",
+        "namespace ReplCheck; $fn = StRlEn(...); return $fn('abc');",
+        "namespace ReplCheck; $fn = \\StRlEn(...); return $fn('abc');",
+        "function MixedName($v) { return $v; } $fn = MIXEDNAME(...); return $fn(3);",
+        "namespace ReplCheck; function MixedName($v) { return $v; } $fn = mIxEdNaMe(...); return $fn(3);",
+        "namespace { function MixedName($v) { return $v; } } namespace ReplCheck { $fn = mIxEdNaMe(...); return $fn(3); }",
+        "namespace Lib { function MixedName($v) { return $v; } } namespace ReplCheck { use function Lib\\MixedName as Imported; $fn = iMpOrTeD(...); return $fn(3); }",
+        "namespace ReplCheck; function MixedName($v) { return $v; } $fn = \\REPLCHECK\\MIXEDNAME(...); return $fn(3);",
     ] {
         let program = parse_fragment(source.as_bytes()).unwrap();
         let mut scope = ElephcEvalScope::new();

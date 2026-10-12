@@ -34,7 +34,9 @@ pub enum EvalExpr {
         is_static: bool,
     },
     FunctionCallable {
+        /// Resolved source spelling, retained for undefined-function diagnostics.
         name: String,
+        /// Unqualified source spelling for PHP's global namespace fallback.
         fallback_name: Option<String>,
     },
     InvokableCallable {

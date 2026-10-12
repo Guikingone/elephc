@@ -61,7 +61,8 @@ Invalid submissions report a syntax error and return to the prompt. Escaping PHP
 An undefined function, such as `isseet()` instead of `isset()`, raises a catchable
 `Error` naming the function and leaves the session available for the next command.
 The diagnostic preserves the resolved name's original capitalization, including
-namespaces and `use function` imports; function lookup remains case-insensitive.
+namespaces and `use function` imports. This also applies when creating a callable
+with `StrLenX(...)`; function lookup remains case-insensitive.
 Errors returned by the eval interpreter also abort only the current submission.
 This includes unknown constants such as `das`, unsupported operations, invalid
 nested eval source, and `trigger_error(..., E_USER_ERROR)`. The REPL reports the

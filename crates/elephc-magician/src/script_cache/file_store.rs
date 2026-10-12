@@ -72,7 +72,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// shapes, and 10 was never released, so the bump orphans no published cache.
 /// BUMPED TO 12 because direct call names retain source spelling. Older parsed entries
 /// discarded that spelling, so reusing them would keep producing lowercase diagnostics.
-pub(crate) const FORMAT_VERSION: u32 = 12;
+/// BUMPED TO 13 because first-class function callable names now also retain source
+/// spelling. Version-12 entries still discarded capitalization on this expression path.
+pub(crate) const FORMAT_VERSION: u32 = 13;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

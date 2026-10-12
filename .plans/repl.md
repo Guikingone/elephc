@@ -10,6 +10,7 @@
 - [x] Make PTY setup portable to Apple libc and preserve warm cache reuse with archived CI bridges.
 - [x] Drain terminal output during exit and close the PTY before waiting during failure cleanup.
 - [x] Resolve OPcache restrictions against the virtual project entry and retain function spelling in errors.
+- [x] Preserve source spelling in first-class callable errors without changing case-insensitive lookup.
 
 ## Execution
 
@@ -109,3 +110,15 @@ Validation passed with 17 REPL integration tests, 2 native eval call tests,
 222 parser tests, 47 dynamic-call tests, 150 script-cache tests (one existing
 ignored test), and 6 compiler OPcache path/restriction tests. The compiler and
 Magician build completed without warnings.
+
+First-class function callable nodes also retain resolved source spelling. Their
+existence probes and captured targets use normalized keys, while missing-function
+errors keep the original name. Parsed-script cache format 13 invalidates earlier
+entries that lost callable capitalization. Tests cover global, namespaced,
+qualified, and imported names, valid mixed-case lookup, native catches with heap
+checks, and REPL state after recovery. The new interpreter regression failed
+before the fix, and its expected diagnostics were cross-checked against PHP.
+Validation passed with 222 parser tests, 49 dynamic-call tests, 11 first-class
+callable tests, 150 script-cache tests (one existing ignored test), 3 REPL review
+regressions, and 3 native eval call regressions. The focused compiler and Magician
+build completed without warnings.

@@ -78,6 +78,8 @@ mod tests {
     /// BUMPED TO 11 WITH THIS VALUE: the open-tag separator became a shared function.
     /// BUMPED TO 12 with the same fingerprint: call-name contents retain source spelling,
     /// while the serialized shape stays unchanged. Older entries must be reparsed.
+    /// BUMPED TO 13 with the same fingerprint: first-class function callable names
+    /// also retain source spelling without changing the serialized shape.
     const RECORDED_FINGERPRINT: u64 = 17666271573136969314;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
