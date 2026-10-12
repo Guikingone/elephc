@@ -52,3 +52,15 @@ Both new native regressions fail on the reviewed head. Combined written lists no
 Constructor rejection additionally exposed an allocated receiver leak. Construction and property initialization now release partial receivers on error and suppress their destructors, preserving metadata for escaped references. Tests cover constructor failures, native parents, by-reference receiver escape, and property-default failure cleanup.
 
 Validation passes: 51 generic parser/interpreter tests, 20 object lifecycle tests, 33 reference tests, and 15 native eval integration tests with clean heap reports on the regression fixtures. `cargo build`, Rust documentation, diff hygiene, and task-owned temporary cleanup pass. The recompiled example prints `42|Magician|8` followed by `type checked`. A separate follow-up records pre-existing static-property and class-constant cell retention during eval context teardown.
+
+## Third PR 1819 review
+
+- [x] Normalize null keys to empty strings for typed array key validation.
+- [x] Preserve non-array union arms and PHP string-offset write behavior.
+- [x] Reproduce both findings on `2a2e5f9875` and validate ownership and focused regressions.
+
+The latest review identifies null-key rejection and replacement of scalar union values with arrays. Cover key normalization, rejected scalar writes, string offsets, operand evaluation order, references, COW, and failed autovivification cleanup through interpreter and native runtime tests.
+
+Both findings fail in native regressions on the reviewed head, and three added interpreter tests also fail before correction. Null keys now validate through a temporary empty string while retaining the runtime's original diagnostic operand. Local writes inspect their current receiver, autovivify only null or false, and preserve string offsets and scalar errors through reference-aware writeback. Owned operands and newly created arrays are released on rejection.
+
+Validation passes: 54 generic parser/interpreter tests, 4 array-reference tests, 16 method reference tests, 40 operand-ownership tests, 2 append tests, and 18 native eval integration tests. The new native fixtures report clean heaps; an ordinary scalar-offset fixture also matches PHP 8.5 output and warning counts. A warning-free `cargo build`, Rust documentation checks, diff hygiene, and temporary fixture cleanup pass. A separate follow-up records the pre-existing leak from a temporary literal `foreach` receiver; bound arrays in the regression fixtures have clean heaps.

@@ -122,7 +122,11 @@ modes. Typed local declarations also retain their substituted contracts during a
 Nullable and union array locals validate writes against an array arm that accepts their existing
 contents. An indexed `array<T>` requires integer keys and rejects associative values; numeric
 string keys such as `'0'`, floats, and booleans use their normalized integer type for write
-validation. `array<K, V>` checks that same stored key type against `K`.
+validation. Null keys become the empty string, so `array<string, V>` accepts them while
+`array<T>` rejects them. `array<K, V>` checks that same stored key type against `K`.
+When a union local holds a string, indexed writes update its bytes and append attempts raise
+`Error`. Other scalars also raise `Error` on array writes and retain their value. Only null
+and false become arrays, and the resulting writes still need to satisfy an array arm.
 
 Execution still uses Magician's boxed runtime cells. AOT's native storage and performance figures
 below apply to compiled code. Generic syntax does not extend other parts of the

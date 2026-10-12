@@ -291,6 +291,92 @@ echo '|', count($strings);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
+/// Null keys keep PHP's empty-string identity across contracts, COW, and autovivification.
+#[test]
+fn test_eval_generics_null_array_keys_regression() {
+    let source = dynamic_eval(r#"
+array<string, int> $map = ['k' => 1]; $original = $map; $key = null;
+$map[$key] = 2; $map[null] = 3;
+echo $map[''], '|', count($map), '|', count($original), '|', is_null($key);
+?array<string, int> $nullable = null; $nullable[null] = 4;
+array<string, int>|null $union = null; $union[null] = 5;
+echo '|', $nullable[''], '|', $union[''];
+array<int> $indexed = [1];
+try { $indexed[null] = 2; } catch (TypeError $e) { echo '|indexed'; }
+try { $map[null] = 'bad'; } catch (TypeError $e) { echo '|value'; }
+echo '|', $map[''];
+for ($i = 0; $i < 20; $i++) {
+    ?array<int> $failed = null;
+    try { $failed['k'] = 2; } catch (TypeError $e) {}
+    try { $failed[] = 'bad'; } catch (TypeError $e) {}
+}
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "3|2|1|1|4|5|indexed|value|3");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Union writes preserve scalars, update string bytes, and only autovivify null or false.
+#[test]
+fn test_eval_generics_non_array_union_writes_regression() {
+    let source = dynamic_eval(r#"
+function rhs(&$calls): int { $calls++; return 9; }
+$calls = 0; array<int>|string $items = 'keep'; $original = $items; $alias =& $items;
+try { $items[] = rhs($calls); } catch (Error $e) { echo $e->getMessage(), '|'; }
+echo $items, '|', $calls;
+$items[0] = rhs($calls); $alias[-1] = 'X'; $items['01'] = 'Y';
+echo '|', $items, '|', $original, '|', $alias;
+try { $items['bad'] = 1; } catch (TypeError $e) { echo '|key'; }
+try { $items[0] = ''; } catch (Error $e) { echo '|empty'; }
+$items[6] = 'Z'; echo '|', $items;
+$cases = [true, 7, 1.5];
+foreach ($cases as $value) {
+    array<int>|bool|int|float $scalar = $value;
+    try { $scalar[] = rhs($calls); } catch (Error $e) { echo '|append'; }
+    try { $scalar[0] = rhs($calls); } catch (Error $e) { echo '|index'; }
+    echo '|', $scalar;
+}
+echo '|', $calls;
+array<int>|bool|null $empty = false; $empty[] = 1; $empty = null; $empty[0] = 2;
+echo '|', $empty[0];
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "[] operator not supported for strings|keep|1|9YeX|keep|9YeX|key|empty|9YeX  Z|append|index|1|append|index|7|append|index|1.5|8|2");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Ordinary scalar offset writes share PHP's conversion, diagnostics, and reference boundaries.
+#[test]
+fn test_eval_generics_ordinary_scalar_offsets_regression() {
+    let source = dynamic_eval(r#"
+class Text { public function __toString(): string { echo 'convert|'; return 'XY'; } }
+$items = 'keep'; $original = $items;
+$items[null] = 'N'; $items[false] = 'F'; $items[1.0] = 'G'; $items['1x'] = 'P';
+$items[2] = new Text();
+echo $items, '|', $original;
+$keys = ['1.9', '1.9x', '1e2', '1e2x', [], new stdClass()];
+foreach ($keys as $key) {
+    try { $items[$key] = 'bad'; } catch (TypeError $e) { echo '|key'; }
+}
+$items[-99] = new Text();
+echo '|', $items;
+$items[' 1 '] = 'W'; $items['1efoo'] = 'V';
+echo '|', $items;
+$number = 7;
+try { $number[] = 'x'; } catch (Error $e) { echo '|scalar'; }
+echo '|', $number;
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "convert|FPXp|keep|key|key|key|key|key|key|FPXp|FVXp|scalar|7");
+    assert_eq!(output.stderr.matches("String offset cast occurred").count(), 3, "{}", output.stderr);
+    assert!(output.stderr.contains("Only the first byte will be assigned"), "{}", output.stderr);
+    assert!(output.stderr.contains("Illegal string offset -99"), "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Failed construction frees receivers and preserves escaped metadata without running destructors.
 #[test]
 fn test_eval_generics_failed_construction_cleanup_regression() {

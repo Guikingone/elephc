@@ -382,27 +382,28 @@ pub(super) fn eval_non_object_array_append_var_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut ownership = ScopeCellOwnership::Owned;
-    let array = if let Some((cell, flags_ownership)) = existing {
-        if values.is_array_like(cell)? {
-            let tag = values.type_tag(cell)?;
-            if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-                return Err(EvalStatus::UnsupportedConstruct);
+    let current = existing.map(|(cell, _)| values.retain(cell)).transpose()?;
+    let mut operands: Vec<_> = current.into_iter().collect();
+    let mut result = (|| {
+        let value = eval_owned_expr(value, context, scope, values)?;
+        operands.push(value);
+        let array = match current {
+            Some(cell) if matches!(values.type_tag(cell)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) => cell,
+            _ => {
+                let array = eval_array_autovivification(current, true, context, values)?;
+                operands.push(array);
+                array
             }
-            ownership = flags_ownership;
-            cell
-        } else {
-            values.array_new(1)?
-        }
-    } else {
-        values.array_new(1)?
-    };
-    let declared = scope.local_type(name).cloned();
-    let array = eval_array_append_value_with_type(array, value, declared.as_ref(), context, scope, values)?;
-    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership, values)? {
-        values.release(replaced)?;
+        };
+        eval_array_append_owned_value_with_type(array, value, scope.local_type(name).cloned().as_ref(), context, values)?;
+        if visible_scope_cell(context, scope, name) == Some(array) { return Ok(()); }
+        write_back_owned_variable_ref_target(scope, name, array, context, values)
+    })();
+    for operand in operands.into_iter().rev() {
+        let released = eval_release_value(context, values, operand);
+        if result.is_ok() { result = released; }
     }
-    Ok(())
+    result
 }
 
 /// Executes `$var[index] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
@@ -447,21 +448,33 @@ pub(super) fn eval_non_object_array_set_var_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let array = if let Some((cell, _)) = existing {
-        if values.is_array_like(cell)? {
-            values.retain(cell)?
-        } else {
-            values.array_new(1)?
-        }
-    } else {
-        values.array_new(1)?
-    };
-    let mut operands = vec![array];
+    let current = existing.map(|(cell, _)| values.retain(cell)).transpose()?;
+    let mut operands: Vec<_> = current.into_iter().collect();
     let mut result = (|| {
-        let index = eval_owned_array_set_index(index, context, scope, values)?;
+        let index = if current.map(|cell| values.type_tag(cell)).transpose()? == Some(EVAL_TAG_STRING) {
+            eval_owned_expr(index, context, scope, values)?
+        } else { eval_owned_array_set_index(index, context, scope, values)? };
         operands.push(index);
         let value = eval_owned_expr(value, context, scope, values)?;
         operands.push(value);
+        if let Some(cell) = current {
+            if values.type_tag(cell)? == EVAL_TAG_STRING {
+                let replacement = eval_string_offset_write(cell, index, value, context, values)?;
+                operands.push(replacement);
+                if let Some(declared) = scope.local_type(name).cloned() {
+                    validate_generic_local(&declared, name, replacement, context, values)?;
+                }
+                return write_back_owned_variable_ref_target(scope, name, replacement, context, values);
+            }
+        }
+        let array = match current {
+            Some(cell) if matches!(values.type_tag(cell)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) => cell,
+            _ => {
+                let array = eval_array_autovivification(current, false, context, values)?;
+                operands.push(array);
+                array
+            }
+        };
         validate_generic_local_element(scope.local_type(name).cloned().as_ref(), array, index, value, context, values)?;
         let replacement = eval_array_set_target_for_index(array, index, values)?;
         if replacement != array {

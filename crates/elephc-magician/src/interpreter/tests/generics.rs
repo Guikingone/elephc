@@ -433,6 +433,30 @@ fn generics_array_local_accepts_normalized_scalar_keys() {
     ]), "float|bool|1");
 }
 
+/// Null keys validate as empty strings without changing the caller key or array copies.
+#[test]
+fn generics_array_local_accepts_null_string_keys() {
+    assert_eq!(run(&[
+        "array<string, int> $map = ['k' => 1]; $original = $map; $key = null; $map[$key] = 2; $map[null] = 3; echo $map[''], '|', count($map), '|', count($original), '|', is_null($key); ?array<string, int> $nullable = null; $nullable[null] = 4; array<string, int>|null $union = null; $union[null] = 5; echo '|', $nullable[''], '|', $union['']; array<int> $indexed = [1]; try { $indexed[null] = 2; } catch (TypeError $e) { echo '|indexed'; } try { $map[null] = 'bad'; } catch (TypeError $e) { echo '|value'; } echo '|', $map[''];",
+    ]), "3|2|1|1|4|5|indexed|value|3");
+}
+
+/// Scalar union arms reject array writes after evaluating operands and preserve their values.
+#[test]
+fn generics_non_array_union_writes_preserve_scalars() {
+    assert_eq!(run(&[
+        "function rhs(&$calls): int { $calls++; return 9; } $calls = 0; array<int>|string $items = 'keep'; try { $items[] = rhs($calls); } catch (Error $e) { echo $e->getMessage(), '|'; } echo $items, '|', $calls; foreach ([true, 7, 1.5] as $value) { array<int>|bool|int|float $scalar = $value; try { $scalar[] = rhs($calls); } catch (Error $e) { echo '|append'; } try { $scalar[0] = rhs($calls); } catch (Error $e) { echo '|index'; } echo '|', $scalar; } echo '|', $calls; array<int>|bool|null $empty = false; $empty[] = 1; $empty = null; $empty[0] = 2; echo '|', $empty[0];",
+    ]), "[] operator not supported for strings|keep|1|append|index|1|append|index|7|append|index|1.5|7|2");
+}
+
+/// String union arms update bytes through references while preserving by-value copies.
+#[test]
+fn generics_string_union_offset_writes_preserve_strings() {
+    assert_eq!(run(&[
+        "array<int>|string $items = 'keep'; $original = $items; $alias =& $items; $items[0] = 9; $alias[-1] = 'X'; $items['01'] = 'Y'; echo $items, '|', $original, '|', $alias; try { $items[] = 1; } catch (Error $e) { echo '|append'; } try { $items['bad'] = 1; } catch (TypeError $e) { echo '|key'; } try { $items[0] = ''; } catch (Error $e) { echo '|empty'; } echo '|', $items; $items[6] = 'Z'; echo '|', $items;",
+    ]), "9YeX|keep|9YeX|append|key|empty|9YeX|9YeX  Z");
+}
+
 /// Escaped failed receivers retain their class and properties but never run their destructors.
 #[test]
 fn generics_failed_construction_preserves_escaped_metadata() {
