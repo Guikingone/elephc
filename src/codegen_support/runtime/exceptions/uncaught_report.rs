@@ -106,6 +106,12 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     // path as `echo`, so buffered text precedes it; this helper used to exit without flushing,
     // which discarded every byte a program had buffered — `ob_start(); echo "x"; throw …` printed
     // nothing at all on stdout. Nothing is live yet at the entry, so the call costs no spill.
+    // The throwing site reaches this report by a tail jump, so the stack may arrive 8-off;
+    // the trace walker calls frame readers that need a 16-aligned stack, and this report never
+    // returns, so re-aligning here costs nothing.
+    emitter.instruction("mov x9, sp");
+    emitter.instruction("and x9, x9, #0xfffffffffffffff0");
+    emitter.instruction("mov sp, x9");
     emitter.instruction("bl __rt_ob_flush_all");                                // drain every open output buffer before the report is written
 
     abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
@@ -176,6 +182,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_NEWLINE_LEN));         // terminating newline
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
+    emitter.instruction("bl __rt_uncaught_print_stack_trace");                  // PHP continues with the stack-trace block
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.syscall(1);
 
@@ -282,6 +289,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // terminate the uncaught-exception diagnostic with a newline
+    emitter.instruction("call __rt_uncaught_print_stack_trace");                // PHP continues with the stack-trace block
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after reporting the throwable

@@ -219,6 +219,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
     exceptions::emit_report_uncaught_exception(emitter);
+    exceptions::emit_uncaught_print_stack_trace(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
     exceptions::emit_throwable_previous(emitter);

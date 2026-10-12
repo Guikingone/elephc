@@ -70,7 +70,7 @@ mod call_cleanup;
 mod call_operands;
 mod callable_descriptors;
 mod core_closures;
-mod core_builtins;
+pub(crate) mod core_builtins;
 mod core_includes;
 mod core_misc;
 mod descriptor_arguments;

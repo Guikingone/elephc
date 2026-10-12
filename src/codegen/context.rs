@@ -160,7 +160,7 @@ impl<'a> FunctionContext<'a> {
             exception_cleanup_activation: layout.exception_cleanup_activation,
             unwinding_cleanup: false,
             backtrace_activation: layout.backtrace_activation,
-            backtrace_enabled: super::frame::module_uses_backtrace(module),
+            backtrace_enabled: true,
             epilogue_emitted: false,
             instr_id: None,
             is_main,

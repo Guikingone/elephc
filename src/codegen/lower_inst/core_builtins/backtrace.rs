@@ -70,16 +70,17 @@ pub(super) fn prepare_call_site(
         .exception_activation_offset
         .expect("backtrace activation requires an activation frame slot");
     abi::store_at_offset(ctx.emitter, scratch, activation_offset - 32);
-    let callback = ctx.next_label("backtrace_frame_reader");
-    abi::emit_symbol_address(ctx.emitter, scratch, &callback);
-    abi::store_at_offset(ctx.emitter, scratch, activation_offset - 24);
-
-    let resume = ctx.next_label("backtrace_call_site");
-    abi::emit_jump(ctx.emitter, &resume);
-    ctx.emitter.label(&callback);
-    emit_frame_reader_callback(ctx)?;
-    ctx.emitter.label(&resume);
     Ok(())
+}
+
+/// The out-of-line frame reader label of the function being lowered.
+pub(crate) fn backtrace_reader_label(ctx: &FunctionContext<'_>) -> String {
+    format!(
+        "{}__btr",
+        ctx.epilogue_label
+            .clone()
+            .unwrap_or_else(|| format!("{}_epilogue", ctx.function.name))
+    )
 }
 
 /// Returns whether an instruction can synchronously enter another PHP-visible frame.
@@ -113,6 +114,22 @@ fn instruction_may_enter_php_frame(inst: &Instruction) -> bool {
             | Op::FiberRuntimeCall
             | Op::CoreBuiltin
     )
+}
+
+/// Emits the function's out-of-line frame reader at its deterministic label.
+///
+/// The reader body depends only on the owning function (its module file, name, class, and
+/// parameter slots); the per-site caller line arrives through the activation record. Called
+/// once per emitted function after its body, for every function whose frame publishes a
+/// backtrace activation.
+pub(crate) fn emit_function_backtrace_reader(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    if !ctx.backtrace_activation {
+        return Ok(());
+    }
+    let label = backtrace_reader_label(ctx);
+    ctx.emitter.label(&label);
+    emit_frame_reader_callback(ctx)?;
+    Ok(())
 }
 
 /// Builds the PHP backtrace array visible at the current AOT call site.

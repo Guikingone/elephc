@@ -16,7 +16,7 @@ use super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
-mod backtrace;
+pub(crate) mod backtrace;
 mod constants;
 mod handlers;
 mod introspection;

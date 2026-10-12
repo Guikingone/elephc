@@ -339,6 +339,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_global_argv", 8, target));
     out.push_str(&comm_directive("_exc_handler_top", 8, target));
     out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
+    // The frame-chain head as it stood at the MOST RECENT throw: the uncaught report walks it
+    // after the unwind has already popped every activation off the live chain.
+    out.push_str(&comm_directive("_uncaught_trace_snapshot", 8, target));
     // Head of the stack-resident boxed-array-walk borrow chain. Each active callback
     // publishes the exact hash-entry value slot it lends as `mixed &$value`, allowing
     // escape boundaries to reject only that unmanaged reference instead of ordinary
@@ -806,6 +809,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    // PHP's uncaught report continues with a stack trace; these are its literal separators.
+    out.push_str(".globl _uncaught_exc_stack\n_uncaught_exc_stack:\n    .ascii \"Stack trace:\\n\"\n");
+    out.push_str(".globl _uncaught_exc_hash\n_uncaught_exc_hash:\n    .ascii \"#\"\n");
+    out.push_str(".globl _uncaught_exc_main\n_uncaught_exc_main:\n    .ascii \" {main}\\n\"\n");
+    out.push_str(".globl _uncaught_exc_thrown\n_uncaught_exc_thrown:\n    .ascii \"  thrown in \"\n");
+    out.push_str(".globl _uncaught_exc_online\n_uncaught_exc_online:\n    .ascii \" on line \"\n");
     // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
     // sentinel, which no correct build should reach — see that helper for why it aborts there
     // instead of answering "no match".

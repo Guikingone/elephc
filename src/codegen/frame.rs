@@ -535,7 +535,15 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
         Arch::X86_64 => "rbp",
     };
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    if ctx.backtrace_activation {
+        // ONE reader per function, published once in the prologue: the reader's body depends
+        // only on this function (its file, name, class, and parameter slots), and the
+        // per-site caller line arrives separately at offset - 32.
+        let reader = crate::codegen::lower_inst::core_builtins::backtrace::backtrace_reader_label(ctx);
+        abi::emit_symbol_address(ctx.emitter, scratch, &reader);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    }
     abi::store_at_offset(ctx.emitter, scratch, offset - 24);
     if ctx.backtrace_activation {
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
