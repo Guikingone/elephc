@@ -305,14 +305,14 @@ fn spl_file_info_methods() -> Vec<ClassMethod> {
             return_body(function_call("basename", vec![file_path_arg_expr(), var_expr("suffix")])),
         ),
         method_with_body("getPathname", Vec::new(), Some(TypeExpr::Str), return_body(file_path_expr())),
-        method_with_body("getPerms", Vec::new(), Some(mixed_type()), return_body(function_call("fileperms", vec![file_path_arg_expr()]))),
-        method_with_body("getInode", Vec::new(), Some(mixed_type()), return_body(function_call("fileinode", vec![file_path_arg_expr()]))),
-        method_with_body("getSize", Vec::new(), Some(TypeExpr::Int), return_body(function_call("filesize", vec![file_path_arg_expr()]))),
-        method_with_body("getOwner", Vec::new(), Some(mixed_type()), return_body(function_call("fileowner", vec![file_path_arg_expr()]))),
-        method_with_body("getGroup", Vec::new(), Some(mixed_type()), return_body(function_call("filegroup", vec![file_path_arg_expr()]))),
-        method_with_body("getATime", Vec::new(), Some(mixed_type()), return_body(function_call("fileatime", vec![file_path_arg_expr()]))),
-        method_with_body("getMTime", Vec::new(), Some(TypeExpr::Int), return_body(function_call("filemtime", vec![file_path_arg_expr()]))),
-        method_with_body("getCTime", Vec::new(), Some(mixed_type()), return_body(function_call("filectime", vec![file_path_arg_expr()]))),
+        method_with_body("getPerms", Vec::new(), Some(mixed_type()), stat_method_body("fileperms", "getPerms")),
+        method_with_body("getInode", Vec::new(), Some(mixed_type()), stat_method_body("fileinode", "getInode")),
+        method_with_body("getSize", Vec::new(), Some(TypeExpr::Int), stat_method_body("filesize", "getSize")),
+        method_with_body("getOwner", Vec::new(), Some(mixed_type()), stat_method_body("fileowner", "getOwner")),
+        method_with_body("getGroup", Vec::new(), Some(mixed_type()), stat_method_body("filegroup", "getGroup")),
+        method_with_body("getATime", Vec::new(), Some(mixed_type()), stat_method_body("fileatime", "getATime")),
+        method_with_body("getMTime", Vec::new(), Some(TypeExpr::Int), stat_method_body("filemtime", "getMTime")),
+        method_with_body("getCTime", Vec::new(), Some(mixed_type()), stat_method_body("filectime", "getCTime")),
         method_with_body("getType", Vec::new(), Some(mixed_type()), return_body(function_call("filetype", vec![file_path_arg_expr()]))),
         method_with_body("isWritable", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("is_writable", vec![file_path_arg_expr()]))),
         method_with_body("isWriteable", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("is_writeable", vec![file_path_arg_expr()]))),
@@ -714,6 +714,36 @@ fn file_path_expr() -> Expr {
 /// Returns a copied `$this->path` for filesystem builtins that may consume string temporaries.
 fn file_path_arg_expr() -> Expr {
     string_copy_expr(file_path_expr())
+}
+
+/// Builds the body of one SplFileInfo stat accessor.
+///
+/// php runs the stat through the class and raises a catchable
+/// `RuntimeException: SplFileInfo::{method}(): stat failed for {path}` when it fails; the
+/// plain `file{...}` builtins answer `false` with a warning instead, so the synthetic body
+/// bridges the two. `method` is spelled in the message even when the receiver is a subclass
+/// (php names the declaring class) — which the corpus asserts verbatim.
+fn stat_method_body(builtin: &str, method: &str) -> Vec<Stmt> {
+    vec![
+        assign_stmt("result", function_call(builtin, vec![file_path_arg_expr()])),
+        if_stmt(
+            binary_expr(var_expr("result"), BinOp::StrictEq, bool_expr(false)),
+            vec![crate::synthetic_class::s_throw(crate::synthetic_class::e_new(
+                "RuntimeException",
+                vec![binary_expr(
+                    binary_expr(
+                        string_expr(&format!("SplFileInfo::{method}(): stat failed for ")),
+                        BinOp::Concat,
+                        file_path_expr(),
+                    ),
+                    BinOp::Concat,
+                    string_expr(""),
+                )],
+            ))],
+            None,
+        ),
+        return_stmt(var_expr("result")),
+    ]
 }
 
 /// Returns `$this->backingPath`.

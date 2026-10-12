@@ -52,8 +52,14 @@ pub(super) fn prepare_call_site(
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-        abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+        let line = inst.span.map_or(0, |span| span.line);
+        if line != 0 {
+            // A zero-line instruction is a synthetic-body call (the span belongs to generated
+            // code, not to the user's source). Leaving the previously published line standing
+            // keeps the diagnostic pointing at the call site that entered this frame.
+            abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(line));
+            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+        }
     }
     if !ctx.backtrace_enabled || !instruction_may_enter_php_frame(inst) {
         return Ok(());
