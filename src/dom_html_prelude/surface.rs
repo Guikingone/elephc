@@ -254,12 +254,11 @@ function __elephc_dom_tokenize(string $html, int $flags): mixed {
             $_i = $_i + 4;
             $_comment_end = strpos($html, "-->", $_i);
             if ($_comment_end === false) {
-                $_body = substr($html, $_i);
-                $_i = $_len;
-            } else {
-                $_body = substr($html, $_i, (int) $_comment_end - $_i);
-                $_i = (int) $_comment_end + 3;
+                // Legacy libxml discards the unfinished comment and the remaining input.
+                break;
             }
+            $_body = substr($html, $_i, (int) $_comment_end - $_i);
+            $_i = (int) $_comment_end + 3;
             $_tokens[] = ["k" => "comment", "v" => $_body];
             continue;
         }
@@ -377,7 +376,15 @@ function __elephc_dom_new_node(string $kind, string $name, string $value, mixed 
 function __elephc_dom_append_child(array $stack, mixed $node): array {
     $_top = $stack[count($stack) - 1];
     $_children = $_top["children"];
-    $_children[] = $node;
+    // Ignored closing tags do not create a boundary between text siblings.
+    $_count = count($_children);
+    if ($node["kind"] === "text" && $_count > 0 && $_children[$_count - 1]["kind"] === "text") {
+        $_last = $_children[$_count - 1];
+        $_last["value"] = (string) $_last["value"] . (string) $node["value"];
+        $_children[$_count - 1] = $_last;
+    } else {
+        $_children[] = $node;
+    }
     $_top["children"] = $_children;
     $stack[count($stack) - 1] = $_top;
     return $stack;
@@ -391,7 +398,14 @@ function __elephc_dom_build_forest(mixed $tokens): mixed {
         if ($_k === "text" || $_k === "cdata") {
             $_node = __elephc_dom_new_node($_k, "#text", (string) $_tok["v"], [], []);
             if (count($_stack) === 0) {
-                $_roots[] = $_node;
+                $_count = count($_roots);
+                if ($_k === "text" && $_count > 0 && $_roots[$_count - 1]["kind"] === "text") {
+                    $_last = $_roots[$_count - 1];
+                    $_last["value"] = (string) $_last["value"] . (string) $_node["value"];
+                    $_roots[$_count - 1] = $_last;
+                } else {
+                    $_roots[] = $_node;
+                }
             } else {
                 $_stack = __elephc_dom_append_child($_stack, $_node);
             }
@@ -476,9 +490,28 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
 function __elephc_dom_parse_html(string $html, int $flags): mixed {
     $_tokens = __elephc_dom_tokenize($html, $flags);
     $_roots = __elephc_dom_build_forest($_tokens);
-    $_html = __elephc_dom_wrap_html($_roots);
-    $_html["value"] = __elephc_dom_text_of($_html);
-    return __elephc_dom_new_node("document", "#document", $_html["value"], [], [$_html]);
+    $_document_children = [];
+    $_content = [];
+    $_leading = true;
+    foreach ($_roots as $_root) {
+        if ($_leading && ($_root["kind"] === "comment" || $_root["kind"] === "pi")) {
+            $_document_children[] = $_root;
+        } elseif ($_leading && $_root["kind"] === "text" && trim((string) $_root["value"]) === "") {
+            // Whitespace before document content is not an implicit body's first child.
+            continue;
+        } else {
+            $_leading = false;
+            $_content[] = $_root;
+        }
+    }
+    $_value = "";
+    if (count($_content) > 0) {
+        $_html = __elephc_dom_wrap_html($_content);
+        $_value = __elephc_dom_text_of($_html);
+        $_html["value"] = $_value;
+        $_document_children[] = $_html;
+    }
+    return __elephc_dom_new_node("document", "#document", $_value, [], $_document_children);
 }
 
 function __elephc_dom_escape(string $s): string {

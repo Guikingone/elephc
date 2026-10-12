@@ -11,6 +11,75 @@
 
 use crate::support::*;
 
+/// Leading comments and instructions remain document siblings, not Termwind body children.
+#[test]
+fn dom_html_fifth_review_document_leading_nodes() {
+    let out = compile_and_run_capture(r#"<?php
+$dom = new DOMDocument();
+$flags = LIBXML_HTML_NODEFDTD | LIBXML_NOERROR;
+$dom->loadHTML("<!--lead--> \n<?worker data?><div>X</div>", $flags);
+echo $dom->childNodes->length, '|';
+foreach ($dom->childNodes as $child) {
+    echo $child->nodeName, ':';
+    echo $child->parentNode === $dom ? 'P' : 'bad';
+    echo $child->ownerDocument === $dom ? 'O' : 'bad';
+    echo '|';
+}
+$body = $dom->getElementsByTagName('body')->item(0);
+echo $body->childNodes->length, ':', $body->childNodes->item(0)->nodeName, '|';
+$first = $dom->childNodes->item(0);
+$pi = $first->nextSibling;
+echo $pi instanceof DOMProcessingInstruction ? 'I' : 'bad';
+echo $pi->nextSibling->nodeName, ':', $pi->previousSibling === $first ? 'S' : 'bad', '|';
+$dom->loadHTML('<!--only-->', $flags);
+echo $dom->childNodes->length, ':', $dom->getElementsByTagName('body')->length, ':';
+echo $dom->childNodes->item(0)->nodeName, '|';
+$dom->loadHTML('<?worker data?>', $flags);
+echo $dom->childNodes->length, ':', $dom->getElementsByTagName('html')->length, ':';
+echo $dom->childNodes->item(0)->nodeName;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3|#comment:PO|worker:PO|html:PO|1:div|Ihtml:S|1:0:#comment|1:0:worker", "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
+/// Discarded unmatched closing tags do not split adjacent text node identities.
+#[test]
+fn dom_html_fifth_review_ignored_end_tag_text_coalescing() {
+    let out = compile_and_run_capture(r#"<?php
+$dom = new DOMDocument();
+$flags = LIBXML_HTML_NODEFDTD | LIBXML_NOERROR;
+$dom->loadHTML('<div>A</not>B</missing>C</div>', $flags);
+$div = $dom->getElementsByTagName('div')->item(0);
+$text = $div->childNodes->item(0);
+echo $div->childNodes->length, ':', $text->nodeName, ':', $text->nodeValue, ':';
+echo $text->nextSibling === null ? 'N' : 'bad', '|', $dom->saveXML($div), '|';
+$dom->loadHTML('<div>A<span>B</span>C</div>', $flags);
+$div = $dom->getElementsByTagName('div')->item(0);
+echo $div->childNodes->length, ':', $div->childNodes->item(1)->nodeName;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:#text:ABC:N|<div>ABC</div>|3:span", "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
+/// Legacy HTML parsing drops an unfinished comment tail without creating a comment node.
+#[test]
+fn dom_html_fifth_review_unterminated_comment() {
+    let out = compile_and_run_capture(r#"<?php
+$dom = new DOMDocument();
+$flags = LIBXML_HTML_NODEFDTD | LIBXML_NOERROR;
+$dom->loadHTML('<div>a<!--b</div>c', $flags);
+$div = $dom->getElementsByTagName('div')->item(0);
+echo $div->childNodes->length, ':', $div->nodeValue, '|', $dom->saveXML($div), '|';
+$dom->loadHTML('<!--unfinished', $flags);
+echo $dom->childNodes->length, ':', $dom->getElementsByTagName('body')->length;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:a|<div>a</div>|0:0", "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
 /// Consecutive instructions preserve typed PI fields and links across every sibling kind.
 #[test]
 fn dom_html_fourth_review_processing_instruction_fields() {

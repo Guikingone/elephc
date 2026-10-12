@@ -38,7 +38,7 @@ foreach ($body->childNodes as $node) {
 | Piece | Behavior |
 |---|---|
 | `new DOMDocument()` | Empty document. Optional constructor args are accepted and ignored. |
-| `loadHTML(string $source, int $options = 0): bool` | Forgiving HTML fragment parse. Wraps content in `html`/`body`; unmatched closing tags are ignored, and a matching ancestor closes its open descendants. Text and attributes decode HTML4 named entities, `&apos;`, and numeric references. Script/style content remains raw until its matching closing tag. This is not full HTML tree-repair semantics. |
+| `loadHTML(string $source, int $options = 0): bool` | Forgiving HTML fragment parse. Wraps element/text content in `html`/`body`; unmatched closing tags are ignored, and a matching ancestor closes its open descendants. Text and attributes decode HTML4 named entities, `&apos;`, and numeric references. Script/style content remains raw until its matching closing tag. This is not full HTML tree-repair semantics. |
 | `getElementsByTagName(string $name): DOMNodeList` | Document-order descendant elements. Names are compared literally after HTML parse lowercases tag names. `*` matches every element. |
 | `DOMNodeList::item(int $index)` / `$length` / `foreach` | Indexed access and `Iterator` traversal. |
 | `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text, excluding comments and processing instructions. Document `nodeValue` remains `null`. A `DOMComment` retains its own comment body and serializes normally. |
@@ -47,6 +47,11 @@ foreach ($body->childNodes as $node) {
 | `instanceof DOMElement` / `DOMText` / `DOMComment` / `DOMDocument` | Class hierarchy matches PHP (`DOMText`/`DOMComment` extend `DOMCharacterData` extend `DOMNode`). |
 | `DOMProcessingInstruction` | Extends `DOMNode`; parsed instructions preserve target case, `target`, `data`, `nodeName`, `nodeValue`, and ordinary node links. Serialization emits `<?target data?>`. Legacy HTML consumes through `>`, retaining a preceding `?` in the data. |
 | `saveXML(?DOMNode $node = null): string` | Serializes a node or the whole document. Text escapes `&`, `<`, `>`, and CR; double-quoted attributes also escape `"`, LF, and TAB, but not `'`. Script/style raw text serializes as safely split CDATA. No XML declaration (Termwind passes `LIBXML_NOXMLDECL`). |
+
+Leading comments and processing instructions remain document-level siblings before
+`html`. Comment-only and instruction-only sources do not create `html` or `body`.
+Ignored closing tags do not split adjacent text nodes. An unfinished comment and
+its remaining input are discarded, following the legacy libxml HTML tokenizer.
 
 ### `LIBXML_*` flags Termwind uses
 

@@ -33,6 +33,12 @@ foreach ($div->childNodes as $child) {
     if ($child instanceof DOMProcessingInstruction) { echo $child->target, $child->data; }
 }
 echo $doc->saveXML($div);
+$doc->loadHTML('<!--lead--><?worker data?><div>A</not>B</div>');
+echo $doc->childNodes->length;
+$div = $doc->getElementsByTagName('div')->item(0);
+echo $div->childNodes->length;
+$doc->loadHTML('<div>a<!--unfinished');
+echo $doc->saveXML($doc->getElementsByTagName('div')->item(0));
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
