@@ -10,6 +10,173 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// Runtime string writes preserve negative offsets, padding, cast warnings and invalid key types.
+#[test]
+fn test_append_sixth_review_string_offset_controls() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+set_error_handler(function(int $level, string $message) { echo $level, ':', $message, '|'; return true; });
+function update(mixed $key): void {
+    $items = ['AB'];
+    try { $items[0][$key] = 'XYZ'; echo json_encode($items); }
+    catch (Throwable $e) { echo get_class($e), ':', $e->getMessage(); }
+    echo ';';
+}
+foreach ([-1, -3, 4, null, true, 1.5, '01', '1.5', 'X', [1], new stdClass()] as $key) { update($key); }
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "2:Only the first byte will be assigned to the string offset|[\"AX\"];",
+        "2:Illegal string offset -3|[\"AB\"];",
+        "2:Only the first byte will be assigned to the string offset|[\"AB  X\"];",
+        "2:String offset cast occurred|2:Only the first byte will be assigned to the string offset|[\"XB\"];",
+        "2:String offset cast occurred|2:Only the first byte will be assigned to the string offset|[\"AX\"];",
+        "2:String offset cast occurred|2:Only the first byte will be assigned to the string offset|[\"AX\"];",
+        "2:Only the first byte will be assigned to the string offset|[\"AX\"];",
+        "TypeError:Cannot access offset of type string on string;",
+        "TypeError:Cannot access offset of type string on string;",
+        "TypeError:Cannot access offset of type array on string;",
+        "TypeError:Cannot access offset of type stdClass on string;"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// False conversion remains attached to caller storage reached through reference variadics.
+#[test]
+fn test_append_sixth_review_false_reference_parent() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+set_error_handler(function(int $level, string $message) { echo $level, ':', $message, '|'; return true; });
+function update(string $key, &...$items): void {
+    $items[$key]['x'] = 1; echo json_encode($items), '|';
+}
+$a = false; $b = 'q'; update('0', $a, $b); echo json_encode($a), ':', $b;
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "8192:Automatic conversion of false to array is deprecated|[{\"x\":1},\"q\"]|{\"x\":1}:q");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// String offset replacement also writes through boxed reference-variadic caller slots.
+#[test]
+fn test_append_sixth_review_string_reference_parent() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+set_error_handler(function(int $level, string $message) { echo $level, ':', $message, '|'; return true; });
+function update(string $key, &...$items): void {
+    $items[$key]['1abc'] = 'Z'; echo json_encode($items), '|';
+}
+$a = 'AB'; $b = 'q'; update('0', $a, $b); echo $a, ':', $b;
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:Illegal string offset \"1abc\"|[\"AZ\",\"q\"]|AZ:q");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing false-conversion handler observes the completed assignment and releases roots.
+#[test]
+fn test_append_sixth_review_throwing_conversion_handler() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function update(string $key): void {
+    $items = [false, 'q'];
+    set_error_handler(function(int $level, string $message) { throw new Exception($message); });
+    try { $items[$key]['x'] = 1; }
+    catch (Exception $error) { echo $error->getMessage(), '|', json_encode($items); }
+    restore_error_handler();
+}
+update('0');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Automatic conversion of false to array is deprecated|[{\"x\":1},\"q\"]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Computed nonnumeric string offsets throw instead of reaching a concrete string array setter.
+#[test]
+fn test_append_sixth_review_computed_string_offset() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function update(): void {
+    $items = ['A', 'B', 'C']; $key = '1';
+    try { $items[$key][strtolower('X')] = 1; echo 'NOERR'; }
+    catch (TypeError $e) { echo $e->getMessage(); }
+    echo '|', json_encode($items);
+}
+update();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Cannot access offset of type string on string|[\"A\",\"B\",\"C\"]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Runtime parent and leaf keys cannot silently discard invalid string offset writes.
+#[test]
+fn test_append_sixth_review_runtime_string_offset() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function update(string $key, string $inner): void {
+    $items = ['A', 'B', 'C'];
+    try { $items[$key][$inner] = 1; echo 'NOERR'; }
+    catch (TypeError $e) { echo $e->getMessage(); }
+    echo '|', json_encode($items);
+}
+update('1', 'x');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Cannot access offset of type string on string|[\"A\",\"B\",\"C\"]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Leading-numeric string offsets warn once, update the stored string, and preserve its COW copy.
+#[test]
+fn test_append_sixth_review_leading_numeric_string_offset() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+set_error_handler(function(int $level, string $message) { echo $level, ':', $message, '|'; return true; });
+function update(): void {
+    $items = ['AB', 'CD']; $key = '0'; $alias = $items;
+    $items[$key]['1abc'] = 'Z';
+    echo json_encode($items), '|', json_encode($alias);
+}
+update(); restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:Illegal string offset \"1abc\"|[\"AZ\",\"CD\"]|[\"AB\",\"CD\"]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Both statically known and runtime string parent keys autovivify false without changing aliases.
+#[test]
+fn test_append_sixth_review_false_parent() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+set_error_handler(function(int $level, string $message) { echo $level, ':', $message, '|'; return true; });
+function dynamic(string $key): void {
+    $items = [false, 'q']; $alias = $items; $items[$key]['x'] = 1;
+    echo json_encode($items), '|', json_encode($alias), '|';
+}
+function concrete(): void {
+    $items = [false, 'q']; $key = '0'; $items[$key]['x'] = 1;
+    echo json_encode($items);
+}
+dynamic('0'); concrete(); restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout,
+        "8192:Automatic conversion of false to array is deprecated|[{\"x\":1},\"q\"]|[false,\"q\"]|8192:Automatic conversion of false to array is deprecated|[{\"x\":1},\"q\"]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The latest scalar-parent regressions retain identical semantics without EIR optimization.
+#[test]
+fn test_append_sixth_review_without_ir_opt() {
+    without_ir_opt(|| {
+        test_append_sixth_review_computed_string_offset();
+        test_append_sixth_review_runtime_string_offset();
+        test_append_sixth_review_leading_numeric_string_offset();
+        test_append_sixth_review_string_offset_controls();
+        test_append_sixth_review_false_parent();
+        test_append_sixth_review_false_reference_parent();
+        test_append_sixth_review_string_reference_parent();
+        test_append_sixth_review_throwing_conversion_handler();
+    });
+}
+
 /// Ordinary String-key writes keep associative return storage and independent COW aliases.
 #[test]
 fn test_append_mixed_string_key_hash_return_contract() {

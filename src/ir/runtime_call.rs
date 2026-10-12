@@ -76,6 +76,12 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Retains the concrete cell behind PHP wrappers and boxed caller-reference markers.
+    MixedCellResolveForWrite,
+    /// Converts a PHP string-write offset, preserving catchable errors and conversion warnings.
+    StringWriteOffset,
+    /// Sends one complete PHP warning or deprecation line through the shared handler dispatcher.
+    WriteDiagnostic,
     /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
     /// Rejects non-array values without mutating the original cell or its payload.
     ArrayUnpackToHash,
@@ -138,6 +144,12 @@ impl RuntimeCallTarget {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
+            RuntimeCallTarget::StringWriteOffset => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 1, max_operands: Some(1),
+            }),
+            RuntimeCallTarget::WriteDiagnostic => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Str], result: IrType::Void,
+            }),
             RuntimeCallTarget::MixedCellPromoteToHash(_)
             | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
             | RuntimeCallTarget::ArrayUnpackToHash => {
@@ -146,7 +158,7 @@ impl RuntimeCallTarget {
                     result: IrType::Heap(IrHeapKind::Hash),
                 })
             }
-            RuntimeCallTarget::MixedCellClone => Some(RuntimeCallSignature::Fixed {
+            RuntimeCallTarget::MixedCellClone | RuntimeCallTarget::MixedCellResolveForWrite => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
@@ -202,6 +214,9 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::StringWriteOffset => "string.write_offset",
+            RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
+            RuntimeCallTarget::WriteDiagnostic => "diagnostic.write",
             RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"

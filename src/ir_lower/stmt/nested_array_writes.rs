@@ -42,6 +42,15 @@ pub(super) fn lower_nested_array_assign(
             (value, pins)
         });
         let parent = lower_nested_assign_parent(ctx, array, span);
+        let parent = if ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed {
+            let resolved = ctx.emit_owned_value(
+                Op::RuntimeCall, vec![parent.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellResolveForWrite)),
+                PhpType::Mixed, effects_lookup::runtime_effects(), Some(span),
+            );
+            crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+            resolved
+        } else { parent };
         let parent_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[parent.value], span);
         let key = lower_expr(ctx, index);
         let key_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], span);
@@ -56,13 +65,7 @@ pub(super) fn lower_nested_array_assign(
         if !super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {
             return;
         }
-        ctx.emit_void(
-            Op::RuntimeCall,
-            vec![parent.value, key.value, value.value],
-            None,
-            effects_lookup::runtime_effects(),
-            Some(span),
-        );
+        super::nested_scalar_writes::lower_nested_set(ctx, parent, key, value, span);
         if deferred {
             crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, span);
             crate::ir_lower::expr::unpin_in_flight_owners(ctx, parent_pins, span);
@@ -155,12 +158,11 @@ pub(super) fn lower_nested_assign_parent(
 }
 
 /// Lowers `$local[key]` as the parent of a nested assignment when the local
-/// holds an indexed array or a Mixed-valued assoc array:
+/// holds an indexed array or an assoc array:
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
 /// context, the possibly promoted/reallocated container is stored back into
 /// the local, and the guaranteed-present element is re-read as the parent
-/// cell. Runtime string/boxed keys can promote any indexed element type; typed numeric
-/// parents retain ordinary read semantics without evaluating their key twice.
+/// cell. Every key shape keeps selected scalar storage attached, and keys are evaluated once.
 /// Returns `None` for receiver or key shapes without a concrete lowering.
 pub(super) fn lower_local_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
@@ -195,15 +197,8 @@ pub(super) fn lower_local_parent_fetch_for_write(
                             ctx, name, hash, assoc_ty, key, span,
                         ));
                     }
-                    if elem_ty.codegen_repr() != PhpType::Mixed
-                        && !is_empty_indexed_array_element(elem_ty.as_ref())
-                    {
-                        // Typed numeric parents keep their ordinary read semantics. Reuse
-                        // the evaluated key so a fallback never repeats a computed expression.
-                        return Some(crate::ir_lower::expr::lower_array_access_from_values(
-                            ctx, array, key, index, parent_expr, true,
-                        ));
-                    }
+                    // A nested write needs the attached child cell even for a typed string
+                    // or boolean element. A plain read loses its writeback identity.
                     let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
                     Some(lower_indexed_parent_fetch_for_write(ctx, name, array, key, span))
                 }
@@ -240,9 +235,11 @@ pub(super) fn lower_local_parent_fetch_for_write(
                 _ => None,
             }
         }
-        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
+        PhpType::AssocArray { key, .. } => {
             let hash_value = ctx.load_local(name, Some(span));
-            let assoc_ty = ctx.local_type(name);
+            let assoc_ty = PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) };
+            // Fetch-for-write normalizes typed entries in place and returns their attached
+            // Mixed cells. Declare that result contract before publishing the changed hash.
             ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
             Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span))
         }

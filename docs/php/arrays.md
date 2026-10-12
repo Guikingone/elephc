@@ -40,6 +40,12 @@ through a local reference alias. Negative and sparse integer writes add only
 the requested key, preserving the other references without inserting null gaps.
 Reads and JSON encoding observe each referenced argument's current value.
 
+Nested keyed writes also retain the selected scalar element's storage. A string
+element supports PHP string-offset assignment, including a single warning for a
+leading-numeric offset such as `"1abc"`; invalid nonnumeric offsets throw
+`TypeError`. A `false` element is converted to an array with an `E_DEPRECATED`
+diagnostic. Both paths preserve copy-on-write aliases and caller references.
+
 ## String arrays
 ```php
 <?php

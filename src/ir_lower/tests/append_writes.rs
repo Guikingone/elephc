@@ -75,6 +75,13 @@ function writeNumericParents(string $key): void {
     echo json_encode($strings), json_encode($copy), json_encode($ints);
 }
 writeNumericParents('1');
+function writeScalarChildren(string $key, mixed $inner): void {
+    $strings = ['AB', 'CD'];
+    try { $strings[$key][$inner] = 'Z'; } catch (TypeError $error) { echo $error->getMessage(); }
+    $false = [false, 'q']; $false[$key]['x'] = 1;
+    echo json_encode($strings), json_encode($false);
+}
+writeScalarChildren('0', '1abc');
 function hashReturn(string $key, mixed $value): array {
     $items = [$value]; $items[$key] = $value; return $items;
 }
@@ -97,6 +104,11 @@ echo json_encode(hashReturn('key', $argc));
         "{target}: selected boxed strings must be guarded before nested writes");
     let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    let scalar = module.functions.iter().find(|function| function.name == "writeScalarChildren").unwrap();
+    assert!(scalar.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+        crate::ir::RuntimeCallTarget::StringWriteOffset))), "{target}: runtime string offsets are normalized");
+    assert!(scalar.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+        crate::ir::RuntimeCallTarget::WriteDiagnostic))), "{target}: false conversion uses PHP's diagnostic channel");
     let nested = asm.split("@fn name=writeConsumingParent ").nth(1)
         .expect("missing reference-variadic assembly body")
         .split("@endfn name=writeConsumingParent").next().unwrap();
