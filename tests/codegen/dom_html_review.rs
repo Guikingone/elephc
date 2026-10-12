@@ -11,6 +11,66 @@
 
 use crate::support::*;
 
+/// Termwind's NOBLANKS drops document padding, not interior or explicit-body spaces.
+#[test]
+fn dom_html_latest_review_document_padding() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$flags = LIBXML_NOERROR | LIBXML_COMPACT | LIBXML_HTML_NODEFDTD | LIBXML_NOBLANKS | LIBXML_NOXMLDECL;
+foreach ([" <div>Hi</div> ", "\n\t<div>Hi</div>\n\t", "<div>A</div> <b>B</b> ", "<body> <div>Hi</div> </body> "] as $source) {
+    $doc->loadHTML($source, $flags);
+    $body = $doc->getElementsByTagName('body')->item(0);
+    echo $body->childNodes->length, ':';
+    foreach ($body->childNodes as $child) { echo $child->nodeName, ','; }
+    echo $doc->saveXML($body), '|';
+}
+$doc->loadHTML(' <div>Hi</div> ', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+$body = $doc->getElementsByTagName('body')->item(0);
+echo $body->childNodes->length, ':', $doc->saveXML($body);
+"#);
+    assert_eq!(out, "1:div,<body><div>Hi</div></body>|1:div,<body><div>Hi</div></body>|3:div,#text,b,<body><div>A</div> <b>B</b></body>|3:#text,div,#text,<body> <div>Hi</div> </body>|2:<body><div>Hi</div> </body>");
+}
+
+/// Native direct and mixed count calls dispatch through the DOM list's Countable contract.
+#[test]
+fn dom_html_latest_review_countable_lists() {
+    let out = compile_and_run(r#"<?php
+function size(mixed $value): int { return count($value); }
+$doc = new DOMDocument();
+$doc->loadHTML('<div><span>A</span><b>B</b><span>C</span></div>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+$list = $doc->getElementsByTagName('span');
+echo count($list), ':', size($list), ':', count($doc->childNodes), ':';
+echo count($doc->getElementsByTagName('missing')), ':';
+echo $list instanceof Countable ? 'Y' : 'bad';
+"#);
+    assert_eq!(out, "2:2:1:0:Y");
+}
+
+/// Eval observes the same registered Countable implementation as native code.
+#[test]
+fn dom_html_latest_review_eval_countable_list() {
+    let out = compile_and_run(r#"<?php
+function enableDom(DOMDocument $doc): void {}
+echo eval('$doc = new DOMDocument(); $doc->loadHTML("<div>X</div>"); return count($doc->getElementsByTagName("div"));');
+"#);
+    assert_eq!(out, "1");
+}
+
+/// Counting does not retain extra list owners or consume its independent traversal state.
+#[test]
+fn dom_html_latest_review_countable_list_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function size(mixed $value): int { return count($value); }
+$items = new DOMNodeList([1, 2]);
+for ($i = 0; $i < 16; $i++) { echo size($items); }
+foreach ($items as $item) { echo $item; }
+unset($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "222222222222222212", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Repeated nested traversals, including early inner exits, release their fresh iterators.
 #[test]
 fn dom_html_sixth_review_iterator_owners() {

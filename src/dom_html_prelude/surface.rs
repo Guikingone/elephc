@@ -504,6 +504,16 @@ function __elephc_dom_parse_html(string $html, int $flags): mixed {
             $_content[] = $_root;
         }
     }
+    if (($flags & LIBXML_NOBLANKS) !== 0) {
+        while (count($_content) > 0) {
+            $_last = $_content[count($_content) - 1];
+            if ($_last["kind"] !== "text" || trim((string) $_last["value"]) !== "") {
+                break;
+            }
+            // Legacy HTML NOBLANKS discards document padding, not element children.
+            array_pop($_content);
+        }
+    }
     $_value = "";
     if (count($_content) > 0) {
         $_html = __elephc_dom_wrap_html($_content);
@@ -741,7 +751,7 @@ class __ElephcDOMNodeListIterator implements Iterator {
     }
 }
 
-class DOMNodeList implements IteratorAggregate {
+class DOMNodeList implements IteratorAggregate, Countable {
     public int $length = 0;
     public mixed $__items = [];
 
@@ -767,6 +777,10 @@ class DOMNodeList implements IteratorAggregate {
 
     public function getIterator(): Iterator {
         return new __ElephcDOMNodeListIterator($this->__items, $this->length);
+    }
+
+    public function count(): int {
+        return $this->length;
     }
 }
 

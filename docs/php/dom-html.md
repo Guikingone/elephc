@@ -41,7 +41,7 @@ foreach ($body->childNodes as $node) {
 | `new DOMDocument()` | Empty document. Optional constructor args are accepted and ignored. |
 | `loadHTML(string $source, int $options = 0): bool` | Forgiving HTML fragment parse. Wraps element/text content in `html`/`body`; unmatched closing tags are ignored, and a matching ancestor closes its open descendants. Text and attributes decode HTML4 named entities, `&apos;`, and numeric references. Script/style content remains raw until its matching closing tag. This is not full HTML tree-repair semantics. |
 | `getElementsByTagName(string $name): DOMNodeList` | Document-order descendant elements. Names are compared literally after HTML parse lowercases tag names. `*` matches every element. |
-| `DOMNodeList::item(int $index)` / `$length` / `foreach` | Indexed access and independent `IteratorAggregate` traversals, including nested walks and descendant queries during a walk. |
+| `DOMNodeList::item(int $index)` / `$length` / `count()` / `foreach` | Indexed access, `Countable` counts, and independent `IteratorAggregate` traversals, including nested walks and descendant queries during a walk. |
 | `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text, excluding comments and processing instructions. Document `nodeValue` remains `null`. A `DOMComment` retains its own comment body and serializes normally. |
 | `childNodes`, `previousSibling`, `nextSibling`, `parentNode`, `ownerDocument` | Wired after parse. The document's `ownerDocument` is `null`; child nodes refer to their document. The tree is treated as immutable. |
 | `DOMElement::getAttribute(string $name): string` | Attribute names are lowercased on parse; duplicate names keep their first value. Queries are compared literally, so `class` matches parsed `CLASS`, but a query for `CLASS` does not. Missing attributes return `""`. |
@@ -64,7 +64,7 @@ These constants are always available (including inside a namespace, and in
 | `LIBXML_NOXMLDECL` | 2 | Save flag; parse ignores it. `saveXML()` never emits `<?xml …?>`. |
 | `LIBXML_HTML_NODEFDTD` | 4 | No default doctype is added (none is added anyway). |
 | `LIBXML_NOERROR` | 32 | Parse is silent and forgiving. |
-| `LIBXML_NOBLANKS` | 256 | Accepted without removing HTML whitespace-only text nodes. XML blank-node filtering is outside this HTML-only subset. |
+| `LIBXML_NOBLANKS` | 256 | Drops trailing document-level whitespace padding. Whitespace between elements and inside an explicit `body` remains, as does padding when this flag is absent. XML blank-node filtering is outside this HTML-only subset. |
 | `LIBXML_COMPACT` | 65536 | Accepted and ignored (libxml compaction is an optimizer hint). |
 
 ## Remaining gaps versus full PHP DOM
