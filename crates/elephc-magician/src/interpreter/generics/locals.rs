@@ -19,7 +19,14 @@ pub(in crate::interpreter) fn validate_generic_local(declared: &EvalParameterTyp
 pub(in crate::interpreter) fn validate_generic_local_element(declared: Option<&EvalParameterType>, array: RuntimeCellHandle, index: RuntimeCellHandle, value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
     let Some(declared) = declared else { return Ok(()); };
     let ty = generic_type(declared);
-    if array_write_accepts(&ty, array, index, value, context, values)? { return Ok(()); }
+    // Validate the stored integer key type without replacing the runtime's diagnostic operand.
+    let normalized = match values.type_tag(index)? {
+        EVAL_TAG_FLOAT | EVAL_TAG_BOOL => Some(values.cast_int(index)?),
+        _ => None,
+    };
+    let accepted = array_write_accepts(&ty, array, normalized.unwrap_or(index), value, context, values);
+    let released = normalized.map_or(Ok(()), |key| values.release(key));
+    if accepted.and_then(|accepted| released.map(|()| accepted))? { return Ok(()); }
     eval_throw_type_error(&format!("Array write violates typed local {ty}"), context, values)
 }
 

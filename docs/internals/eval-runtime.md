@@ -277,6 +277,11 @@ Class relation registration instantiates generic parents, interfaces, and traits
 validation. A recursion guard rejects cyclic generic inheritance, and type growth is bounded.
 Class identities put class and constructor slots in a single argument list. Constructor slots
 remain part of the registry key; class-shaped inference and variance compare only class slots.
+Written lists extending beyond class slots bind the combined class/constructor parameters, so
+concrete names and parent references resolve independently of specialization cache order.
+Failed initialization releases the allocated receiver on property-default, argument-binding, or
+constructor errors and suppresses its destructor. An escaped `$this` retains class/property
+metadata until its remaining owners release it, matching PHP's failed-construction behavior.
 
 Generated-code context calls and callable dispatch use the same specialization resolver before
 ordinary binding. The public context-call entry points live in `interpreter/context_calls.rs`;
@@ -285,7 +290,9 @@ first-class function callables may retain a template name until arguments determ
 Structural `EvalParameterTypeVariant::Generic` contracts validate boxed arrays and typed callbacks
 at existing argument and return boundaries. Indexed contracts reject associative storage. Typed
 local writes validate before mutation, including nullable and union array arms, normalized keys,
-and the existing contents of a selected union arm. No new
+and the existing contents of a selected union arm. Float and bool keys use a temporary integer
+cell for contract validation; that cell is released on success and failure, while storage receives
+the original key so native normalization and diagnostics keep their existing operands. No new
 value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
 mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
 format 13 includes the retained templates, tokens, imports, structural types, and typed locals;

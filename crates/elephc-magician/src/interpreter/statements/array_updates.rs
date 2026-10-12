@@ -124,6 +124,9 @@ pub(crate) fn eval_dynamic_destructor_for_object_cell(
     else {
         return Ok(false);
     };
+    if context.dynamic_object_destructor_is_finished(identity) {
+        return Ok(true);
+    }
     let Some((declaring_class, method)) = context.class_method(&class_name, "__destruct") else {
         return Ok(false);
     };

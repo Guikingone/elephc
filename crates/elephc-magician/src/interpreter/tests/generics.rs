@@ -398,3 +398,59 @@ fn generics_constructor_slots_preserve_nested_type_contracts() {
         "class Animal {} class Dog extends Animal {} class Box<out T> { public function __construct<U>(private T $value, private U $label) {} public function get(): T { return $this->value; } } function nested<V>(Box<Box<V>> $box): V { return $box->get()->get(); } $inner = new Box(new Dog(), 1); echo get_class(nested(new Box($inner, 'outer'))); class Sink<in T> { public function __construct<U>(private U $label) {} public function put(T $value): void {} } function write(Sink<Dog> $sink): string { $sink->put(new Dog()); return 'sink'; } echo '|', write(new Sink<Animal>(1)); class Invariant<T> { public function __construct<U>(private T $value, private U $label) {} } function reject(Invariant<Animal> $value): void {} try { reject(new Invariant(new Dog(), 1)); } catch (TypeError $e) { echo '|invariant'; } class Item { public function __construct<U>(public U $value) {} } function item(Item<int> $value): int { return $value->value; } echo '|', item(new Item(7)); try { item(new Item('bad')); } catch (TypeError $e) { echo '|constructor'; }",
     ]), "Dog|sink|invariant|7|constructor");
 }
+
+/// Fully written constructor identities work before and after inferred cache entries exist.
+#[test]
+fn generics_written_class_and_constructor_slots_are_order_independent() {
+    for inferred_first in [false, true] {
+        let warmup = if inferred_first { "$warm = new Pair<int>(1, 'warm');" } else { "" };
+        let source = format!("class Pair<T> {{ public function __construct<U>(public T $left, public U $right) {{}} }} {warmup} $pair = new Pair<int, string>(1, 'two'); echo get_class($pair), '|', $pair->right; try {{ new Pair<int, string>(1, []); }} catch (TypeError $e) {{ echo '|value'; }}");
+        assert_eq!(run(&[&source]), "Pair<int, string>|two|value");
+    }
+    assert_eq!(run(&[
+        "class Pair<T> { public function __construct<U>(public T $left, public U $right) {} }",
+        "class Child extends Pair<int, string> {} $child = new Child(3, 'child'); echo $child->left, '|', $child->right, '|', get_parent_class($child);",
+    ]), "3|child|Pair<int, string>");
+}
+
+/// Combined written lists retain dependent constructor defaults, bounds and lexical shadowing.
+#[test]
+fn generics_written_constructor_slots_preserve_binding_rules() {
+    assert_eq!(run(&[
+        "class Base {} class Child extends Base {} class Pair<T> { public function __construct<U: Base, V = U>(public T $left, public U $right, public V $other) {} } $pair = new Pair<int, Child>(1, new Child(), new Child()); echo get_class($pair); try { new Pair<int, int>(1, 2, 3); } catch (TypeError $e) { echo '|bound'; } try { new Pair<int, Child, Child, string>(1, new Child(), new Child()); } catch (TypeError $e) { echo '|arity'; } class Shadow<T> { public function __construct<T>(public T $value) {} } $shadow = new Shadow<int, string>('ok'); echo '|', get_class($shadow), '|', $shadow->value;",
+    ]), "Pair<int, Child, Child>|bound|arity|Shadow<int, string>|ok");
+}
+
+/// Typed array keys use PHP's integer normalization for floats and booleans before validation.
+#[test]
+fn generics_array_local_accepts_normalized_scalar_keys() {
+    for ty in ["array<int>", "array<int, int>", "?array<int>", "array<int>|null"] {
+        let source = format!("{ty} $items = [1, 2]; $items[1.0] = 3; $items[true] = 4; $items[false] = 5; $items[-0.0] = 6; $items[2.0] = 7; $items[1.9] = 8; try {{ $items[false] = 'bad'; }} catch (TypeError $e) {{ echo 'value|'; }} echo $items[0], '|', $items[1], '|', $items[2], '|', count($items);");
+        assert_eq!(run(&[&source]), "value|6|8|7|3", "{ty}");
+    }
+    assert_eq!(run(&[
+        "array<string, int> $map = ['k' => 1]; try { $map[1.0] = 2; } catch (TypeError $e) { echo 'float|'; } try { $map[false] = 3; } catch (TypeError $e) { echo 'bool|'; } echo count($map);",
+    ]), "float|bool|1");
+}
+
+/// Escaped failed receivers retain their class and properties but never run their destructors.
+#[test]
+fn generics_failed_construction_preserves_escaped_metadata() {
+    assert_eq!(run(&[
+        "class Saved { public static $value = null; } class Failed<T> { public function __construct(public T $value) { Saved::$value = $this; throw new Exception('failed'); } public function __destruct() { echo 'bad-destructor|'; } } try { new Failed<int>(7); } catch (Exception $e) { echo $e->getMessage(), '|'; } $saved = Saved::$value; Saved::$value = null; echo get_class($saved), '|', $saved->value; unset($saved);",
+    ]), "failed|Failed<int>|7");
+}
+
+/// Property-default errors consume the partial receiver without calling its destructor.
+#[test]
+fn generics_failed_property_default_releases_receiver() {
+    let program = parse_fragment(b"class Secret { private const VALUE = 1; } class Broken<T> { public $first = 'allocated'; public $value = Secret::VALUE; public function __construct(T $value) {} public function __destruct() { echo 'bad'; } } try { new Broken<int>(3); } catch (Error $e) { echo 'default'; }").unwrap();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    values.release(result).unwrap();
+    assert_eq!(values.output, "default");
+    let receiver = values.values.keys().find(|identity| context.dynamic_object_class_name(**identity as u64).as_deref() == Some("Broken<int>")).copied().expect("partial receiver was allocated");
+    assert_eq!(values.cell_owners.get(&receiver), Some(&0));
+}

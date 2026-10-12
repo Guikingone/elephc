@@ -348,6 +348,9 @@ types. Templates and concrete specializations persist across eval calls and runt
 Bounds, defaults, variance, structural array contracts, typed callable signatures, and substituted
 typed locals are checked at runtime. Binding and specialized contract failures throw catchable
 `TypeError` values. Generic classes have distinct names and static state per specialization.
+Class and constructor arguments may be written together, such as `Pair<int, string>`, before
+any inferred instantiation, including in parent references. Typed arrays validate float and bool
+keys as their stored integer type, following PHP array-key normalization.
 Native syntax requires ordinary mode; PHPDoc templates also work under `--strict-php`.
 
 Specialization reuses the existing call binder and boxed value ABI. It does not change the

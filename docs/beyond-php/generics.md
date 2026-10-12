@@ -110,6 +110,10 @@ identities and static storage, just as in AOT.
 Magician renders class and constructor arguments in one concrete identity: a `Pair<T>` with a
 constructor-local `U` produces `Pair<int, string>` for `new Pair<int>(7, 'seven')`. Constructor
 arguments distinguish concrete storage; class inference and variance use the declared class slots.
+The combined spelling also works directly: `new Pair<int, string>(7, 'seven')`, or a parent
+reference such as `extends Pair<int, string>`, resolves without a previous instantiation.
+Writing only class arguments still infers constructor arguments; writing constructor arguments
+uses their declared defaults for any omitted trailing slots.
 
 Missing or conflicting arguments, violated bounds, invalid variance declarations, and rejected
 specialized argument/return contracts raise catchable `TypeError` values. Native generic syntax
@@ -117,7 +121,8 @@ is rejected before execution under `--strict-php`; supported PHPDoc annotations 
 modes. Typed local declarations also retain their substituted contracts during assignment.
 Nullable and union array locals validate writes against an array arm that accepts their existing
 contents. An indexed `array<T>` requires integer keys and rejects associative values; numeric
-string keys such as `'0'` are normalized before write validation.
+string keys such as `'0'`, floats, and booleans use their normalized integer type for write
+validation. `array<K, V>` checks that same stored key type against `K`.
 
 Execution still uses Magician's boxed runtime cells. AOT's native storage and performance figures
 below apply to compiled code. Generic syntax does not extend other parts of the

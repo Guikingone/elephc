@@ -238,3 +238,87 @@ $child = new Child(7); echo $child->get(), '|', $child->label();
         assert_eq!(compile_cli_file_and_run_with_flags(&source, flags), "7|label");
     }
 }
+
+/// Fully written class and constructor arguments work on a cold cache and through inheritance.
+#[test]
+fn test_eval_generics_written_constructor_arguments_regression() {
+    let source = dynamic_eval(r#"
+class Pair<T> { public function __construct<U>(public T $left, public U $right) {} }
+$cold = new Pair<int, string>(1, 'cold');
+$inferred = new Pair<int>(2, 'inferred');
+$warm = new Pair<int, string>(3, 'warm');
+echo get_class($cold), '|', get_class($inferred), '|', $warm->right;
+try { new Pair<int, string>(4, []); } catch (TypeError $e) { echo '|value'; }
+class ParentPair<T> { public function __construct<U>(public T $left, public U $right) {} }
+class Child extends ParentPair<int, string> {}
+$child = new Child(6, 'child'); echo '|', $child->left, '|', $child->right, '|', get_parent_class($child);
+class Base {} class Derived extends Base {}
+class DefaultPair<T> { public function __construct<U: Base, V = U>(public T $left, public U $right, public V $other) {} }
+$default = new DefaultPair<int, Derived>(7, new Derived(), new Derived());
+echo '|', get_class($default);
+try { new DefaultPair<int, int>(7, 8, 9); } catch (TypeError $e) { echo '|bound'; }
+try { new Pair<int, string, bool>(1, 'two'); } catch (TypeError $e) { echo '|arity'; }
+class Shadow<T> { public function __construct<T>(public T $value) {} }
+echo '|', get_class(new Shadow<int, string>('ok'));
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "Pair<int, string>|Pair<int, string>|warm|value|6|child|ParentPair<int, string>|DefaultPair<int, Derived, Derived>|bound|arity|Shadow<int, string>");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Float and bool writes validate their stored key type without changing caller keys or COW.
+#[test]
+fn test_eval_generics_normalized_scalar_array_keys_regression() {
+    let source = dynamic_eval(r#"
+array<int> $items = [1, 2]; $original = $items;
+$float = 1.0; $bool = false;
+$items[$float] = 3; $items[true] = 4; $items[$bool] = 5; $items[-0.0] = 6; $items[2.0] = 7;
+try { $items[false] = 'bad'; } catch (TypeError $e) { echo 'value|'; }
+echo $items[0], '|', $items[1], '|', $items[2], '|', count($items), '|', $original[0], '|', $original[1], '|', is_float($float), '|', is_bool($bool);
+array<int, int> $map = [1, 2]; $map[true] = 8; $map[0.0] = 9;
+?array<int> $nullable = [1]; $nullable[false] = 10;
+array<int>|null $union = [1]; $union[0.0] = 11;
+echo '|', $map[0], '|', $map[1], '|', $nullable[0], '|', $union[0];
+array<string, int> $strings = ['k' => 1];
+try { $strings[1.0] = 2; } catch (TypeError $e) { echo '|float'; }
+try { $strings[false] = 3; } catch (TypeError $e) { echo '|bool'; }
+echo '|', count($strings);
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "value|6|4|7|3|1|2|1|1|9|8|10|11|float|bool|1");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Failed construction frees receivers and preserves escaped metadata without running destructors.
+#[test]
+fn test_eval_generics_failed_construction_cleanup_regression() {
+    let body = dynamic_eval(r#"
+class Failed<T> {
+    public function __construct(public T $value) { throw new Exception('body'); }
+    public function __destruct() { echo 'bad-destructor|'; }
+}
+try { new Failed<int>(1); } catch (Exception $e) { echo $e->getMessage(), '|'; }
+class Escaped<T> {
+    public function __construct(public T $value, &$saved) { $saved = $this; throw new Exception('escaped'); }
+    public function __destruct() { echo 'bad-escaped|'; }
+}
+$saved = null;
+try { new Escaped<int>(2, $saved); } catch (Exception $e) { echo $e->getMessage(), '|'; }
+echo get_class($saved), '|', $saved->value, '|';
+unset($saved);
+class Ordinary {
+    public function __construct(int $value) { throw new Exception('ordinary'); }
+    public function __destruct() { echo 'bad-argument|'; }
+}
+try { new Ordinary(3); } catch (Exception $e) { echo $e->getMessage(), '|'; }
+class NativeChild<T> extends NativeParent {}
+try { new NativeChild<int>(4); } catch (Exception $e) { echo $e->getMessage(); }
+"#);
+    let source = format!("<?php\nclass NativeParent {{ public function __construct(int $value) {{ throw new Exception('native'); }} public function __destruct() {{ echo 'bad-native|'; }} }}\n{}", body.trim_start_matches("<?php"));
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "body|escaped|Escaped<int>|2|ordinary|native");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

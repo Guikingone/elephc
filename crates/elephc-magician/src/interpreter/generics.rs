@@ -55,8 +55,10 @@ fn bind_template(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Bindings, EvalStatus> {
     let parameters = template.parameters.iter().chain(&template.constructor_parameters).cloned().collect::<Vec<_>>();
-    let written_parameters = if template.parameters.is_empty() && !template.constructor_parameters.is_empty() {
-        &template.constructor_parameters
+    // Class-only spelling leaves constructor slots inferable; longer lists bind both sets explicitly.
+    let written_parameters = if template.parameters.is_empty()
+        || written.is_some_and(|arguments| arguments.len() > template.parameters.len()) {
+        &parameters
     } else { &template.parameters };
     let mut inferred = Vec::new();
     if let Some(written) = written {
