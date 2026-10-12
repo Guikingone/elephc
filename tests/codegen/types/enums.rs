@@ -9,6 +9,256 @@
 
 use super::*;
 
+/// Named partial calls check earlier supplied types but stop at the first missing slot.
+#[test]
+fn test_enum_sixth_review_named_shortage_precedence() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $a, int $b): int; }
+enum G implements I { case A; public function f(int $a = 1, int $b): int { return $a + $b; } }
+enum H implements I { case A; public function f(mixed $a = 1, mixed $b = 2): int { return 1; } }
+function bad(): string { echo 'Y'; return 'no'; }
+function first(I $value): int { return $value->f(a: bad()); }
+function second(I $value): int { return $value->f(b: bad()); }
+try { first(G::A); } catch (TypeError $e) { echo $e->getMessage(); }
+echo '|';
+try { second(G::A); } catch (ArgumentCountError $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "YG::f(): Argument #1 ($a) must be of type int, string given|YG::f(): Argument #1 ($a) not passed");
+}
+
+/// Enum variadic storage stays boxed when an ordinary class shares the interface.
+#[test]
+fn test_enum_sixth_review_variadic_with_class_implementation() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x): int; }
+class C implements I { public function f(int $x): int { return $x; } }
+enum V implements I {
+    case A;
+    public function f(int $x, int ...$rest): int {
+        foreach ($rest as $key => $value) { echo $key, '=', $value, ';'; $x += $value; }
+        return $x;
+    }
+}
+function invoke(I $value, array $args): int { return $value->f(...$args); }
+echo invoke(V::A, ['7', '8']), '|';
+echo invoke(V::A, ['x' => 2, 'extra' => '4']);
+"#);
+    assert_eq!(out, "0=8;15|extra=4;6");
+}
+
+/// Diagnostic and weak-binding behavior does not depend on EIR optimization.
+#[test]
+fn test_enum_sixth_review_unpack_diagnostics_ir_off() {
+    assert_eq!(run_enum_sixth_review_ir_off(r#"<?php
+interface I { public function f(int $x, int $y = 2): int; }
+enum F implements I { case A; public function f(int $x, int $y = 2): int { return $x + $y; } }
+function invoke(I $value, array $args): int { return $value->f(...$args); }
+function probe(I $value, array $args): void {
+    try { echo invoke($value, $args); } catch (Throwable $e) { echo $e->getMessage(); }
+    echo '|';
+}
+probe(F::A, []); probe(F::A, ['y' => 4]); probe(F::A, ['no']); probe(F::A, [null]);
+echo invoke(F::A, ['7']), '|', invoke(F::A, [true]), '|', invoke(F::A, [2.0]);
+"#),
+        "Too few arguments to function F::f(), 0 passed and at least 1 expected|F::f(): Argument #1 ($x) not passed|F::f(): Argument #1 ($x) must be of type int, string given|F::f(): Argument #1 ($x) must be of type int, null given|9|3|4");
+}
+
+/// A returned storage alias remains attached after runtime argument binding retires.
+#[test]
+fn test_enum_sixth_review_reference_storage_alias() {
+    let out = compile_and_run(r#"<?php
+class Store { public array $values = [0]; }
+interface I { public function &f(Store $store, int $x): array; }
+enum E implements I {
+    case A;
+    public function &f(Store $store, int $x = 1): array { $store->values = [$x]; return $store->values; }
+}
+function invoke(I $value, array $args): int {
+    $result = &$value->f(...$args); $result[0] += 10; return $result[0];
+}
+$store = new Store();
+echo invoke(E::A, [$store, 2]), ':', $store->values[0], '|';
+echo invoke(E::A, [$store]), ':', $store->values[0];
+"#);
+    assert_eq!(out, "12:12|11:11");
+}
+
+/// Runtime scalar binding covers numeric strings, bools and Stringable objects.
+#[test]
+fn test_enum_sixth_review_weak_scalar_unpack() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(string $x, float $y, bool $z): string; }
+enum E implements I {
+    case A;
+    public function f(string $x, float $y, bool $z): string {
+        return $x . ':' . $y . ':' . ($z ? 'T' : 'F');
+    }
+}
+class Text { public function __toString(): string { return 'ok'; } }
+function invoke(I $value, array $args): string { return $value->f(...$args); }
+echo invoke(E::A, ['z' => 0, 'x' => 8, 'y' => '2.5']), '|';
+echo invoke(E::A, [new Text(), '1.5', true]), '|';
+try { invoke(E::A, [null, 2.0, false]); } catch (TypeError $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "8:2.5:F|ok:1.5:T|E::f(): Argument #1 ($x) must be of type string, null given");
+}
+
+/// Runs one regression through the CLI with EIR optimization explicitly disabled.
+fn run_enum_sixth_review_ir_off(source: &str) -> String {
+    let dir = make_cli_test_dir("elephc_enum_unpack_ir_off");
+    let path = dir.join("main.php");
+    fs::write(&path, source).expect("write enum unpack fixture");
+    let result = std::panic::catch_unwind(|| {
+        let compiled = elephc_cli_command(&dir).arg("--ir-opt=off").arg(&path).output()
+            .expect("compile enum unpack fixture");
+        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+        let output = Command::new(dir.join("main")).output().expect("run enum unpack fixture");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).expect("enum fixture UTF-8")
+    });
+    let _ = fs::remove_dir_all(&dir);
+    result.unwrap_or_else(|failure| std::panic::resume_unwind(failure))
+}
+
+/// Returned reference cells survive unpack materialization with optimization disabled.
+#[test]
+fn test_enum_sixth_review_reference_unpack_ir_off() {
+    assert_eq!(run_enum_sixth_review_ir_off(r#"<?php
+interface I { public function &f(int $x): array; }
+enum H implements I { case A; public function &f(int $x): array { $a = [$x]; return $a; } }
+enum E implements I { case A; public function &f(int $x = 1): array { $a = [$x]; return $a; } }
+function invoke(I $value, array $args): int { $r = &$value->f(...$args); $r[0] += 10; return $r[0]; }
+try { echo invoke(H::A, []); } catch (ArgumentCountError $e) { echo $e->getMessage(); }
+echo '|', invoke(H::A, [2]), '|', invoke(H::A, ['x' => 3]), '|', invoke(E::A, []);
+"#),
+        "Too few arguments to function H::f(), 0 passed and exactly 1 expected|12|13|11");
+}
+
+/// Supplied argument validation precedes omissions with optimization disabled too.
+#[test]
+fn test_enum_sixth_review_shortage_type_precedence_ir_off() {
+    assert_eq!(run_enum_sixth_review_ir_off(r#"<?php
+interface I { public function f(int $a, int $b): int; }
+enum G implements I { case A; public function f(int $a = 1, int $b): int { return $a + $b; } }
+function bad(): string { echo 'Y'; return 'no'; }
+function good(): int { echo 'Z'; return 3; }
+function rejected(I $value): int { return $value->f(bad()); }
+function missing(I $value): int { return $value->f(good()); }
+try { rejected(G::A); } catch (TypeError $e) { echo $e->getMessage(); }
+echo '|';
+try { missing(G::A); } catch (ArgumentCountError $e) { echo $e->getMessage(); }
+"#),
+        "YG::f(): Argument #1 ($a) must be of type int, string given|ZToo few arguments to function G::f(), 1 passed and exactly 2 expected");
+}
+
+/// Variadic values and introspection collectors retain actual counts and named keys.
+#[test]
+fn test_enum_sixth_review_variadic_unpack() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x): int; }
+enum V implements I {
+    case A;
+    public function f(int $x = 3, int ...$rest): int {
+        echo func_num_args(), ':';
+        foreach ($rest as $key => $value) { echo $key, '=', $value, ';'; $x += $value; }
+        return $x;
+    }
+}
+function invoke(I $value, array $args): int { return $value->f(...$args); }
+echo invoke(V::A, []), '|', invoke(V::A, ['7', '8', 9]), '|';
+echo invoke(V::A, ['x' => 2, 'extra' => '4']);
+"#);
+    assert_eq!(out, "0:3|3:0=8;1=9;24|1:extra=4;6");
+}
+
+/// Name collisions are rejected before earlier supplied parameter type errors.
+#[test]
+fn test_enum_sixth_review_binding_error_precedence() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x, int $y): int; }
+enum F implements I { case A; public function f(int $x, int $y): int { return $x + $y; } }
+function invoke(I $value, array $args): int { return $value->f(...$args); }
+try { invoke(F::A, ['no', 2, 'y' => 3]); } catch (Error $e) { echo $e->getMessage(); }
+echo '|';
+try { invoke(F::A, ['no', 'bad' => 3]); } catch (Error $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "Named parameter $y overwrites previous argument|Unknown named parameter $bad");
+}
+
+/// Repeated rejected unpacks retain no more than the direct enum singleton baseline.
+#[test]
+fn test_enum_sixth_review_unpack_owners() {
+    let retained = |stderr: &str, metric: &str| stderr.lines().next().unwrap().split_whitespace()
+        .find_map(|field| field.strip_prefix(metric)).unwrap().parse::<usize>().unwrap();
+    for iterations in [1, 40] {
+        let run = |body: &str| compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function f(int $x): int; }}
+enum F implements I {{ case A; public function f(int $x): int {{ return $x; }} }}
+class Payload {{ public function __destruct() {{ echo 'D'; }} }}
+function args(array $values): array {{ echo 'A'; return $values; }}
+function invoke(I $value, array $values): int {{ return $value->f(...args($values)); }}
+for ($i = 0; $i < {iterations}; $i++) {{ {body} }}
+"#));
+        let direct = run("echo F::A->f(4), '|';");
+        let result = run("try { invoke(F::A, [new Payload()]); } catch (TypeError $e) { echo 'T'; unset($e); } echo invoke(F::A, [4, new Payload()]), '|';");
+        assert!(direct.success && result.success, "{}\n{}", direct.stderr, result.stderr);
+        assert_eq!(result.stdout, "ADTAD4|".repeat(iterations));
+        for metric in ["live_blocks=", "live_bytes="] {
+            assert_eq!(retained(&direct.stderr, metric), retained(&result.stderr, metric),
+                "{metric}: direct {}\nunpack {}", direct.stderr, result.stderr);
+        }
+    }
+}
+
+/// Runtime unpacking preserves the selected method's returned reference cell.
+#[test]
+fn test_enum_sixth_review_reference_unpack() {
+    let out = compile_and_run(r#"<?php
+interface I { public function &f(int $x): array; }
+enum H implements I { case A; public function &f(int $x): array { $a = [$x]; return $a; } }
+enum E implements I { case A; public function &f(int $x = 1): array { $a = [$x]; return $a; } }
+function invoke(I $value, array $args): int { $r = &$value->f(...$args); $r[0] += 10; return $r[0]; }
+try { echo invoke(H::A, []); } catch (ArgumentCountError $e) { echo $e->getMessage(); }
+echo '|', invoke(H::A, [2]), '|', invoke(H::A, ['x' => 3]), '|', invoke(E::A, []);
+"#);
+    assert_eq!(out, "Too few arguments to function H::f(), 0 passed and exactly 1 expected|12|13|11");
+}
+
+/// Selected methods retain PHP argument diagnostics and weak scalar parameter binding.
+#[test]
+fn test_enum_sixth_review_unpack_diagnostics() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x, int $y = 2): int; }
+enum F implements I { case A; public function f(int $x, int $y = 2): int { return $x + $y; } }
+function invoke(I $value, array $args): int { return $value->f(...$args); }
+function probe(I $value, array $args): void {
+    try { echo invoke($value, $args); } catch (Throwable $e) { echo $e->getMessage(); }
+    echo '|';
+}
+probe(F::A, []); probe(F::A, ['y' => 4]); probe(F::A, ['no']); probe(F::A, [null]);
+echo invoke(F::A, ['7']), '|', invoke(F::A, [true]), '|', invoke(F::A, [2.0]);
+"#);
+    assert_eq!(out, "Too few arguments to function F::f(), 0 passed and at least 1 expected|F::f(): Argument #1 ($x) not passed|F::f(): Argument #1 ($x) must be of type int, string given|F::f(): Argument #1 ($x) must be of type int, null given|9|3|4");
+}
+
+/// Provided argument types are checked before the selected method's positional shortage.
+#[test]
+fn test_enum_sixth_review_shortage_type_precedence() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $a, int $b): int; }
+enum G implements I { case A; public function f(int $a = 1, int $b): int { return $a + $b; } }
+function bad(): string { echo 'Y'; return 'no'; }
+function good(): int { echo 'Z'; return 3; }
+function rejected(I $value): int { return $value->f(bad()); }
+function missing(I $value): int { return $value->f(good()); }
+try { rejected(G::A); } catch (TypeError $e) { echo $e->getMessage(); }
+echo '|';
+try { missing(G::A); } catch (ArgumentCountError $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "YG::f(): Argument #1 ($a) must be of type int, string given|ZToo few arguments to function G::f(), 1 passed and exactly 2 expected");
+}
+
+
 /// Dynamic PHP arrays unpack elements instead of passing their count to the selected method.
 #[test]
 fn test_enum_fifth_review_dynamic_unpack() {

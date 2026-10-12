@@ -301,6 +301,18 @@ impl Checker {
             .map(|(name, info)| (name.clone(), info.methods.get(&method_key).cloned()))
             .collect();
         implementations.sort_by(|left, right| left.0.cmp(&right.0));
+        if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            && crate::types::call_args::expand_planned_positional_spreads(args).is_none()
+        {
+            // Runtime enum unpacks can retain named tail keys, even when the
+            // interface also has ordinary class implementations. Recheck enum
+            // bodies against boxed collectors without changing source element hints.
+            for (name, _) in &implementations {
+                if self.enums.contains_key(name) {
+                    self.promote_descriptor_variadic_container_for_method(name, &method_key, false);
+                }
+            }
+        }
         if !implementations.is_empty()
             && implementations.iter().all(|(name, _)| self.enums.contains_key(name))
         {

@@ -56,8 +56,17 @@ pub(super) fn lower_enum_interface_call(
         let signature = ctx.classes.get(&class)
             .and_then(|info| info.methods.get(&php_symbol_key(method))).cloned();
         if let Some(signature) = signature.as_ref() {
+            // PHP treats defaults before a later required parameter as required,
+            // including named omissions. Keep declaration metadata unchanged.
+            let regular = crate::types::call_args::regular_param_count(signature);
+            let required = signature.defaults.iter().take(regular).rposition(Option::is_none)
+                .map_or(0, |index| index + 1);
+            let mut binding_signature = signature.clone();
+            for default in binding_signature.defaults.iter_mut().take(required) {
+                *default = None;
+            }
             let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
-                &signature, args, expr.span, crate::types::call_args::regular_param_count(&signature),
+                &binding_signature, args, expr.span, regular,
                 false, signature.variadic.is_some()
                     && !crate::func_args::sig_collects_surplus_args(&signature),
                 &assoc_spread_sources(ctx, args),
@@ -74,14 +83,17 @@ pub(super) fn lower_enum_interface_call(
                 Err(error) => Some(enum_argument_error(&class, method, &signature, error)),
             };
             if let Some((exception_class, message)) = error {
-                terminate_enum_argument_error(ctx, args, exception_class, message, expr.span);
+                terminate_enum_argument_error(ctx, args, Some((&class, method, signature)),
+                    exception_class, message, expr.span);
                 ctx.builder.position_at_end(next);
                 continue;
             }
         }
         let concrete = ctx.emit_value(Op::Borrow, vec![object.value], None,
             PhpType::Object(class), Op::Borrow.default_effects(), Some(expr.span));
-        let call = if dynamic_unpack && !reference_assignment {
+        let uses_eir_binding = signature.as_ref()
+            .is_some_and(|signature| !signature.ref_params.iter().any(|by_ref| *by_ref));
+        let call = if dynamic_unpack && !reference_assignment && !uses_eir_binding {
             // Runtime unpacks can carry either packed values or named/sparse hash keys. The
             // ordinary descriptor binder owns those rules and catchable missing-argument errors.
             let callable = lower_instance_callable_from_receiver(ctx, concrete, method, expr.span);
@@ -132,12 +144,51 @@ pub(super) fn lower_enum_interface_call(
 /// Evaluates rejected branch arguments once and throws through ordinary operand-owner cleanup.
 fn terminate_enum_argument_error(
     ctx: &mut LoweringContext<'_, '_>, args: &[Expr],
+    selected: Option<(&str, &str, &FunctionSig)>,
     exception_class: &str, message: String, span: Span,
 ) {
+    let mut staged = Vec::new();
     for arg in args {
         let value = lower_call_source_arg(ctx, arg);
         let value = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
-        let _ = root_owned_call_operand(ctx, value, arg.span);
+        let ty = ctx.builder.value_php_type(value.value);
+        let slot = ctx.declare_synthetic_php_local(ty.clone());
+        store_value_into_temp(ctx, &slot, ty, value, arg.span);
+        register_owned_call_operand(ctx, ctx.local_slots[&slot], arg.span);
+        staged.push(slot);
+    }
+    if exception_class == "ArgumentCountError" && !args.iter().any(is_spread_arg) {
+        if let Some((class, method, signature)) = selected {
+            let mut bindings: Vec<_> = (0..staged.len()).map(|index| (index, index)).collect();
+            if crate::types::call_args::has_named_args(args) {
+                // Ask the shared planner for supplied-slot provenance without making
+                // omitted slots a planning error. Placeholder defaults are never lowered.
+                let mut partial = signature.clone();
+                for default in partial.defaults.iter_mut().take(
+                    crate::types::call_args::regular_param_count(signature))
+                {
+                    if default.is_none() { *default = Some(Expr::new(ExprKind::Null, span)); }
+                }
+                bindings = crate::types::call_args::plan_call_args(&partial, args, span, false, false)
+                    .map(|plan| {
+                        let required = signature.defaults.iter().take(
+                            crate::types::call_args::regular_param_count(signature))
+                            .rposition(Option::is_none).map_or(0, |index| index + 1);
+                        plan.regular_args.into_iter().enumerate().take_while(|(parameter, arg)| {
+                            !matches!(arg, crate::types::call_args::PlannedRegularArg::Default(_))
+                                || *parameter >= required
+                        }).filter_map(|(parameter, arg)| {
+                            if let crate::types::call_args::PlannedRegularArg::Source { source_index, .. } = arg {
+                                Some((parameter, source_index))
+                            } else { None }
+                        }).collect()
+                    }).unwrap_or_default();
+            }
+            for (index, source) in bindings {
+                enum_argument_guards::guard_parameter(ctx, signature, index,
+                    &Expr::new(ExprKind::Variable(staged[source].clone()), span), class, method, span);
+            }
+        }
     }
     let exception = Expr::new(ExprKind::NewObject {
         class_name: Name::unqualified(exception_class),

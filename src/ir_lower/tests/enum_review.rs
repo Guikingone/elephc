@@ -147,7 +147,17 @@ enum LaterRequiredValue implements LaterRequiredContract {
     case A; public function f(int $a = 1, int $b): int { return $a + $b; }
 }
 function later_required(LaterRequiredContract $value): int { return $value->f(1); }
+function later_required_bad(LaterRequiredContract $value): int { return $value->f('no'); }
 try { later_required(LaterRequiredValue::A); } catch (\ArgumentCountError $error) { echo $error->getMessage(); }
+try { later_required_bad(LaterRequiredValue::A); } catch (\TypeError $error) { echo $error->getMessage(); }
+interface UnpackReferenceContract { public function &f(int $x): array; }
+enum UnpackReferenceValue implements UnpackReferenceContract {
+    case A; public function &f(int $x = 1): array { $a = [$x]; return $a; }
+}
+function reference_unpack(UnpackReferenceContract $value, array $args): int {
+    $result = &$value->f(...$args); $result[0] += 10; return $result[0];
+}
+echo reference_unpack(UnpackReferenceValue::A, []), reference_unpack(UnpackReferenceValue::A, [2]);
 debug_print_backtrace();
 "#;
     let module = super::lower_source_at_for_target(
@@ -162,8 +172,11 @@ debug_print_backtrace();
     let unpack = module.functions.iter().find(|function| function.name == "EnumReview\\dynamic_unpack")
         .expect("missing dynamic-unpack fixture");
     assert!(unpack.blocks.iter().flat_map(|block| &block.instructions)
+        .any(|id| unpack.instruction(*id).is_some_and(|inst| inst.op == crate::ir::Op::MethodCall)),
+        "{target}: dynamic PHP arrays bind before the ordinary selected-method ABI");
+    assert!(!unpack.blocks.iter().flat_map(|block| &block.instructions)
         .any(|id| unpack.instruction(*id).is_some_and(|inst| inst.op == crate::ir::Op::CallableDescriptorInvoke)),
-        "{target}: dynamic PHP arrays bind through the shared descriptor invoker");
+        "{target}: selected method calls must not use call_user_func_array semantics");
     crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
 }
