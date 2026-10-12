@@ -2,7 +2,7 @@
 //! Preserves PHP scalar receiver behavior for local offset writes and array creation.
 //!
 //! Called from:
-//! - `array_updates` local append and indexed assignment paths.
+//! - `local_offset_writes` append and indexed assignment paths.
 //!
 //! Key details:
 //! - Only null, false, or missing locals become arrays; other scalars remain intact on error.
@@ -75,7 +75,7 @@ fn eval_string_write_offset(
         EVAL_TAG_STRING => {
             let bytes = values.string_bytes(index)?;
             let text = String::from_utf8_lossy(&bytes);
-            let trimmed = text.trim_matches(|c: char| c.is_ascii_whitespace());
+            let trimmed = text.trim_matches(|c: char| c.is_ascii_whitespace() || c == '\u{000b}');
             if let Ok(offset) = trimmed.parse::<i64>() { return Ok(offset); }
             // Integer prefixes warn; fractional or exponent prefixes are invalid even with a suffix.
             let sign = usize::from(trimmed.starts_with(['+', '-']));

@@ -457,6 +457,59 @@ fn generics_string_union_offset_writes_preserve_strings() {
     ]), "9YeX|keep|9YeX|append|key|empty|9YeX|9YeX  Z");
 }
 
+/// Offset writes observe replacements made by either operand before choosing receiver semantics.
+#[test]
+fn generics_local_offsets_observe_operand_reassignments() {
+    assert_eq!(run(&[r#"
+function replace(&$target, $next, $result) { $target = $next; return $result; }
+array<int>|string|int|null $items = 'ab'; $original = $items;
+$items[replace($items, 'xy', 0)] = 'Z'; echo $items, '|', $original;
+array<int>|string|int $scalar = 'ab';
+try { $scalar[replace($scalar, 7, 0)] = 'Z'; } catch (Error $e) { echo '|scalar'; }
+echo '|', $scalar;
+array<int>|string|null $append = null;
+try { $append[] = replace($append, 'ab', 'value'); } catch (Error $e) { echo '|append'; }
+echo '|', $append;
+array<int>|string $rhs = 'ab';
+$rhs[0] = replace($rhs, 'xy', 'Z'); echo '|', $rhs;
+array<int> $indexed = [0];
+$indexed[replace($indexed, [1, 2], 0)] = 3; echo '|', $indexed[0], '|', $indexed[1];
+array<int> $appended = [0];
+$appended[] = replace($appended, [4, 5], 6); echo '|', $appended[0], '|', $appended[1], '|', $appended[2];
+array<mixed, int>|string $map = 'ab';
+$map[replace($map, [7], '01')] = 8; echo '|', $map[0], '|', $map['01'], '|', count($map);
+$map['01'] = replace($map, 'xy', 'Z'); echo '|', $map;
+function stage1(&$target, &$order) { $order .= 'i'; $target = 'xy'; return 0; }
+function stage2(&$target, &$order) { $order .= 'v'; $target = 'uv'; return 'Z'; }
+array<int>|string $ordered = 'ab'; $order = '';
+$ordered[stage1($ordered, $order)] = stage2($ordered, $order);
+echo '|', $ordered, '|', $order;
+"#]), "Zy|ab|scalar|7|append|ab|Zy|3|2|4|5|6|7|8|2|xZ|Zv|iv");
+}
+
+/// Failed index and RHS evaluation preserve their reassignments without applying the pending write.
+#[test]
+fn generics_offset_operand_failures_preserve_live_values() {
+    assert_eq!(run(&[r#"
+function reject(&$target, $next) { $target = $next; throw new Exception('stop'); }
+array<int>|string $items = 'ab';
+try { $items[reject($items, 'xy')] = 'Z'; } catch (Exception $e) { echo 'index|'; }
+echo $items;
+try { $items[0] = reject($items, 'uv'); } catch (Exception $e) { echo '|rhs'; }
+echo '|', $items;
+"#]), "index|xy|rhs|uv");
+}
+
+/// PHP string offsets include vertical tab among leading and trailing numeric whitespace.
+#[test]
+fn generics_string_offsets_accept_vertical_tab() {
+    assert_eq!(run(&[r#"
+array<int>|string $items = 'keep';
+$items["\v1"] = 'Q'; $items["\v1x"] = 'R'; $items["1\v"] = 'S';
+echo $items;
+"#]), "kSep");
+}
+
 /// Escaped failed receivers retain their class and properties but never run their destructors.
 #[test]
 fn generics_failed_construction_preserves_escaped_metadata() {

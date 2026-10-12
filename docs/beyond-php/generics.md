@@ -124,9 +124,12 @@ contents. An indexed `array<T>` requires integer keys and rejects associative va
 string keys such as `'0'`, floats, and booleans use their normalized integer type for write
 validation. Null keys become the empty string, so `array<string, V>` accepts them while
 `array<T>` rejects them. `array<K, V>` checks that same stored key type against `K`.
-When a union local holds a string, indexed writes update its bytes and append attempts raise
-`Error`. Other scalars also raise `Error` on array writes and retain their value. Only null
+Local offset writes select the receiver after evaluating the index and value, so an operand's
+reassignment determines the storage being written. When a union local holds a string, indexed
+writes update its bytes and append attempts raise `Error`. Other scalars also raise `Error`
+on array writes and retain their value. Only null
 and false become arrays, and the resulting writes still need to satisfy an array arm.
+Numeric string offsets on string receivers accept PHP whitespace, including vertical tab.
 
 Execution still uses Magician's boxed runtime cells. AOT's native storage and performance figures
 below apply to compiled code. Generic syntax does not extend other parts of the

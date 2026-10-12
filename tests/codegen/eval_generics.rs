@@ -377,6 +377,97 @@ echo '|', $number;
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
+/// Live local receivers follow index and RHS side effects, including receiver-type transitions.
+#[test]
+fn test_eval_generics_live_offset_receivers_regression() {
+    let source = dynamic_eval(r#"
+function replace(&$target, $next, $result) { $target = $next; return $result; }
+array<int>|string|int|null $items = 'ab'; $original = $items;
+$items[replace($items, 'xy', 0)] = 'Z'; echo $items, '|', $original;
+array<int>|string|int $scalar = 'ab';
+try { $scalar[replace($scalar, 7, 0)] = 'Z'; } catch (Error $e) { echo '|scalar'; }
+echo '|', $scalar;
+array<int>|string|null $append = null;
+try { $append[] = replace($append, 'ab', 'value'); } catch (Error $e) { echo '|append'; }
+echo '|', $append;
+array<int>|string $rhs = 'ab';
+$rhs[0] = replace($rhs, 'xy', 'Z'); echo '|', $rhs;
+array<int> $indexed = [0];
+$indexed[replace($indexed, [1, 2], 0)] = 3; echo '|', $indexed[0], '|', $indexed[1];
+array<int> $appended = [0];
+$appended[] = replace($appended, [4, 5], 6); echo '|', $appended[0], '|', $appended[1], '|', $appended[2];
+array<mixed, int>|string $map = 'ab';
+$map[replace($map, [7], '01')] = 8; echo '|', $map[0], '|', $map['01'], '|', count($map);
+$map['01'] = replace($map, 'xy', 'Z'); echo '|', $map;
+function stage1(&$target, &$order) { $order .= 'i'; $target = 'xy'; return 0; }
+function stage2(&$target, &$order) { $order .= 'v'; $target = 'uv'; return 'Z'; }
+array<int>|string $ordered = 'ab'; $order = '';
+$ordered[stage1($ordered, $order)] = stage2($ordered, $order);
+echo '|', $ordered, '|', $order;
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "Zy|ab|scalar|7|append|ab|Zy|3|2|4|5|6|7|8|2|xZ|Zv|iv");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Live dispatch reaches reassigned ArrayAccess receivers and preserves operand failures and aliases.
+#[test]
+fn test_eval_generics_live_array_access_and_operand_failures() {
+    let source = dynamic_eval(r#"
+function replace(&$target, $next, $result) { $target = $next; return $result; }
+function reject(&$target, $next) { $target = $next; throw new Exception('stop'); }
+class Sink implements ArrayAccess {
+    public function __construct(private string $label) {}
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetUnset(mixed $key): void {}
+    public function offsetSet(mixed $key, mixed $value): void {
+        echo $this->label, ':', $key === null ? 'null' : $key, ':', $value, '|';
+    }
+}
+array<mixed, mixed>|string|Sink|null $object = new Sink('old');
+$object[replace($object, new Sink('new'), '01')] = 'value';
+$object[0] = replace($object, 'xy', 'Z'); echo $object, '|';
+array<mixed, mixed>|Sink $indexed = [1];
+$indexed[replace($indexed, new Sink('indexed'), 'k')] = 'V';
+array<mixed, mixed>|Sink|null $append = null;
+$append[] = replace($append, new Sink('append'), 'W');
+$invalid = 7;
+try { $invalid[replace($invalid, new stdClass(), 0)] = 'Z'; }
+catch (Error $e) { echo $e->getMessage(), '|', get_class($invalid), '|'; }
+array<int>|string $items = 'ab';
+try { $items[reject($items, 'xy')] = 'Z'; } catch (Exception $e) { echo 'index|'; }
+echo $items;
+try { $items[0] = reject($items, 'uv'); } catch (Exception $e) { echo '|rhs'; }
+echo '|', $items;
+$live = 'ab'; $alias =& $live;
+$alias[replace($live, 'xy', 0)] = 'Z'; echo '|', $live, '|', $alias;
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "new:01:value|Zy|indexed:k:V|append:null:W|Cannot use object of type stdClass as array|stdClass|index|xy|rhs|uv|Zy|Zy");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Numeric string offsets accept all PHP whitespace, including vertical-tab integer prefixes.
+#[test]
+fn test_eval_generics_vertical_tab_string_offsets_regression() {
+    let source = dynamic_eval(r#"
+array<int>|string $items = 'keep';
+$items["\v1"] = 'Q'; $items["\v1x"] = 'R'; $items["1\v"] = 'S';
+echo $items;
+$keys = [" 0 ", "\t0\t", "\r0\r", "\n0\n", "\f0\f", "\v0\v"];
+foreach ($keys as $key) { $items[$key] = 'Z'; }
+echo '|', $items;
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "kSep|ZSep");
+    assert_eq!(output.stderr.matches("Illegal string offset").count(), 1, "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Failed construction frees receivers and preserves escaped metadata without running destructors.
 #[test]
 fn test_eval_generics_failed_construction_cleanup_regression() {

@@ -64,3 +64,15 @@ The latest review identifies null-key rejection and replacement of scalar union 
 Both findings fail in native regressions on the reviewed head, and three added interpreter tests also fail before correction. Null keys now validate through a temporary empty string while retaining the runtime's original diagnostic operand. Local writes inspect their current receiver, autovivify only null or false, and preserve string offsets and scalar errors through reference-aware writeback. Owned operands and newly created arrays are released on rejection.
 
 Validation passes: 54 generic parser/interpreter tests, 4 array-reference tests, 16 method reference tests, 40 operand-ownership tests, 2 append tests, and 18 native eval integration tests. The new native fixtures report clean heaps; an ordinary scalar-offset fixture also matches PHP 8.5 output and warning counts. A warning-free `cargo build`, Rust documentation checks, diff hygiene, and temporary fixture cleanup pass. A separate follow-up records the pre-existing leak from a temporary literal `foreach` receiver; bound arrays in the regression fixtures have clean heaps.
+
+## Fourth PR 1819 review
+
+- [x] Resolve local offset receivers after index and RHS evaluation.
+- [x] Include vertical tab in PHP numeric-string offset whitespace.
+- [x] Reproduce both findings on `42dd93e7ef` and validate reference/COW ownership and native parity.
+
+The review identifies stale receiver snapshots when an operand reassigns the local, affecting both indexed and append writes. Cover changes between strings, scalars, arrays, and objects, normalize keys for the resulting receiver, and keep each operand evaluated once. Numeric string offsets must accept PHP's full whitespace set, including vertical tab.
+
+Both reported findings fail in interpreter and native regressions on the reviewed head. `local_offset_writes` now evaluates the index and RHS once, then resolves the visible local, selects its current storage semantics, and normalizes array keys only for an array receiver. Shared cleanup covers scalar errors, string replacements, array writes, and `ArrayAccess::offsetSet`. String offset trimming explicitly includes vertical tab.
+
+Validation passes: 57 generic parser/interpreter tests, 4 array-reference tests, 33 reference tests, 40 operand-ownership tests, 1 ArrayAccess test, 2 append tests, and 21 native eval integration tests. The updated receiver regression also verifies single index-then-value evaluation. New fixtures cover receiver type changes, noncanonical numeric keys, aliases, rejected objects, and operand exceptions with clean heaps; their output matches PHP 8.5. A warning-free `cargo build`, Rust documentation checks, and diff hygiene pass. The example remains covered by the native tests.
