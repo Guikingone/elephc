@@ -42,6 +42,10 @@ class MethodConsumer {
 }
 try { (new MethodConsumer())->value(); } catch (Error $error) { echo 'instance'; }
 try { MethodConsumer::staticValue(); } catch (Error $error) { echo 'static'; }
+try { call_user_func([MethodConsumer::class, 'staticValue']); }
+catch (Error $error) { echo 'descriptor-static'; }
+try { ((new MethodConsumer())->value(...))(); }
+catch (Error $error) { echo 'descriptor-instance'; }
 echo (new MethodConsumer())->value(7), MethodConsumer::staticValue(value: 8);
 "#;
     let module = super::lower_source_at_for_target(source, Path::new("main.php"), Path::new("."),

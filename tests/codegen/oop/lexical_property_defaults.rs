@@ -10,6 +10,82 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Descriptor-backed static calls materialize lazy default Errors inside the caller's handler.
+#[test]
+fn test_property_default_fifth_review_static_descriptor() {
+    let out = compile_and_run(r#"<?php
+class Consumer {
+    public static function value(int $value = parent::A, int $other = 2): int {
+        echo 'body'; return $value + $other;
+    }
+}
+try { call_user_func([Consumer::class, 'value']); }
+catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+try { call_user_func_array([Consumer::class, 'value'], ['other' => 4]); }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+echo call_user_func([Consumer::class, 'value'], 7), '|after';
+"#);
+    let message = "Cannot access \"parent\" when current class scope has no parent";
+    assert_eq!(out, format!("Error:{message}|{message}|body9|after"));
+}
+
+/// Immediate instance callable defaults throw rather than aborting or entering the method body.
+#[test]
+fn test_property_default_fifth_review_instance_descriptor() {
+    let out = compile_and_run(r#"<?php
+class Consumer {
+    public function inst(int $value = parent::A): int { echo 'body'; return $value; }
+}
+try { ((new Consumer())->inst(...))(); }
+catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+echo ((new Consumer())->inst(...))(7), '|after';
+"#);
+    assert_eq!(out, "Error:Cannot access \"parent\" when current class scope has no parent|body7|after");
+}
+
+/// An invoker releases previously staged heap arguments when a later default raises an Error.
+#[test]
+fn test_property_default_fifth_review_descriptor_argument_ownership() {
+    let out = compile_and_run(r#"<?php
+class Payload { public function __destruct() { echo 'D'; } }
+class Consumer {
+    public static function value(Payload $payload, int $value = parent::A): int {
+        echo 'body'; return $value;
+    }
+}
+function invoke(): void {
+    $payload = new Payload();
+    try { call_user_func([Consumer::class, 'value'], $payload); }
+    catch (Error $error) { echo 'caught|'; }
+}
+invoke();
+echo 'after';
+"#);
+    assert_eq!(out, "caught|Dafter");
+}
+
+/// Earlier heap defaults unwind and trait-imported parent class names keep their own wording.
+#[test]
+fn test_property_default_fifth_review_descriptor_default_ownership() {
+    let out = compile_and_run(r#"<?php
+trait Values {
+    public static function labeled(string $label = parent::class): string { return $label; }
+}
+class Consumer {
+    use Values;
+    public static function value(array $items = ['key' => [1]], int $value = parent::A): int {
+        echo 'body'; return $value;
+    }
+}
+try { call_user_func([Consumer::class, 'value']); }
+catch (Error $error) { echo 'array-caught|'; }
+try { call_user_func([Consumer::class, 'labeled']); }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+echo call_user_func([Consumer::class, 'labeled'], 'explicit');
+"#);
+    assert_eq!(out, "array-caught|Cannot use \"parent\" when current class scope has no parent|explicit");
+}
+
 /// Exact instance calls retain handlers for omitted defaults, including static and dynamic unpacks.
 #[test]
 fn test_property_default_fourth_review_exact_instance_calls() {
