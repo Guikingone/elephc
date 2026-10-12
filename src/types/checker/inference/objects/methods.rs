@@ -311,6 +311,7 @@ impl Checker {
             if let Err(shared_error) = shared {
                 let mut accepted = false;
                 let mut missing = false;
+                let mut runtime_shortage = false;
                 for (name, implementation) in implementations {
                     let Some(implementation) = implementation else {
                         // Schema validation already recorded the missing contract. Continue
@@ -318,6 +319,11 @@ impl Checker {
                         missing = true;
                         continue;
                     };
+                    // Final enum dispatch diagnoses positional shortages in the selected
+                    // branch, including defaults that precede a later required parameter.
+                    runtime_shortage |= crate::types::call_args::plan_call_args(
+                        &implementation, args, expr.span, false, true,
+                    ).is_ok_and(|plan| plan.statically_missing_positionals(&implementation).is_some());
                     if self.check_user_declared_call(
                         &implementation, args, expr.span, env,
                         &format!("Method {name}::{method}"), &name,
@@ -326,7 +332,7 @@ impl Checker {
                         break;
                     }
                 }
-                if !accepted && !missing { return Err(shared_error); }
+                if !accepted && !missing && !runtime_shortage { return Err(shared_error); }
             }
         } else {
             self.check_user_declared_call(

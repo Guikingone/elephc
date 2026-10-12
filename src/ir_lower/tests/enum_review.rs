@@ -139,6 +139,15 @@ function missing_named(RequiredContract $value): int { return $value->f(y: 4); }
 echo missing_positional(OptionalRequiredValue::A), missing_named(OptionalRequiredValue::A);
 try { missing_positional(RequiredValue::A); } catch (\ArgumentCountError $error) { echo $error->getMessage(); }
 try { missing_named(RequiredValue::A); } catch (\ArgumentCountError $error) { echo $error->getMessage(); }
+function dynamic_unpack(RequiredContract $value, array $args): int { return $value->f(...$args); }
+try { dynamic_unpack(RequiredValue::A, []); } catch (\ArgumentCountError $error) { echo $error->getMessage(); }
+echo dynamic_unpack(RequiredValue::A, [4]), dynamic_unpack(RequiredValue::A, ['x' => 4]);
+interface LaterRequiredContract { public function f(int $a, int $b): int; }
+enum LaterRequiredValue implements LaterRequiredContract {
+    case A; public function f(int $a = 1, int $b): int { return $a + $b; }
+}
+function later_required(LaterRequiredContract $value): int { return $value->f(1); }
+try { later_required(LaterRequiredValue::A); } catch (\ArgumentCountError $error) { echo $error->getMessage(); }
 debug_print_backtrace();
 "#;
     let module = super::lower_source_at_for_target(
@@ -150,6 +159,11 @@ debug_print_backtrace();
         Some(&crate::parser::ast::TypeExpr::Int));
     assert_eq!(variadic.params.last().unwrap().1,
         crate::types::PhpType::Array(Box::new(crate::types::PhpType::Mixed)));
+    let unpack = module.functions.iter().find(|function| function.name == "EnumReview\\dynamic_unpack")
+        .expect("missing dynamic-unpack fixture");
+    assert!(unpack.blocks.iter().flat_map(|block| &block.instructions)
+        .any(|id| unpack.instruction(*id).is_some_and(|inst| inst.op == crate::ir::Op::CallableDescriptorInvoke)),
+        "{target}: dynamic PHP arrays bind through the shared descriptor invoker");
     crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
 }

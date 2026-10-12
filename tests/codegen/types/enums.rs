@@ -9,6 +9,80 @@
 
 use super::*;
 
+/// Dynamic PHP arrays unpack elements instead of passing their count to the selected method.
+#[test]
+fn test_enum_fifth_review_dynamic_unpack() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x): int; }
+enum E implements I { case A; public function f(int $x = 10): int { return $x; } }
+enum F implements I { case A; public function f(int $x): int { return $x; } }
+function invoke(I $value, array $args): int { return $value->f(...$args); }
+try { echo invoke(F::A, []); } catch (ArgumentCountError $error) { echo 'missing'; }
+echo '|', invoke(F::A, [4]), '|', invoke(F::A, [4, 5]), '|', invoke(E::A, []);
+echo '|', invoke(F::A, ['x' => 6]), '|', invoke(F::A, [7 => 8]);
+"#);
+    assert_eq!(out, "missing|4|4|10|6|8");
+}
+
+/// A required parameter after a default makes every preceding positional slot required.
+#[test]
+fn test_enum_fifth_review_required_after_default() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $a, int $b): int; }
+enum E implements I { case A; public function f(int $a = 1, int $b): int { return $a + $b; } }
+function argument(): int { echo 'Y'; return 4; }
+function invoke(I $value): int { return $value->f(argument()); }
+try { echo invoke(E::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
+echo '|', E::A->f(4, 5);
+"#);
+    assert_eq!(out, "YToo few arguments to function E::f(), 1 passed and exactly 2 expected|9");
+}
+
+/// A hidden backtrace collector does not turn a fixed method into a source variadic.
+#[test]
+fn test_enum_fifth_review_hidden_collector_bound() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x): int; }
+enum E implements I { case A; public function f(int $x = 10): int { return $x; } }
+enum F implements I { case A; public function f(int $x): int { return $x; } }
+enum V implements I { case A; public function f(int $x, int ...$rest): int { return $x; } }
+enum W implements I { case A; public function f(int $x, int $y = 2, int ...$rest): int { return $x; } }
+function invoke(I $value): int { return $value->f(); }
+debug_print_backtrace();
+try { echo invoke(F::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
+echo '|';
+try { echo invoke(V::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
+echo '|';
+try { echo invoke(W::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "Too few arguments to function F::f(), 0 passed and exactly 1 expected|Too few arguments to function V::f(), 0 passed and exactly 1 expected|Too few arguments to function W::f(), 0 passed and at least 1 expected");
+}
+
+/// Runtime unpack binding releases source, callback and rejected argument owners exactly once.
+#[test]
+fn test_enum_fifth_review_unpack_ownership() {
+    for iterations in [1, 30] {
+        let run = |body: &str| compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function f(int $x): int; }}
+enum E implements I {{ case A; public function f(int $x = 10): int {{ return $x; }} }}
+enum F implements I {{ case A; public function f(int $x): int {{ return $x; }} }}
+class Payload {{ public function __destruct() {{ echo 'D'; }} }}
+function arguments(array $values): array {{ echo 'A'; return $values; }}
+function invoke(I $value, array $args): int {{ return $value->f(...arguments($args)); }}
+for ($i = 0; $i < {iterations}; $i++) {{ {body} }}
+"#));
+        let direct = run("echo E::A->f(), '|', F::A->f(4), '|';");
+        let unpacked = run("echo invoke(E::A, []), '|'; $bad = ['bad' => new Payload()]; try { invoke(F::A, $bad); } catch (Error $error) { echo 'bad|'; unset($error); } unset($bad); try { invoke(F::A, []); } catch (ArgumentCountError $error) { echo 'missing|'; unset($error); } echo invoke(F::A, [4, new Payload()]), '|';");
+        assert!(direct.success && unpacked.success, "{}\n{}", direct.stderr, unpacked.stderr);
+        assert_eq!(unpacked.stdout, "A10|Abad|DAmissing|AD4|".repeat(iterations));
+        for metric in ["live_blocks=", "live_bytes="] {
+            let retained = |stderr: &str| stderr.lines().next().unwrap().split_whitespace()
+                .find(|field| field.starts_with(metric)).unwrap()[metric.len()..].parse::<usize>().unwrap();
+            assert_eq!(retained(&unpacked.stderr), retained(&direct.stderr), "{metric}: {}\n{}", unpacked.stderr, direct.stderr);
+        }
+    }
+}
+
 /// A missing positional argument throws only for the selected required enum implementation.
 #[test]
 fn test_enum_fourth_review_missing_positionals() {

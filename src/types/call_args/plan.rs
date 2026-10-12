@@ -466,6 +466,21 @@ mod tests {
         assert_eq!(check(&[dynamic]), None);
     }
 
+    /// Leading defaults cannot lower positional arity below the last required visible slot.
+    #[test]
+    fn positional_shortage_includes_defaults_before_required() {
+        let mut sig = sig_with_defaults(vec![Some(Expr::int_lit(1)), None, Some(Expr::int_lit(3))]);
+        let plan = super::super::planner::plan_call_args(
+            &sig, &[Expr::int_lit(4)], Span::dummy(), false, true,
+        ).unwrap();
+        assert_eq!(plan.statically_missing_positionals(&sig), Some((1, 2)));
+        sig.params.push((crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed))));
+        sig.defaults.push(None);
+        sig.variadic = Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string());
+        assert_eq!(super::super::matching::required_param_count(&sig), 2);
+    }
+
     /// Implements the `normalized_args_skip_default_guard_when_spread_check_guarantees_slot`
     /// operation for this module.
     #[test]

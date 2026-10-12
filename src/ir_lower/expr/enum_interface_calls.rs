@@ -33,6 +33,8 @@ pub(super) fn lower_enum_interface_call(
     let result_type = method_call_result_type(ctx, object.value, method, op, expr);
     let reference_assignment = ctx.reference_call_context.as_ref()
         .is_some_and(|context| context.depth == ctx.expression_depth);
+    let dynamic_unpack = args.iter().any(is_spread_arg)
+        && crate::types::call_args::expand_planned_positional_spreads(args).is_none();
     let result = if reference_assignment { None } else {
         let name = ctx.declare_owned_hidden_temp(result_type.clone());
         register_owned_call_operand(ctx, ctx.local_slots[&name], expr.span);
@@ -53,7 +55,7 @@ pub(super) fn lower_enum_interface_call(
         ctx.builder.position_at_end(selected);
         let signature = ctx.classes.get(&class)
             .and_then(|info| info.methods.get(&php_symbol_key(method))).cloned();
-        if let Some(signature) = signature {
+        if let Some(signature) = signature.as_ref() {
             let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
                 &signature, args, expr.span, crate::types::call_args::regular_param_count(&signature),
                 false, signature.variadic.is_some()
@@ -62,8 +64,7 @@ pub(super) fn lower_enum_interface_call(
             );
             let error = match plan {
                 Ok(plan) => plan.statically_missing_positionals(&signature).map(|(provided, required)| {
-                    let bound = if signature.variadic.is_some()
-                        || required < crate::types::call_args::regular_param_count(&signature) {
+                    let bound = if required < crate::types::call_args::regular_param_count(signature) {
                         "at least"
                     } else { "exactly" };
                     ("ArgumentCountError", format!(
@@ -80,7 +81,20 @@ pub(super) fn lower_enum_interface_call(
         }
         let concrete = ctx.emit_value(Op::Borrow, vec![object.value], None,
             PhpType::Object(class), Op::Borrow.default_effects(), Some(expr.span));
-        let call = lower_method_call_with_receiver_direct(ctx, concrete, method, args, op, expr);
+        let call = if dynamic_unpack && !reference_assignment {
+            // Runtime unpacks can carry either packed values or named/sparse hash keys. The
+            // ordinary descriptor binder owns those rules and catchable missing-argument errors.
+            let callable = lower_instance_callable_from_receiver(ctx, concrete, method, expr.span);
+            let callable = root_descriptor_callback(
+                ctx, callable, descriptor_invoker_result_type(signature.as_ref()), expr.span,
+            );
+            let arguments = lower_descriptor_invoker_arg_container_for_call_user_func(
+                ctx, args, signature.as_ref(), expr.span,
+            );
+            emit_callable_descriptor_invoke(ctx, callable, arguments, expr.span)
+        } else {
+            lower_method_call_with_receiver_direct(ctx, concrete, method, args, op, expr)
+        };
         if let Some(result) = &result {
             store_value_into_temp(ctx, result, result_type.clone(), call, expr.span);
         }
