@@ -265,9 +265,200 @@ or vendor deletions. Draft PR head before this checkpoint is 56721291ed93d4698c4
 live base now reports 5fc8dd0bd0e77ffa304cacb4f1ad9253df92a840 and must be reconciled
 again before final acceptance. Current CI test workflow at the old head failed;
 classifier success and build success do not mean full regression acceptance.
+
+Published checkpoint: `b578c494db586d4baf5090c30b8afbde4b012b54` was pushed by
+normal fast-forward to fork/spike/runtime-ctx-register. Live PR #958 confirms
+that exact head, OPEN, draft and MERGEABLE. CI test run 38224754985 is queued;
+run 38224754816 is in progress; classifier 38224749669 succeeded. No CI acceptance
+is claimed. Only six compiler/test files, the plan and the scoped Kioku packet
+were committed; local facade/reaper/contract work and inherited changes remain.
+
+Next local implementation now routes opaque Mixed method receivers through the
+existing descriptor invocation boundary when a possible target has defaults or
+a source variadic. Concrete/known-nullable receiver lowering is unchanged.
+`tests/codegen/objects/mixed_method_arguments.rs` adds normal/defaulted, variadic,
+spread/named and once-only evaluation plus clean-heap controls. Focused replay is
+live under session 19288, log `/tmp/elephc-task-mixed-method-arguments-20261012.log`.
+After it finishes, replay the original closed TaskGroup assertion unchanged,
+then the five public facade controls and relevant target/optimizer variants.
+This dispatch change is uncommitted and unverified, not another completed gate.
+
+## Mixed dispatch replay and synthetic-span recursion (2026-10-12)
+
+The two initial Mixed-method controls pass **2/2**, including clean heap and
+default/variadic/spread/named argument binding. PHP oracle agrees. However, the
+public three-test replay terminated the Rust harness with SIGBUS; an isolated
+closed-group replay reproduced it. This is a compiler crash, not a worker crash
+or an observation timeout. macOS diagnostic report
+`codegen_tests-e95d5933ce7fa5b1-2026-10-12-105352.ips` shows repeated frames through
+lower_dynamic_method_call_with_receiver, function_calls and
+lower_desugared_dynamic_method_call. Synthetic callback and call spans are both
+dummy, so the parser-desugaring recognizer loops back into its own reconstructed
+call_user_func callback array.
+
+The helper now invokes lower_dynamic_call_user_func directly, not lower_expr of
+another reconstructed function-call AST. Mixed methods needing runtime binding
+also pass through the shared null guard before argument evaluation; a new
+clean-heap regression asserts no argument side effect on a null receiver.
+The original closed-group assertion remains unchanged. Current isolated replay:
+session 98943, `/tmp/elephc-task-public-closed-group-desugar-fix-20261012.log`.
+Then run mixed_method_arguments (now three tests) and all five public controls.
+
+Kioku recall --semantic reported semantic search unavailable and explicitly
+fell back to lexical results. The semantic backend was not diagnosed or repaired
+by this scheduler slice. The fallback still recovered the current relevant
+run-result and direct-every decisions; no semantic success is claimed.
+
+The 30-second per-command semantic retry subsequently completed without the
+fallback warning; Ollama's live `ps` showed embeddinggemma loaded on GPU. The
+default failure cause is still undiagnosed (model warming/timeout are not proven).
+No global configuration or Kioku source was changed.
+
+Closed-group desugaring fix passes **1/1** with the original exact expected scope
+error. The subsequent combined replay is **4/8**: closed group plus three
+Mixed-method controls pass, but the four live/result Async/Parallel controls now
+fail callable-array resolution. Inspection shows the heuristic also routed
+already-typed/common-signature methods such as Fiber::resume into a descriptor
+inventory which requires emitted public EIR method bodies. Native Fiber methods
+are intrinsic, not ordinary emitted bodies.
+
+The predicate now excludes calls with an existing method_signature. The argument
+regressions each contain two source classes with incompatible collect signatures,
+so they exercise ambiguous receiver binding rather than an already-supported
+unique/common signature. Current combined eight-test replay is session 79344,
+`/tmp/elephc-task-public-dispatch-ambiguous-only-20261012.log`. This refinement is
+unverified and uncommitted. Do not turn the earlier 4/8 into an acceptance claim.
+
+## Dispatch gates passed; heartbeat TDD begins (2026-10-12)
+
+The ambiguous-only replacement passes **8/8** in
+`/tmp/elephc-task-public-dispatch-ambiguous-only-20261012.log`: all five initial
+public Task controls plus the three truly ambiguous method-binding controls.
+The same eight tests pass with EIR optimization disabled and stack register
+allocation in `/tmp/elephc-task-public-dispatch-stack-noopt-20261012.log`.
+Three target tests pass in `/tmp/elephc-task-public-target-dispatch-20261012.log`,
+including five-target emission of closed-group dispatch with dummy prelude spans.
+This is source/host evidence, not native Linux/iOS or full API acceptance.
+
+Two initial every Async tests now pin nonblocking registration, explicit callback
+control/arguments, first delay and independent intervals. They correctly fail
+with Undefined method TaskGroup::every (**0/2**), log
+`/tmp/elephc-task-every-async-initial-red-20261012.log`. Async is an implementation
+slice, not a reduced end state: Parallel command proxies remain required.
+
+A retained CLI reduction `/tmp/elephc-task-escaped-group.cZe6A2/descendant.php`
+exposes another result-lifetime defect: a child submitted by a child while the
+facade drains is not cached before closure, and later reports the old Async
+Awaitable scope-ended error. TaskGroup::__drain used a foreach snapshot. It now
+walks the live indexed task list until all appended descendants are materialized.
+The new regression expects done|42 unchanged; replay is session 3366,
+`/tmp/elephc-task-public-descendant-drain-20261012.log`. This correction is pending.
+
+Next: finish descendant replay and preserve existing controls, then implement
+scope-owned periodic registrations with wakeable control changes and bounded
+tracking across repetitions. Native worker proxies must exchange scalar commands,
+not PHP arena pointers. Continue final namespace retirement, failure/cancellation,
+ownership/queue/target gates, full API docs, exact-artifact review and draft pushes.
+
+The live-descendant correction now passes **1/1** in its focused native replay.
+The following complete current baseline passes **9/9** in
+`/tmp/elephc-task-public-live-drain-final-20261012.log` (four terminal/scope tests,
+two cooperative worker controls, three ambiguous-method binding controls).
+The earlier stack/no-opt and five-target emission proofs predate the live-index
+drain change; refresh them when publishing the facade. Public every is still
+expected-red, not implemented. Native current draft-head CI run 38224754985
+completed with failure; do not claim the PR's full CI is green.
+
+Implementation direction for the next heartbeat slice: test a monotonic per-
+registration cadence/control state in the native bridge, with wakeable stop and
+interval changes. Each registration owns its wait transport; worker controls send
+scalar commands only. Couple that state to a scope-owned Async pump, with ordinary
+Async invocation and checked Parallel submission, never a blocking callback loop
+in the registering task. Keep recurrence tracking bounded, materialize active
+outcomes before closure, and reject retired control identities. Do not substitute
+an Async-only API or unbounded historical Future/Task accumulation for the full
+requested shared hub. The first two Async tests are only the initial behavior pins.
+
+## Native periodic state and first AST pump WIP (2026-10-12)
+
+`crates/elephc-parallel/src/periodic/` now owns a deterministic monotonic cadence
+and native registration registry. First admission is delayed; one active claim
+prevents overlap; completion skips missed slots on a fixed cadence. An idle
+interval change rearms from the command, an active change from completion;
+reapplying the same value preserves the deadline. Stop is irreversible.
+Each registration owns a separate nonblocking Wake shared with the completion
+transport implementation. No PHP pointer, background timer or new thread is
+created. Signed-64 identities never reuse a retired registration. Release stops
+admission but returns pending while an invocation remains active.
+
+Ten focused native tests pass in
+`/tmp/elephc-task-periodic-native-initial-20261012.log`, including synthetic clock
+deadlines, interval validation, independent cross-thread wakes and retirement.
+This does not prove PHP periodic integration, native target parity or full teardown.
+
+`src/task_prelude/periodic.rs` declares the C ABI and builds PeriodicControl plus
+the initial Async pump in Rust AST. The pump uses existing awaitReadable timeout
+and a native command FD; the registering task does not execute the callback.
+TaskGroup stores controls until scope drain so stop remains available throughout
+the owning live scope; cancel stops registrations, and drain retires controls.
+The checker records Async every callback reachability. Initial library check
+passed, log `/tmp/elephc-task-periodic-ast-check-20261012.log`.
+The first PHP integration replay is session3526,
+`/tmp/elephc-task-every-async-first-implementation-20261012.log`; shared wake tests
+are session32978, queued on the Cargo artifact lock. Do not restart live builds.
+
+Open implementation gates: Parallel every lowering and worker-local proxy creation,
+bounded historical tracking, cancellation/failure cleanup, control opacity and
+constructor/private helper authority, oracle parity, all targets and fresh facade
+replays. The interim source fallback rejects Parallel instead of running it
+synchronously; it is not the accepted complete API. Registry/docs generation stays
+behind the explicitly requested fully-tested API gate.
+
+Shared wake regression passes **7/7** in
+`/tmp/elephc-task-periodic-shared-wake-20261012.log` after exposing only the native
+Wake operations needed by periodic state. First PHP pump replay was **0/2** at
+type checking: the raw Parallel extern guard knew only legacy compiler-owned
+classes, not PeriodicControl. It now permits that exact generated class while
+preserving the unconditional rejection of source-located calls. New direct and
+string-callback user-FFI error tests protect the boundary.
+
+Current pump replay is session87006,
+`/tmp/elephc-task-every-async-trusted-body-replay-20261012.log`. Boundary errors are
+session23307, `/tmp/elephc-task-periodic-extern-boundary-20261012.log`, queued on
+the same Cargo artifact lock. No native PHP periodic success is inferred yet.
+
+## Periodic foundation verification and publication boundary (2026-10-12)
+
+Current cadence+wake tests pass **18/18** on macOS ARM64, Linux ARM64 and Linux
+x86_64. These include the added deterministic two-interval admission test.
+Logs: `/tmp/elephc-task-periodic-host-final-20261012.log`,
+`/tmp/elephc-task-periodic-linux-{arm64,x86_64}-20261012.log`.
+Docker images remain pinned to ARM64 3f506a232838c660a0258049609b99a32be19beeaff50f93bd691da0c599a96e
+and x86_64 db9f3dce9005b21801ae553692d7c5c69fac998efd890766faedeccfcbd47312.
+iOS device and Simulator bridge cargo checks pass with Rust1.95, using an isolated
+`target/periodic-native-checks` directory. Logs are
+`/tmp/elephc-task-periodic-ios{,-sim}-check-20261012.log`. No iOS executable proof.
+
+The first two public Async every controls now pass **2/2** after the trusted-body
+fix. Direct/string user-FFI denial checks pass **2/2**. The subsequent six-control
+PHP replay passes **6/6**, including setInterval/repetition, waking external stop,
+scope-expired control, invalid intervals and clean heaps:
+`/tmp/elephc-task-every-async-lifecycle-20261012.log`. The two registrations test
+does not assume realtime ordering when both deadlines become overdue; native fake-
+clock admission tests prove independent deadlines, and PHP checks independent stop.
+
+The next checkpoint contains only the new native periodic module, shared native
+Wake visibility/accessor, library module registration, plan and scoped Kioku proof.
+The AST/class contract/checker/error/Every PHP work remains local and deliberately
+outside this native checkpoint. No complete shared Async/Parallel heartbeat, full
+CI acceptance, opacity/fatal cleanup or final documentation/review is claimed.
+Pre-push exact draft head is b578c494db586d4baf5090c30b8afbde4b012b54, base is
+5fc8dd0bd0e77ffa304cacb4f1ad9253df92a840. Preserve all inherited source changes
+and seven vendor deletions; do not stage with a blanket add.
 Legacy namespace references in backing-engine implementation are transitional;
 this does not establish completed public namespace migration or heartbeat support.
-The public Task run/group facade is not yet implemented, so these are deliberate
-red end-state tests, not a renamed-green claim. Current verification command is
-session 83131, `/tmp/elephc-task-canonical-api-red-20261012.log`.
+Historical first canonical replay: the public Task run/group facade was not yet
+implemented, and the tests intentionally failed before the facade was added.
+That obsolete first command was session 83131,
+`/tmp/elephc-task-canonical-api-red-20261012.log`; current proofs are recorded above.
 Both iOS bridge checks now completed successfully; SDK linkage is still unproved.

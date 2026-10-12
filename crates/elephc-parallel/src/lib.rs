@@ -23,6 +23,8 @@ use std::ffi::c_void;
 mod executor;
 #[cfg(unix)]
 mod completion_wake;
+#[cfg(unix)]
+mod periodic;
 mod failure;
 mod job;
 mod php_wire;

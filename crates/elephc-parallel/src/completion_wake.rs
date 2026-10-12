@@ -18,7 +18,7 @@ use std::os::unix::net::UnixStream;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Mutex, OnceLock};
 
-struct Wake {
+pub(crate) struct Wake {
     reader: UnixStream,
     writer: UnixStream,
     pending: bool,
@@ -27,7 +27,7 @@ struct Wake {
 
 impl Wake {
     /// Creates both owned endpoints without allowing either notification or drain to block.
-    fn new() -> io::Result<Self> {
+    pub(crate) fn new() -> io::Result<Self> {
         let (reader, writer) = UnixStream::pair()?;
         reader.set_nonblocking(true)?;
         writer.set_nonblocking(true)?;
@@ -35,7 +35,7 @@ impl Wake {
     }
 
     /// Coalesces a notification; transport failure makes the reader ready with EOF.
-    fn signal(&mut self) {
+    pub(crate) fn signal(&mut self) {
         if self.pending || self.failed {
             return;
         }
@@ -50,7 +50,7 @@ impl Wake {
     }
 
     /// Consumes the single wake byte under the registry lock, preserving future notifications.
-    fn drain(&mut self) -> i32 {
+    pub(crate) fn drain(&mut self) -> i32 {
         if self.failed {
             return -1;
         }
@@ -66,6 +66,11 @@ impl Wake {
                 _ => { self.failed = true; return -1; }
             }
         }
+    }
+
+    /// Borrows the read endpoint while this native wake owner remains live.
+    pub(crate) fn fd(&self) -> i64 {
+        if self.failed { -1 } else { i64::from(self.reader.as_raw_fd()) }
     }
 }
 
