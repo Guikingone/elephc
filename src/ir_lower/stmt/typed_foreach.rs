@@ -167,6 +167,50 @@ pub(super) fn lower_foreach(
         return;
     }
     if value_by_ref
+        && matches!(
+            ctx.builder.value_php_type(source.value).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        // A `mixed` source may hold an array — by-reference iteration is legal — or an
+        // iterator, where php raises the SAME catchable Error the typed check above raises.
+        // The kind is only known at run time, so the guard branches on it: an object source
+        // throws, anything else iterates. This is the shape every untyped-argument foreach
+        // takes (the corpus's `p($iii)` with an `IteratorIterator` included).
+        let is_object = ctx.emit_value(
+            Op::TypePredicate,
+            vec![source.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+            PhpType::Bool,
+            Op::TypePredicate.default_effects(),
+            Some(array.span),
+        );
+        let throw_block = ctx
+            .builder
+            .create_named_block("foreach.byref.iterator.throw", Vec::new());
+        let iterate_block = ctx
+            .builder
+            .create_named_block("foreach.byref.iterate", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_object.value,
+            then_target: throw_block,
+            then_args: Vec::new(),
+            else_target: iterate_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(throw_block);
+        let message = ctx.intern_string("An iterator cannot be used with foreach by reference");
+        ctx.emit_void(
+            Op::ThrowError,
+            Vec::new(),
+            Some(Immediate::Data(message)),
+            Op::ThrowError.default_effects(),
+            Some(array.span),
+        );
+        ctx.builder.terminate(Terminator::Unreachable);
+        ctx.builder.position_at_end(iterate_block);
+    }
+    if value_by_ref
         && by_ref_origin.is_none()
         && matches!(
             ctx.builder.value_php_type(source.value).codegen_repr(),

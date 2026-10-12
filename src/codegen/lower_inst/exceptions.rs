@@ -390,18 +390,19 @@ fn emit_static_exception_at(
     };
     let creation_line = location.as_ref().map_or(0, |(_, line)| *line);
     // Reference PHP continues an uncaught report with the throwable's trace and the re-stated
-    // construction site. A located guard (a by-reference `foreach` over an iterator) knows both,
-    // so it prints them; an unlocated one keeps its previous single-line wording rather than
-    // fabricating a `{main}` frame for a site that has no file to name.
-    let fatal_message = match &location {
-        Some((file, line)) => format!(
-            "\nFatal error: Uncaught {}: {}{}\nStack trace:\n#0 {{main}}\n  thrown in {} on line {}\n",
-            class_name, message, suffix, file, line
-        ),
-        None => format!("\nFatal error: Uncaught {}: {}{}\n", class_name, message, suffix),
-    };
-    let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
-    emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
+    // construction site. A LOCATED guard (a by-reference `foreach` over an iterator, a
+    // runtime type refusal) publishes its stamped throwable and throws through the standard
+    // unwinder: with no handler, the runtime report prints the location, the activation-chain
+    // trace, and the thrown-in tail — which beats the `#0 {main}` frame this path used to
+    // hardcode. An unlocated guard has no file to name, so it keeps its previous single-line
+    // wording rather than fabricating one.
+    if location.is_some() {
+        // The throwable below is built either way; the throw label skips the inline fatal.
+    } else {
+        let fatal_message = format!("\nFatal error: Uncaught {}: {}{}\n", class_name, message, suffix);
+        let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
+        emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
+    }
 
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
