@@ -782,3 +782,25 @@ echo $n, "\n";
     assert_eq!(out.stdout, "240\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// An `offsetSet()` rejection names the rejected offset's type — `resource` here, where `main`
+/// used to print the opaque `non-int`. Regression for #1623. (PHP 8.5 itself converts a resource
+/// offset with a `Resource ID#N used as offset` warning and then raises `OutOfBoundsException`
+/// for an out-of-range index; elephc's rejection of resources is the divergence recorded in
+/// docs/php/types.md.) The other `ArrayAccess` operations are pinned in
+/// `test_spl_fixed_array_converts_integer_string_offsets`; they depend on the offset-variable
+/// handling tracked separately, so they are not asserted here.
+#[test]
+fn test_spl_fixed_array_resource_offset_names_the_type() {
+    let out = compile_and_run(
+        r#"<?php
+$f = new SplFixedArray(3);
+$r = fopen("php://memory", "r+");
+try { $f[$r] = 1; } catch (TypeError $e) { echo "set: ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "set: Cannot access offset of type resource on SplFixedArray\n"
+    );
+}
