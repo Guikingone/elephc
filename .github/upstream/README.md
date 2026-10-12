@@ -28,7 +28,9 @@ tag, so re-runs never duplicate. The file is committed by the workflow and only
 rewritten when a branch pointer advances — a run that finds nothing new leaves
 it untouched. The first run seeds the pointers **silently** (no issue burst);
 pass `--kickoff` (or the workflow's `kickoff` input) to also open one issue for
-each branch's current latest release.
+each branch's current latest release. `--seed-only` never opens an issue either:
+on a later run it moves a behind branch pointer to the branch's latest release
+and skips the backlog in between on purpose.
 
 ## What an issue contains
 

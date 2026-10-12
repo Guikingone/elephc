@@ -21,7 +21,8 @@
 #   - First run (no state file) records the branch pointers silently; pass
 #     --kickoff to also open one issue for each watched branch's current latest
 #     release. Later runs open one issue per newly published tag. --seed-only
-#     records pointers without opening.
+#     only records pointers and never opens an issue — even when an existing
+#     branch pointer is behind (the backlog in between is skipped on purpose).
 #   - --dry-run performs no writes: no issues and no state update.
 #   - Any issue-creation failure makes the run exit non-zero without advancing
 #     state, so the next run retries; already-opened issues are skipped by the
@@ -128,6 +129,9 @@ normalize_releases() {
 
 # plan_releases NORMALIZED_JSON STATE_BRANCHES_JSON SEED_ONLY -> planned items.
 # Each item carries tag/version/branch/prev_tag/first plus release metadata.
+# Seed mode plans nothing — not even when an existing branch pointer is behind:
+# seeding records pointers without opening issues, so a re-seed stays
+# burst-free and the skipped backlog is a deliberate operator choice.
 plan_releases() {
   local normalized="$1" state="$2" seed="$3"
   jq -c --argjson state "$state" --arg seed "$seed" '
@@ -146,8 +150,8 @@ plan_releases() {
       | . as $rs
       | ($rs | last) as $latest
       | ($state[$latest.branch] // null) as $rec
-      | if $rec != null then chain($rec; $rs)
-        elif seed_flag then []
+      | if seed_flag then []
+        elif $rec != null then chain($rec; $rs)
         else [ $latest + {
                  prev_tag: (if ($rs | length) > 1 then $rs[-2].tag else null end),
                  first: (($rs | length) == 1)
@@ -523,15 +527,22 @@ main() {
     else
       log "first run: opening one issue per watched branch's latest release"
     fi
+  elif [ "$seed" -eq 1 ]; then
+    log "seed-only: recording branch pointers without opening issues"
   fi
 
   local planned_total plan_file
   plan_file="$tmp/planned.jsonl"
   plan_releases "$(cat "$tmp/normalized.json")" "$state_branches" "$seed" >"$tmp/planned.json"
+  # planned.json is branch-grouped with patches ascending per branch, so the
+  # flood guard keeps the OLDEST planned tags: the deferred tail stays behind
+  # the per-branch pointers and is planned again on the next run. A
+  # newest-first cut would open a newer tag while its older siblings on the
+  # branch stay unfiled, and the advanced pointer would hide them forever.
   planned_total="$(jq 'length' "$tmp/planned.json")"
   if [ "$planned_total" -gt "$MAX_ISSUES" ]; then
-    log "warning: $(( planned_total - MAX_ISSUES )) older release(s) skipped by --max-issues"
-    jq -c ".[-$MAX_ISSUES:] | .[]" "$tmp/planned.json" >"$plan_file"
+    log "warning: $(( planned_total - MAX_ISSUES )) newest release(s) deferred to a later run by --max-issues"
+    jq -c ".[:$MAX_ISSUES] | .[]" "$tmp/planned.json" >"$plan_file"
   else
     jq -c '.[]' "$tmp/planned.json" >"$plan_file"
   fi

@@ -45,6 +45,14 @@ assert_file_contains() { # desc needle file
   fi
 }
 
+assert_file_lacks() { # desc needle file
+  if [ -f "$3" ] && grep -qF -- "$2" "$3"; then
+    fail "$1 (unexpected [$2] in $3)"
+  else
+    pass "$1"
+  fi
+}
+
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/php-watch-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 FIX="$WORK/fixtures"
@@ -229,6 +237,11 @@ assert_eq "plan seed opens nothing" "0" "$(plan_releases "$normalized" '{}' 1 | 
 assert_eq "plan state current opens nothing" "0" "$(plan_releases "$normalized" '{"8.5":"php-8.5.11","8.4":"php-8.4.26"}' 0 | jq 'length')"
 assert_eq "plan state behind opens both" "2" "$(plan_releases "$normalized" '{"8.5":"php-8.5.10","8.4":"php-8.4.25"}' 0 | jq 'length')"
 assert_eq "plan chains compare base" "php-8.5.10" "$(plan_releases "$normalized" '{"8.5":"php-8.5.10","8.4":"php-8.4.26"}' 0 | jq -r '.[] | select(.tag == "php-8.5.11") | .prev_tag')"
+# Seed mode must plan nothing even when an existing branch pointer is behind:
+# --seed-only promises "record pointers, open nothing" (review regression:
+# it used to open the backlog between the recorded pointer and the latest).
+assert_eq "plan seed with existing state opens nothing" "0" \
+  "$(plan_releases "$normalized" '{"8.5":"php-8.5.10","8.4":"php-8.4.25"}' 1 | jq 'length')"
 
 # ---------------------------------------------------------------------------
 # End-to-end: dry run (no writes)
@@ -300,27 +313,137 @@ fi
 assert_eq "second run does not rewrite state" "$state_snapshot" "$(cat "$WORK/state.json")"
 
 # ---------------------------------------------------------------------------
-# End-to-end: flood guard must not advance a pointer past a skipped release
+# End-to-end: flood guard must not advance a pointer past a deferred release
 # ---------------------------------------------------------------------------
 
-# planned.json is branch-ordered, so --max-issues 1 keeps only the newest
-# branch's latest (8.5.11) and drops 8.4.26 entirely. The dropped branch's
-# pointer must stay absent so the next run retries it.
+# planned.json is branch-grouped with patches ascending per branch, so the
+# flood guard keeps the OLDEST planned tags and defers the newest ones. With
+# --max-issues 1, run one opens 8.4.26 and must leave 8.5 unplanned: the 8.5
+# pointer stays absent so the next run retries the deferred 8.5.11 tag.
 : >"$FIX/titles.log"
 bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state-flood.json" \
   --baseline "$FIX/baseline.json" --kickoff --max-issues 1 >"$WORK/flood1.log" 2>&1 \
   || fail "flood-guard run exited non-zero"
-assert_file_contains "flood guard opens the newest issue" "PHP 8.5.11 released" "$FIX/titles.log"
-assert_eq "flood guard records the opened branch" "php-8.5.11" "$(jq -r '.branches["8.5"]' "$WORK/state-flood.json")"
-assert_eq "flood guard leaves the skipped branch pointer unadvanced" "false" \
-  "$(jq -r '.branches | has("8.4")' "$WORK/state-flood.json")"
+assert_file_contains "flood guard opens the oldest planned issue" "PHP 8.4.26 released" "$FIX/titles.log"
+assert_file_lacks "flood guard defers the newest issue" "PHP 8.5.11 released" "$FIX/titles.log"
+assert_file_contains "flood guard logs the deferral" "deferred to a later run" "$WORK/flood1.log"
+assert_eq "flood guard records the opened branch" "php-8.4.26" "$(jq -r '.branches["8.4"]' "$WORK/state-flood.json")"
+assert_eq "flood guard leaves the deferred branch pointer unadvanced" "false" \
+  "$(jq -r '.branches | has("8.5")' "$WORK/state-flood.json")"
 
-# The skipped branch is retried on the next run.
+# The deferred tag is retried on the next run.
 : >"$FIX/titles.log"
 bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state-flood.json" \
   --baseline "$FIX/baseline.json" >"$WORK/flood2.log" 2>&1 \
   || fail "flood-guard retry run exited non-zero"
-assert_file_contains "flood guard retries the skipped branch" "PHP 8.4.26 released" "$FIX/titles.log"
+assert_file_contains "flood guard retries the deferred branch" "PHP 8.5.11 released" "$FIX/titles.log"
+assert_eq "flood guard records the retried pointer" "php-8.5.11" "$(jq -r '.branches["8.5"]' "$WORK/state-flood.json")"
+
+# ---------------------------------------------------------------------------
+# End-to-end: flood guard must cut a branch mid-chain without losing a tag
+# ---------------------------------------------------------------------------
+
+# State records php-8.4.0 / php-8.5.0 while every stable patch on both branches
+# is waiting: 8.4.1..8.4.5 plus 8.5.1. --max-issues 3 cuts planned.json in the
+# middle of the 8.4 chain, so run one must open the contiguous oldest prefix
+# (8.4.1-8.4.3) and leave the rest pending. A pointer that jumped past an
+# unopened tag would hide 8.4.4/8.4.5 forever; the two runs must file all six
+# tags and end with every pointer on the branch's latest release.
+CHAIN="$WORK/fixtures-chain"
+mkdir -p "$CHAIN"
+cp "$FIX/NEWS" "$FIX/UPGRADING" "$FIX/compare.json" "$FIX/baseline.json" "$CHAIN/"
+cat >"$CHAIN/releases.json" <<'JSON'
+[
+ {"tag_name":"php-8.5.1","draft":false,"prerelease":false,"html_url":"https://example/85p1","published_at":"2026-01-22T12:00:00Z","body":"This is a bug fix release."},
+ {"tag_name":"php-8.4.5","draft":false,"prerelease":false,"html_url":"https://example/84p5","published_at":"2026-01-22T12:00:00Z","body":"This is a bug fix release."},
+ {"tag_name":"php-8.4.4","draft":false,"prerelease":false,"html_url":"https://example/84p4","published_at":"2025-12-18T12:00:00Z","body":"This is a security release."},
+ {"tag_name":"php-8.4.3","draft":false,"prerelease":false,"html_url":"https://example/84p3","published_at":"2025-11-20T12:00:00Z","body":"This is a bug fix release."},
+ {"tag_name":"php-8.4.2","draft":false,"prerelease":false,"html_url":"https://example/84p2","published_at":"2025-10-16T12:00:00Z","body":"This is a bug fix release."},
+ {"tag_name":"php-8.4.1","draft":false,"prerelease":false,"html_url":"https://example/84p1","published_at":"2025-09-18T12:00:00Z","body":"This is a bug fix release."}
+]
+JSON
+printf '{"schema":1,"updated_at":"2025-09-01","branches":{"8.4":"php-8.4.0","8.5":"php-8.5.0"}}\n' \
+  >"$WORK/state-chain.json"
+CHAIN_ARGS=(--repo example/elephc --state "$WORK/state-chain.json" --baseline "$CHAIN/baseline.json")
+
+: >"$CHAIN/titles.log"
+FIXTURE_DIR="$CHAIN" bash "$HERE/php-upstream-watch.sh" "${CHAIN_ARGS[@]}" \
+  --max-issues 3 >"$WORK/chain1.log" 2>&1 || fail "chain run 1 exited non-zero"
+cp "$CHAIN/titles.log" "$WORK/chain1-titles.txt"
+assert_eq "chain run 1 opens the flood cap" "3" "$(wc -l <"$WORK/chain1-titles.txt" | tr -d ' ')"
+assert_file_contains "chain run 1 opens the chain head" "PHP 8.4.1 released" "$WORK/chain1-titles.txt"
+assert_file_contains "chain run 1 opens the second tag" "PHP 8.4.2 released" "$WORK/chain1-titles.txt"
+assert_file_contains "chain run 1 opens the third tag" "PHP 8.4.3 released" "$WORK/chain1-titles.txt"
+assert_file_lacks "chain run 1 skips the mid-chain tail" "PHP 8.4.4 released" "$WORK/chain1-titles.txt"
+assert_file_lacks "chain run 1 skips the newest patch" "PHP 8.4.5 released" "$WORK/chain1-titles.txt"
+assert_file_lacks "chain run 1 skips the other branch" "PHP 8.5.1 released" "$WORK/chain1-titles.txt"
+assert_eq "chain run 1 advances the pointer through opened tags only" "php-8.4.3" \
+  "$(jq -r '.branches["8.4"]' "$WORK/state-chain.json")"
+assert_eq "chain run 1 leaves the untouched branch behind" "php-8.5.0" \
+  "$(jq -r '.branches["8.5"]' "$WORK/state-chain.json")"
+
+# Run 2: the mid-chain remainder (8.4.4-8.4.5) and 8.5.1 all fit under the cap.
+# prev_tag must chain from the new pointer, not restart from the branch head.
+: >"$CHAIN/titles.log"
+FIXTURE_DIR="$CHAIN" bash "$HERE/php-upstream-watch.sh" "${CHAIN_ARGS[@]}" \
+  --max-issues 3 >"$WORK/chain2.log" 2>&1 || fail "chain run 2 exited non-zero"
+cp "$CHAIN/titles.log" "$WORK/chain2-titles.txt"
+assert_eq "chain run 2 opens the remainder" "3" "$(wc -l <"$WORK/chain2-titles.txt" | tr -d ' ')"
+assert_file_contains "chain run 2 opens the deferred patch" "PHP 8.4.4 released" "$WORK/chain2-titles.txt"
+assert_file_contains "chain run 2 opens the last 8.4 patch" "PHP 8.4.5 released" "$WORK/chain2-titles.txt"
+assert_file_contains "chain run 2 opens the deferred branch" "PHP 8.5.1 released" "$WORK/chain2-titles.txt"
+assert_file_lacks "chain run 2 does not re-open filed tags" "PHP 8.4.1 released" "$WORK/chain2-titles.txt"
+assert_eq "chain run 2 ends 8.4 on its latest" "php-8.4.5" \
+  "$(jq -r '.branches["8.4"]' "$WORK/state-chain.json")"
+assert_eq "chain run 2 ends 8.5 on its latest" "php-8.5.1" \
+  "$(jq -r '.branches["8.5"]' "$WORK/state-chain.json")"
+
+# Run 3: state is current, so nothing is planned and state is untouched.
+state_snapshot="$(cat "$WORK/state-chain.json")"
+: >"$CHAIN/titles.log"
+FIXTURE_DIR="$CHAIN" bash "$HERE/php-upstream-watch.sh" "${CHAIN_ARGS[@]}" \
+  >"$WORK/chain3.log" 2>&1 || fail "chain run 3 exited non-zero"
+if [ -s "$CHAIN/titles.log" ]; then
+  fail "chain run 3 must open nothing once state is current"
+else
+  pass "chain run 3 opens nothing once state is current"
+fi
+assert_eq "chain run 3 does not rewrite state" "$state_snapshot" "$(cat "$WORK/state-chain.json")"
+
+assert_eq "chain files every pending tag exactly once" "6" "$(cat "$WORK/chain1-titles.txt" "$WORK/chain2-titles.txt" | wc -l | tr -d ' ')"
+
+# ---------------------------------------------------------------------------
+# End-to-end: --seed-only must open nothing even with outdated state
+# ---------------------------------------------------------------------------
+
+# --seed-only with an existing, behind state promises "record pointers, open
+# nothing": both branches are recorded as current, and any pending backlog
+# (8.4.26, 8.5.11) is skipped deliberately instead of being opened.
+printf '{"schema":1,"updated_at":"2026-08-01","branches":{"8.5":"php-8.5.10","8.4":"php-8.4.25"}}\n' \
+  >"$WORK/state-seed.json"
+: >"$FIX/titles.log"
+bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state-seed.json" \
+  --baseline "$FIX/baseline.json" --seed-only >"$WORK/seed-existing.log" 2>&1 \
+  || fail "seed-only run with existing state exited non-zero"
+if [ -s "$FIX/titles.log" ]; then
+  fail "seed-only must not open issues with existing state"
+else
+  pass "seed-only opens no issue with existing state"
+fi
+assert_file_contains "seed-only logs its silent re-record" "recording branch pointers without opening issues" "$WORK/seed-existing.log"
+assert_eq "seed-only re-records the behind 8.5 pointer" "php-8.5.11" "$(jq -r '.branches["8.5"]' "$WORK/state-seed.json")"
+assert_eq "seed-only re-records the behind 8.4 pointer" "php-8.4.26" "$(jq -r '.branches["8.4"]' "$WORK/state-seed.json")"
+
+# The re-seeded state makes the next normal run plan nothing.
+: >"$FIX/titles.log"
+bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state-seed.json" \
+  --baseline "$FIX/baseline.json" >"$WORK/seed-after.log" 2>&1 \
+  || fail "post-seed run exited non-zero"
+if [ -s "$FIX/titles.log" ]; then
+  fail "post-seed run must not re-open the skipped backlog"
+else
+  pass "post-seed run plans nothing after the re-seed"
+fi
 
 echo
 if [ "$failures" -eq 0 ]; then

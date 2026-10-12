@@ -10,6 +10,8 @@ name: PHP upstream watch
 # first run records the branch pointers silently; pass --kickoff (or the
 # workflow's kickoff input) to also open one issue for each watched branch's
 # current latest release. Later runs open one issue per newly published tag.
+# seed_only records the pointers silently too: on a later run it never opens
+# the backlog behind an existing outdated pointer.
 #
 # This is deliberately disjoint from the release workflows: it only reads
 # php/php-src, writes tracking issues, and commits its own state file.
@@ -71,6 +73,11 @@ jobs:
         with:
           app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
           private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
+          # Scope the minted installation token explicitly: the job-level
+          # `permissions:` above only bounds GITHUB_TOKEN, not this App token,
+          # and without inputs the token inherits the whole installation grant.
+          # The App token only checks out and pushes the state file.
+          permission-contents: write
 
       - uses: actions/checkout@v7
         with:
