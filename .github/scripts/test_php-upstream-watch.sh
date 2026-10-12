@@ -166,7 +166,12 @@ case "$cmd" in
       *"/compare/"*) cat "$fix/compare.json" ;;
       *"/milestones"*)
         if [ "$has_post" -eq 1 ]; then printf '{"number": 1}\n'; else printf '[]\n'; fi ;;
-      *"search/issues"*) printf '%s\n' "${SEARCH_COUNT:-0}" ;;
+      *"search/issues"*)
+        if [ "${SEARCH_FAILED:-0}" = "1" ]; then
+          printf 'fake gh: issue search unavailable\n' >&2
+          exit 1
+        fi
+        printf '%s\n' "${SEARCH_COUNT:-0}" ;;
       *) printf '{}\n' ;;
     esac
     ;;
@@ -232,16 +237,29 @@ assert_eq "normalize keeps watched stable" "2" "$(printf '%s' "$normalized" | jq
 assert_eq "normalize drops prerelease" "0" "$(printf '%s' "$normalized" | jq '[.[] | select(.tag == "php-8.6.0RC3")] | length')"
 assert_eq "normalize drops below min-minor" "0" "$(printf '%s' "$normalized" | jq '[.[] | select(.tag == "php-8.1.99")] | length')"
 
-assert_eq "plan fresh opens latest per branch" "2" "$(plan_releases "$normalized" '{}' 0 | jq 'length')"
-assert_eq "plan seed opens nothing" "0" "$(plan_releases "$normalized" '{}' 1 | jq 'length')"
-assert_eq "plan state current opens nothing" "0" "$(plan_releases "$normalized" '{"8.5":"php-8.5.11","8.4":"php-8.4.26"}' 0 | jq 'length')"
-assert_eq "plan state behind opens both" "2" "$(plan_releases "$normalized" '{"8.5":"php-8.5.10","8.4":"php-8.4.25"}' 0 | jq 'length')"
-assert_eq "plan chains compare base" "php-8.5.10" "$(plan_releases "$normalized" '{"8.5":"php-8.5.10","8.4":"php-8.4.26"}' 0 | jq -r '.[] | select(.tag == "php-8.5.11") | .prev_tag')"
+assert_eq "plan fresh opens latest per branch" "2" "$(plan_releases "$normalized" '{}' 0 0 | jq 'length')"
+assert_eq "plan seed opens nothing" "0" "$(plan_releases "$normalized" '{}' 1 0 | jq 'length')"
+assert_eq "plan state current opens nothing" "0" "$(plan_releases "$normalized" '{"8.5":"php-8.5.11","8.4":"php-8.4.26"}' 0 1 | jq 'length')"
+assert_eq "plan state behind opens both" "2" "$(plan_releases "$normalized" '{"8.5":"php-8.5.10","8.4":"php-8.4.25"}' 0 1 | jq 'length')"
+assert_eq "plan chains compare base" "php-8.5.10" "$(plan_releases "$normalized" '{"8.5":"php-8.5.10","8.4":"php-8.4.26"}' 0 1 | jq -r '.[] | select(.tag == "php-8.5.11") | .prev_tag')"
 # Seed mode must plan nothing even when an existing branch pointer is behind:
 # --seed-only promises "record pointers, open nothing" (review regression:
 # it used to open the backlog between the recorded pointer and the latest).
 assert_eq "plan seed with existing state opens nothing" "0" \
-  "$(plan_releases "$normalized" '{"8.5":"php-8.5.10","8.4":"php-8.4.25"}' 1 | jq 'length')"
+  "$(plan_releases "$normalized" '{"8.5":"php-8.5.10","8.4":"php-8.4.25"}' 1 1 | jq 'length')"
+
+# A branch missing from an existing state plans its whole fetched backlog
+# (a late-discovered branch must not lose the releases before its newest);
+# a true first run (no state file) stays latest-only for the kickoff guard.
+newbranch='[{"tag_name":"php-8.6.1","draft":false,"prerelease":false,"html_url":"https://example/861","published_at":"2026-11-19T12:00:00Z","body":"This is a bug fix release."},{"tag_name":"php-8.6.0","draft":false,"prerelease":false,"html_url":"https://example/860","published_at":"2026-10-22T12:00:00Z","body":"This is a security release."}]'
+newnorm="$(normalize_releases "$(min_minor_num 8.2)" <<<"$newbranch")"
+assert_eq "plan unknown branch opens the fetched backlog" "2" \
+  "$(plan_releases "$newnorm" '{"8.4":"php-8.4.26"}' 0 1 | jq 'length')"
+assert_eq "plan unknown branch starts at its oldest" "true" \
+  "$(plan_releases "$newnorm" '{"8.4":"php-8.4.26"}' 0 1 | jq -r '.[] | select(.tag == "php-8.6.0") | .first | tostring')"
+assert_eq "plan unknown branch chains prev" "php-8.6.0" \
+  "$(plan_releases "$newnorm" '{"8.4":"php-8.4.26"}' 0 1 | jq -r '.[] | select(.tag == "php-8.6.1") | .prev_tag')"
+assert_eq "plan fresh stays latest-only" "1" "$(plan_releases "$newnorm" '{}' 0 0 | jq 'length')"
 
 # ---------------------------------------------------------------------------
 # End-to-end: dry run (no writes)
@@ -331,12 +349,14 @@ assert_eq "flood guard records the opened branch" "php-8.4.26" "$(jq -r '.branch
 assert_eq "flood guard leaves the deferred branch pointer unadvanced" "false" \
   "$(jq -r '.branches | has("8.5")' "$WORK/state-flood.json")"
 
-# The deferred tag is retried on the next run.
+# The deferred branch is retried on the next run, and — because it is unknown
+# to the state — its whole fetched backlog is filed: both 8.5.10 and 8.5.11.
 : >"$FIX/titles.log"
 bash "$HERE/php-upstream-watch.sh" --repo example/elephc --state "$WORK/state-flood.json" \
   --baseline "$FIX/baseline.json" >"$WORK/flood2.log" 2>&1 \
   || fail "flood-guard retry run exited non-zero"
 assert_file_contains "flood guard retries the deferred branch" "PHP 8.5.11 released" "$FIX/titles.log"
+assert_file_contains "flood guard files the branch's older patch too" "PHP 8.5.10 released" "$FIX/titles.log"
 assert_eq "flood guard records the retried pointer" "php-8.5.11" "$(jq -r '.branches["8.5"]' "$WORK/state-flood.json")"
 
 # ---------------------------------------------------------------------------
@@ -444,6 +464,71 @@ if [ -s "$FIX/titles.log" ]; then
 else
   pass "post-seed run plans nothing after the re-seed"
 fi
+
+# ---------------------------------------------------------------------------
+# End-to-end: a late-discovered branch files its full backlog, including .0
+# ---------------------------------------------------------------------------
+
+# State knows 8.4/8.5 but not 8.6. The fetched releases include BOTH 8.6.0 and
+# 8.6.1: the run must file both — 8.6.0 keeps its UPGRADING highlights, its
+# coverage count and the new-minor baseline checklist, and 8.6.1 chains from
+# it — instead of jumping the pointer straight to 8.6.1 and losing 8.6.0.
+NEWB="$WORK/fixtures-new-branch"
+mkdir -p "$NEWB"
+cp "$FIX/NEWS" "$FIX/UPGRADING" "$FIX/compare.json" "$FIX/baseline.json" "$NEWB/"
+# Deterministic coverage: the "New Functions" section mentions array_first()
+# and array_last(); this synthetic registry covers only array_first().
+printf '[{"name":"array_first"}]\n' >"$NEWB/registry.json"
+cat >"$NEWB/releases.json" <<'JSON'
+[
+ {"tag_name":"php-8.6.1","draft":false,"prerelease":false,"html_url":"https://example/new861","published_at":"2026-11-19T12:00:00Z","body":"This is a bug fix release."},
+ {"tag_name":"php-8.6.0","draft":false,"prerelease":false,"html_url":"https://example/new860","published_at":"2026-10-22T12:00:00Z","body":"This is a security release."}
+]
+JSON
+printf '{"schema":1,"updated_at":"2026-10-01","branches":{"8.4":"php-8.4.26","8.5":"php-8.5.11"}}\n' \
+  >"$WORK/state-newbranch.json"
+: >"$NEWB/titles.log"
+FIXTURE_DIR="$NEWB" bash "$HERE/php-upstream-watch.sh" --repo example/elephc \
+  --state "$WORK/state-newbranch.json" --baseline "$NEWB/baseline.json" \
+  --builtin-registry "$NEWB/registry.json" >"$WORK/newbranch.log" 2>&1 \
+  || fail "late-branch run exited non-zero"
+assert_eq "late branch files every fetched release" "2" "$(wc -l <"$NEWB/titles.log" | tr -d ' ')"
+assert_file_contains "late branch opens the .0 release" "PHP 8.6.0 released" "$NEWB/titles.log"
+assert_file_contains "late branch opens the next patch" "PHP 8.6.1 released" "$NEWB/titles.log"
+assert_file_contains "late branch .0 body carries marker" "<!-- php-src-watch:php-8.6.0 -->" "$NEWB/body_body_php-8.6.0.md"
+assert_file_contains "late branch .0 flags first stable on branch" "first stable release seen on this branch" "$NEWB/body_body_php-8.6.0.md"
+assert_file_contains "minor .0 body embeds UPGRADING highlights" "UPGRADING highlights" "$NEWB/body_body_php-8.6.0.md"
+assert_file_contains "minor .0 body embeds the New Functions section" "**New Functions**" "$NEWB/body_body_php-8.6.0.md"
+assert_file_contains "minor .0 body reports the coverage count" "elephc covers 1" "$NEWB/body_body_php-8.6.0.md"
+assert_file_contains "minor .0 body lists uncovered functions" "array_last" "$NEWB/body_body_php-8.6.0.md"
+assert_file_contains "minor .0 body carries the new-minor checklist" "opens the **8.6** branch" "$NEWB/body_body_php-8.6.0.md"
+assert_file_contains "minor .0 checklist names the profile bump" 'profile to `--php-version`' "$NEWB/body_body_php-8.6.0.md"
+assert_eq "late branch ends on its latest" "php-8.6.1" "$(jq -r '.branches["8.6"]' "$WORK/state-newbranch.json")"
+assert_eq "late branch run leaves recorded branches untouched" "php-8.5.11" "$(jq -r '.branches["8.5"]' "$WORK/state-newbranch.json")"
+
+# ---------------------------------------------------------------------------
+# End-to-end: a failed dedup search aborts instead of risking duplicates
+# ---------------------------------------------------------------------------
+
+# A transient search outage must not read as "no duplicates": the run stops
+# with a non-zero exit, opens nothing, and leaves state untouched, so the next
+# run retries cleanly once the search API answers again.
+printf '{"schema":1,"updated_at":"2026-09-01","branches":{"8.5":"php-8.5.10","8.4":"php-8.4.25"}}\n' \
+  >"$WORK/state-searchfail.json"
+searchfail_snapshot="$(cat "$WORK/state-searchfail.json")"
+: >"$FIX/titles.log"
+rc=0
+SEARCH_FAILED=1 bash "$HERE/php-upstream-watch.sh" --repo example/elephc \
+  --state "$WORK/state-searchfail.json" --baseline "$FIX/baseline.json" \
+  >"$WORK/searchfail.log" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  fail "failed dedup search must abort the run (exit non-zero)"
+else
+  pass "failed dedup search aborts the run"
+fi
+assert_file_lacks "failed dedup search opens no issue" "PHP 8.5.11 released" "$FIX/titles.log"
+assert_file_contains "failed dedup search explains the abort" "duplicate search failed" "$WORK/searchfail.log"
+assert_eq "failed dedup search leaves state untouched" "$searchfail_snapshot" "$(cat "$WORK/state-searchfail.json")"
 
 echo
 if [ "$failures" -eq 0 ]; then

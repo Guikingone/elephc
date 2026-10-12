@@ -23,6 +23,13 @@
 #     release. Later runs open one issue per newly published tag. --seed-only
 #     only records pointers and never opens an issue — even when an existing
 #     branch pointer is behind (the backlog in between is skipped on purpose).
+#   - A branch missing from an existing state file plans every fetched stable
+#     release on it, oldest first, so a branch discovered late files its whole
+#     backlog; a true first run keeps the burst guard (at most the current
+#     latest per branch, and only with --kickoff).
+#   - The dedup search is authoritative: a failing issue search aborts the run
+#     instead of reading as "no duplicates", which could re-open an issue a
+#     previous run created but failed to record in state.
 #   - --dry-run performs no writes: no issues and no state update.
 #   - Any issue-creation failure makes the run exit non-zero without advancing
 #     state, so the next run retries; already-opened issues are skipped by the
@@ -127,15 +134,20 @@ normalize_releases() {
   '
 }
 
-# plan_releases NORMALIZED_JSON STATE_BRANCHES_JSON SEED_ONLY -> planned items.
+# plan_releases NORMALIZED_JSON STATE_BRANCHES_JSON SEED_ONLY STATE_EXISTED -> planned items.
 # Each item carries tag/version/branch/prev_tag/first plus release metadata.
 # Seed mode plans nothing — not even when an existing branch pointer is behind:
 # seeding records pointers without opening issues, so a re-seed stays
 # burst-free and the skipped backlog is a deliberate operator choice.
+# A branch missing from an existing state plans its whole fetched backlog
+# (chain_all), so a late-discovered branch cannot lose the releases published
+# before its first recorded pointer. A true first run (no state file) stays
+# latest-only, gated behind --kickoff.
 plan_releases() {
-  local normalized="$1" state="$2" seed="$3"
-  jq -c --argjson state "$state" --arg seed "$seed" '
+  local normalized="$1" state="$2" seed="$3" had_state="$4"
+  jq -c --argjson state "$state" --arg seed "$seed" --arg hadstate "$had_state" '
     def seed_flag: ($seed == "1");
+    def had_state_flag: ($hadstate == "1");
     def chain($rec; $rs):
       ($rec | capture("^php-[0-9]+\\.[0-9]+\\.(?<pat>[0-9]+)$")? // null) as $rp
       | if $rp == null then []
@@ -146,12 +158,21 @@ plan_releases() {
              | .base = $r.tag)
           | .acc
         end;
+    def chain_all($rs):
+      if ($rs | length) == 0 then []
+      else
+        reduce ($rs[]) as $r ({acc: [], base: null};
+          .acc += [ ($r + {prev_tag: .base, first: (.base == null)}) ]
+          | .base = $r.tag)
+        | .acc
+      end;
     [ (group_by(.branch) | .[])
       | . as $rs
       | ($rs | last) as $latest
       | ($state[$latest.branch] // null) as $rec
       | if seed_flag then []
         elif $rec != null then chain($rec; $rs)
+        elif had_state_flag then chain_all($rs)
         else [ $latest + {
                  prev_tag: (if ($rs | length) > 1 then $rs[-2].tag else null end),
                  first: (($rs | length) == 1)
@@ -408,6 +429,12 @@ render_news() {
 # render_upgrading BODY TITLES_TSV TMP_DIR COVERED_FUNCTIONS_FILE
 render_upgrading() {
   local body="$1" titles="$2" dir="$3" covered="$4"
+  # idx and title are declared local on purpose: the while-read below would
+  # otherwise bind to the caller's (e.g. main loop's) `title` through bash's
+  # dynamic scoping, and the EOF read would blank it — every .0 release body
+  # would then be filed with an empty issue title. See test "late branch
+  # opens the .0 release", which guards exactly this.
+  local idx title
   [ -s "$titles" ] || return 0
   printf '\n### UPGRADING highlights\n' >>"$body"
   while IFS=$'\t' read -r idx title; do
@@ -533,7 +560,7 @@ main() {
 
   local planned_total plan_file
   plan_file="$tmp/planned.jsonl"
-  plan_releases "$(cat "$tmp/normalized.json")" "$state_branches" "$seed" >"$tmp/planned.json"
+  plan_releases "$(cat "$tmp/normalized.json")" "$state_branches" "$seed" "$state_existed" >"$tmp/planned.json"
   # planned.json is branch-grouped with patches ascending per branch, so the
   # flood guard keeps the OLDEST planned tags: the deferred tail stays behind
   # the per-branch pointers and is planned again on the next run. A
@@ -626,10 +653,24 @@ main() {
     render_checklist "$body"
 
     # Dedup search runs in both modes (read-only), so --dry-run reports the same
-    # exists/would-open decision the real run would make.
+    # exists/would-open decision the real run would make. A failed (or
+    # unreadable) search is fatal, not "no duplicates": reading an API hiccup as
+    # an empty result could re-open an issue a previous run created but failed
+    # to record in state.
     local existing
-    existing="$(gh api -X GET "search/issues" -f q="repo:$TARGET_REPO in:body \"$marker\"" --jq '.total_count' 2>/dev/null || printf '0')"
-    if [ "${existing:-0}" -gt 0 ]; then
+    if ! existing="$(gh api -X GET "search/issues" -f q="repo:$TARGET_REPO in:body \"$marker\"" --jq '.total_count' 2>/dev/null)"; then
+      log "error: duplicate search failed for $tag; aborting so no duplicate issue is opened"
+      failures=$(( failures + 1 ))
+      break
+    fi
+    case "$existing" in
+      ''|*[!0-9]*)
+        log "error: duplicate search returned an unusable count for $tag; aborting so no duplicate issue is opened"
+        failures=$(( failures + 1 ))
+        break
+        ;;
+    esac
+    if [ "$existing" -gt 0 ]; then
       log "skip $tag: issue already exists"
       if [ "$DRY_RUN" -eq 0 ]; then
         already=$(( already + 1 ))

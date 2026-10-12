@@ -30,7 +30,10 @@ it untouched. The first run seeds the pointers **silently** (no issue burst);
 pass `--kickoff` (or the workflow's `kickoff` input) to also open one issue for
 each branch's current latest release. `--seed-only` never opens an issue either:
 on a later run it moves a behind branch pointer to the branch's latest release
-and skips the backlog in between on purpose.
+and skips the backlog in between on purpose. A branch that appears after the
+state file was created files its whole fetched backlog on the next run (oldest
+first), so a newly discovered branch cannot skip the releases published before
+its first recorded pointer.
 
 ## What an issue contains
 

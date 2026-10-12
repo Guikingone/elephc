@@ -84,6 +84,9 @@ jobs:
           # The App token is the ruleset's bypass actor, so the state commit
           # below can land on protected `main`.
           token: ${{ steps.app-token.outputs.token }}
+          # Full history so the state commit can be rebased onto a moved branch
+          # tip before pushing (see the push retry in the last step).
+          fetch-depth: 0
 
       - name: Detect new releases and open issues
         env:
@@ -118,4 +121,20 @@ jobs:
             exit 0
           fi
           git commit -m "chore: update php-src watch state [skip ci]"
-          git push
+          # `concurrency` prevents overlapping watcher runs, but ordinary merges
+          # can still land on the branch while this job fetches upstream data
+          # and opens issues. Rebase the state commit onto the moved tip and
+          # retry a bounded number of times, so the completed run is saved now
+          # instead of leaving the pointers unadvanced for a week. (A lost push
+          # is recoverable via the next run's dedup search, but a red weekly
+          # run is noisy.) A conflicting rebase fails the run cleanly and is
+          # handled by that same recovery path.
+          tries=0
+          until git push; do
+            tries=$(( tries + 1 ))
+            if [ "$tries" -ge 3 ]; then
+              echo "::error::could not push the watch state (tried ${tries} times)"
+              exit 1
+            fi
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+          done
