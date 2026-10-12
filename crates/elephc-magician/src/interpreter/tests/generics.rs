@@ -152,6 +152,20 @@ fn generics_function_aliases_and_enum_methods() {
     assert_eq!(run(&["enum Pick { case One; public function id<T>(T $v): T { return $v; } } echo Pick::One->id<int>(7);"]), "7");
 }
 
+/// Case-insensitive direct and first-class imports bind written slots in persistent contexts.
+#[test]
+fn generics_mixed_case_function_aliases_and_callables() {
+    assert_eq!(run(&[
+        "namespace Lib; function Identity<T>(T $v): T { return $v; }",
+        "namespace App; use function Lib\\Identity as Alias; echo aLIAS<string>('direct'), '|'; $f = ALias<int>(...); echo $f(42);",
+        "namespace Other; echo '|', \\Lib\\IDENTITY<int>(7);",
+    ]), "direct|42|7");
+    assert_eq!(run(&[
+        "function Identity<T>(T $v): T { return $v; }",
+        "namespace App; echo iDENTITY<int>(8), '|'; $f = IDentity<string>(...); echo $f('fallback');",
+    ]), "8|fallback");
+}
+
 /// Variance widens object arguments and keeps AOT's scalar storage restriction.
 #[test]
 fn generics_variance_accepts_safe_object_widening() {

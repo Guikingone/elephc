@@ -86,7 +86,7 @@ mod tests {
     /// also retain source spelling without changing the serialized shape.
     /// BUMPED TO 14: retained generic templates, structural types, and typed locals are serialized
     /// alongside main's source-spelling semantics. The combined layout has a fresh cache identity.
-    const RECORDED_FINGERPRINT: u64 = 7340873381526035986;
+    const RECORDED_FINGERPRINT: u64 = 2604479976000790958;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

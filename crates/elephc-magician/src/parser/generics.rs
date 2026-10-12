@@ -135,7 +135,7 @@ impl Parser {
 
 /// Re-parses one specialization with concrete type syntax at the retained lexical scope.
 pub(crate) fn instantiate(template: &EvalGenericTemplate, bindings: &Bindings, name: &str) -> Result<EvalStmt, EvalParseError> {
-    let parser = specialization_parser(template, bindings, name)?;
+    let mut parser = specialization_parser(template, bindings, name)?;
     let program = parser.parse_program()?;
     let mut declaration = program.statements().first().cloned().ok_or(EvalParseError::UnexpectedEof)?;
     match (&mut declaration, template.prototype.as_ref()) {

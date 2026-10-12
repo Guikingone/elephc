@@ -23,7 +23,7 @@ Keep source locations and namespace imports when retaining templates. Script-cac
 
 `elephc-generics` provides dependency-neutral type terms, binding conflicts, written arguments, dependent defaults, and depth limits. AOT adapts its existing type expressions through `src/generics/shared.rs`; Magician infers corresponding terms from runtime values.
 
-The parser retains declaration prototypes and tokens marked by lexical type-parameter identity. Replay preserves imports, namespaces, literal bytes, attributes, source lines, and constructor-local shadowing. Native syntax and PHPDoc provenance remain distinct for strict mode. File-cache format 13 covers the additional serialized metadata and invalidates older PHPDoc inheritance rewrites.
+The parser retains declaration prototypes and tokens marked by lexical type-parameter identity. Replay preserves imports, namespaces, literal bytes, attributes, source lines, and constructor-local shadowing. Native syntax and PHPDoc provenance remain distinct for strict mode. File-cache format 14 covers the combined generic metadata and source-spelling semantics from main and invalidates older PHPDoc inheritance rewrites.
 
 Concrete functions, class-like declarations, and methods use ordinary EvalIR execution. Function and class templates occupy separate PHP namespaces, and normal declarations reject conflicting templates. Persistent-context entry points, first-class callables, callback aliases, and call argument arrays resolve templates before normal binding. `interpreter/context_calls.rs` keeps the interpreter dispatcher small.
 
@@ -76,3 +76,16 @@ The review identifies stale receiver snapshots when an operand reassigns the loc
 Both reported findings fail in interpreter and native regressions on the reviewed head. `local_offset_writes` now evaluates the index and RHS once, then resolves the visible local, selects its current storage semantics, and normalizes array keys only for an array receiver. Shared cleanup covers scalar errors, string replacements, array writes, and `ArrayAccess::offsetSet`. String offset trimming explicitly includes vertical tab.
 
 Validation passes: 57 generic parser/interpreter tests, 4 array-reference tests, 33 reference tests, 40 operand-ownership tests, 1 ArrayAccess test, 2 append tests, and 21 native eval integration tests. The updated receiver regression also verifies single index-then-value evaluation. New fixtures cover receiver type changes, noncanonical numeric keys, aliases, rejected objects, and operand exceptions with clean heaps; their output matches PHP 8.5. A warning-free `cargo build`, Rust documentation checks, and diff hygiene pass. The example remains covered by the native tests.
+
+## Rebase onto main
+
+- [x] Replay the five feature/review commits from `d8f084cfee` onto main `889f45203e`.
+- [x] Preserve the REPL modules, parser failure cursor, and source-spelling diagnostics.
+- [x] Invalidate both prior eval cache layouts with format 14 and the combined IR fingerprint.
+- [x] Cover generic import spelling, first-class aliases, and persistent REPL specialization.
+- [x] Validate focused generics, parser/cache, callable/ownership, and native eval/REPL regressions.
+- [x] Prepare the validated branch for publication with an explicit lease against the previously reviewed head.
+
+Specialization replay now borrows a mutable parser, as required by main's REPL failure cursor. Imported first-class generic callables resolve their base name before retaining written arguments, matching direct generic calls and preserving main's diagnostic spelling. The cache guard fingerprints the merged schema as `2604479976000790958`; format 14 prevents either old format-13 layout from being reused.
+
+Validation passes: a warning-free `cargo build`, 59 generic parser/interpreter tests, 230 parser tests, 150 cache tests (one unrelated ignored), and 93 focused callable, reference, ownership, and recovery tests. All 27 native regressions pass: 21 generic eval tests, 3 source-spelling/undefined-function tests, and 3 persistent REPL tests. The new parser regression failed before the import correction. Range comparison preserves all three latest review-fix commits unchanged; Rust documentation checks and `git diff --check` pass.

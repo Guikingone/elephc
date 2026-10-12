@@ -9,6 +9,20 @@
 
 use super::support::*;
 
+/// Imported generic calls and first-class callables retain resolved spelling and written slots.
+#[test]
+fn generics_function_names_preserve_imports_and_source_spelling() {
+    let program = parse_fragment(b"namespace App; use function Lib\\Identity as Alias; aLIAS<string>('ok'); ALias<int>(...); Missing<string>(...);").unwrap();
+    assert!(matches!(&program.statements()[0], EvalStmt::Expr(EvalExpr::Call { name, .. })
+        if name == "Lib\\Identity<string>"));
+    assert_eq!(program.statements()[1], EvalStmt::Expr(EvalExpr::FunctionCallable {
+        name: "Lib\\Identity<int>".to_string(), fallback_name: None,
+    }));
+    assert_eq!(program.statements()[2], EvalStmt::Expr(EvalExpr::FunctionCallable {
+        name: "App\\Missing<string>".to_string(), fallback_name: Some("Missing<string>".to_string()),
+    }));
+}
+
 /// Typed-local probing must not reinterpret reserved statement keywords as class types.
 #[test]
 fn generics_typed_local_keeps_statement_keyword_precedence() {

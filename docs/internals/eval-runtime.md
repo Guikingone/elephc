@@ -295,9 +295,10 @@ cell for contract validation; that cell is released on success and failure, whil
 the original key so native normalization and diagnostics keep their existing operands. No new
 value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
 mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
-format 13 includes the retained templates, tokens, imports, structural types, and typed locals;
-it discards incorrectly rewritten PHPDoc parents from format 12. The serialized shape and its
-fingerprint are unchanged from format 12, whose guard covers the corresponding type sources.
+format 14 includes the retained templates, tokens, imports, structural types, and typed locals,
+alongside preserved source spelling for direct and first-class function calls. It invalidates
+older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents.
+The format guard covers the combined serialized IR and its corresponding type sources.
 
 ## Parsing and cache
 
