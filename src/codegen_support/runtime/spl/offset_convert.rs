@@ -44,6 +44,11 @@ pub(crate) const SPL_OFFSET_STATUS_NULL: i64 = 8;
 
 /// The type names a rejected offset can carry, in `_spl_offset_type_rows` order, as
 /// `(data symbol of the name, name length)`.
+///
+/// The spellings are BORROWED from other producers' data rows instead of duplicated — the
+/// unserializer's `_unser_type_*` strings and the closure tag of `sprintf()` happen to spell
+/// what a rejected offset quotes. If either producer's string or length ever changes, update the
+/// pairing here in the same change or the thrown message and the rows drift apart.
 pub(crate) const SPL_OFFSET_TYPE_ROWS: [(&str, usize); 7] = [
     ("_unser_type_string", 6),
     ("_unser_type_null", 4),

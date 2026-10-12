@@ -370,10 +370,12 @@ fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
 }
 
 /// Emits the common offset validation prefix for aarch64 offset operations.
-/// Saves frame state, unboxes the offset argument, validates it is a non-negative integer
-/// within the fixed array range, and branches to `type_label` on TypeError or `range_label`
-/// on out-of-range. On success, x9 = storage pointer, x10 = integer offset.
-/// Clobbers: x0, x1, x9, x10, x11, x12. Saves and restores x29, x30.
+/// Saves frame state, then converts the offset argument through `__rt_spl_offset_convert` with
+/// SplFixedArray's rules — the converter accepts only a canonical integer string and CONSUMES the
+/// owned boxed offset. On rejection it branches to `type_label` (the rejected type's name row is
+/// in [sp, #32]) or `range_label`. On success, x9 = storage pointer, x10 = integer offset.
+/// Clobbers: x0-x2, the x9-x15 scratch block, and d0/d1 — everything the converter and the
+/// diagnostics it runs before the throw may touch. Saves and restores x29, x30.
 fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_label: &str) {
     emitter.instruction("sub sp, sp, #64");                                     // reserve common offset frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
@@ -1040,10 +1042,14 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits the common offset validation prefix for x86_64 offset operations.
-/// Saves frame state, unboxes the offset argument, validates it is a non-negative integer
-/// within the fixed array range, and branches to `type_label` on TypeError or `range_label`
-/// on out-of-range. On success, r9 = storage pointer, r10 = integer offset.
-/// Clobbers: rax, rdi, r9, r10, r11, r12. Preserves rbp.
+/// Saves frame state, then converts the offset argument through `__rt_spl_offset_convert` with
+/// SplFixedArray's rules — the converter accepts only a canonical integer string and CONSUMES the
+/// owned boxed offset. On rejection it branches to `type_label` (the rejected type's name row is
+/// in [rbp, -40]) or `range_label`. On success, r9 = storage pointer, r10 = integer offset.
+/// Clobbers: rax, rdi, rsi, rdx, rcx, r10, r11, xmm0/xmm1 — the converter and the diagnostics it
+/// runs before the throw. Preserves rbp; on every path this prefix leaves `r12` holding the
+/// offset tag it reloaded and never restores it, so it is NOT callee-saved here (the SPL helper
+/// family's existing convention, see #1832).
 fn emit_offset_prefix_x86_64(emitter: &mut Emitter, type_label: &str, range_label: &str) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offset helper
     emitter.instruction("mov rbp, rsp");                                        // establish common offset frame

@@ -1068,10 +1068,13 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
 }
 
 /// Emits the shared offset validation preamble on ARM64: receiver in x0, boxed offset in x1.
-/// Unboxes the offset, validates it is an integer and non-negative, loads storage and length,
-/// and checks bounds. Converts LIFO logical offset to physical slot using ITER_MODE_LIFO.
-/// Sets x9 = storage, x10 = physical index on success; jumps to type_label, range_label on
-/// errors. Returns with the offset helper frame established but not yet cleaned up.
+/// Converts the offset through `__rt_spl_offset_convert` with the list's `int $index` rules —
+/// the converter accepts a canonical or weak-coercible numeric string and CONSUMES the owned
+/// box — then validates the index is non-negative, loads storage and length, checks bounds, and
+/// converts the LIFO logical offset to a physical slot using ITER_MODE_LIFO. Sets x9 = storage
+/// and x10 = physical index on success; branches to `type_label` (the rejected type's name row
+/// is in [sp, #24]) or `range_label` on errors. Clobbers x0, x2 and the x9-x15 scratch block and
+/// d0/d1 on every path. Returns with the offset helper frame established but not yet cleaned up.
 fn emit_offset_index_prefix_aarch64(
     emitter: &mut Emitter,
     type_label: &str,
@@ -2261,10 +2264,14 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits the shared offset validation preamble on x86_64: receiver in rdi, boxed offset in rsi.
-/// Unboxes the offset, validates it is an integer and non-negative, loads storage and length,
-/// and checks bounds. Converts LIFO logical offset to physical slot using ITER_MODE_LIFO.
-/// Sets r9 = storage, r10 = physical index on success; jumps to type_label, range_label on
-/// errors. Returns with the offset helper frame established but not yet cleaned up.
+/// Converts the offset through `__rt_spl_offset_convert` with the list's `int $index` rules —
+/// the converter accepts a canonical or weak-coercible numeric string and CONSUMES the owned
+/// box — then validates the index is non-negative, loads storage and length, checks bounds, and
+/// converts the LIFO logical offset to a physical slot using ITER_MODE_LIFO. Sets r9 = storage
+/// and r10 = physical index on success; branches to `type_label` (the rejected type's name row
+/// is in [rbp, -32]) or `range_label` on errors. Clobbers rax, rdx, rcx, r10, r11, r12 and
+/// where a float path runs, xmm0/xmm1. Preserves rbp and the other callee-saved registers.
+/// Returns with the offset helper frame established but not yet cleaned up.
 fn emit_offset_index_prefix_x86_64(
     emitter: &mut Emitter,
     type_label: &str,
@@ -2526,6 +2533,10 @@ fn dll_offset_type_prefix(method: &str) -> (String, usize) {
 
 /// Branches to `__rt_spl_throw_offset_type` with a linked-list method's message around the name
 /// row the caller left in `x2`: `TypeError("SplDoublyLinkedList::offsetGet(): ... int, string given")`.
+///
+/// The `... given` suffix borrows the unserializer's `_unser_type_given_suffix` data row through
+/// `SPL_DLL_OFFSET_TYPE_GIVEN_SUFFIX_LEN`; a change to that producer's string must move this
+/// length in the same change.
 fn emit_dll_offset_type_throw_aarch64(emitter: &mut Emitter, method: &str) {
     let (prefix_symbol, prefix_len) = dll_offset_type_prefix(method);
     abi::emit_symbol_address(emitter, "x0", &prefix_symbol);
