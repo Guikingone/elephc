@@ -285,24 +285,52 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
                 || super::index_expr_key_type(ctx, group.index).codegen_repr() != PhpType::Int);
         if !polymorphic_indexed
             && matches!(local_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-            // Re-load the container and key: they were emitted in a predecessor block, and the
-            // vivification may have republished a grown or copy-on-write-split container pointer into
-            // the local. A `LoadLocal` is pure, and the key is either replayable or already hoisted into
-            // a prefix temporary, so neither is evaluated twice observably.
-            let container = ctx.load_local(name, Some(span));
-            let key = lower_expr(ctx, group.index);
-            ctx.emit_void(
-                Op::SlotDetach,
-                vec![container.value, key.value],
-                None,
-                Op::SlotDetach.default_effects(),
-                Some(span),
-            );
+            detach_array_bucket(ctx, group, name, span);
         }
     }
 
     super::lower_stmt(ctx, group.push);
     super::lower_stmt(ctx, group.write_back);
+}
+
+/// Detaches only actual arrays, preserving a selected scalar until its append error is caught.
+/// Boxed buckets retain the in-place fast path without removing strings before RHS evaluation.
+fn detach_array_bucket(
+    ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup<'_>, name: &str, span: Span,
+) {
+    let StmtKind::Assign { name: temp, .. } = &group.read.kind else { return; };
+    let bucket_ty = ctx.local_type(temp).codegen_repr();
+    let merge = if bucket_ty == PhpType::Mixed {
+        let bucket = ctx.load_local(temp, Some(span));
+        let is_array = ctx.emit_value(
+            Op::TypePredicate, vec![bucket.value],
+            Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)),
+            PhpType::Bool, Op::TypePredicate.default_effects(), Some(span),
+        );
+        let detach = ctx.builder.create_named_block("napp.detach", Vec::new());
+        let append = ctx.builder.create_named_block("napp.append", Vec::new());
+        ctx.builder.terminate(crate::ir::Terminator::CondBr {
+            cond: is_array.value, then_target: detach, then_args: Vec::new(),
+            else_target: append, else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(detach);
+        Some(append)
+    } else if matches!(bucket_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        None
+    } else {
+        return;
+    };
+    // Vivification can republish the container; reload it and the replayable or hoisted key.
+    let container = ctx.load_local(name, Some(span));
+    let key = lower_expr(ctx, group.index);
+    ctx.emit_void(
+        Op::SlotDetach, vec![container.value, key.value], None,
+        Op::SlotDetach.default_effects(), Some(span),
+    );
+    if let Some(append) = merge {
+        ctx.builder.terminate(crate::ir::Terminator::Br { target: append, args: Vec::new() });
+        ctx.builder.position_at_end(append);
+    }
 }
 
 /// Loads the nested append's outer container as a value.

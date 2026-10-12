@@ -37,6 +37,112 @@ writeString("key"); writeMixed("key");
 "#, "{\"0\":\"A\",\"1\":\"B\",\"2\":\"C\",\"key\":{\"x\":1,\"y\":2}}|[\"A\",\"B\",\"C\"]\n{\"0\":5,\"1\":7,\"key\":{\"x\":3}}|[5,7]\n");
 }
 
+/// Numeric-string keys select existing strings and keep failed writes local to the mutation.
+#[test]
+fn test_variadic_fifth_review_numeric_string_parent() {
+    assert_key_write(r#"<?php
+function writeString(string $key): void {
+    $items = ["A", "B", "C"]; $copy = $items;
+    try { $items[$key]["x"] = 1; echo 'wrong'; }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
+    echo '|', json_encode($items), '|', json_encode($copy);
+}
+writeString("1");
+"#, "TypeError:Cannot access offset of type string on string|[\"A\",\"B\",\"C\"]|[\"A\",\"B\",\"C\"]");
+}
+
+/// A scalar integer parent raises the normal PHP Error without altering its COW sibling.
+#[test]
+fn test_variadic_fifth_review_numeric_integer_parent() {
+    assert_key_write(r#"<?php
+function writeInt(string $key): void {
+    $items = [10, 20, 30]; $copy = $items;
+    try { $items[$key]["x"] = 1; echo 'wrong'; }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
+    echo '|', json_encode($items), '|', json_encode($copy);
+}
+writeInt("1");
+"#, "Error:Cannot use a scalar value as an array|[10,20,30]|[10,20,30]");
+}
+
+/// Appending to a selected string raises a catchable Error, not a codegen diagnostic.
+#[test]
+fn test_variadic_fifth_review_numeric_string_append() {
+    assert_key_write(r#"<?php
+function appendString(string $key): void {
+    $items = ["A", "B", "C"]; $copy = $items;
+    try { $items[$key][] = 1; echo 'wrong'; }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
+    echo '|', json_encode($items), '|', json_encode($copy);
+}
+appendString("1");
+"#, "Error:[] operator not supported for strings|[\"A\",\"B\",\"C\"]|[\"A\",\"B\",\"C\"]");
+}
+
+/// Computed parent keys and RHS effects run once before a selected string's offset error.
+#[test]
+fn test_variadic_fifth_review_owned_numeric_string_order() {
+    assert_key_write(r#"<?php
+function pickParentKey(): string { echo 'K'; return '1'; }
+function value(): int { echo 'V'; return 1; }
+$items = ["A", "B", "C"]; $copy = $items;
+try { $items[pickParentKey()]["x"] = value(); echo 'wrong'; }
+catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
+echo '|', json_encode($items), '|', json_encode($copy);
+"#, "KVTypeError:Cannot access offset of type string on string|[\"A\",\"B\",\"C\"]|[\"A\",\"B\",\"C\"]");
+}
+
+/// Missing numeric and named parents still autovivify after a failed scalar append.
+#[test]
+fn test_variadic_fifth_review_missing_parent_controls() {
+    assert_key_write(r#"<?php
+function appendValue(): int { echo 'V'; return 1; }
+function writeParents(string $existing, string $missing, string $named): void {
+    $items = ['A', 'B', 'C']; $copy = $items;
+    try { $items[$existing][] = appendValue(); }
+    catch (Error $error) { echo $error->getMessage(), '|'; }
+    $items[$missing]['x'] = 2;
+    $items[$named][] = 3; $items[$named][] = 4;
+    echo json_encode($items), '|', json_encode($copy);
+}
+writeParents('1', '3', 'key');
+"#, "V[] operator not supported for strings|{\"0\":\"A\",\"1\":\"B\",\"2\":\"C\",\"3\":{\"x\":2},\"key\":[3,4]}|[\"A\",\"B\",\"C\"]");
+}
+
+/// A concrete string-list bucket must not reach an unsupported codegen append.
+#[test]
+fn test_variadic_fifth_review_concrete_string_append() {
+    assert_key_write(r#"<?php
+function appendString(string $key): void {
+    $items = ['A', 'B'];
+    try { $items[$key][] = 1; }
+    catch (Error $error) { echo $error->getMessage(), '|'; }
+    echo json_encode($items);
+}
+appendString('1');
+"#, "[] operator not supported for strings|[\"A\",\"B\"]");
+}
+
+/// Failed nested writes retire owning RHS values and parent cells before entering the catch.
+#[test]
+fn test_variadic_fifth_review_owned_rhs_cleanup() {
+    assert_key_write(r#"<?php
+function ownedValue(): string { return str_repeat('x', 40); }
+function throwingValue(): int { throw new Exception('rhs'); }
+function writeOwned(string $key): void {
+    $items = ['A', 'B']; $copy = $items;
+    try { $items[$key]['x'] = ownedValue(); }
+    catch (TypeError $error) { echo 'offset|'; }
+    try { $items[$key][] = ownedValue(); }
+    catch (Error $error) { echo 'append|'; }
+    try { $items[$key]['x'] = throwingValue(); }
+    catch (Exception $error) { echo $error->getMessage(), '|'; }
+    echo json_encode($items), '|', json_encode($copy);
+}
+writeOwned('1');
+"#, "offset|append|rhs|[\"A\",\"B\"]|[\"A\",\"B\"]");
+}
+
 /// An owning string call is evaluated once per parent fetch on a typed string list.
 #[test]
 fn test_variadic_fourth_review_typed_list_owned_parent() {

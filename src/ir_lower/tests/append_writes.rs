@@ -66,6 +66,15 @@ function writeTypedParents(string $key, mixed $boxed): void {
     echo json_encode($strings), json_encode($ints);
 }
 writeTypedParents('key', 'key');
+function writeNumericParents(string $key): void {
+    $strings = ['A', 'B']; $copy = $strings;
+    try { $strings[$key]['x'] = 1; } catch (TypeError $error) { echo $error->getMessage(); }
+    try { $strings[$key][] = 1; } catch (Error $error) { echo $error->getMessage(); }
+    $ints = [5, 7];
+    try { $ints[$key]['x'] = 2; } catch (Error $error) { echo $error->getMessage(); }
+    echo json_encode($strings), json_encode($copy), json_encode($ints);
+}
+writeNumericParents('1');
 function hashReturn(string $key, mixed $value): array {
     $items = [$value]; $items[$key] = $value; return $items;
 }
@@ -80,6 +89,12 @@ echo json_encode(hashReturn('key', $argc));
     assert!(returning.blocks.iter().flat_map(|block| &block.instructions)
         .any(|inst| returning.instruction(*inst).is_some_and(|inst| inst.op == crate::ir::Op::ArrayToHash)),
         "ordinary String-key writes must retain their associative storage contract");
+    let guarded = module.functions.iter().find(|function| function.name == "writeNumericParents")
+        .expect("missing scalar-parent fixture");
+    assert!(guarded.blocks.iter().flat_map(|block| &block.instructions)
+        .any(|id| guarded.instruction(*id).is_some_and(|inst| inst.op == crate::ir::Op::TypePredicate
+            && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)))),
+        "{target}: selected boxed strings must be guarded before nested writes");
     let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     let nested = asm.split("@fn name=writeConsumingParent ").nth(1)

@@ -37,6 +37,11 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let array_value = load_array_local_for_write(ctx, array, span);
     let value = lower_expr(ctx, value);
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[array_value.value, value.value], span);
+    if !super::nested_write_guards::guard_nested_write_parent(ctx, array_value, None, span) {
+        return;
+    }
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
         Op::ArrayPush
     } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Hash) {

@@ -36,13 +36,26 @@ pub(super) fn lower_nested_array_assign(
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
         let deferred = nested_target_is_all_bare_variables(target);
-        let value_first = deferred.then(|| lower_expr(ctx, value));
+        let value_first = deferred.then(|| {
+            let value = lower_expr(ctx, value);
+            let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
+            (value, pins)
+        });
         let parent = lower_nested_assign_parent(ctx, array, span);
+        let parent_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[parent.value], span);
         let key = lower_expr(ctx, index);
-        let value = match value_first {
+        let key_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], span);
+        let (value, value_pins) = match value_first {
             Some(value) => value,
-            None => lower_expr(ctx, value),
+            None => {
+                let value = lower_expr(ctx, value);
+                let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
+                (value, pins)
+            }
         };
+        if !super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {
+            return;
+        }
         ctx.emit_void(
             Op::RuntimeCall,
             vec![parent.value, key.value, value.value],
@@ -50,6 +63,15 @@ pub(super) fn lower_nested_array_assign(
             effects_lookup::runtime_effects(),
             Some(span),
         );
+        if deferred {
+            crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, span);
+            crate::ir_lower::expr::unpin_in_flight_owners(ctx, parent_pins, span);
+            crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
+        } else {
+            crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
+            crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, span);
+            crate::ir_lower::expr::unpin_in_flight_owners(ctx, parent_pins, span);
+        }
         release_persisted_string_operand(ctx, key, span);
         release_persisted_string_operand(ctx, value, span);
         // Parent subscript reads of Mixed/refcounted elements are owning
