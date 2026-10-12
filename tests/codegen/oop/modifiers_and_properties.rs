@@ -9,6 +9,58 @@
 
 use super::*;
 
+/// An abstract child may add readonly storage while its inherited setter stays abstract.
+#[test]
+fn test_asymmetric_latest_review_abstract_set_readonly_storage() {
+    assert_eq!(compile_and_run(r#"<?php
+abstract class Base { abstract public int $x { get; set; } }
+abstract class Child extends Base { public public(set) readonly int $x; }
+class Grandchild extends Child {}
+echo (new ReflectionClass(Child::class))->isAbstract() ? 'Y' : 'bad';
+echo (new ReflectionClass(Grandchild::class))->isAbstract() ? 'bad' : 'N';
+"#), "YN");
+}
+
+/// Checks the readonly exception against eval or generated abstract getter/setter metadata.
+fn check_asymmetric_latest_review_abstract_set_readonly(native_parent: bool) {
+    let parent = "abstract class Base { abstract public int $x { get; set; } }";
+    let child = r#"abstract class Child extends Base { public public(set) readonly int $x; }
+class Grandchild extends Child {}
+echo (new ReflectionClass(Child::class))->isAbstract() ? "Y" : "bad";
+echo (new ReflectionClass(Grandchild::class))->isAbstract() ? "bad" : "N";"#;
+    let source = if native_parent {
+        format!("<?php {parent} echo (new ReflectionClass(Base::class))->isAbstract() ? '' : 'bad'; eval('{child}');")
+    } else {
+        format!("<?php eval('{parent} {child}');")
+    };
+    assert_eq!(compile_and_run(&source), "YN");
+}
+
+/// Eval-defined abstract getter/setter parents permit readonly storage on an abstract child.
+#[test]
+fn test_asymmetric_latest_review_abstract_set_readonly_eval_parent() {
+    check_asymmetric_latest_review_abstract_set_readonly(false);
+}
+
+/// Native abstract getter/setter metadata grants the same readonly exception to eval.
+#[test]
+fn test_asymmetric_latest_review_abstract_set_readonly_native_parent() {
+    check_asymmetric_latest_review_abstract_set_readonly(true);
+}
+
+/// An abstract readonly child cannot narrow the native abstract parent's public setter.
+#[test]
+fn test_asymmetric_latest_review_native_abstract_setter_narrowing() {
+    let out = compile_and_run_capture(r#"<?php
+abstract class Base { abstract public int $x { get; set; } }
+echo (new ReflectionClass(Base::class))->isAbstract() ? 'before' : 'bad';
+eval('abstract class Child extends Base { public readonly int $x; } echo "bad";');
+"#);
+    assert!(!out.success, "{}", out.stdout);
+    assert_eq!(out.stdout, "before", "{}", out.stderr);
+    assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
+}
+
 /// Exercises one readonly addition with one compilation per independently scheduled case.
 fn check_asymmetric_fifth_review_eval_readonly_addition(parent: &str, child: &str, native_parent: bool) {
     let parent = format!("class Base {{ {parent} }}");

@@ -12,6 +12,50 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// An abstract child can store readonly values without implementing its inherited abstract setter.
+#[test]
+fn execute_program_asymmetric_latest_review_abstract_set_readonly() {
+    let program = parse_fragment(br#"abstract class Base { abstract public int $x { get; set; } }
+abstract class Child extends Base { public public(set) readonly int $x; }
+return true;"#).expect("parse abstract readonly storage");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("abstract parent does not impose concrete readonly invariance");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Rechecking an abstract ancestor's legal readonly storage does not reject a later subclass.
+#[test]
+fn execute_program_asymmetric_latest_review_abstract_readonly_storage_descendant() {
+    let program = parse_fragment(br#"abstract class Base { abstract public int $x { get; set; } }
+abstract class Child extends Base { public public(set) readonly int $x; }
+class Grandchild extends Child {}
+return true;"#).expect("parse abstract readonly ancestor");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("legal ancestor storage retains its declaration context");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Broadening the abstract exception never permits a concrete missing setter or narrowed access.
+#[test]
+fn execute_program_asymmetric_latest_review_abstract_set_readonly_refusals() {
+    for child in [
+        "class Child extends Base { public public(set) readonly int $x; }",
+        "class Child extends Base { public readonly int $x; }",
+        "abstract class Child extends Base { public readonly int $x; }",
+    ] {
+        let source = format!("abstract class Base {{ abstract public int $x {{ get; set; }} }} {child}");
+        let program = parse_fragment(source.as_bytes()).expect("parse readonly refusals");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert_eq!(execute_program(&program, &mut scope, &mut values)
+            .expect_err("setter visibility and concrete implementation remain required"), EvalStatus::RuntimeFatal);
+    }
+}
+
 /// Eval rejects adding readonly to an inherited mutable property regardless of setter access.
 #[test]
 fn execute_program_asymmetric_fifth_review_rejects_added_readonly() {

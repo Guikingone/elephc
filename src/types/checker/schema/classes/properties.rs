@@ -568,12 +568,12 @@ fn validate_instance_property_override(
 
     let parent_has_setter = state.property_hooks.get(&prop.name)
         .is_none_or(|hooks| !hooks.is_virtual() || hooks.set);
-    // An abstract getter describes access, not the readonly status of storage.
+    // Abstract hooks describe access, not the readonly status of storage.
     // Concrete virtual getters still retain the ordinary readonly invariant.
-    let parent_abstract_getter = state.abstract_properties.contains(&prop.name) && !parent_has_setter;
+    let parent_abstract = state.abstract_properties.contains(&prop.name);
     let parent_readonly = state.readonly_properties.contains(&prop.name);
     let child_readonly = class.is_readonly_class || prop.readonly;
-    if parent_readonly != child_readonly && !parent_abstract_getter {
+    if parent_readonly != child_readonly && !parent_abstract {
         let (parent_modifier, child_modifier) = if parent_readonly {
             ("readonly", "non-readonly")
         } else { ("non-readonly", "readonly") };
@@ -606,7 +606,6 @@ fn validate_instance_property_override(
         )));
     }
 
-    let parent_abstract = state.abstract_properties.contains(&prop.name);
     if parent_abstract {
         validate_abstract_property_contract(
             state,
@@ -698,11 +697,14 @@ fn validate_abstract_property_contract(
     }
     if let Some(required_set) = contract.set_type.as_ref() {
         if class.is_readonly_class || prop.readonly {
+            if class.is_abstract {
+                return Ok(());
+            }
             return Err(CompileError::new(
                 prop.span,
                 &format!(
-                    "Readonly property {}::${} cannot satisfy set property contract from {}",
-                    class.name, prop.name, parent_declaring_class
+                    "Class {} contains 1 abstract method and must therefore be declared abstract or implement the remaining method ({}::${}::set)",
+                    class.name, parent_declaring_class, prop.name
                 ),
             ));
         }

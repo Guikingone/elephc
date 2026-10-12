@@ -401,7 +401,7 @@ pub(super) fn apply_class_abstract_property_requirements(
                 requirements.insert(key, property.clone());
             }
         } else if let Some(requirement) = requirements.get(&key) {
-            class_property_satisfies_abstract_contract(property, requirement)
+            class_property_satisfies_abstract_contract_in_class(property, requirement, class.is_abstract())
                 .then_some(())
                 .ok_or(EvalStatus::RuntimeFatal)?;
             requirements.remove(&key);
@@ -445,6 +445,15 @@ pub(super) fn class_property_satisfies_abstract_contract(
     property: &EvalClassProperty,
     requirement: &EvalClassProperty,
 ) -> bool {
+    class_property_satisfies_abstract_contract_in_class(property, requirement, false)
+}
+
+/// Keeps an abstract ancestor's legal readonly storage distinct from a concrete implementation.
+fn class_property_satisfies_abstract_contract_in_class(
+    property: &EvalClassProperty,
+    requirement: &EvalClassProperty,
+    abstract_class: bool,
+) -> bool {
     if property.is_abstract()
         || property.is_static()
         || property.property_type() != requirement.property_type()
@@ -455,7 +464,8 @@ pub(super) fn class_property_satisfies_abstract_contract(
     if requirement.requires_set_hook() {
         return requirement.set_visibility() != Some(EvalVisibility::Private)
             && property_contract_write_visibility_allows(requirement, property)
-            && (property.has_set_hook() || (!property.has_get_hook() && !property.is_readonly()));
+            && (property.has_set_hook()
+                || (!property.has_get_hook() && (!property.is_readonly() || abstract_class)));
     }
     requirement.requires_get_hook()
 }
@@ -492,9 +502,11 @@ pub(super) fn class_property_satisfies_aot_abstract_parent_requirement(
         return false;
     }
     if required.requires_set_hook() {
+        let abstract_readonly_storage = pending_class.is_some_and(|class| class.is_abstract())
+            && property.is_readonly() && !property.has_get_hook();
         return required.set_visibility() != Some(EvalVisibility::Private)
             && property_contract_write_visibility_allows(required, property)
-            && class_property_supports_interface_set(property);
+            && (class_property_supports_interface_set(property) || abstract_readonly_storage);
     }
     required.requires_get_hook()
 }

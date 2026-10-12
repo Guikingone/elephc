@@ -44,6 +44,14 @@ class ReadonlyGetter extends AbstractGetter {
     public readonly int $id;
     public function __construct() { $this->id = 42; }
 }
+abstract class AbstractSetter { abstract public int $id { get; set; } }
+abstract class AbstractReadonlyStorage extends AbstractSetter { public public(set) readonly int $id; }
+class ReadonlyStorageDescendant extends AbstractReadonlyStorage {}
+echo (new ReflectionClass(AbstractReadonlyStorage::class))->isAbstract() ? '' : 'bad';
+echo (new ReflectionClass(ReadonlyStorageDescendant::class))->isAbstract() ? 'bad' : '';
+function acceptAbstractReadonlyStorage(): void {
+    eval('abstract class DynamicAbstractReadonlyStorage extends AbstractSetter { public public(set) readonly int $id; }');
+}
 class NativeMutableParent { public int $id; }
 function rejectReadonlyAddition(): void {
     eval('class DynamicReadonlyChild extends NativeMutableParent { public public(set) readonly int $id; }');
