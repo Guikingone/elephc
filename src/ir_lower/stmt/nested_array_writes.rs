@@ -53,7 +53,7 @@ pub(super) fn lower_nested_array_assign(
         }
         return;
     }
-    lower_nested_array_assign_inner(ctx, target, value, span, false);
+    lower_nested_array_assign_inner(ctx, target, value, span, compound);
 }
 
 /// Captures computed dimensions before the RHS without retaining the static array itself.
