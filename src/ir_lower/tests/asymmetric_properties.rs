@@ -35,7 +35,14 @@ readonly class LegacyReadonly {
     public function __construct(int $id) { $this->id = $id; }
 }
 class ReadonlyBase { public readonly int $id; }
-class ReadonlyChild extends ReadonlyBase { public function __construct() { $this->id = 7; } }
+class ReadonlyChild extends ReadonlyBase {
+    public protected(set) readonly int $id;
+    public function __construct() { $this->id = 7; }
+}
+class NativeMutableParent { public int $id; }
+function rejectReadonlyAddition(): void {
+    eval('class DynamicReadonlyChild extends NativeMutableParent { public public(set) readonly int $id; }');
+}
 function receiver(): ConditionalReadonly { echo "receiver"; return new ConditionalReadonly(); }
 function updateTemporary(): void { receiver()->implicit ??= fallback(); }
 $box = new ConditionalReadonly();

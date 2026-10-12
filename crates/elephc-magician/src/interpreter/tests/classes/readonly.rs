@@ -12,10 +12,10 @@
 use super::super::super::*;
 use super::super::support::*;
 
-/// A readonly redeclaration without a default cannot inherit initialized parent storage.
+/// A readonly redeclaration preserves the inherited uninitialized typed-slot state.
 #[test]
-fn execute_program_readonly_followup_redeclaration_discards_parent_default() {
-    let program = parse_fragment(br#"class ParentBox { public int $id = 0; }
+fn execute_program_readonly_followup_redeclaration_remains_uninitialized() {
+    let program = parse_fragment(br#"class ParentBox { public public(set) readonly int $id; }
     class ChildBox extends ParentBox { public public(set) readonly int $id; }
     $box = new ChildBox();
     return isset($box->id);"#).expect("parse redeclared readonly slot");

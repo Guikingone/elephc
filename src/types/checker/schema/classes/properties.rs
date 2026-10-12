@@ -538,11 +538,11 @@ fn replace_active_property_flags(
 }
 
 /// Validates an instance property override against PHP inheritance rules:
-/// visibility reduction, final override attempts, readonly removal, by-reference
+/// visibility reduction, final override attempts, readonly changes, by-reference
 /// toggling, and making a concrete property abstract. For abstract parent
 /// properties, delegates to `validate_abstract_property_contract`; otherwise
-/// validates type invariance. Private parent properties are rejected as
-/// shadowing is not yet supported.
+/// validates type invariance. Private parent shadowing is handled before this
+/// validation because those declarations own separate storage slots.
 fn validate_instance_property_override(
     state: &ClassBuildState,
     class: &FlattenedClass,
@@ -566,6 +566,18 @@ fn validate_instance_property_override(
         ));
     }
 
+    let parent_readonly = state.readonly_properties.contains(&prop.name);
+    let child_readonly = class.is_readonly_class || prop.readonly;
+    if parent_readonly != child_readonly {
+        let (parent_modifier, child_modifier) = if parent_readonly {
+            ("readonly", "non-readonly")
+        } else { ("non-readonly", "readonly") };
+        return Err(CompileError::new(prop.span, &format!(
+            "Cannot redeclare {parent_modifier} property {parent_declaring_class}::${} as {child_modifier} {}::${}",
+            prop.name, class.name, prop.name,
+        )));
+    }
+
     let parent_set_visibility = state.property_set_visibilities.get(&prop.name)
         .unwrap_or(&inherited_visibility);
     let child_set_visibility = effective_set_visibility(class, prop);
@@ -574,10 +586,21 @@ fn validate_instance_property_override(
     if parent_has_setter
         && visibility_rank(&child_set_visibility) < visibility_rank(parent_set_visibility)
     {
-        return Err(CompileError::new(
-            prop.span,
-            &format!("Cannot reduce set visibility when overriding property: {}::${}", class.name, prop.name),
-        ));
+        // PHP normalizes equal read/write access to an omitted setter, including
+        // an explicit public(set). An implicit readonly protected setter differs.
+        let (access, suffix) = if parent_set_visibility == &inherited_visibility {
+            ("omitted", "")
+        } else {
+            (match parent_set_visibility {
+                Visibility::Public => "public(set)",
+                Visibility::Protected => "protected(set)",
+                Visibility::Private => "private(set)",
+            }, " or weaker")
+        };
+        return Err(CompileError::new(prop.span, &format!(
+            "Set access level of {}::${} must be {access} (as in class {parent_declaring_class}){suffix}",
+            class.name, prop.name,
+        )));
     }
 
     let parent_abstract = state.abstract_properties.contains(&prop.name);
@@ -601,18 +624,6 @@ fn validate_instance_property_override(
             parent_declaring_class,
             prop.span,
         )?;
-    }
-
-    let parent_readonly = state.readonly_properties.contains(&prop.name);
-    let child_readonly = class.is_readonly_class || prop.readonly;
-    if parent_readonly && !child_readonly {
-        return Err(CompileError::new(
-            prop.span,
-            &format!(
-                "Cannot remove readonly modifier when redeclaring property: {}::${}",
-                class.name, prop.name
-            ),
-        ));
     }
 
     let parent_ref = state.reference_properties.contains(&prop.name);

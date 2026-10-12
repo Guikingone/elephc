@@ -9,6 +9,46 @@
 
 use super::*;
 
+/// Exercises one readonly addition against both eval and generated parent metadata.
+fn check_asymmetric_fifth_review_eval_readonly_addition(parent: &str, child: &str) {
+    for native_parent in [false, true] {
+        let parent = format!("class Base {{ {parent} }}");
+        let source = if native_parent {
+            format!("<?php {parent} $base = new Base(); echo 'before'; eval('class Child extends Base {{ {child} }} echo \"bad\";');")
+        } else {
+            format!("<?php echo 'before'; eval('{parent} class Child extends Base {{ {child} }} echo \"bad\";');")
+        };
+        let out = compile_and_run_capture(&source);
+        assert!(!out.success, "accepted readonly addition: {source}");
+        assert_eq!(out.stdout, "before", "{source}");
+        assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
+    }
+}
+
+/// Public readonly additions fail for both eval and native parents.
+#[test]
+fn test_asymmetric_fifth_review_eval_cannot_add_public_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public readonly int $x;");
+}
+
+/// Protected readonly additions cannot bypass the invariant through matching setter access.
+#[test]
+fn test_asymmetric_fifth_review_eval_cannot_add_protected_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("protected int $x;", "protected readonly int $x;");
+}
+
+/// Explicit public(set) does not make a readonly addition legal.
+#[test]
+fn test_asymmetric_fifth_review_eval_cannot_add_public_set_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public public(set) readonly int $x;");
+}
+
+/// Constructor promotion obeys the same readonly invariant as declared properties.
+#[test]
+fn test_asymmetric_fifth_review_eval_cannot_add_promoted_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public function __construct(public public(set) readonly int $x) {}");
+}
+
 /// Private-set readonly clone refusals omit the readonly word and retain the source value.
 #[test]
 fn test_asymmetric_second_review_private_readonly_clone_message() {
@@ -30,11 +70,11 @@ unset($source);"#;
     }
 }
 
-/// Eval child readonly redeclarations discard parent defaults before constructor initialization.
+/// Legal eval child readonly redeclarations keep initialization and empty slots distinct.
 #[test]
 fn test_asymmetric_followup_eval_redeclared_readonly_initialization() {
     let out = compile_and_run_with_heap_debug(r#"<?php
-eval('class ParentBox { public int $id = 0; }
+eval('class ParentBox { public public(set) readonly int $id; }
 class ChildBox extends ParentBox {
     public public(set) readonly int $id;
     public function __construct() { $this->id = 7; }

@@ -116,7 +116,7 @@ pub(super) fn validate_property_parent_redeclaration(
         let parent_has_setter = !parent_property.is_virtual()
             || parent_property.has_set_hook() || parent_property.requires_set_hook();
         if parent_property.is_static() != property.is_static()
-            || (parent_property.is_readonly() && !property.is_readonly())
+            || parent_property.is_readonly() != property.is_readonly()
             || property_visibility_rank(property.visibility())
                 < property_visibility_rank(parent_property.visibility())
             || (parent_has_setter && property_visibility_rank(property.write_visibility())
@@ -174,7 +174,7 @@ pub(super) fn validate_property_aot_parent_redeclaration(
         .native_property_type(&parent_declaring_class, property.name())
         .or_else(|| context.native_property_type(parent, property.name()));
     if parent_is_static != property.is_static()
-        || (parent_is_readonly && !property.is_readonly())
+        || parent_is_readonly != property.is_readonly()
         || property_visibility_rank(property.visibility())
             < property_visibility_rank(parent_visibility)
         || (parent_has_setter && property_visibility_rank(property.write_visibility())

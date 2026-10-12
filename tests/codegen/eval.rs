@@ -22774,7 +22774,7 @@ EvalPromotedAsymBase::$privateValue from global scope"
     );
 }
 
-/// Compatible eval redeclarations retain inherited setter access, including readonly additions.
+/// Compatible eval redeclarations retain inherited setter access and the readonly modifier.
 #[test]
 fn test_eval_declared_inherited_property_redeclaration_contracts() {
     let out = compile_and_run(
@@ -22793,15 +22793,15 @@ class EvalPropertyRelativeChild extends EvalPropertyRelativeBase {
     public self $selfValue;
     public parent $parentValue;
 }
-class EvalPropertyReadonlyAddBase {
-    public int $count = 0;
+class EvalPropertyReadonlyPreserveBase {
+    public public(set) readonly int $count;
 }
-class EvalPropertyReadonlyAddChild extends EvalPropertyReadonlyAddBase {
+class EvalPropertyReadonlyPreserveChild extends EvalPropertyReadonlyPreserveBase {
     public public(set) readonly int $count;
     public function __construct() { $this->count = 7; }
 }
 class EvalPropertyReadonlyWidenBase {
-    protected int $count = 0;
+    protected readonly int $count;
     public function count() { return $this->count; }
 }
 class EvalPropertyReadonlyWidenChild extends EvalPropertyReadonlyWidenBase {
@@ -22810,7 +22810,7 @@ class EvalPropertyReadonlyWidenChild extends EvalPropertyReadonlyWidenBase {
 }
 $box = new EvalPropertyRedeclareChild();
 $box->value = "ok";
-$readonly = new EvalPropertyReadonlyAddChild();
+$readonly = new EvalPropertyReadonlyPreserveChild();
 $widened = new EvalPropertyReadonlyWidenChild();
 echo $box->value . ":" . $readonly->count . ":" . $widened->count . ":" . $widened->count();');
 "#,

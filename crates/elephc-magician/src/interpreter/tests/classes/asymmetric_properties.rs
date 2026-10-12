@@ -12,6 +12,24 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Eval rejects adding readonly to an inherited mutable property regardless of setter access.
+#[test]
+fn execute_program_asymmetric_fifth_review_rejects_added_readonly() {
+    for (parent, child) in [
+        ("public int $x;", "public readonly int $x;"),
+        ("protected int $x;", "protected readonly int $x;"),
+        ("public int $x;", "public public(set) readonly int $x;"),
+        ("public int $x;", "public function __construct(public public(set) readonly int $x) {}"),
+    ] {
+        let source = format!("class Base {{ {parent} }} class Child extends Base {{ {child} }} return 1;");
+        let program = parse_fragment(source.as_bytes()).expect("parse readonly override");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert_eq!(execute_program(&program, &mut scope, &mut values)
+            .expect_err("readonly cannot change across an override"), EvalStatus::RuntimeFatal);
+    }
+}
+
 /// A private child cannot narrow a public or protected parent property, matching PHP.
 #[test]
 fn execute_program_asymmetric_oct9_rejects_private_child_narrowing() {
@@ -292,15 +310,15 @@ class EvalPropertyRelativeChild extends EvalPropertyRelativeBase {
     public self $selfValue;
     public parent $parentValue;
 }
-class EvalPropertyReadonlyAddBase {
-    public int $count = 0;
+class EvalPropertyReadonlyPreserveBase {
+    public public(set) readonly int $count;
 }
-class EvalPropertyReadonlyAddChild extends EvalPropertyReadonlyAddBase {
+class EvalPropertyReadonlyPreserveChild extends EvalPropertyReadonlyPreserveBase {
     public public(set) readonly int $count;
     public function __construct() { $this->count = 7; }
 }
 class EvalPropertyReadonlyWidenBase {
-    protected int $count = 0;
+    protected readonly int $count;
     public function count() { return $this->count; }
 }
 class EvalPropertyReadonlyWidenChild extends EvalPropertyReadonlyWidenBase {
@@ -309,7 +327,7 @@ class EvalPropertyReadonlyWidenChild extends EvalPropertyReadonlyWidenBase {
 }
 $box = new EvalPropertyRedeclareChild();
 $box->value = "ok";
-$readonly = new EvalPropertyReadonlyAddChild();
+$readonly = new EvalPropertyReadonlyPreserveChild();
 $widened = new EvalPropertyReadonlyWidenChild();
 return $box->value . ":" . $readonly->count . ":" . $widened->count . ":" . $widened->count();"#,
     )

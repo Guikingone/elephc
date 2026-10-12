@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Setter narrowing reports the normalized inherited setter contract, matching PHP.
+#[test]
+fn test_asymmetric_fifth_review_setter_diagnostics() {
+    for (parent, child, message) in [
+        ("public int $x;", "public protected(set) int $x;", "omitted"),
+        ("public public(set) int $x;", "public protected(set) int $x;", "omitted"),
+        ("protected int $x;", "public private(set) int $x;", "omitted"),
+        ("public protected(set) int $x;", "public private(set) int $x;", "protected(set)"),
+        ("public readonly int $x;", "public private(set) readonly int $x;", "protected(set)"),
+    ] {
+        let source = format!("<?php class Base {{ {parent} }} class Child extends Base {{ {child} }}");
+        let suffix = if message == "omitted" { "" } else { " or weaker" };
+        expect_error(&source, &format!("Set access level of Child::$x must be {message} (as in class Base){suffix}"));
+    }
+}
+
+/// Adding readonly is rejected before its implicit setter could hide the real diagnostic.
+#[test]
+fn test_asymmetric_fifth_review_cannot_add_readonly() {
+    for (parent, child) in [
+        ("public int $x;", "public readonly int $x;"),
+        ("protected int $x;", "protected readonly int $x;"),
+        ("public int $x;", "public public(set) readonly int $x;"),
+        ("public int $x;", "public function __construct(public public(set) readonly int $x) {}"),
+    ] {
+        expect_error(&format!("<?php class Base {{ {parent} }} class Child extends Base {{ {child} }}"),
+            "Cannot redeclare non-readonly property Base::$x as readonly Child::$x");
+    }
+    expect_no_error("<?php class Base { private int $x; } class Child extends Base { public readonly int $x; }");
+}
+
 /// An omitted setter on a public readonly declaration is implicitly protected.
 #[test]
 fn test_asymmetric_review_readonly_override_effective_set_visibility() {
@@ -30,12 +61,8 @@ fn test_asymmetric_review_virtual_getter_can_gain_restricted_setter() {
 /// Implicit readonly protected(set) cannot narrow an inherited explicit public setter.
 #[test]
 fn test_asymmetric_review_readonly_omitted_setter_cannot_narrow_public() {
-    for source in [
-        "<?php class Base { public public(set) readonly int $x; } class Child extends Base { public readonly int $x; }",
-        "<?php class Base { public int $x; } class Child extends Base { public readonly int $x; }",
-    ] {
-        expect_error(source, "Cannot reduce set visibility when overriding property: Child::$x");
-    }
+    expect_error("<?php class Base { public public(set) readonly int $x; } class Child extends Base { public readonly int $x; }",
+        "Set access level of Child::$x must be omitted (as in class Base)");
 }
 
 /// A restricted private setter makes a publicly readable property implicitly final.
@@ -55,12 +82,12 @@ fn test_asymmetric_review_private_setter_property_cannot_be_overridden() {
 /// A property override cannot narrow inherited write visibility while retaining public reads.
 #[test]
 fn test_error_asymmetric_property_override_reduces_set_visibility() {
-    for source in [
-        "<?php class Base { public int $x = 0; } class Child extends Base { public protected(set) int $x = 0; }",
-        "<?php class Base { public protected(set) int $x = 0; } class Child extends Base { public private(set) int $x = 0; }",
-        "<?php class Base { public public(set) readonly int $x; } class Child extends Base { public protected(set) readonly int $x; }",
+    for (source, message) in [
+        ("<?php class Base { public int $x = 0; } class Child extends Base { public protected(set) int $x = 0; }", "omitted (as in class Base)"),
+        ("<?php class Base { public protected(set) int $x = 0; } class Child extends Base { public private(set) int $x = 0; }", "protected(set) (as in class Base) or weaker"),
+        ("<?php class Base { public public(set) readonly int $x; } class Child extends Base { public protected(set) readonly int $x; }", "omitted (as in class Base)"),
     ] {
-        expect_error(source, "Cannot reduce set visibility when overriding property: Child::$x");
+        expect_error(source, &format!("Set access level of Child::$x must be {message}"));
     }
     check_source("<?php class Base { public protected(set) int $x = 0; } class Child extends Base { public int $x = 0; }").unwrap();
 }
@@ -913,7 +940,7 @@ fn test_error_property_redeclaration_removes_readonly() {
     // child property cannot remove the readonly modifier from the parent.
     expect_error(
         "<?php class Base { public readonly int $value; public function __construct() { $this->value = 1; } } class Child extends Base { public int $value = 5; }",
-        "Cannot remove readonly modifier when redeclaring property: Child::$value",
+        "Cannot redeclare readonly property Base::$value as non-readonly Child::$value",
     );
 }
 
