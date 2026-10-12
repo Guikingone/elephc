@@ -167,7 +167,7 @@ pub(super) fn apply(tokens: Vec<Token>) -> Vec<Token> {
     let mut edits: Vec<(usize, usize, Vec<Token>)> = Vec::new();
     let mut scopes: Vec<(usize, usize, Vec<String>)> = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
-        if !matches!(token.kind(), TokenKind::Ident(name) if ["class", "interface", "trait"].contains(&name.as_str())) { continue; }
+        if !matches!(token.kind(), TokenKind::Ident(name) if ["class", "interface", "trait"].iter().any(|keyword| name.eq_ignore_ascii_case(keyword))) { continue; }
         let header = index + 2;
         if !matches!(tokens.get(header).map(Token::kind), Some(TokenKind::Less)) { continue; }
         let Some(body) = (header..tokens.len()).find(|index| matches!(tokens[*index].kind(), TokenKind::LBrace)) else { continue; };

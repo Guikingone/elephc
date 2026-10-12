@@ -66,9 +66,7 @@ fn eval_local_offset_write(
                 if tag == Some(EVAL_TAG_STRING) {
                     let replacement = eval_string_offset_write(current, index, value, context, values)?;
                     operands.push(replacement);
-                    if let Some(declared) = scope.local_type(name).cloned() {
-                        validate_generic_local(&declared, name, replacement, context, values)?;
-                    }
+                    validate_generic_local_contracts(scope, name, replacement, context, values)?;
                     return write_back_owned_variable_ref_target(scope, name, replacement, context, values);
                 }
             }
@@ -81,13 +79,13 @@ fn eval_local_offset_write(
                 array
             }
         };
-        let declared = scope.local_type(name).cloned();
+        let declared = generic_local_contracts(scope, name, context);
         let replacement = if let Some(index) = index {
             let index = match normalized_array_string_index(index, values)? {
                 Some(normalized) => { operands.push(normalized); normalized }
                 None => index,
             };
-            validate_generic_local_element(declared.as_ref(), array, index, value, context, values)?;
+            for ty in &declared { validate_generic_local_element(Some(ty), array, index, value, context, values)?; }
             let replacement = eval_array_set_target_for_index(array, index, values)?;
             if replacement != array {
                 operands.push(replacement);
@@ -97,7 +95,7 @@ fn eval_local_offset_write(
             values.array_set(replacement, index, value)?;
             replacement
         } else {
-            eval_array_append_owned_value_with_type(array, value, declared.as_ref(), context, values)?
+            eval_array_append_owned_value_with_type(array, value, &declared, context, values)?
         };
         if visible_scope_cell(context, scope, name) == Some(replacement) { return Ok(()); }
         write_back_owned_variable_ref_target(scope, name, replacement, context, values)

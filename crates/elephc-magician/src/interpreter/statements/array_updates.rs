@@ -357,7 +357,7 @@ pub(super) fn eval_array_element_reference_write(
             let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
             write_back_owned_variable_ref_target(scope, &name, value, context, values)
         }
-        EvalReferenceTarget::Cell { cell } if values.reference_is_shared(cell)? => {
+        EvalReferenceTarget::Cell { cell } if !context.local_reference_types(cell).is_empty() || values.reference_is_shared(cell)? => {
             write_back_method_ref_target(&target, value, context, values)
         }
         EvalReferenceTarget::Cell { .. } => {
@@ -522,6 +522,9 @@ pub(super) fn eval_static_property_array_set_result(
     };
     let array = eval_array_set_target_for_index(array, index, values)?;
     let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
+    for declared in context.local_reference_types(array) {
+        validate_generic_local_element(Some(&declared), array, index, value, context, values)?;
+    }
     let array = values.array_set(array, index, value)?;
     eval_static_property_set_result(class_name, property, array, context, values)
 }

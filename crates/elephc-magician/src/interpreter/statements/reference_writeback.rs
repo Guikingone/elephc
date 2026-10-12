@@ -72,6 +72,11 @@ pub(in crate::interpreter) fn bind_method_scope_args(
                     eval_release_value(context, values, old)?;
                 }
             }
+            if let Some(target) = bound_arg.ref_target.as_ref() {
+                if let Some(reference) = method_scope.visible_cell(name).filter(|_| values.supports_persistent_references()) {
+                    context.bind_local_reference_types(reference, &generic_reference_contracts(target, context));
+                }
+            }
         } else {
             let value = copy_scope_value(bound_arg.value, context, values)?;
             method_scope.set(name.clone(), value, ScopeCellOwnership::Owned);
@@ -273,13 +278,7 @@ pub(super) fn write_back_owned_variable_ref_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let retained = values.retain(value)?;
-    let replaced = match set_owned_scope_cell(context, scope, name.to_string(), retained, values) {
-        Ok(replaced) => replaced,
-        Err(status) => {
-            let _ = eval_release_value(context, values, retained);
-            return Err(status);
-        }
-    };
+    let replaced = set_owned_scope_cell(context, scope, name.to_string(), retained, values)?;
     let mut result = Ok(());
     for replaced in replaced {
         let released = eval_release_value(context, values, replaced);
@@ -361,6 +360,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             values,
         ),
         EvalReferenceTarget::Cell { cell } => {
+            for declared in context.local_reference_types(*cell) { validate_generic_local(&declared, "reference", value, context, values)?; }
             if *cell != value && values.is_reference(*cell)? {
                 let previous = values.reference_replace(*cell, value)?;
                 eval_release_value(context, values, previous)?;
@@ -483,10 +483,15 @@ pub(super) fn write_back_method_array_element_ref_target(
     array_name: &str,
     index: RuntimeCellHandle,
     value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let mut ownership = ScopeCellOwnership::Owned;
+    if let Some(current) = visible_scope_cell(context, scope, array_name) {
+        for declared in generic_local_contracts(scope, array_name, context) {
+            validate_generic_local_element(Some(&declared), current, index, value, context, values)?;
+        }
+    }
     let array = if let Some(existing) =
         scope_entry(context, scope, array_name).filter(|entry| entry.flags().is_visible())
     {

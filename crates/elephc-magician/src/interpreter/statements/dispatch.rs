@@ -217,20 +217,26 @@ pub(in crate::interpreter) fn execute_stmt(
             let value = eval_owned_expr(value, context, scope, values)?;
             let checked = validate_generic_local(declared, name, value, context, values);
             if let Err(error) = checked { let _ = eval_release_value(context, values, value); return Err(error); }
+            let previous = scope.local_type(name).cloned();
             scope.declare_local_type(name.clone(), declared.clone());
-            for replaced in set_owned_scope_cell(context, scope, name.clone(), value, values)? {
+            let replaced = match set_owned_scope_cell(context, scope, name.clone(), value, values) {
+                Ok(replaced) => replaced,
+                Err(status) => {
+                    if let Some(previous) = previous { scope.declare_local_type(name.clone(), previous); }
+                    else { scope.clear_local_type(name); }
+                    return Err(status);
+                }
+            };
+            for replaced in replaced {
                 eval_release_value(context, values, replaced)?;
+            }
+            if let Some(cell) = visible_scope_cell(context, scope, name) {
+                if values.is_reference(cell)? { context.bind_local_reference_types(cell, &[declared.clone()]); }
             }
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_owned_expr(value, context, scope, values)?;
-            if let Some(declared) = scope.local_type(name).cloned() {
-                if let Err(error) = validate_generic_local(&declared, name, value, context, values) {
-                    let _ = eval_release_value(context, values, value);
-                    return Err(error);
-                }
-            }
             for replaced in set_owned_scope_cell(
                 context,
                 scope,

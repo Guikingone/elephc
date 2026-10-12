@@ -119,6 +119,11 @@ Missing or conflicting arguments, violated bounds, invalid variance declarations
 specialized argument/return contracts raise catchable `TypeError` values. Native generic syntax
 is rejected before execution under `--strict-php`; supported PHPDoc annotations work in both
 modes. Typed local declarations also retain their substituted contracts during assignment.
+References share those contracts: writes through aliases, reference parameters, closure captures,
+and references returned inside arrays must satisfy every typed alias. Independent value copies
+remain unconstrained by the original local's declaration. Compatible child return types project
+their generic arguments through inherited class and interface contracts. Trait variance checks
+use the effective method visibility after trait aliases and overrides.
 Nullable and union array locals validate writes against an array arm that accepts their existing
 contents. An indexed `array<T>` requires integer keys and rejects associative values; numeric
 string keys such as `'0'`, floats, and booleans use their normalized integer type for write

@@ -14,6 +14,7 @@ use super::super::*;
 fn run(fragments: &[&str]) -> String {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
+    context.set_global_scope(&mut scope);
     let mut values = FakeOps::default();
     for source in fragments {
         let program = parse_fragment(source.as_bytes()).expect("generic syntax parses");
@@ -22,6 +23,198 @@ fn run(fragments: &[&str]) -> String {
         values.release(result).expect("release eval result");
     }
     values.output
+}
+
+/// Aliases and reference parameters must enforce the original typed local before mutation.
+#[test]
+fn generics_review_reference_local_contracts() {
+    assert_eq!(run(&[r#"
+array<int> $a = [1]; $b =& $a;
+try { $b[0] = 'bad'; } catch (TypeError $e) { echo 'index|'; }
+try { $b[] = 'bad'; } catch (TypeError $e) { echo 'append|'; }
+try { $b = ['bad']; } catch (TypeError $e) { echo 'replace|'; }
+function change(&$v) { $v[0] = 'bad'; }
+try { change($b); } catch (TypeError $e) { echo 'call|'; }
+function element(&$v) { $v = 'bad'; }
+$key = '0';
+try { element($b[$key]); } catch (TypeError $e) { echo 'element|'; }
+echo $a[0], '|', count($a);
+"#]), "index|append|replace|call|element|1|1");
+}
+
+/// Interface returns can use a concrete child with the same inherited generic arguments.
+#[test]
+fn generics_review_inherited_signature_returns() {
+    assert_eq!(run(&[r#"
+class Box<T> {} class Child<T> extends Box<T> {}
+$parent = new Box<int>(); $child = new Child<int>();
+interface Factory { public function make(): Box<int>; }
+class Maker implements Factory { public function make(): Child<int> { return new Child<int>(); } }
+echo get_class((new Maker())->make());
+"#]), "Child<int>");
+}
+
+/// A generic trait cannot introduce a consumer into a covariant class surface.
+#[test]
+fn generics_review_trait_variance() {
+    assert_eq!(run(&[r#"
+trait Mutator<T> { public function put(T $v): void {} }
+try { class Box<out T> { use Mutator<T>; } } catch (TypeError $e) { echo 'variance'; }
+"#]), "variance");
+}
+
+/// Trait aliases and overrides determine the effective public variance surface.
+#[test]
+fn generics_review_trait_variance_uses_effective_visibility() {
+    assert_eq!(run(&[r#"
+trait Put<T> { public function put(T $value): void {} }
+trait Hidden<T> { private function put(T $value): void {} }
+class HiddenBox<out T> { use Put<T> { put as private; } }
+class OverrideBox<out T> { use Put<T>; public function put(int $value): void {} }
+try { class Exposed<out T> { use Hidden<T> { put as public; } } } catch (TypeError $e) { echo 'exposed'; }
+"#]), "exposed");
+}
+
+/// Class keyword casing must retain type-parameter evidence from constructor annotations.
+#[test]
+fn generics_review_docblock_keyword_case() {
+    assert_eq!(run(&[r#"
+CLASS Box<T> {
+    /** @param T $v */ public function __construct(public $v) {}
+    /** @return T */ public function get() { return $this->v; }
+}
+
+$box = new Box(1); echo get_class($box), '|', $box->get();
+"#]), "Box<int>|1");
+}
+
+/// Shared storage retains contracts through chained aliases, copies, captures, and escaped references.
+#[test]
+fn generics_review_reference_contract_lifetimes() {
+    assert_eq!(run(&[r#"
+array<int> $a = [1]; $b =& $a; $c =& $b; $copy = $a;
+$copy[0] = 'copy'; $c[0] = 2; unset($a);
+try { $c[] = 'bad'; } catch (TypeError $e) { echo 'chain|'; }
+$f = function() use (&$b) { $b = ['bad']; };
+try { $f(); } catch (TypeError $e) { echo 'capture|'; }
+function escaped() { array<int> $local = [3]; return [&$local]; }
+$refs = escaped();
+try { $refs[0] = ['bad']; } catch (TypeError $e) { echo 'escape|'; }
+$refs[0] = [4]; echo $b[0], '|', $copy[0], '|', $refs[0][0];
+"#]), "chain|capture|escape|2|copy|4");
+}
+
+/// Every typed alias contributes its own contract, and by-value copies remain independent.
+#[test]
+fn generics_review_reference_contract_intersection() {
+    assert_eq!(run(&[r#"
+array<int>|string $wide = [1]; array<int> $narrow = [2]; $narrow =& $wide;
+try { $wide = 'bad'; } catch (TypeError $e) { echo 'intersection|'; }
+$copy = $wide; $copy = 'ok';
+try { array_push($wide, 'bad'); } catch (TypeError $e) { echo 'builtin|'; }
+$wide[] = 3; echo $wide[0], '|', $narrow[1], '|', $copy;
+"#]), "intersection|builtin|1|3|ok");
+}
+
+/// Reference rebinding validates the new source before changing the typed destination.
+#[test]
+fn generics_review_reference_rebinding_rejects_invalid_sources() {
+    assert_eq!(run(&[r#"
+array<int> $a = [1]; $b = ['bad'];
+try { $a =& $b; } catch (TypeError $e) { echo 'value|'; }
+try { $a =& $missing; } catch (TypeError $e) { echo 'undefined|'; }
+echo $a[0]; $b[0] = 'independent'; echo '|', $b[0];
+"#]), "value|undefined|1|independent");
+}
+
+/// Rejected redeclarations leave both existing and newly introduced alias contracts unchanged.
+#[test]
+fn generics_review_failed_declaration_preserves_reference_contracts() {
+    assert_eq!(run(&[r#"
+array<int> $a = [1]; $b =& $a;
+try { array<string> $a = ['bad']; } catch (TypeError $e) { echo 'declared|'; }
+try { array<string> $b = ['bad']; } catch (TypeError $e) { echo 'alias|'; }
+$a = [2]; $b[] = 3; echo $a[0], '|', $b[1];
+"#]), "declared|alias|2|3");
+}
+
+/// A typed local that aliases a global contributes its contract to that shared storage.
+#[test]
+fn generics_review_global_reference_contracts() {
+    assert_eq!(run(&[r#"
+$global = [1];
+function bind_global() { global $global; array<int> $local = [2]; $local =& $global; }
+bind_global();
+try { $global[] = 'bad'; } catch (TypeError $e) { echo 'global|'; }
+echo $global[0], '|', count($global);
+"#]), "global|1|1");
+}
+
+/// Static aliases preserve persistent reference storage through valid and rejected assignments.
+#[test]
+fn generics_review_static_reference_contracts() {
+    assert_eq!(run(&[r#"
+class Holder { public static $value = null; }
+function bind_static() { array<int> $local = [3]; Holder::$value =& $local; }
+bind_static();
+try { Holder::$value = ['bad']; } catch (TypeError $e) { echo 'static|'; }
+try { Holder::$value[0] = 'bad'; } catch (TypeError $e) { echo 'index|'; }
+echo Holder::$value[0], '|'; Holder::$value = [4]; echo Holder::$value[0];
+"#]), "static|index|3|4");
+}
+
+/// Substituted ancestors support cold-cache covariant returns while incompatible slots stay rejected.
+#[test]
+fn generics_review_inherited_variance_returns() {
+    assert_eq!(run(&[r#"
+class Animal {} class Dog extends Animal {}
+class Box<out T> {} class Child<T> extends Box<T> {}
+interface Factory { public function make(): Box<Animal>; }
+class Maker implements Factory { public function make(): Child<Dog> { return new Child<Dog>(); } }
+echo get_class((new Maker())->make());
+"#]), "Child<Dog>");
+    for returned in ["Child<string>", "Child<float>"] {
+        let source = format!("class Box<T> {{}} class Child<T> extends Box<T> {{}} interface Factory {{ public function make(): Box<int>; }} class Maker implements Factory {{ public function make(): {returned} {{ return new {returned}(); }} }}");
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values), Err(EvalStatus::RuntimeFatal), "{returned}");
+    }
+}
+
+/// Nested traits enforce both polarities and preserve constructor/private exclusions and method shadowing.
+#[test]
+fn generics_review_nested_trait_variance() {
+    assert_eq!(run(&[r#"
+trait Put<T> { public function put(T $value): void {} }
+trait Nested<U> { use Put<U>; }
+trait Get<T> { public function get(): T { throw new Exception('unused'); } }
+trait State<T> { public T $value; }
+trait Hidden<T> { private function put(T $value): void {} public function id<T>(T $value): T { return $value; } }
+try { class Bad<out V> { use Nested<V>; } } catch (TypeError $e) { echo 'nested|'; }
+try { class BadGet<in V> { use Get<V>; } } catch (TypeError $e) { echo 'return|'; }
+try { class BadState<out V> { use State<V>; } } catch (TypeError $e) { echo 'property|'; }
+class Good<out V> { use Hidden<V>; public function __construct(V $value) {} }
+echo (new Good<int>(1))->id('ok');
+"#]), "nested|return|property|ok");
+}
+
+/// Mixed-case interfaces and traits retain annotated member types during specialization.
+#[test]
+fn generics_review_all_classlike_keyword_cases() {
+    assert_eq!(run(&[r#"
+InTeRfAcE Read<T> { /** @return T */ public function get(); }
+TrAiT ReadValue<T> { /** @return T */ public function get() { return $this->value; } }
+cLaSs Box<T> implements Read<T> {
+    use ReadValue<T>;
+    /** @var T */ public $value;
+    /** @param T $value */ public function __construct($value) { $this->value = $value; }
+}
+$box = new Box(5); echo $box->get();
+$box->value = 'bad';
+try { $box->get(); } catch (TypeError $e) { echo '|return'; }
+"#]), "5|return");
 }
 
 /// Functions specialize independently for scalars, nested arrays, names, and spreads.

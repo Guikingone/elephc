@@ -23,7 +23,7 @@ Keep source locations and namespace imports when retaining templates. Script-cac
 
 `elephc-generics` provides dependency-neutral type terms, binding conflicts, written arguments, dependent defaults, and depth limits. AOT adapts its existing type expressions through `src/generics/shared.rs`; Magician infers corresponding terms from runtime values.
 
-The parser retains declaration prototypes and tokens marked by lexical type-parameter identity. Replay preserves imports, namespaces, literal bytes, attributes, source lines, and constructor-local shadowing. Native syntax and PHPDoc provenance remain distinct for strict mode. File-cache format 14 covers the combined generic metadata and source-spelling semantics from main and invalidates older PHPDoc inheritance rewrites.
+The parser retains declaration prototypes and tokens marked by lexical type-parameter identity. Replay preserves imports, namespaces, literal bytes, attributes, source lines, and constructor-local shadowing. Native syntax and PHPDoc provenance remain distinct for strict mode. File-cache format 15 covers the combined generic metadata and source-spelling semantics from main and invalidates older PHPDoc inheritance rewrites and member annotations discarded after case-insensitive native keywords.
 
 Concrete functions, class-like declarations, and methods use ordinary EvalIR execution. Function and class templates occupy separate PHP namespaces, and normal declarations reject conflicting templates. Persistent-context entry points, first-class callables, callback aliases, and call argument arrays resolve templates before normal binding. `interpreter/context_calls.rs` keeps the interpreter dispatcher small.
 
@@ -89,3 +89,19 @@ Validation passes: 57 generic parser/interpreter tests, 4 array-reference tests,
 Specialization replay now borrows a mutable parser, as required by main's REPL failure cursor. Imported first-class generic callables resolve their base name before retaining written arguments, matching direct generic calls and preserving main's diagnostic spelling. The cache guard fingerprints the merged schema as `2604479976000790958`; format 14 prevents either old format-13 layout from being reused.
 
 Validation passes: a warning-free `cargo build`, 59 generic parser/interpreter tests, 230 parser tests, 150 cache tests (one unrelated ignored), and 93 focused callable, reference, ownership, and recovery tests. All 27 native regressions pass: 21 generic eval tests, 3 source-spelling/undefined-function tests, and 3 persistent REPL tests. The new parser regression failed before the import correction. Range comparison preserves all three latest review-fix commits unchanged; Rust documentation checks and `git diff --check` pass.
+
+## Fifth PR 1819 review
+
+- [x] Preserve typed-local contracts through aliases and by-reference writes.
+- [x] Accept compatible inherited generic signature returns without widening invariant slots.
+- [x] Validate public members supplied by generic traits, including nested trait uses.
+- [x] Retain scoped PHPDoc annotations for case-insensitive class-like keywords.
+- [x] Reproduce all four findings on `b5f94385a6`, validate native storage and focused regressions, and prepare the corrections for publication.
+
+Greptile reports four P1 findings on the rebased head. Reference contracts must follow shared storage rather than one variable name, and all write paths must validate before mutation. Signature compatibility must inspect concrete ancestors. Variance verification must inspect trait members after inherited substitutions. Parser semantic changes require a fresh file-cache version.
+
+All four primary interpreter regressions fail on `b5f94385a6` and pass after correction. Shared reference allocation metadata now protects aliases, parameters, captures, globals, property aliases, escaped array references, and whole-value writeback without retaining cells. Allocation retirement prevents stale type constraints after address reuse. Failed typed declarations restore the prior local contract; instance and static property writes preserve shared reference storage and validate before mutation. Signature checks project class/interface ancestors; trait checks reuse method composition for aliases, overrides, and effective visibility, shielding method-local slots. File-cache format 15 invalidates dropped scoped PHPDoc annotations.
+
+Focused validation passes: 564 parser, generic, cache, reference, trait, and ownership tests, with one existing ignored cache case, plus a warning-free build and Rust/diff hygiene. Native alias and escaped array-reference heap probes are clean. Ordinary closure captures independently retain runtime cells after context teardown; journal task `90e1d964` records that separate issue, and capture behavior checks remain separate from clean-heap assertions.
+
+Native validation passes across focused runs: 31 generic eval cases, 3 source-spelling/undefined-function cases, 1 persistent REPL case, and 2 existing reference-lifetime regressions. The final 9-case run covers failed typed declarations, static/instance property storage, globals, native writeback, ordinary call ownership, array contracts, and property/container reference lifetimes. Heap assertions pass where enabled. Literal by-reference argument keys independently retain temporary cells, tracked in journal task `4136c2d0`; the normalization fixture uses a named local key owner. Static/capture behavior fixtures remain separate from clean-heap assertions because ordinary teardown already retains their owners.

@@ -9,6 +9,26 @@
 
 use super::support::*;
 
+/// Every class-like keyword spelling retains scoped PHPDoc member types in its prototype.
+#[test]
+fn generics_docblock_classlike_keywords_are_case_insensitive() {
+    for keyword in ["CLASS", "cLaSs", "TRAIT", "TrAiT", "INTERFACE", "InTeRfAcE"] {
+        let body = if keyword.eq_ignore_ascii_case("interface") {
+            "/** @return T */ public function get();"
+        } else { "/** @var T */ public $value; /** @return T */ public function get() { return $this->value; }" };
+        let program = parse_fragment(format!("{keyword} Box<T> {{ {body} }}").as_bytes()).unwrap();
+        let EvalStmt::GenericDecl(template) = &program.statements()[0] else { panic!("expected generic prototype"); };
+        let (ret, property) = match template.prototype.as_ref() {
+            EvalStmt::ClassDecl(class) => (class.methods()[0].return_type(), class.properties()[0].property_type()),
+            EvalStmt::TraitDecl(trait_decl) => (trait_decl.methods()[0].return_type(), trait_decl.properties()[0].property_type()),
+            EvalStmt::InterfaceDecl(interface) => (interface.methods()[0].return_type(), None),
+            _ => panic!("expected class-like prototype"),
+        };
+        assert_eq!(crate::eval_ir::generic_type(ret.expect("annotated return")).to_string(), "T", "{keyword}");
+        if !keyword.eq_ignore_ascii_case("interface") { assert_eq!(crate::eval_ir::generic_type(property.expect("annotated property")).to_string(), "T", "{keyword}"); }
+    }
+}
+
 /// Imported generic calls and first-class callables retain resolved spelling and written slots.
 #[test]
 fn generics_function_names_preserve_imports_and_source_spelling() {

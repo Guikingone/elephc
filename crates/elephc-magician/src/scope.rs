@@ -171,6 +171,24 @@ impl ElephcEvalScope {
         self.local_types.get(name)
     }
 
+    /// Removes a tentative declaration whose initializer could not enter shared storage.
+    pub(crate) fn clear_local_type(&mut self, name: &str) {
+        self.local_types.remove(name);
+    }
+
+    /// Collects explicit contracts from every visible name sharing this PHP reference group.
+    pub(crate) fn local_type_contracts(&self, name: &str) -> Vec<crate::eval_ir::EvalParameterType> {
+        let mut types = self.local_type(name).cloned().into_iter().collect::<Vec<_>>();
+        if let Some(entry) = self.entry(name).filter(|entry| entry.flags().is_visible() && entry.flags().by_ref) {
+            for (alias, alias_entry) in &self.entries {
+                if alias_entry.flags().is_visible() && alias_entry.flags().by_ref && alias_entry.cell() == entry.cell() {
+                    if let Some(ty) = self.local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
+                }
+            }
+        }
+        types
+    }
+
     /// Returns the current scope generation counter.
     pub const fn generation(&self) -> u64 {
         self.generation

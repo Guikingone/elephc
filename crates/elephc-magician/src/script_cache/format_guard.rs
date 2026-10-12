@@ -86,6 +86,8 @@ mod tests {
     /// also retain source spelling without changing the serialized shape.
     /// BUMPED TO 14: retained generic templates, structural types, and typed locals are serialized
     /// alongside main's source-spelling semantics. The combined layout has a fresh cache identity.
+    /// BUMPED TO 15 with the same fingerprint: case-insensitive native class-like scopes
+    /// now retain member PHPDoc types that earlier parsers silently omitted.
     const RECORDED_FINGERPRINT: u64 = 2604479976000790958;
 
     /// Returns a stable fingerprint of every source the stored format depends on.

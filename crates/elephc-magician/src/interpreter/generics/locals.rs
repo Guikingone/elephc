@@ -9,6 +9,39 @@
 
 use super::*;
 
+/// Collects contracts from a local alias group and its persistent shared storage.
+pub(in crate::interpreter) fn generic_local_contracts(scope: &ElephcEvalScope, name: &str, context: &ElephcEvalContext) -> Vec<EvalParameterType> {
+    let mut types = scope.local_type_contracts(name);
+    if let Some(cell) = visible_scope_cell(context, scope, name) {
+        for ty in context.local_reference_types(cell) {
+            if !types.contains(&ty) { types.push(ty); }
+        }
+    }
+    if let Some(global_name) = scope.global_alias_target(name) {
+        if let Some(global) = context.global_scope_ptr().filter(|global| *global != scope as *const _ as *mut _) {
+            if let Some(global) = unsafe { global.as_ref() } {
+                for ty in global.local_type_contracts(global_name) { if !types.contains(&ty) { types.push(ty); } }
+            }
+        }
+    }
+    types
+}
+
+/// Obtains contracts for a whole variable reference before binding an untyped parameter or capture.
+pub(in crate::interpreter) fn generic_reference_contracts(target: &EvalReferenceTarget, context: &ElephcEvalContext) -> Vec<EvalParameterType> {
+    match target {
+        EvalReferenceTarget::Variable { scope, name } => unsafe { scope.as_ref() }.map(|scope| generic_local_contracts(scope, name, context)).unwrap_or_default(),
+        EvalReferenceTarget::Cell { cell } => context.local_reference_types(*cell),
+        _ => Vec::new(),
+    }
+}
+
+/// Enforces every contract on the destination before a whole-value replacement.
+pub(in crate::interpreter) fn validate_generic_local_contracts(scope: &ElephcEvalScope, name: &str, value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
+    for declared in generic_local_contracts(scope, name, context) { validate_generic_local(&declared, name, value, context, values)?; }
+    Ok(())
+}
+
 /// Checks an initialized or reassigned typed local without coercing its stored value.
 pub(in crate::interpreter) fn validate_generic_local(declared: &EvalParameterType, name: &str, value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
     if generic_value_accepts(&generic_type(declared), value, context, values)? { return Ok(()); }
@@ -23,6 +56,8 @@ pub(in crate::interpreter) fn validate_generic_local_element(declared: Option<&E
     let normalized = match values.type_tag(index)? {
         EVAL_TAG_FLOAT | EVAL_TAG_BOOL => Some(values.cast_int(index)?),
         EVAL_TAG_NULL => Some(values.string("")?),
+        EVAL_TAG_STRING => eval_numeric_string_array_key(&values.string_bytes(index)?)
+            .map(|index| values.int(index)).transpose()?,
         _ => None,
     };
     let accepted = array_write_accepts(&ty, array, normalized.unwrap_or(index), value, context, values);

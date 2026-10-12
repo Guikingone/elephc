@@ -499,3 +499,192 @@ try { new NativeChild<int>(4); } catch (Exception $e) { echo $e->getMessage(); }
     assert_eq!(output.stdout, "body|escaped|Escaped<int>|2|ordinary|native");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Typed local aliases reject element, append, replacement, and parameter writes before mutation.
+#[test]
+fn test_eval_generics_review_reference_local_contracts() {
+    let source = dynamic_eval(r#"
+array<int> $a = [1]; $b =& $a;
+try { $b[0] = 'bad'; } catch (TypeError $e) { echo 'index|'; }
+try { $b[] = 'bad'; } catch (TypeError $e) { echo 'append|'; }
+try { $b = ['bad']; } catch (TypeError $e) { echo 'replace|'; }
+function change(&$v) { $v[0] = 'bad'; }
+try { change($b); } catch (TypeError $e) { echo 'call|'; }
+function element(&$v) { $v = 'bad'; }
+$key = '0';
+try { element($b[$key]); } catch (TypeError $e) { echo 'element|'; }
+echo $a[0], '|', count($a), '|';
+try { array<string> $a = ['bad']; } catch (TypeError $e) { echo 'declared|'; }
+try { array<string> $b = ['bad']; } catch (TypeError $e) { echo 'alias|'; }
+$a = [2]; $b[] = 3; echo $a[0], '|', $b[1];
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "index|append|replace|call|element|1|1|declared|alias|2|3");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Escaping storage keeps its type contract while copied arrays remain independent.
+#[test]
+fn test_eval_generics_review_reference_contract_lifetimes() {
+    let source = dynamic_eval(r#"
+array<int> $a = [1]; $b =& $a; $c =& $b; $copy = $a;
+$copy[0] = 'copy'; $c[0] = 2; unset($a);
+try { $c[] = 'bad'; } catch (TypeError $e) { echo 'chain|'; }
+function escaped() { array<int> $local = [3]; return [&$local]; }
+$refs = escaped();
+try { $refs[0] = ['bad']; } catch (TypeError $e) { echo 'escape|'; }
+$refs[0] = [4]; echo $b[0], '|', $copy[0], '|', $refs[0][0];
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "chain|escape|2|copy|4");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Multiple typed aliases constrain builtin writeback without constraining independent values.
+#[test]
+fn test_eval_generics_review_reference_contract_intersection() {
+    let source = dynamic_eval(r#"
+array<int>|string $wide = [1]; array<int> $narrow = [2]; $narrow =& $wide;
+try { $wide = 'bad'; } catch (TypeError $e) { echo 'intersection|'; }
+$copy = $wide; $copy = 'ok';
+try { array_push($wide, 'bad'); } catch (TypeError $e) { echo 'builtin|'; }
+$wide[] = 3; echo $wide[0], '|', $narrow[1], '|', $copy;
+$f = function() use (&$wide) { $wide = ['bad']; };
+try { $f(); } catch (TypeError $e) { echo '|capture'; }
+"#);
+    assert_eq!(compile_and_run(&source), "intersection|builtin|1|3|ok|capture");
+}
+
+/// Concrete child returns implement generic parent contracts with invariant or covariant slots.
+#[test]
+fn test_eval_generics_review_inherited_signature_returns() {
+    let source = dynamic_eval(r#"
+class Box<T> {} class Child<T> extends Box<T> {}
+$parent = new Box<int>(); $child = new Child<int>();
+interface Factory { public function make(): Box<int>; }
+class Maker implements Factory { public function make(): Child<int> { return new Child<int>(); } }
+echo get_class((new Maker())->make());
+class Animal {} class Dog extends Animal {}
+class Covariant<out T> {} class Sub<T> extends Covariant<T> {}
+interface Animals { public function make(): Covariant<Animal>; }
+class Dogs implements Animals { public function make(): Sub<Dog> { return new Sub<Dog>(); } }
+echo '|', get_class((new Dogs())->make());
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "Child<int>|Sub<Dog>");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Generic traits enforce variance through nested uses, mutable properties, and shadowed methods.
+#[test]
+fn test_eval_generics_review_trait_variance() {
+    let source = dynamic_eval(r#"
+trait Put<T> { public function put(T $value): void {} }
+trait Nested<U> { use Put<U>; }
+trait Get<T> { public function get(): T { throw new Exception('unused'); } }
+trait State<T> { public T $value; }
+trait Hidden<T> { private function put(T $value): void {} public function id<T>(T $value): T { return $value; } }
+try { class Bad<out V> { use Nested<V>; } } catch (TypeError $e) { echo 'nested|'; }
+try { class BadGet<in V> { use Get<V>; } } catch (TypeError $e) { echo 'return|'; }
+try { class BadState<out V> { use State<V>; } } catch (TypeError $e) { echo 'property|'; }
+class Good<out V> { use Hidden<V>; public function __construct(V $value) {} }
+class PrivateBox<out T> { use Put<T> { put as private; } }
+class OverrideBox<out T> { use Put<T>; public function put(int $value): void {} }
+try { class Exposed<out T> { use Hidden<T> { put as public; } } } catch (TypeError $e) { echo 'exposed|'; }
+echo (new Good<int>(1))->id('ok');
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "nested|return|property|exposed|ok");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Mixed-case native declarations retain PHPDoc constructor and inherited member annotations.
+#[test]
+fn test_eval_generics_review_docblock_keyword_case() {
+    let source = dynamic_eval(r#"
+InTeRfAcE Read<T> { /** @return T */ public function get(); }
+TrAiT ReadValue<T> { /** @return T */ public function get() { return $this->value; } }
+CLASS Box<T> implements Read<T> {
+    use ReadValue<T>;
+    /** @var T */ public $value;
+    /** @param T $value */ public function __construct($value) { $this->value = $value; }
+}
+$box = new Box(5); echo get_class($box), '|', $box->get();
+$box->value = 'bad';
+try { $box->get(); } catch (TypeError $e) { echo '|return'; }
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "Box<int>|5|return");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Native by-reference writeback preserves typed storage on rejection and releases staging owners.
+#[test]
+fn test_eval_generics_review_native_reference_writeback() {
+    let eval = dynamic_eval(r#"
+array<int> $a = [1]; $b =& $a;
+try { native_replace($b); } catch (TypeError $e) { echo 'native|'; }
+echo $a[0], '|', $b[0];
+"#);
+    let source = eval.replacen("<?php", "<?php\nfunction native_replace(array &$value): void { $value = ['bad']; }", 1);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "native|1|1");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// A property reference created in a function retains the local array contract after the frame exits.
+#[test]
+fn test_eval_generics_review_property_reference_escape() {
+    let source = dynamic_eval(r#"
+class Holder { public $value; }
+function escaped_property() {
+    array<int> $a = [3]; $holder = new Holder(); $holder->value =& $a; return $holder;
+}
+$holder = escaped_property();
+try { $holder->value = ['bad']; } catch (TypeError $e) { echo 'property|'; }
+try { $holder->value[0] = 'bad'; } catch (TypeError $e) { echo 'index|'; }
+try { $holder->value[] = 'bad'; } catch (TypeError $e) { echo 'append|'; }
+echo $holder->value[0], '|'; $holder->value = [4]; echo $holder->value[0];
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "property|index|append|3|4");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Contracts introduced through a global alias remain attached after the declaring frame exits.
+#[test]
+fn test_eval_generics_review_global_reference_contracts() {
+    let source = dynamic_eval(r#"
+$global = [1];
+function bind_global() { global $global; array<int> $local = [2]; $local =& $global; }
+bind_global();
+try { $global[] = 'bad'; } catch (TypeError $e) { echo 'global|'; }
+echo $global[0], '|', count($global);
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "global|1|1");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Static reference storage retains typed constraints across assignments and offset writes.
+#[test]
+fn test_eval_generics_review_static_reference_contracts() {
+    let source = dynamic_eval(r#"
+class Holder { public static $value = null; }
+function bind_static() { array<int> $local = [3]; Holder::$value =& $local; }
+bind_static();
+try { Holder::$value = ['bad']; } catch (TypeError $e) { echo 'static|'; }
+try { Holder::$value[0] = 'bad'; } catch (TypeError $e) { echo 'index|'; }
+try { Holder::$value[] = 'bad'; } catch (TypeError $e) { echo 'append|'; }
+echo Holder::$value[0], '|'; Holder::$value = [4]; echo Holder::$value[0];
+"#);
+    assert_eq!(compile_and_run(&source), "static|index|append|3|4");
+}

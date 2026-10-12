@@ -77,7 +77,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// BUMPED TO 14 for retained generic declarations, structural signatures, and typed locals,
 /// combined with source-spelling preservation from main and qualified PHPDoc inheritance.
 /// Both prior layouts must be refused.
-pub(crate) const FORMAT_VERSION: u32 = 14;
+/// BUMPED TO 15 because native class-like keyword casing now preserves member PHPDoc types.
+/// Stored declarations parsed with the earlier annotation rewrite must be refused.
+pub(crate) const FORMAT_VERSION: u32 = 15;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

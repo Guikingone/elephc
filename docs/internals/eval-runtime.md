@@ -275,6 +275,10 @@ Constructor inference omits null and empty arrays using concrete runtime tags, s
 native objects still contribute their class types.
 Class relation registration instantiates generic parents, interfaces, and traits before ordinary
 validation. A recursion guard rejects cyclic generic inheritance, and type growth is bounded.
+Signature compatibility projects concrete bindings through class and interface ancestors,
+including specializations that have not yet entered the runtime registry. Variance checks
+include public and protected trait members and nested trait uses, with method-local slots
+shielded from enclosing template substitutions.
 Class identities put class and constructor slots in a single argument list. Constructor slots
 remain part of the registry key; class-shaped inference and variance compare only class slots.
 Written lists extending beyond class slots bind the combined class/constructor parameters, so
@@ -290,14 +294,22 @@ first-class function callables may retain a template name until arguments determ
 Structural `EvalParameterTypeVariant::Generic` contracts validate boxed arrays and typed callbacks
 at existing argument and return boundaries. Indexed contracts reject associative storage. Typed
 local writes validate before mutation, including nullable and union array arms, normalized keys,
-and the existing contents of a selected union arm. Float and bool keys use a temporary integer
+and the existing contents of a selected union arm. Local reference groups collect every declared
+contract. Persistent wrappers carry those contracts in `context/local_types.rs`, so aliases,
+reference parameters, captures, and returned array references enforce the same constraints.
+The metadata borrows runtime storage and uses allocation retirement tokens to prevent contracts
+from following reused addresses. Rejected typed declarations restore the previous local contract,
+and property writes preserve shared wrappers while validating before mutation.
+Independent value copies retain their ordinary COW semantics.
+Float and bool keys use a temporary integer
 cell for contract validation; that cell is released on success and failure, while storage receives
 the original key so native normalization and diagnostics keep their existing operands. No new
 value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
 mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
-format 14 includes the retained templates, tokens, imports, structural types, and typed locals,
+format 15 includes the retained templates, tokens, imports, structural types, and typed locals,
 alongside preserved source spelling for direct and first-class function calls. It invalidates
-older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents.
+older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents and
+member annotations discarded after uppercase or mixed-case native class-like keywords.
 The format guard covers the combined serialized IR and its corresponding type sources.
 
 ## Parsing and cache

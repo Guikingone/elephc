@@ -555,7 +555,7 @@ pub(super) fn eval_trait_abstract_properties_are_compatible(
 }
 
 /// Appends trait methods unless the class provides a same-name method.
-pub(super) fn append_eval_trait_methods(
+pub(in crate::interpreter) fn append_eval_trait_methods(
     trait_decl: &EvalTrait,
     trait_adaptations: &[EvalTraitAdaptation],
     class_method_names: &std::collections::HashSet<String>,

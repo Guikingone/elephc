@@ -19,6 +19,7 @@ mod core;
 mod functions;
 mod generics;
 mod global_registry;
+mod local_types;
 mod native_defaults;
 mod native_function;
 mod native_metadata;
@@ -53,6 +54,7 @@ pub(crate) use global_registry::*;
 pub use native_defaults::*;
 pub use native_function::*;
 use normalization::*;
+use local_types::EvalLocalReferenceTypes;
 pub use reference_metadata::*;
 
 #[cfg(not(test))]
