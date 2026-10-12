@@ -66,6 +66,7 @@ mod probe_key;
 mod pipeline;
 mod progress;
 mod resolver;
+mod repl;
 mod runtime_cache;
 mod debug_info;
 mod source;
@@ -115,6 +116,7 @@ fn main_inner() {
         cli::print_mascotte();
     }
     match cli::parse_args(&args) {
+        cli::Command::Repl(command) => std::process::exit(repl::run(command)),
         cli::Command::Compile(mut config) => {
             apply_project_ini(&mut config);
             emit_ini_override_warnings(&config);
