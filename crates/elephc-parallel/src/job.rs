@@ -82,6 +82,8 @@ fn notify_completion() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *generation = generation.wrapping_add(1);
     signal.changed.notify_all();
+    #[cfg(unix)]
+    crate::completion_wake::notify_waiters();
 }
 
 /// Returns the process-wide terminal-transition generation for race-free group waiting.
@@ -720,6 +722,39 @@ mod tests {
         assert_eq!(output(id, 1), b"result");
         assert_eq!(elephc_parallel_job_release(id), 1);
         assert_eq!(elephc_parallel_job_phase(id), PARALLEL_JOB_ERROR);
+    }
+
+    /// Real terminal transitions wake each registered coordinator through the exported ABI.
+    #[cfg(unix)]
+    #[test]
+    fn completion_wake_terminal_transitions_notify_subscribers() {
+        use crate::completion_wake::*;
+        for phase in [PARALLEL_JOB_COMPLETED, PARALLEL_JOB_FAILED, PARALLEL_JOB_CANCELLED] {
+            let left = elephc_parallel_completion_wake_create();
+            let right = elephc_parallel_completion_wake_create();
+            assert_ne!(left, 0);
+            assert_ne!(right, 0);
+            let id = elephc_parallel_job_create(blob(b"input"));
+            assert_ne!(id, 0);
+            if phase == PARALLEL_JOB_CANCELLED {
+                assert_eq!(elephc_parallel_job_cancel(id), 1);
+            } else {
+                assert_eq!(elephc_parallel_job_mark_running(id), 1);
+                if phase == PARALLEL_JOB_COMPLETED {
+                    assert_eq!(elephc_parallel_job_complete(id, blob(b"result")), 1);
+                } else {
+                    assert_eq!(elephc_parallel_job_fail(id,
+                        failure_blob(PARALLEL_FAILURE_CONTEXT_UNAVAILABLE, b"failure")), 1);
+                }
+            }
+            assert_eq!(elephc_parallel_job_phase(id), phase);
+            assert!(elephc_parallel_completion_wake_fd(left) >= 0);
+            assert_eq!(elephc_parallel_completion_wake_drain(left), 1);
+            assert_eq!(elephc_parallel_completion_wake_drain(right), 1);
+            assert_eq!(elephc_parallel_job_release(id), 1);
+            assert_eq!(elephc_parallel_completion_wake_release(left), 1);
+            assert_eq!(elephc_parallel_completion_wake_release(right), 1);
+        }
     }
 
     /// Raw non-EPV payloads cannot become job inputs/results and remain caller-owned on rejection.

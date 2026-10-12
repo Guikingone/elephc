@@ -21,6 +21,8 @@ use elephc_parallel_contract::{
 use std::ffi::c_void;
 
 mod executor;
+#[cfg(unix)]
+mod completion_wake;
 mod failure;
 mod job;
 mod php_wire;
