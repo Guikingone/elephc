@@ -82,7 +82,7 @@ use metadata_control::*;
 use return_coercions::*;
 use static_property_helpers::*;
 
-pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};
+pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr, lower_throw_access_error_of_class};
 // Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
 // for `__unset` that the write path needs for `__set`.
 pub(crate) use instance_property_writes::{

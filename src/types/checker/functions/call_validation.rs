@@ -624,7 +624,7 @@ impl Checker {
     /// Compiler-injected classes carry `Span::dummy()` as their declaration span, which is the
     /// only marker distinguishing them from user declarations. An unknown name is treated as
     /// not user-declared so an unresolved receiver never silently gains coercive binding.
-    fn class_is_user_declared(&self, class_name: &str) -> bool {
+    pub(crate) fn class_is_user_declared(&self, class_name: &str) -> bool {
         self.classes
             .get(class_name)
             .is_some_and(|info| info.declaration_span != crate::span::Span::dummy())

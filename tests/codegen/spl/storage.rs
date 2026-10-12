@@ -542,3 +542,65 @@ var_dump(drop(['k' => 1, 'j' => 2], 'k'));
         )
     );
 }
+
+/// Verifies `natsort()` orders values in php's natural order, keeping keys, and answers true.
+#[test]
+fn test_array_object_natsort_orders_values_naturally() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+$ao = new ArrayObject(['boo10', 'boo1', 'boo2', 'boo22', 'BOO5']);
+var_dump($ao->natsort());
+foreach ($ao as $k => $v) { echo "$k=$v "; } echo "\n";
+$a2 = new ArrayObject(['a' => 'img12', 'b' => 'img2', 'c' => 'img1x']);
+$a2->natsort();
+foreach ($a2 as $k => $v) { echo "$k=$v "; } echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "4=BOO5 1=boo1 2=boo2 0=boo10 3=boo22 \n",
+            "c=img1x b=img2 a=img12 \n",
+        )
+    );
+}
+
+/// Verifies `natcasesort()` folds case before comparing, so mixed-case keys sort naturally.
+#[test]
+fn test_array_object_natcasesort_folds_case() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+$ao = new ArrayObject(['a' => 'boo10', 'b' => 'boo1', 'c' => 'boo2', 'd' => 'boo22', 'e' => 'BOO5']);
+var_dump($ao->natcasesort());
+foreach ($ao as $k => $v) { echo "$k=$v "; } echo "\n";
+"#,
+    );
+    assert_eq!(out, "bool(true)\nb=boo1 c=boo2 e=BOO5 a=boo10 d=boo22 \n");
+}
+
+/// Verifies that a wrong argument count on an internal class's method raises php's catchable
+/// `ArgumentCountError` at run time with php's own wording, instead of a compile-time refusal.
+#[test]
+fn test_array_object_internal_method_arity_is_a_runtime_argument_count_error() {
+    let out = compile_and_run(
+        r#"<?php
+$ao = new ArrayObject([1]);
+try {
+    $ao->natsort('blah');
+} catch (ArgumentCountError $e) {
+    echo $e->getMessage(), "\n";
+}
+var_dump(count($ao));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "ArrayObject::natsort() expects exactly 0 arguments, 1 given\n",
+            "int(1)\n",
+        )
+    );
+}

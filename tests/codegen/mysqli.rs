@@ -354,3 +354,73 @@ echo '|', $e->sqlstate;
     );
     assert_eq!(out, "rt|123|012|2048|00000");
 }
+
+/// Verifies that an internal class's argument-count error is a RUNTIME catchable
+/// `ArgumentCountError` with php's wording — a fixed-arity method says "exactly".
+#[test]
+fn test_mysqli_select_db_arity_is_a_runtime_argument_count_error() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new mysqli();
+try {
+    $db->select_db();
+} catch (ArgumentCountError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "mysqli::select_db() expects exactly 1 argument, 0 given\n",
+            "done\n",
+        )
+    );
+}
+
+/// Verifies the "at least" wording for an internal method whose minimum is below its maximum.
+#[test]
+fn test_mysqli_query_arity_is_a_runtime_argument_count_error() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new mysqli();
+try {
+    $db->query();
+} catch (ArgumentCountError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "mysqli::query() expects at least 1 argument, 0 given\n",
+            "done\n",
+        )
+    );
+}
+
+/// Verifies the "at least" wording for an internal by-ref variadic method.
+#[test]
+fn test_mysqli_bind_param_arity_is_a_runtime_argument_count_error() {
+    let out = compile_and_run(
+        r#"<?php
+$stmt = new mysqli_stmt();
+try {
+    $stmt->bind_param();
+} catch (ArgumentCountError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "mysqli_stmt::bind_param() expects at least 1 argument, 0 given\n",
+            "done\n",
+        )
+    );
+}

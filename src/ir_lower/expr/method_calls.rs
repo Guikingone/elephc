@@ -23,28 +23,47 @@ pub(super) fn lower_method_call(
     // but the receiver expression must still be evaluated first.
     let throw_access_message = if op == Op::MethodCall {
         ctx.throw_access_sites.get(&expr.span).and_then(|info| {
-            if let ThrowAccessKind::PrivateMethod {
-                visibility,
-                class_name,
-                method: m,
-            } = &info.kind
-            {
-                Some(format!(
+            match &info.kind {
+                ThrowAccessKind::PrivateMethod {
+                    visibility,
+                    class_name,
+                    method: m,
+                } => Some(format!(
                     "Call to {} method {}::{}() from global scope",
                     visibility, class_name, m
-                ))
-            } else {
-                None
+                )),
+                // An internal class's argument-count error carries php's verbatim message and
+                // is an ArgumentCountError — a subclass a `catch (ArgumentCountError)` matches.
+                ThrowAccessKind::ArgumentCount { message } => Some(message.clone()),
+                _ => None,
             }
         })
     } else {
         None
     };
+    let mut throw_access_class: Option<&str> = None;
+    if op == Op::MethodCall {
+        throw_access_class = ctx
+            .throw_access_sites
+            .get(&expr.span)
+            .and_then(|info| match &info.kind {
+                ThrowAccessKind::ArgumentCount { .. } => Some("ArgumentCountError"),
+                _ => None,
+            });
+    }
     let object_expr = object;
     let object = lower_expr(ctx, object_expr);
     if let Some(message) = throw_access_message {
         release_owning_receiver_temporary(ctx, object, expr.span);
-        return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
+        return match throw_access_class {
+            Some(class_name) => crate::ir_lower::stmt::lower_throw_access_error_of_class(
+                ctx,
+                class_name,
+                &message,
+                expr.span,
+            ),
+            None => crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span),
+        };
     }
     if op == Op::MethodCall && value_is_definitely_null(ctx, object.value) {
         let null_value = lower_null(ctx, expr);

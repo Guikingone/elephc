@@ -28,6 +28,8 @@ mod intrinsics;
 mod redirects;
 #[path = "spl/exceptions.rs"]
 mod exceptions;
+#[path = "spl/phar_arity.rs"]
+mod phar_arity;
 #[path = "spl/filesystem.rs"]
 mod filesystem;
 #[path = "spl/recursive.rs"]

@@ -53,6 +53,16 @@ pub enum ThrowAccessKind {
         /// Property name without the leading `$` (e.g. `x`).
         property: String,
     },
+    /// An internal class's method called with the wrong argument count.
+    ///
+    /// php defers the arity of an INTERNAL call to run time, where it is a catchable
+    /// `ArgumentCountError`; the message is php's own wording and is carried verbatim because
+    /// the wording differs from elephc's compile-time refusal message.
+    ArgumentCount {
+        /// The verbatim php error message (e.g. `ArrayObject::natsort() expects exactly 0
+        /// arguments, 1 given`).
+        message: String,
+    },
 }
 
 #[derive(Debug)]

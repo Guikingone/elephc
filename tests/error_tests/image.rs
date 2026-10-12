@@ -85,13 +85,15 @@ imagepng(123);
 /// An Imagick method called with too few arguments is rejected at compile time.
 #[test]
 fn test_image_error_imagick_arity() {
-    expect_image_error(
+    // php defers an internal class's argument-count error to a catchable
+    // `ArgumentCountError` at run time, so the check must accept the program;
+    // the runtime message itself is pinned by the codegen suite.
+    check_image(
         r#"<?php
 $im = new Imagick();
 $im->blurImage();
 "#,
-        "blurImage",
-    );
+    ).expect("an internal class's arity error is deferred to run time");
 }
 
 /// An Imagick method called with a wrong-typed argument (string where a `float`

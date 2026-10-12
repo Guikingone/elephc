@@ -238,6 +238,29 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Bool),
             array_sort_body(ArraySort::Uksort),
         ),
+        method_with_body("natsort", Vec::new(), Some(TypeExpr::Bool), array_sort_body(ArraySort::Natsort)),
+        method_with_body(
+            "natcasesort",
+            Vec::new(),
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Natcasesort),
+        ),
+        method_with_body(
+            "__elephcStrnatcmp",
+            vec![
+                param("a", TypeExpr::Str),
+                param("b", TypeExpr::Str),
+                param("fold", TypeExpr::Bool),
+            ],
+            Some(TypeExpr::Int),
+            strnatcmp_body(),
+        ),
+        method_with_body(
+            "__elephcIsNatSpace",
+            vec![param("ch", TypeExpr::Str)],
+            Some(TypeExpr::Bool),
+            is_nat_space_body(),
+        ),
         method_with_body(
             "seek",
             vec![param("offset", TypeExpr::Int)],
@@ -376,6 +399,29 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             vec![param("callback", named_type("callable"))],
             Some(TypeExpr::Bool),
             array_sort_body(ArraySort::Uksort),
+        ),
+        method_with_body("natsort", Vec::new(), Some(TypeExpr::Bool), array_sort_body(ArraySort::Natsort)),
+        method_with_body(
+            "natcasesort",
+            Vec::new(),
+            Some(TypeExpr::Bool),
+            array_sort_body(ArraySort::Natcasesort),
+        ),
+        method_with_body(
+            "__elephcStrnatcmp",
+            vec![
+                param("a", TypeExpr::Str),
+                param("b", TypeExpr::Str),
+                param("fold", TypeExpr::Bool),
+            ],
+            Some(TypeExpr::Int),
+            strnatcmp_body(),
+        ),
+        method_with_body(
+            "__elephcIsNatSpace",
+            vec![param("ch", TypeExpr::Str)],
+            Some(TypeExpr::Bool),
+            is_nat_space_body(),
         ),
         method_with_body("count", Vec::new(), Some(TypeExpr::Int), array_count_body()),
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(flags_expr())),
@@ -873,7 +919,10 @@ fn array_object_get_iterator_body() -> Vec<Stmt> {
 /// the insertion over parallel key/value lists preserves. `uasort`/`uksort` compare through the
 /// `$callback`; `asort`/`ksort` compare directly with `>`.
 fn array_sort_body(sort: ArraySort) -> Vec<Stmt> {
-    let compares_value = matches!(sort, ArraySort::Asort | ArraySort::Uasort);
+    let compares_value = matches!(
+        sort,
+        ArraySort::Asort | ArraySort::Uasort | ArraySort::Natsort | ArraySort::Natcasesort
+    );
     let uses_callback = matches!(sort, ArraySort::Uasort | ArraySort::Uksort);
     let projected = if compares_value {
         array_access(var_expr("__values"), var_expr("__j"))
@@ -884,6 +933,20 @@ fn array_sort_body(sort: ArraySort) -> Vec<Stmt> {
     let comparison = if uses_callback {
         binary_expr(
             crate::synthetic_class::e_closure_call("callback", vec![projected, var_expr(current)]),
+            BinOp::Gt,
+            int_expr(0),
+        )
+    } else if matches!(sort, ArraySort::Natsort | ArraySort::Natcasesort) {
+        binary_expr(
+            method_call(
+                this_expr(),
+                "__elephcStrnatcmp",
+                vec![
+                    projected,
+                    var_expr(current),
+                    bool_expr(matches!(sort, ArraySort::Natcasesort)),
+                ],
+            ),
             BinOp::Gt,
             int_expr(0),
         )
@@ -945,6 +1008,321 @@ fn array_sort_body(sort: ArraySort) -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for the natural-order comparison php's `natsort` and
+/// `natcasesort` sort through (php-src's `strnatcmp_ex`, including its leading-zero preamble,
+/// whitespace runs, digit-run compares, and the case fold), with `$fold` selecting
+/// `natsort`'s case-sensitive compare or `natcasesort`'s case-insensitive one.
+///
+/// Characters past a string's end answer the C NUL php-src's pointer walk reads: `""` compares
+/// below every printable character and stops both the whitespace and digit runs.
+fn strnatcmp_body() -> Vec<Stmt> {
+    // A single character is a decimal digit exactly when it sorts inside "0".."9"; the
+    // end-of-string marker `""` fails both comparisons the way the C NUL is not a digit.
+    let digit_at = |name: &'static str, index: Expr| {
+        let ch = array_access(var_expr(name), index);
+        binary_expr(
+            binary_expr(ch.clone(), BinOp::GtEq, string_expr("0")),
+            BinOp::And,
+            binary_expr(ch, BinOp::LtEq, string_expr("9")),
+        )
+    };
+    vec![
+        assign_stmt("alen", function_call("strlen", vec![var_expr("a")])),
+        assign_stmt("blen", function_call("strlen", vec![var_expr("b")])),
+        if_stmt(
+            binary_expr(
+                binary_expr(var_expr("alen"), BinOp::StrictEq, int_expr(0)),
+                BinOp::Or,
+                binary_expr(var_expr("blen"), BinOp::StrictEq, int_expr(0)),
+            ),
+            vec![return_stmt(crate::synthetic_class::e_ternary(
+                binary_expr(var_expr("alen"), BinOp::StrictEq, var_expr("blen")),
+                int_expr(0),
+                crate::synthetic_class::e_ternary(
+                    binary_expr(var_expr("alen"), BinOp::Gt, var_expr("blen")),
+                    int_expr(1),
+                    int_expr(-1),
+                ),
+            ))],
+            None,
+        ),
+        assign_stmt("ai", int_expr(0)),
+        assign_stmt("bi", int_expr(0)),
+        // php-src skips leading zeros ONLY while another digit follows.
+        while_stmt(
+            binary_expr(
+                binary_expr(
+                    array_access(var_expr("a"), var_expr("ai")),
+                    BinOp::StrictEq,
+                    string_expr("0"),
+                ),
+                BinOp::And,
+                digit_at("a", binary_expr(var_expr("ai"), BinOp::Add, int_expr(1))),
+            ),
+            vec![increment_stmt("ai")],
+        ),
+        while_stmt(
+            binary_expr(
+                binary_expr(
+                    array_access(var_expr("b"), var_expr("bi")),
+                    BinOp::StrictEq,
+                    string_expr("0"),
+                ),
+                BinOp::And,
+                digit_at("b", binary_expr(var_expr("bi"), BinOp::Add, int_expr(1))),
+            ),
+            vec![increment_stmt("bi")],
+        ),
+        while_stmt(bool_expr(true), vec![
+            while_stmt(
+                binary_expr(
+                    binary_expr(var_expr("ai"), BinOp::Lt, var_expr("alen")),
+                    BinOp::And,
+                    method_call(
+                        this_expr(),
+                        "__elephcIsNatSpace",
+                        vec![array_access(var_expr("a"), var_expr("ai"))],
+                    ),
+                ),
+                vec![increment_stmt("ai")],
+            ),
+            while_stmt(
+                binary_expr(
+                    binary_expr(var_expr("bi"), BinOp::Lt, var_expr("blen")),
+                    BinOp::And,
+                    method_call(
+                        this_expr(),
+                        "__elephcIsNatSpace",
+                        vec![array_access(var_expr("b"), var_expr("bi"))],
+                    ),
+                ),
+                vec![increment_stmt("bi")],
+            ),
+            assign_stmt(
+                "ca",
+                crate::synthetic_class::e_ternary(
+                    binary_expr(var_expr("ai"), BinOp::Lt, var_expr("alen")),
+                    array_access(var_expr("a"), var_expr("ai")),
+                    string_expr(""),
+                ),
+            ),
+            assign_stmt(
+                "cb",
+                crate::synthetic_class::e_ternary(
+                    binary_expr(var_expr("bi"), BinOp::Lt, var_expr("blen")),
+                    array_access(var_expr("b"), var_expr("bi")),
+                    string_expr(""),
+                ),
+            ),
+            // A run of digits compares through php's right-aligned (integer) or left-aligned
+            // (fractional) walk; the C for-increment runs after each non-returning iteration,
+            // so both indexes advance past the compared digits.
+            if_stmt(
+                binary_expr(
+                    digit_at("a", var_expr("ai")),
+                    BinOp::And,
+                    digit_at("b", var_expr("bi")),
+                ),
+                vec![
+                    assign_stmt(
+                        "fractional",
+                        binary_expr(
+                            binary_expr(var_expr("ca"), BinOp::StrictEq, string_expr("0")),
+                            BinOp::Or,
+                            binary_expr(var_expr("cb"), BinOp::StrictEq, string_expr("0")),
+                        ),
+                    ),
+                    assign_stmt("result", int_expr(0)),
+                    while_stmt(bool_expr(true), vec![
+                        assign_stmt(
+                            "ad",
+                            binary_expr(
+                                binary_expr(var_expr("ai"), BinOp::Lt, var_expr("alen")),
+                                BinOp::And,
+                                digit_at("a", var_expr("ai")),
+                            ),
+                        ),
+                        assign_stmt(
+                            "bd",
+                            binary_expr(
+                                binary_expr(var_expr("bi"), BinOp::Lt, var_expr("blen")),
+                                BinOp::And,
+                                digit_at("b", var_expr("bi")),
+                            ),
+                        ),
+                        if_stmt(
+                            binary_expr(var_expr("ad"), BinOp::StrictNotEq, var_expr("bd")),
+                            vec![
+                                assign_stmt(
+                                    "result",
+                                    crate::synthetic_class::e_ternary(
+                                        var_expr("bd"),
+                                        int_expr(-1),
+                                        int_expr(1),
+                                    ),
+                                ),
+                                crate::synthetic_class::s_break(1),
+                            ],
+                            None,
+                        ),
+                        if_stmt(
+                            binary_expr(var_expr("ad"), BinOp::StrictEq, bool_expr(false)),
+                            vec![crate::synthetic_class::s_break(1)],
+                            None,
+                        ),
+                        if_stmt(
+                            var_expr("fractional"),
+                            vec![
+                                if_stmt(
+                                    binary_expr(
+                                        array_access(var_expr("a"), var_expr("ai")),
+                                        BinOp::Lt,
+                                        array_access(var_expr("b"), var_expr("bi")),
+                                    ),
+                                    vec![assign_stmt("result", int_expr(-1)), crate::synthetic_class::s_break(1)],
+                                    None,
+                                ),
+                                if_stmt(
+                                    binary_expr(
+                                        array_access(var_expr("a"), var_expr("ai")),
+                                        BinOp::Gt,
+                                        array_access(var_expr("b"), var_expr("bi")),
+                                    ),
+                                    vec![assign_stmt("result", int_expr(1)), crate::synthetic_class::s_break(1)],
+                                    None,
+                                ),
+                            ],
+                            Some(vec![
+                                if_stmt(
+                                    binary_expr(
+                                        array_access(var_expr("a"), var_expr("ai")),
+                                        BinOp::Lt,
+                                        array_access(var_expr("b"), var_expr("bi")),
+                                    ),
+                                    vec![if_stmt(
+                                        binary_expr(var_expr("result"), BinOp::StrictEq, int_expr(0)),
+                                        vec![assign_stmt("result", int_expr(-1))],
+                                        None,
+                                    )],
+                                    None,
+                                ),
+                                if_stmt(
+                                    binary_expr(
+                                        array_access(var_expr("a"), var_expr("ai")),
+                                        BinOp::Gt,
+                                        array_access(var_expr("b"), var_expr("bi")),
+                                    ),
+                                    vec![if_stmt(
+                                        binary_expr(var_expr("result"), BinOp::StrictEq, int_expr(0)),
+                                        vec![assign_stmt("result", int_expr(1))],
+                                        None,
+                                    )],
+                                    None,
+                                ),
+                            ]),
+                        ),
+                        increment_stmt("ai"),
+                        increment_stmt("bi"),
+                    ]),
+                    if_stmt(
+                        binary_expr(var_expr("result"), BinOp::StrictNotEq, int_expr(0)),
+                        vec![return_stmt(var_expr("result"))],
+                        None,
+                    ),
+                    if_stmt(
+                        binary_expr(
+                            binary_expr(var_expr("ai"), BinOp::GtEq, var_expr("alen")),
+                            BinOp::And,
+                            binary_expr(var_expr("bi"), BinOp::GtEq, var_expr("blen")),
+                        ),
+                        vec![return_stmt(int_expr(0))],
+                        None,
+                    ),
+                    if_stmt(
+                        binary_expr(var_expr("ai"), BinOp::GtEq, var_expr("alen")),
+                        vec![return_stmt(int_expr(-1))],
+                        None,
+                    ),
+                    if_stmt(
+                        binary_expr(var_expr("bi"), BinOp::GtEq, var_expr("blen")),
+                        vec![return_stmt(int_expr(1))],
+                        None,
+                    ),
+                    assign_stmt("ca", array_access(var_expr("a"), var_expr("ai"))),
+                    assign_stmt("cb", array_access(var_expr("b"), var_expr("bi"))),
+                ],
+                None,
+            ),
+            if_stmt(
+                var_expr("fold"),
+                vec![
+                    assign_stmt("ca", function_call("strtoupper", vec![var_expr("ca")])),
+                    assign_stmt("cb", function_call("strtoupper", vec![var_expr("cb")])),
+                ],
+                None,
+            ),
+            if_stmt(
+                binary_expr(var_expr("ca"), BinOp::Lt, var_expr("cb")),
+                vec![return_stmt(int_expr(-1))],
+                None,
+            ),
+            if_stmt(
+                binary_expr(var_expr("ca"), BinOp::Gt, var_expr("cb")),
+                vec![return_stmt(int_expr(1))],
+                None,
+            ),
+            increment_stmt("ai"),
+            increment_stmt("bi"),
+            if_stmt(
+                binary_expr(
+                    binary_expr(var_expr("ai"), BinOp::GtEq, var_expr("alen")),
+                    BinOp::And,
+                    binary_expr(var_expr("bi"), BinOp::GtEq, var_expr("blen")),
+                ),
+                vec![return_stmt(int_expr(0))],
+                None,
+            ),
+            if_stmt(
+                binary_expr(var_expr("ai"), BinOp::GtEq, var_expr("alen")),
+                vec![return_stmt(int_expr(-1))],
+                None,
+            ),
+            if_stmt(
+                binary_expr(var_expr("bi"), BinOp::GtEq, var_expr("blen")),
+                vec![return_stmt(int_expr(1))],
+                None,
+            ),
+        ]),
+    ]
+}
+
+/// Builds the synthetic method body for the whitespace test php-src's `strnatcmp_ex` skips runs
+/// of (`isspace` in the C locale: space, tab, newline, vertical tab, form feed, carriage return).
+fn is_nat_space_body() -> Vec<Stmt> {
+    let ch = var_expr("ch");
+    vec![return_stmt(binary_expr(
+        binary_expr(
+            binary_expr(ch.clone(), BinOp::StrictEq, string_expr(" ")),
+            BinOp::Or,
+            binary_expr(ch.clone(), BinOp::StrictEq, string_expr("\t")),
+        ),
+        BinOp::Or,
+        binary_expr(
+            binary_expr(
+                binary_expr(ch.clone(), BinOp::StrictEq, string_expr("\n")),
+                BinOp::Or,
+                binary_expr(ch.clone(), BinOp::StrictEq, string_expr("\r")),
+            ),
+            BinOp::Or,
+            binary_expr(
+                binary_expr(ch.clone(), BinOp::StrictEq, string_expr("\u{0b}")),
+                BinOp::Or,
+                binary_expr(ch, BinOp::StrictEq, string_expr("\u{0c}")),
+            ),
+        ),
+    ))]
+}
+
 /// Selects which side of the key/value projection an [`array_sort_body`] sorts.
 #[derive(Clone, Copy)]
 enum ArraySort {
@@ -956,4 +1334,8 @@ enum ArraySort {
     Uasort,
     /// `uksort`: keys through `$callback`.
     Uksort,
+    /// `natsort`: values ascending in php's natural order (case-sensitive).
+    Natsort,
+    /// `natcasesort`: values ascending in php's natural order, case-insensitively.
+    Natcasesort,
 }

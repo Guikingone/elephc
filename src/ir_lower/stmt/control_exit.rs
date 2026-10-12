@@ -645,9 +645,23 @@ pub(crate) fn lower_throw_access_error_expr(
     message: &str,
     span: Span,
 ) -> LoweredValue {
+    lower_throw_access_error_of_class(ctx, "Error", message, span)
+}
+
+/// Throws a caught-or-uncaught `Throwable` of a SPECIFIC error class at a recorded access site.
+///
+/// php's argument-count violation is an `ArgumentCountError` — a subclass a `catch
+/// (ArgumentCountError)` matches — so the recorded-throw path needs the class, not just the
+/// message the generic `Error` form carries.
+pub(crate) fn lower_throw_access_error_of_class(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    message: &str,
+    span: Span,
+) -> LoweredValue {
     let error_expr = Expr::new(
         ExprKind::NewObject {
-            class_name: crate::names::Name::unqualified("Error"),
+            class_name: crate::names::Name::unqualified(class_name),
             args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
         },
         span,
