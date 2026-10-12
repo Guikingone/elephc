@@ -9,44 +9,107 @@
 
 use super::*;
 
-/// Exercises one readonly addition against both eval and generated parent metadata.
-fn check_asymmetric_fifth_review_eval_readonly_addition(parent: &str, child: &str) {
-    for native_parent in [false, true] {
-        let parent = format!("class Base {{ {parent} }}");
-        let source = if native_parent {
-            format!("<?php {parent} $base = new Base(); echo 'before'; eval('class Child extends Base {{ {child} }} echo \"bad\";');")
-        } else {
-            format!("<?php echo 'before'; eval('{parent} class Child extends Base {{ {child} }} echo \"bad\";');")
-        };
-        let out = compile_and_run_capture(&source);
-        assert!(!out.success, "accepted readonly addition: {source}");
-        assert_eq!(out.stdout, "before", "{source}");
-        assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
-    }
+/// Exercises one readonly addition with one compilation per independently scheduled case.
+fn check_asymmetric_fifth_review_eval_readonly_addition(parent: &str, child: &str, native_parent: bool) {
+    let parent = format!("class Base {{ {parent} }}");
+    let source = if native_parent {
+        format!("<?php {parent} $base = new Base(); echo 'before'; eval('class Child extends Base {{ {child} }} echo \"bad\";');")
+    } else {
+        format!("<?php echo 'before'; eval('{parent} class Child extends Base {{ {child} }} echo \"bad\";');")
+    };
+    let out = compile_and_run_capture(&source);
+    assert!(!out.success, "accepted readonly addition: {source}");
+    assert_eq!(out.stdout, "before", "{source}");
+    assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
 }
 
-/// Public readonly additions fail for both eval and native parents.
+/// Public readonly additions fail for eval parents.
 #[test]
 fn test_asymmetric_fifth_review_eval_cannot_add_public_readonly() {
-    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public readonly int $x;");
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public readonly int $x;", false);
+}
+
+/// Public readonly additions fail for generated parent metadata.
+#[test]
+fn test_asymmetric_fifth_review_native_cannot_add_public_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public readonly int $x;", true);
 }
 
 /// Protected readonly additions cannot bypass the invariant through matching setter access.
 #[test]
 fn test_asymmetric_fifth_review_eval_cannot_add_protected_readonly() {
-    check_asymmetric_fifth_review_eval_readonly_addition("protected int $x;", "protected readonly int $x;");
+    check_asymmetric_fifth_review_eval_readonly_addition("protected int $x;", "protected readonly int $x;", false);
+}
+
+/// Generated protected parents retain the same readonly invariant in eval.
+#[test]
+fn test_asymmetric_fifth_review_native_cannot_add_protected_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("protected int $x;", "protected readonly int $x;", true);
 }
 
 /// Explicit public(set) does not make a readonly addition legal.
 #[test]
 fn test_asymmetric_fifth_review_eval_cannot_add_public_set_readonly() {
-    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public public(set) readonly int $x;");
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public public(set) readonly int $x;", false);
+}
+
+/// Explicit public(set) cannot change readonly status inherited from a generated parent.
+#[test]
+fn test_asymmetric_fifth_review_native_cannot_add_public_set_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public public(set) readonly int $x;", true);
 }
 
 /// Constructor promotion obeys the same readonly invariant as declared properties.
 #[test]
 fn test_asymmetric_fifth_review_eval_cannot_add_promoted_readonly() {
-    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public function __construct(public public(set) readonly int $x) {}");
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public function __construct(public public(set) readonly int $x) {}", false);
+}
+
+/// Constructor promotion cannot change readonly status inherited from a generated parent.
+#[test]
+fn test_asymmetric_fifth_review_native_cannot_add_promoted_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public function __construct(public public(set) readonly int $x) {}", true);
+}
+
+/// A concrete virtual getter remains a concrete property for readonly invariance in eval.
+#[test]
+fn test_asymmetric_ci_eval_virtual_getter_cannot_add_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x { get => 1; }", "public readonly int $x;", false);
+}
+
+/// Generated virtual getter metadata does not grant the abstract-property exception.
+#[test]
+fn test_asymmetric_ci_native_virtual_getter_cannot_add_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x { get => 1; }", "public readonly int $x;", true);
+}
+
+/// Checks declared and promoted readonly implementations of one abstract getter contract.
+fn check_asymmetric_ci_abstract_getter_readonly(native_parent: bool) {
+    let parent = "abstract class Base { abstract public int $value { get; } }";
+    let child = r#"class Child extends Base {
+    public readonly int $value;
+    public function __construct(int $value) { $this->value = $value; }
+}
+class Promoted extends Base { public function __construct(public readonly int $value) {} }
+echo (new Child(42))->value, ":", (new Promoted(7))->value;"#;
+    let source = if native_parent {
+        format!("<?php {parent} echo (new ReflectionClass(Base::class))->isAbstract() ? '' : 'bad'; eval('{child}');")
+    } else {
+        format!("<?php eval('{parent} {child}');")
+    };
+    assert_eq!(compile_and_run(&source), "42:7");
+}
+
+/// Eval-defined abstract getter contracts accept readonly backed implementations.
+#[test]
+fn test_asymmetric_ci_abstract_getter_readonly_eval_parent() {
+    check_asymmetric_ci_abstract_getter_readonly(false);
+}
+
+/// Generated abstract getter contracts accept readonly eval implementations.
+#[test]
+fn test_asymmetric_ci_abstract_getter_readonly_native_parent() {
+    check_asymmetric_ci_abstract_getter_readonly(true);
 }
 
 /// Private-set readonly clone refusals omit the readonly word and retain the source value.

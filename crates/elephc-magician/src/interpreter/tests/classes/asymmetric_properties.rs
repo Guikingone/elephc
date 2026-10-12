@@ -20,6 +20,8 @@ fn execute_program_asymmetric_fifth_review_rejects_added_readonly() {
         ("protected int $x;", "protected readonly int $x;"),
         ("public int $x;", "public public(set) readonly int $x;"),
         ("public int $x;", "public function __construct(public public(set) readonly int $x) {}"),
+        ("public int $x { get => 1; }", "public readonly int $x;"),
+        ("public int $x { get => 1; set {} }", "public public(set) readonly int $x;"),
     ] {
         let source = format!("class Base {{ {parent} }} class Child extends Base {{ {child} }} return 1;");
         let program = parse_fragment(source.as_bytes()).expect("parse readonly override");
@@ -28,6 +30,25 @@ fn execute_program_asymmetric_fifth_review_rejects_added_readonly() {
         assert_eq!(execute_program(&program, &mut scope, &mut values)
             .expect_err("readonly cannot change across an override"), EvalStatus::RuntimeFatal);
     }
+}
+
+/// Only abstract getter-only contracts permit a readonly backed implementation.
+#[test]
+fn execute_program_asymmetric_ci_abstract_getter_readonly() {
+    let program = parse_fragment(br#"abstract class Base { abstract public int $value { get; } }
+class Child extends Base {
+    public readonly int $value;
+    public function __construct(int $value) { $this->value = $value; }
+}
+class Promoted extends Base { public function __construct(public readonly int $value) {} }
+echo (new Child(42))->value, ":", (new Promoted(7))->value;
+return true;"#).expect("parse readonly implementations");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("readonly storage implements an abstract getter");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.output, "42:7");
 }
 
 /// A private child cannot narrow a public or protected parent property, matching PHP.

@@ -566,9 +566,14 @@ fn validate_instance_property_override(
         ));
     }
 
+    let parent_has_setter = state.property_hooks.get(&prop.name)
+        .is_none_or(|hooks| !hooks.is_virtual() || hooks.set);
+    // An abstract getter describes access, not the readonly status of storage.
+    // Concrete virtual getters still retain the ordinary readonly invariant.
+    let parent_abstract_getter = state.abstract_properties.contains(&prop.name) && !parent_has_setter;
     let parent_readonly = state.readonly_properties.contains(&prop.name);
     let child_readonly = class.is_readonly_class || prop.readonly;
-    if parent_readonly != child_readonly {
+    if parent_readonly != child_readonly && !parent_abstract_getter {
         let (parent_modifier, child_modifier) = if parent_readonly {
             ("readonly", "non-readonly")
         } else { ("non-readonly", "readonly") };
@@ -581,8 +586,6 @@ fn validate_instance_property_override(
     let parent_set_visibility = state.property_set_visibilities.get(&prop.name)
         .unwrap_or(&inherited_visibility);
     let child_set_visibility = effective_set_visibility(class, prop);
-    let parent_has_setter = state.property_hooks.get(&prop.name)
-        .is_none_or(|hooks| !hooks.is_virtual() || hooks.set);
     if parent_has_setter
         && visibility_rank(&child_set_visibility) < visibility_rank(parent_set_visibility)
     {

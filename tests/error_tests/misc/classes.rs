@@ -33,11 +33,22 @@ fn test_asymmetric_fifth_review_cannot_add_readonly() {
         ("protected int $x;", "protected readonly int $x;"),
         ("public int $x;", "public public(set) readonly int $x;"),
         ("public int $x;", "public function __construct(public public(set) readonly int $x) {}"),
+        ("public int $x { get => 1; }", "public readonly int $x;"),
+        ("public int $x { get => 1; set {} }", "public public(set) readonly int $x;"),
+        ("public int $x { get => $this->x; }", "public readonly int $x;"),
     ] {
         expect_error(&format!("<?php class Base {{ {parent} }} class Child extends Base {{ {child} }}"),
             "Cannot redeclare non-readonly property Base::$x as readonly Child::$x");
     }
     expect_no_error("<?php class Base { private int $x; } class Child extends Base { public readonly int $x; }");
+}
+
+/// Readonly can implement an abstract getter but cannot satisfy its setter contract.
+#[test]
+fn test_asymmetric_ci_abstract_readonly_contracts() {
+    expect_no_error("<?php abstract class Base { abstract public int $x { get; } } class Child extends Base { public readonly int $x; }");
+    expect_error("<?php abstract class Base { abstract public int $x { get; set; } } class Child extends Base { public public(set) readonly int $x; }",
+        "Cannot redeclare non-readonly property Base::$x as readonly Child::$x");
 }
 
 /// An omitted setter on a public readonly declaration is implicitly protected.

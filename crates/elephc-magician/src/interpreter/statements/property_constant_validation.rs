@@ -115,8 +115,9 @@ pub(super) fn validate_property_parent_redeclaration(
         }
         let parent_has_setter = !parent_property.is_virtual()
             || parent_property.has_set_hook() || parent_property.requires_set_hook();
+        let parent_abstract_getter = parent_property.is_abstract() && !parent_has_setter;
         if parent_property.is_static() != property.is_static()
-            || parent_property.is_readonly() != property.is_readonly()
+            || (parent_property.is_readonly() != property.is_readonly() && !parent_abstract_getter)
             || property_visibility_rank(property.visibility())
                 < property_visibility_rank(parent_property.visibility())
             || (parent_has_setter && property_visibility_rank(property.write_visibility())
@@ -170,11 +171,12 @@ pub(super) fn validate_property_aot_parent_redeclaration(
         || values.reflection_method_flags(
             &parent_declaring_class, &property_hook_set_method(property.name()),
         )?.is_some_and(|flags| flags & EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK != 0);
+    let parent_abstract_getter = flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT != 0 && !parent_has_setter;
     let parent_property_type = context
         .native_property_type(&parent_declaring_class, property.name())
         .or_else(|| context.native_property_type(parent, property.name()));
     if parent_is_static != property.is_static()
-        || parent_is_readonly != property.is_readonly()
+        || (parent_is_readonly != property.is_readonly() && !parent_abstract_getter)
         || property_visibility_rank(property.visibility())
             < property_visibility_rank(parent_visibility)
         || (parent_has_setter && property_visibility_rank(property.write_visibility())

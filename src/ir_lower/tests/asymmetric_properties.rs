@@ -39,6 +39,11 @@ class ReadonlyChild extends ReadonlyBase {
     public protected(set) readonly int $id;
     public function __construct() { $this->id = 7; }
 }
+abstract class AbstractGetter { abstract public int $id { get; } }
+class ReadonlyGetter extends AbstractGetter {
+    public readonly int $id;
+    public function __construct() { $this->id = 42; }
+}
 class NativeMutableParent { public int $id; }
 function rejectReadonlyAddition(): void {
     eval('class DynamicReadonlyChild extends NativeMutableParent { public public(set) readonly int $id; }');
@@ -48,6 +53,7 @@ function updateTemporary(): void { receiver()->implicit ??= fallback(); }
 $box = new ConditionalReadonly();
 $legacy = new LegacyReadonly(7);
 echo $legacy->id;
+echo (new ReadonlyGetter())->id;
 try { update($box); } catch (Error $e) { echo "error"; }
 $properties = (new ReflectionClass(ConditionalReadonly::class))->getProperties(ReflectionProperty::IS_PROTECTED_SET);
 echo count($properties);
@@ -97,6 +103,7 @@ echo count($properties);
         module.functions.iter().find(|function| function.name == "initializePublic").unwrap(),
         module.functions.iter().find(|function| function.name == "initializeUnion").unwrap(),
         module.class_methods.iter().find(|function| function.name == "ReadonlyChild::__construct").unwrap(),
+        module.class_methods.iter().find(|function| function.name == "ReadonlyGetter::__construct").unwrap(),
     ] {
         assert!(function.instructions.iter().any(|inst| inst.op == Op::PropInitialized), "{target}");
         let initialize = function.blocks.iter().find(|block| block.name == "readonly.write.uninitialized").unwrap();
