@@ -4,7 +4,7 @@
   "generator": "scripts/benchmark_suite.py",
   "branch": "main",
   "sampling": "one-per-day (last run of each day)",
-  "points": 92,
+  "points": 148,
   "series": [
     {
       "date": "2026-04-24",
@@ -2118,6 +2118,1294 @@
         "sum_loop": {
           "elephc_ms": 16.23045799999545,
           "c_ms": 6.0583750000660075,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-07",
+      "timestamp": "2026-08-07T16:52:32Z",
+      "commit": "6b848750",
+      "run_id": 31198519994,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 7.071458999917013,
+          "c_ms": 1.5639169999985825,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 25.17570899999555,
+          "c_ms": 2.1022500000071886,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 9.71312499996202,
+          "c_ms": 1.3060840000207463,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-08",
+      "timestamp": "2026-08-08T19:24:50Z",
+      "commit": "e47a8e9d",
+      "run_id": 31274048689,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.096582999769453,
+          "c_ms": 2.399874999809981,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.210084000013012,
+          "c_ms": 3.23158399987733,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 11.375458000202343,
+          "c_ms": 2.212124999914522,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-09",
+      "timestamp": "2026-08-09T19:24:30Z",
+      "commit": "d4e08c39",
+      "run_id": 31330052647,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 9.47445899998911,
+          "c_ms": 2.1049580000180868,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.680624999926295,
+          "c_ms": 2.9275829999733105,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 10.536624999986088,
+          "c_ms": 1.894834000040646,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-10",
+      "timestamp": "2026-08-10T21:23:07Z",
+      "commit": "738bffe2",
+      "run_id": 31432360444,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 11.077458000045226,
+          "c_ms": 4.780750000008993,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 33.14729199996691,
+          "c_ms": 5.022666000058962,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 12.233291000029567,
+          "c_ms": 3.5243749999835927,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-11",
+      "timestamp": "2026-08-11T10:59:08Z",
+      "commit": "d6906b65",
+      "run_id": 31482936372,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 9.348415999966164,
+          "c_ms": 3.8848340000186,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 29.324834000021838,
+          "c_ms": 3.553749999923639,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 12.373750000051587,
+          "c_ms": 3.0267500000036307,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-12",
+      "timestamp": "2026-08-12T14:57:37Z",
+      "commit": "5bcd84a0",
+      "run_id": 31604263857,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.79662499994538,
+          "c_ms": 4.406417000041074,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 30.318957999952545,
+          "c_ms": 4.338584000038281,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 13.565207999931772,
+          "c_ms": 2.814790999991601,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-13",
+      "timestamp": "2026-08-13T15:32:46Z",
+      "commit": "be64a446",
+      "run_id": 31711403812,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 10.184125000023414,
+          "c_ms": 6.020375000048261,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 35.09937500007254,
+          "c_ms": 5.69354200001726,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 16.226833000018814,
+          "c_ms": 3.4017499999663414,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-14",
+      "timestamp": "2026-08-14T12:42:48Z",
+      "commit": "755c035a",
+      "run_id": 31795689627,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 11.13500000019485,
+          "c_ms": 4.100333999758732,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 38.91812499978187,
+          "c_ms": 6.180207999932463,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 14.481209000223316,
+          "c_ms": 6.09416700035581,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-15",
+      "timestamp": "2026-08-15T13:31:55Z",
+      "commit": "06d224d3",
+      "run_id": 31884953311,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.40099999999211,
+          "c_ms": 2.650707999976021,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.744917000030455,
+          "c_ms": 2.965625000001637,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 17.67816699998548,
+          "c_ms": 2.1299169999906553,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-17",
+      "timestamp": "2026-08-17T16:45:10Z",
+      "commit": "538f08e3",
+      "run_id": 32046530293,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.588583000005201,
+          "c_ms": 3.054667000014888,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 28.03962500001944,
+          "c_ms": 4.823208000061641,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 11.508915999911551,
+          "c_ms": 4.773124999928768,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-18",
+      "timestamp": "2026-08-18T18:43:56Z",
+      "commit": "06111d0f",
+      "run_id": 32170477149,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.02704199998061,
+          "c_ms": 2.840290999984063,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.256708000005347,
+          "c_ms": 3.3074579999947673,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 10.619291000011799,
+          "c_ms": 2.030584000010549,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-19",
+      "timestamp": "2026-08-19T10:11:52Z",
+      "commit": "2f217bb7",
+      "run_id": 32240229420,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 10.363957999970808,
+          "c_ms": 3.1007909999516414,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 28.685582999969483,
+          "c_ms": 4.542083000046659,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 18.521332999966944,
+          "c_ms": 2.2285410000222328,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-20",
+      "timestamp": "2026-08-20T16:59:41Z",
+      "commit": "783c63af",
+      "run_id": 32394224226,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.54704200003198,
+          "c_ms": 2.674833000014587,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.150499999971544,
+          "c_ms": 3.2075830000621863,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 11.251667000010457,
+          "c_ms": 1.9502500000498912,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-21",
+      "timestamp": "2026-08-21T16:41:42Z",
+      "commit": "73ce8669",
+      "run_id": 32503479131,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 9.996375000014268,
+          "c_ms": 2.480541000068115,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.7575409999381,
+          "c_ms": 6.521249999991596,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 12.154708999901231,
+          "c_ms": 2.252333000001272,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-25",
+      "timestamp": "2026-08-25T12:40:59Z",
+      "commit": "d854c725",
+      "run_id": 32848271664,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 7.852167000010013,
+          "c_ms": 2.41083400004527,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.302499999985685,
+          "c_ms": 3.45870799998238,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 10.830458000043564,
+          "c_ms": 2.926124999987678,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-26",
+      "timestamp": "2026-08-26T20:49:05Z",
+      "commit": "cd4c99e7",
+      "run_id": 33011523856,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 6.603166999980203,
+          "c_ms": 3.888999999958287,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 41.38258399996175,
+          "c_ms": 5.006208999930095,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 6.602415999964251,
+          "c_ms": 2.491042000087873,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-27",
+      "timestamp": "2026-08-27T12:43:29Z",
+      "commit": "71b14b80",
+      "run_id": 33072288293,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 9.842917000014495,
+          "c_ms": 5.688958000064304,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 32.228500000201166,
+          "c_ms": 4.5040420000077575,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 8.293749999893407,
+          "c_ms": 3.3485829999335692,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-28",
+      "timestamp": "2026-08-28T22:43:46Z",
+      "commit": "343ed111",
+      "run_id": 33217276408,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 6.883791999939604,
+          "c_ms": 4.51262499996119,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 31.01754199997231,
+          "c_ms": 3.6012919999848236,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 9.240707999992992,
+          "c_ms": 2.7428329999565904,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-29",
+      "timestamp": "2026-08-29T17:11:37Z",
+      "commit": "20fa8909",
+      "run_id": 33264576552,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 6.406749999996464,
+          "c_ms": 4.677458000060142,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 25.884208000206854,
+          "c_ms": 3.456458000073326,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 6.058041999949637,
+          "c_ms": 2.3740410001664713,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-08-31",
+      "timestamp": "2026-08-31T18:29:30Z",
+      "commit": "33b49075",
+      "run_id": 33386487115,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 7.594041999936962,
+          "c_ms": 3.2975839999380696,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 29.24466600006781,
+          "c_ms": 3.5794579999901543,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 7.004416999961904,
+          "c_ms": 3.503042000033929,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-01",
+      "timestamp": "2026-09-01T17:04:01Z",
+      "commit": "dcd420c2",
+      "run_id": 33534406065,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 7.813957999928789,
+          "c_ms": 9.878916999923604,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 33.89166700003443,
+          "c_ms": 3.9918749999969805,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 11.152333000040926,
+          "c_ms": 4.092000000014195,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-02",
+      "timestamp": "2026-09-02T11:36:00Z",
+      "commit": "254052a4",
+      "run_id": 33624638837,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 12.433875000056105,
+          "c_ms": 7.578416000001198,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 28.822666999985813,
+          "c_ms": 8.280125000055705,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 8.513750000020082,
+          "c_ms": 6.598749999966458,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-03",
+      "timestamp": "2026-09-03T17:42:21Z",
+      "commit": "cf9d435d",
+      "run_id": 33785153236,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 7.423417000040899,
+          "c_ms": 3.119875000038519,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.395916999945257,
+          "c_ms": 6.136667000077978,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 7.095875000004526,
+          "c_ms": 2.669207999929313,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-04",
+      "timestamp": "2026-09-04T18:11:49Z",
+      "commit": "24cf6e8e",
+      "run_id": 33903506620,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.171832999892104,
+          "c_ms": 7.824458999948547,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 35.403584000050614,
+          "c_ms": 6.697333000033723,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 8.790624999960528,
+          "c_ms": 8.654542000044785,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-05",
+      "timestamp": "2026-09-05T18:36:35Z",
+      "commit": "d425080b",
+      "run_id": 33983940076,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.628625000028478,
+          "c_ms": 5.350582999994913,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 48.09920799993961,
+          "c_ms": 7.166708999989169,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 9.285750000003645,
+          "c_ms": 4.2954580000014175,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "timestamp": "2026-09-07T17:44:57Z",
+      "commit": "4a02a1fa",
+      "run_id": 34148347699,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 4.996417000029396,
+          "c_ms": 1.629708999871582,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.83470900001339,
+          "c_ms": 2.52800000021125,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 5.786708999949042,
+          "c_ms": 1.4888329999394045,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-08",
+      "timestamp": "2026-09-08T19:36:18Z",
+      "commit": "640380cf",
+      "run_id": 34268805937,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 7.459916000016165,
+          "c_ms": 3.573957999947197,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 34.98449999995046,
+          "c_ms": 4.286625000077038,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 10.019457999987935,
+          "c_ms": 3.3829170000672093,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-09",
+      "timestamp": "2026-09-09T21:24:43Z",
+      "commit": "b068c2b7",
+      "run_id": 34405518388,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 18.58500000003005,
+          "c_ms": 5.407417000014902,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 35.27612499999577,
+          "c_ms": 5.121958000017912,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 8.862000000021908,
+          "c_ms": 6.521750000047177,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-10",
+      "timestamp": "2026-09-10T15:30:37Z",
+      "commit": "b9b05c42",
+      "run_id": 34494763727,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 10.432750000063606,
+          "c_ms": 3.2722089999879245,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 31.154958999991322,
+          "c_ms": 3.9040000000341024,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 7.433250000076441,
+          "c_ms": 2.8782499999806532,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-11",
+      "timestamp": "2026-09-11T20:34:00Z",
+      "commit": "476a24fb",
+      "run_id": 34643947359,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 6.941332999986116,
+          "c_ms": 3.7478330000340065,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 31.51095800001258,
+          "c_ms": 4.371375000005173,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 11.332167000091431,
+          "c_ms": 2.2405000000844666,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-13",
+      "timestamp": "2026-09-13T14:06:23Z",
+      "commit": "ded89618",
+      "run_id": 34761073308,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 10.061292000045796,
+          "c_ms": 3.9513750002697634,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 30.42825000011362,
+          "c_ms": 3.6222499998075364,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 7.416625000132626,
+          "c_ms": 5.323625000073662,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-14",
+      "timestamp": "2026-09-14T18:50:32Z",
+      "commit": "5df15c1d",
+      "run_id": 34882017499,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.22529200002009,
+          "c_ms": 3.850332999945749,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 30.51741599995239,
+          "c_ms": 4.752209000002949,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 9.765499999957683,
+          "c_ms": 5.6039579999378475,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-15",
+      "timestamp": "2026-09-15T12:05:32Z",
+      "commit": "6e6f0261",
+      "run_id": 34965846418,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 13.017915999967045,
+          "c_ms": 4.4857090000505195,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 34.122959000001174,
+          "c_ms": 6.9997500000908985,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 15.444375000015498,
+          "c_ms": 5.146708000097533,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-16",
+      "timestamp": "2026-09-16T13:33:45Z",
+      "commit": "71012552",
+      "run_id": 35101515901,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 6.592916999920817,
+          "c_ms": 3.5050420000288796,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 35.5243750000227,
+          "c_ms": 3.1463340000073003,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 8.301500000015949,
+          "c_ms": 3.0505839999932505,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-18",
+      "timestamp": "2026-09-18T20:23:12Z",
+      "commit": "8c5f75e5",
+      "run_id": 35390046956,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 15.682374999869353,
+          "c_ms": 6.297541000094498,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 47.449207999989085,
+          "c_ms": 5.835166999986541,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 8.936958000049344,
+          "c_ms": 8.032875000026252,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-21",
+      "timestamp": "2026-09-21T20:34:17Z",
+      "commit": "eecb77d1",
+      "run_id": 35651028919,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 5.183541000064906,
+          "c_ms": 1.7019580000123824,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 28.060541999934685,
+          "c_ms": 2.601874999982101,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 5.972709000047871,
+          "c_ms": 1.7649169999458536,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-22",
+      "timestamp": "2026-09-22T16:21:18Z",
+      "commit": "574105c4",
+      "run_id": 35751862187,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.316333000038867,
+          "c_ms": 4.6261670000831145,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 30.81574999998793,
+          "c_ms": 4.4430000000375,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 8.296416999996836,
+          "c_ms": 3.568290999965029,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-23",
+      "timestamp": "2026-09-23T13:30:27Z",
+      "commit": "605fb1d7",
+      "run_id": 35865996776,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 8.487250000143831,
+          "c_ms": 3.401707999955761,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.305083000124796,
+          "c_ms": 3.195875000074011,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 10.95412499989834,
+          "c_ms": 2.7669589999277378,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-24",
+      "timestamp": "2026-09-24T21:33:18Z",
+      "commit": "0261725d",
+      "run_id": 36052953150,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 13.732832999949096,
+          "c_ms": 3.753791999997702,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 32.82195899987528,
+          "c_ms": 4.8887919999742735,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 8.066915999961566,
+          "c_ms": 4.210124999872278,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-25",
+      "timestamp": "2026-09-25T21:36:29Z",
+      "commit": "9661a657",
+      "run_id": 36190933217,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 11.863291000054232,
+          "c_ms": 4.655791000004683,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 38.35725000021739,
+          "c_ms": 4.9956249999922875,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 12.10795799988773,
+          "c_ms": 5.989540999962628,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-26",
+      "timestamp": "2026-09-26T15:22:35Z",
+      "commit": "36d7219f",
+      "run_id": 36250723741,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 6.832583000004888,
+          "c_ms": 3.440417000092566,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 27.5205420000475,
+          "c_ms": 4.1524169998865545,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 7.621541000162324,
+          "c_ms": 6.2570830000368005,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-27",
+      "timestamp": "2026-09-27T21:15:10Z",
+      "commit": "fa399117",
+      "run_id": 36349918601,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 18.409541999972134,
+          "c_ms": 8.310166999763169,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 39.06216700033838,
+          "c_ms": 5.166500000086671,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 27.613042000211863,
+          "c_ms": 4.943958000239945,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-28",
+      "timestamp": "2026-09-28T18:50:07Z",
+      "commit": "69c16673",
+      "run_id": 36447850369,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 12.815583000019615,
+          "c_ms": 6.121166999946581,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 35.502542000017456,
+          "c_ms": 4.92204199997559,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 21.765290999951503,
+          "c_ms": 5.597041999976682,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-29",
+      "timestamp": "2026-09-29T18:21:38Z",
+      "commit": "24f68a7b",
+      "run_id": 36610245075,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 12.423542000078669,
+          "c_ms": 2.250290999882054,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.83391600021423,
+          "c_ms": 3.0657919999157457,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 18.966083000123035,
+          "c_ms": 2.215167000031215,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-09-30",
+      "timestamp": "2026-09-30T16:58:15Z",
+      "commit": "34b46cde",
+      "run_id": 36735371804,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 10.712499999954161,
+          "c_ms": 1.768749999996544,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 27.957958999991206,
+          "c_ms": 2.383208000082959,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 19.73249999991822,
+          "c_ms": 1.4060420000987506,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-01",
+      "timestamp": "2026-10-01T21:18:18Z",
+      "commit": "42760fcd",
+      "run_id": 36915719299,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 15.053875000148764,
+          "c_ms": 3.0400419998386496,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 37.79404100009742,
+          "c_ms": 4.982208000001265,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 21.51404200003526,
+          "c_ms": 3.3000839998749143,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-02",
+      "timestamp": "2026-10-02T13:43:48Z",
+      "commit": "c4ece12a",
+      "run_id": 37013084139,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 18.36291600000095,
+          "c_ms": 8.376666999993176,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 31.74158299998453,
+          "c_ms": 4.681582999978673,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 22.505249999994703,
+          "c_ms": 3.9134169999215374,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-03",
+      "timestamp": "2026-10-03T08:03:08Z",
+      "commit": "5044d290",
+      "run_id": 37107605634,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 18.369042000017544,
+          "c_ms": 6.635666999954992,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 34.364790999916295,
+          "c_ms": 4.397166999979163,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 25.789417000055437,
+          "c_ms": 5.735541000035482,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-05",
+      "timestamp": "2026-10-05T16:51:04Z",
+      "commit": "b23aa1a6",
+      "run_id": 37340077972,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 15.853166999932,
+          "c_ms": 10.829625000042142,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 37.34987500001807,
+          "c_ms": 8.149457999934384,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 26.190250000013293,
+          "c_ms": 7.910416999948211,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-06",
+      "timestamp": "2026-10-06T21:05:42Z",
+      "commit": "c1d4a97d",
+      "run_id": 37529036904,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 10.064917000022433,
+          "c_ms": 1.8493339999849923,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 26.343999999994594,
+          "c_ms": 2.6690419999795267,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 18.685583999968003,
+          "c_ms": 1.8157080000946735,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-07",
+      "timestamp": "2026-10-07T21:39:13Z",
+      "commit": "a65ce2f1",
+      "run_id": 37688049320,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 18.398624999917956,
+          "c_ms": 5.475375000060012,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 38.04387500008488,
+          "c_ms": 7.101540999883582,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 24.823999999853186,
+          "c_ms": 5.320166999808862,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-08",
+      "timestamp": "2026-10-08T16:30:02Z",
+      "commit": "5d962789",
+      "run_id": 37807080656,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 14.690416000007644,
+          "c_ms": 5.763249999972686,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 35.917083000072125,
+          "c_ms": 7.828207999978076,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 23.852457999964827,
+          "c_ms": 5.081625000002532,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-09",
+      "timestamp": "2026-10-09T19:16:15Z",
+      "commit": "4f79c92c",
+      "run_id": 37976603916,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 19.72624999996242,
+          "c_ms": 5.096332999983133,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 50.270915999931276,
+          "c_ms": 6.419458999971539,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 32.52816700000949,
+          "c_ms": 9.69950000001063,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-10",
+      "timestamp": "2026-10-10T11:38:49Z",
+      "commit": "9df6d3bd",
+      "run_id": 38047550546,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 11.130832999924678,
+          "c_ms": 5.473124999980428,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 27.59737500002757,
+          "c_ms": 4.382249999935084,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 19.60624999992433,
+          "c_ms": 2.8059170000460654,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-11",
+      "timestamp": "2026-10-11T21:07:44Z",
+      "commit": "10330d7d",
+      "run_id": 38173490689,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 20.45366599998033,
+          "c_ms": 4.6490000000858345,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 37.45291600000655,
+          "c_ms": 5.690957999945567,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 22.66154100004769,
+          "c_ms": 4.860000000007858,
+          "php_ms": null
+        }
+      }
+    },
+    {
+      "date": "2026-10-12",
+      "timestamp": "2026-10-12T07:03:07Z",
+      "commit": "4fdabfb8",
+      "run_id": 38213762061,
+      "cases": {
+        "array_sum": {
+          "elephc_ms": 16.018833999964954,
+          "c_ms": 4.461500000047636,
+          "php_ms": null
+        },
+        "string_concat": {
+          "elephc_ms": 35.00620800002707,
+          "c_ms": 7.354833000022154,
+          "php_ms": null
+        },
+        "sum_loop": {
+          "elephc_ms": 22.460166999962894,
+          "c_ms": 4.164207999906466,
           "php_ms": null
         }
       }
