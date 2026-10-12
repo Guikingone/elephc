@@ -19,6 +19,28 @@ pub(super) fn object_type(ty: &Type) -> bool {
     }
 }
 
+/// Separates constructor identity slots from a generic class's public type arguments.
+pub(super) fn generic_class_arguments<'a>(name: &str, args: &'a [Type], context: &ElephcEvalContext) -> &'a [Type] {
+    if let Some(template) = context.generic_template(name) {
+        let count = template.parameters.len();
+        if count != 0 && !template.constructor_parameters.is_empty()
+            && args.len() == count + template.constructor_parameters.len() { return &args[..count]; }
+    }
+    args
+}
+
+/// Removes constructor identity slots recursively before matching a declared generic shape.
+pub(super) fn generic_inference_type(ty: &Type, context: &ElephcEvalContext) -> Type {
+    match ty {
+        Type::Apply(name, args) => Type::Apply(name.clone(), generic_class_arguments(name, args, context).iter().map(|ty| generic_inference_type(ty, context)).collect()),
+        Type::Nullable(inner) => Type::Nullable(Box::new(generic_inference_type(inner, context))),
+        Type::Union(types) => Type::Union(types.iter().map(|ty| generic_inference_type(ty, context)).collect()),
+        Type::Intersection(types) => Type::Intersection(types.iter().map(|ty| generic_inference_type(ty, context)).collect()),
+        Type::Callable(params, ret) => Type::Callable(params.iter().map(|ty| generic_inference_type(ty, context)).collect(), Box::new(generic_inference_type(ret, context))),
+        _ => ty.clone(),
+    }
+}
+
 /// Relates retained signature types using dynamic hierarchy metadata.
 pub(in crate::interpreter) fn generic_signature_accepts(actual: &Type, expected: &Type, context: &ElephcEvalContext) -> bool {
     if actual == expected || object_type(actual) && object_type(expected) && actual.to_string().eq_ignore_ascii_case(&expected.to_string()) { return true; }
@@ -29,6 +51,8 @@ pub(in crate::interpreter) fn generic_signature_accepts(actual: &Type, expected:
         return context.class_is_a(&actual.to_string(), &expected.to_string(), false);
     };
     let Some(template) = context.generic_template(actual_name) else { return false; };
+    let actual_args = generic_class_arguments(actual_name, actual_args, context);
+    let expected_args = generic_class_arguments(expected_name, expected_args, context);
     actual_name.eq_ignore_ascii_case(expected_name) && actual_args.len() == expected_args.len()
         && template.parameters.len() == actual_args.len()
         && template.parameters.iter().zip(actual_args.iter().zip(expected_args)).all(|(param, (actual, expected))| {

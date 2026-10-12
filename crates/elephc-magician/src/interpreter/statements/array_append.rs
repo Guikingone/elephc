@@ -35,7 +35,7 @@ pub(super) fn eval_array_append_value_with_type(
             );
         };
         let index = values.int(index)?;
-        let inserted = validate_generic_local_element(declared, index, value, context, values)
+        let inserted = validate_generic_local_element(declared, array, index, value, context, values)
             .and_then(|()| values.array_set(array, index, value));
         let cleanup = values.release(index);
         inserted.and_then(|result| cleanup.map(|()| result))

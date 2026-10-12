@@ -18,7 +18,7 @@ struct Block {
     params: HashMap<String, String>,
     returns: Option<String>,
     var: Option<String>,
-    inherited: Vec<String>,
+    inherited: Vec<(&'static str, String)>,
 }
 
 /// Reads the PHPStan/Psalm tags already supported by the AOT frontend.
@@ -49,8 +49,9 @@ fn block(comment: &str) -> Block {
         } else if let Some(rest) = line.strip_prefix("@var ") {
             let ty = rest.split('$').next().unwrap_or("").trim();
             if valid_type(ty) { block.var = Some(ty.into()); }
-        } else if let Some(rest) = line.strip_prefix("@extends ").or_else(|| line.strip_prefix("@implements ")) {
-            if valid_type(rest.trim()) && rest.contains('<') { block.inherited.push(rest.trim().into()); }
+        } else if let Some((clause, rest)) = line.strip_prefix("@extends ").map(|rest| ("extends", rest))
+            .or_else(|| line.strip_prefix("@implements ").map(|rest| ("implements", rest))) {
+            if valid_type(rest.trim()) && rest.contains('<') { block.inherited.push((clause, rest.trim().into())); }
         }
     }
     block
@@ -115,6 +116,51 @@ fn skip_prefix(tokens: &[Token], mut position: usize, limit: usize) -> usize {
     position
 }
 
+/// Selects each parent once by its complete written name and extends/implements clause.
+fn inheritance_edits(tokens: &[Token], start: usize, end: usize, annotations: &[(&str, String)], line: i64) -> Vec<(usize, usize, Vec<Token>)> {
+    let mut edits = Vec::new();
+    let mut clause = "";
+    let mut parent = false;
+    let mut depth = 0;
+    let mut position = start;
+    while position < end {
+        match tokens[position].kind() {
+            TokenKind::Less => depth += 1,
+            TokenKind::Greater => depth -= 1,
+            TokenKind::GreaterGreater => depth -= 2,
+            TokenKind::Ident(name) if depth == 0 && (name.eq_ignore_ascii_case("extends") || name.eq_ignore_ascii_case("implements")) => {
+                clause = if name.eq_ignore_ascii_case("extends") { "extends" } else { "implements" };
+                parent = true;
+            }
+            TokenKind::Comma if depth == 0 && !clause.is_empty() => parent = true,
+            TokenKind::Ident(_) | TokenKind::Backslash if depth == 0 && parent => {
+                let mut name = String::new();
+                if matches!(tokens[position].kind(), TokenKind::Backslash) { name.push('\\'); position += 1; }
+                while position < end {
+                    let TokenKind::Ident(segment) = tokens[position].kind() else { break; };
+                    name.push_str(segment);
+                    position += 1;
+                    if !matches!(tokens.get(position).map(Token::kind), Some(TokenKind::Backslash)) { break; }
+                    name.push('\\');
+                    position += 1;
+                }
+                if !matches!(tokens.get(position).map(Token::kind), Some(TokenKind::Less)) {
+                    if let Some((_, annotation)) = annotations.iter().find(|(kind, annotation)| *kind == clause
+                        && annotation.split('<').next().is_some_and(|base| base.trim().eq_ignore_ascii_case(&name))) {
+                        let args = &annotation[annotation.find('<').unwrap()..];
+                        edits.push((position, position, annotation_tokens(args, line)));
+                    }
+                }
+                parent = false;
+                continue;
+            }
+            _ => {}
+        }
+        position += 1;
+    }
+    edits
+}
+
 /// Rewrites only declaration annotations, leaving doc comments inside expressions inert.
 pub(super) fn apply(tokens: Vec<Token>) -> Vec<Token> {
     if !tokens.iter().any(|token| matches!(token.kind(), TokenKind::DocComment(_))) { return tokens; }
@@ -149,15 +195,7 @@ pub(super) fn apply(tokens: Vec<Token>) -> Vec<Token> {
                 let params = block.templates.iter().map(|(_, syntax)| syntax.clone()).collect::<Vec<_>>().join(", ");
                 edits.push((header, header, annotation_tokens(&format!("<{params}>"), token.line())));
             }
-            for inherited in &block.inherited {
-                let base = inherited.split('<').next().unwrap_or("").rsplit('\\').next().unwrap_or("");
-                for index in header..body {
-                    if matches!(tokens[index].kind(), TokenKind::Ident(name) if name.eq_ignore_ascii_case(base)) && !tokens.get(index + 1).is_some_and(|token| matches!(token.kind(), TokenKind::Less)) {
-                        let args = &inherited[inherited.find('<').unwrap_or(inherited.len())..];
-                        edits.push((index + 1, index + 1, annotation_tokens(args, token.line())));
-                    }
-                }
-            }
+            edits.extend(inheritance_edits(&tokens, header, body, &block.inherited, token.line()));
         } else if function {
             let header = declaration + 2 + usize::from(matches!(tokens.get(declaration + 1).map(Token::kind), Some(TokenKind::Ampersand)));
             if tokens.get(header).is_some_and(|token| matches!(token.kind(), TokenKind::Less)) { continue; }

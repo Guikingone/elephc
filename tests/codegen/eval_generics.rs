@@ -53,7 +53,7 @@ $b = new Box('hello');
 $p = new Pair<int>(1, 'two');
 echo Box(9), '|', $b->map(function(string $s): int { return strlen($s); })->get(), '|', $p->right, '|', get_class($p);
 "#);
-    assert_eq!(compile_and_run(&source), "9|5|two|Pair<int><string>");
+    assert_eq!(compile_and_run(&source), "9|5|two|Pair<int, string>");
 }
 
 /// Runtime binding failures and structural contracts use the normal catchable TypeError path.
@@ -157,4 +157,84 @@ echo $a, '|', $b, '|', $original[0], '|', $changed[0], '|', count($original), '|
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "right|left|old|new|1|2");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Array contracts preserve indexed storage and nullable/union writes with balanced cleanup.
+#[test]
+fn test_eval_generics_array_local_contract_regressions() {
+    let source = dynamic_eval(r#"
+?array<int> $nullable = [1]; $nullable[] = 2; $nullable[0] = 3;
+array<int>|null $union = [4]; $union[] = 5; $union[0] = 6;
+echo $nullable[0], '|', $nullable[1], '|', $union[0], '|', $union[1];
+try { $nullable[] = 'bad'; } catch (TypeError $e) { echo '|value'; }
+try { $union['key'] = 7; } catch (TypeError $e) { echo '|key'; }
+$union['0'] = 8; echo '|', $union[0], '|', count($union);
+function length(array<int> $items): int { return count($items); }
+function bad(): array<int> { return ['key' => 1]; }
+try { length(['key' => 1]); } catch (TypeError $e) { echo '|argument'; }
+try { bad(); } catch (TypeError $e) { echo '|return'; }
+try { array<int> $items = ['key' => 1]; } catch (TypeError $e) { echo '|local'; }
+array<int>|array<string> $items = [1];
+try { $items[] = 'bad'; } catch (TypeError $e) { echo '|arm'; }
+echo '|', count($items);
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "3|2|6|5|value|key|8|2|argument|return|local|arm|1");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Constructor slots retain identities while class variance and inference see native hierarchy.
+#[test]
+fn test_eval_generics_constructor_class_variance_regression() {
+    let body = dynamic_eval(r#"
+class Box<out T: Animal> {
+    public function __construct<U>(private T $value, private U $label) {}
+    public function get(): T { return $this->value; }
+}
+function read(Box<Animal> $box): string { return get_class($box->get()); }
+function relay<V>(Box<V> $box): V { return $box->get(); }
+function bounded<V: Box<Animal>>(V $box): string { return read($box); }
+$i = new Box(new Dog(), 1); $s = new Box<Dog>(new Dog(), 'label');
+echo read($i), '|', read($s), '|', get_class(relay($i)), '|', bounded($s), '|', get_class($i), '|', get_class($s);
+function packed(array<int> $items): void {}
+function associative(array<string, int> $items): void {}
+try { packed(new Dog()); } catch (TypeError $e) { echo '|packed'; }
+try { associative(new Dog()); } catch (TypeError $e) { echo '|assoc'; }
+"#);
+    let source = format!("<?php\nclass Animal {{}} class Dog extends Animal {{}}\necho get_class(new Dog()), '|';\n{}", body.trim_start_matches("<?php"));
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "Dog|Dog|Dog|Dog|Dog|Box<Dog, int>|Box<Dog, string>|packed|assoc");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Same short parent names receive distinct qualified PHPDoc arguments in both PHP modes.
+#[test]
+fn test_eval_generics_docblock_qualified_parent_regression() {
+    let source = dynamic_eval(r#"
+namespace Ns;
+/** @template T */
+class Foo {
+    /** @param T $value */
+    public function __construct(private $value) {}
+    /** @return T */
+    public function get() { return $this->value; }
+}
+namespace Other;
+/** @template T */
+interface Foo { /** @return T */ public function label(); }
+namespace App;
+/**
+ * @extends \Ns\Foo<int>
+ * @implements \Other\Foo<string>
+ */
+class Child extends \Ns\Foo implements \Other\Foo {
+    public function label(): string { return 'label'; }
+}
+$child = new Child(7); echo $child->get(), '|', $child->label();
+"#);
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, flags), "7|label");
+    }
 }

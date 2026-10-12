@@ -75,7 +75,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// BUMPED TO 13 because first-class function callable names now also retain source
 /// spelling. Version-12 entries still discarded capitalization on this expression path.
 /// BUMPED TO 14 for retained generic declarations, structural signatures, and typed locals,
-/// combined with source-spelling preservation from main. Both prior layouts must be refused.
+/// combined with source-spelling preservation from main and qualified PHPDoc inheritance.
+/// Both prior layouts must be refused.
 pub(crate) const FORMAT_VERSION: u32 = 14;
 
 /// Identifies the writer, so one build never reads another's entries.

@@ -16,16 +16,29 @@ pub(in crate::interpreter) fn validate_generic_local(declared: &EvalParameterTyp
 }
 
 /// Checks an array write against its key and element contracts before mutating storage.
-pub(in crate::interpreter) fn validate_generic_local_element(declared: Option<&EvalParameterType>, index: RuntimeCellHandle, value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
+pub(in crate::interpreter) fn validate_generic_local_element(declared: Option<&EvalParameterType>, array: RuntimeCellHandle, index: RuntimeCellHandle, value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
     let Some(declared) = declared else { return Ok(()); };
     let ty = generic_type(declared);
-    if ty == Type::atom("array") || ty == Type::atom("mixed") { return Ok(()); }
-    if let Type::Apply(name, args) = &ty {
-        if name == "array" && !args.is_empty() {
-            let element = generic_value_accepts(args.last().unwrap(), value, context, values)?;
-            let key = args.len() != 2 || generic_value_accepts(&args[0], index, context, values)?;
-            if element && key { return Ok(()); }
-        }
-    }
+    if array_write_accepts(&ty, array, index, value, context, values)? { return Ok(()); }
     eval_throw_type_error(&format!("Array write violates typed local {ty}"), context, values)
+}
+
+/// Checks non-null array arms and requires integer keys for indexed array contracts.
+fn array_write_accepts(ty: &Type, array: RuntimeCellHandle, index: RuntimeCellHandle, value: RuntimeCellHandle, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
+    match ty {
+        Type::Atom(name) => Ok(name == "array" || name == "mixed"),
+        Type::Nullable(inner) => array_write_accepts(inner, array, index, value, context, values),
+        Type::Union(types) => {
+            for ty in types {
+                if generic_value_accepts(ty, array, context, values)? && array_write_accepts(ty, array, index, value, context, values)? { return Ok(true); }
+            }
+            Ok(false)
+        }
+        Type::Apply(name, args) if name == "array" && !args.is_empty() => {
+            let key = if args.len() == 1 { values.type_tag(index)? == EVAL_TAG_INT }
+                else { generic_value_accepts(&args[0], index, context, values)? };
+            Ok(key && generic_value_accepts(args.last().unwrap(), value, context, values)?)
+        }
+        _ => Ok(false),
+    }
 }

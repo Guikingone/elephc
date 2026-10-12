@@ -46,3 +46,43 @@ fn generics_malformed_lists_are_rejected() {
         assert!(parse_fragment(source.as_bytes()).is_err(), "{source}");
     }
 }
+
+/// PHPDoc arguments attach only to the qualified parent named by the matching clause.
+#[test]
+fn generics_docblock_parent_arguments_match_qualified_clauses() {
+    for (annotations, parent, interface) in [
+        ("@extends \\Ns\\Foo<int>", "Ns\\Foo<int>", "Other\\Foo"),
+        ("@implements \\Other\\Foo<string>", "Ns\\Foo", "Other\\Foo<string>"),
+        ("@extends \\Ns\\Foo<int>\n * @implements \\Other\\Foo<string>", "Ns\\Foo<int>", "Other\\Foo<string>"),
+        ("@extends \\Other\\Foo<int>\n * @implements \\Ns\\Foo<string>", "Ns\\Foo", "Other\\Foo"),
+    ] {
+        let source = format!("/**\n * {annotations}\n */ class Child extends \\Ns\\Foo implements \\Other\\Foo {{}}");
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let EvalStmt::ClassDecl(class) = &program.statements()[0] else { panic!("expected class"); };
+        assert_eq!(class.parent(), Some(parent), "{source}");
+        assert_eq!(class.interfaces(), &[interface.to_string()], "{source}");
+    }
+}
+
+/// Independent interface parents with the same leaf name receive one argument list each.
+#[test]
+fn generics_docblock_interface_parents_keep_separate_arguments() {
+    let source = b"/**\n * @extends \\Ns\\Foo<int>\n * @extends \\Other\\Foo<string>\n */ interface Child extends \\Ns\\Foo, \\Other\\Foo {}";
+    let program = parse_fragment(source).unwrap();
+    let EvalStmt::InterfaceDecl(interface) = &program.statements()[0] else { panic!("expected interface"); };
+    assert_eq!(interface.parents(), &["Ns\\Foo<int>".to_string(), "Other\\Foo<string>".to_string()]);
+}
+
+/// Native parent arguments win and duplicate PHPDoc tags do not create suffix chains.
+#[test]
+fn generics_docblock_parent_arguments_keep_native_precedence() {
+    for (header, expected) in [
+        ("\\Ns\\Foo<string>", "Ns\\Foo<string>"),
+        ("\\Ns\\Foo", "Ns\\Foo<int>"),
+    ] {
+        let source = format!("/**\n * @extends \\Ns\\Foo<int>\n * @extends \\Ns\\Foo<int>\n */ class Child extends {header} {{}}");
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let EvalStmt::ClassDecl(class) = &program.statements()[0] else { panic!("expected class"); };
+        assert_eq!(class.parent(), Some(expected));
+    }
+}

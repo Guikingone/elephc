@@ -139,7 +139,7 @@ fn generics_constructor_slots_and_shadowing() {
     assert_eq!(run(&[
         "class Item { public function __construct<T>(private T $value) {} public function get() { return $this->value; } } class Pair<T> { public function __construct<U>(private T $left, private U $right) {} public function right() { return $this->right; } } class Shadow<T> { public function __construct<T>(private T $value) {} public function get() { return $this->value; } }",
         "$a = new Item(7); $b = new Pair<int>(1, 'two'); $c = new Shadow<int>('shadow'); echo $a->get(), '|', get_class($a), '|', $b->right(), '|', get_class($b), '|', $c->get(), '|', get_class($c);",
-    ]), "7|Item<int>|two|Pair<int><string>|shadow|Shadow<int><string>");
+    ]), "7|Item<int>|two|Pair<int, string>|shadow|Shadow<int, string>");
 }
 
 /// Imported generic function aliases retain explicitly written types in their own namespace.
@@ -353,4 +353,48 @@ fn generics_ordinary_redefinitions_are_rejected() {
         let program = parse_fragment(duplicate.as_bytes()).unwrap();
         assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values), Err(EvalStatus::RuntimeFatal));
     }
+}
+
+/// Nullable and union array locals accept valid writes and preserve rejected values.
+#[test]
+fn generics_nullable_and_union_array_local_writes() {
+    for ty in ["?array<int>", "array<int>|null", "null|array<int>", "array<int>|string"] {
+        let source = format!("{ty} $items = [1]; $items[] = 2; $items[0] = 3; try {{ $items[] = 'bad'; }} catch (TypeError $e) {{ echo 'append|'; }} try {{ $items[0] = 'bad'; }} catch (TypeError $e) {{ echo 'index|'; }} echo $items[0], '|', $items[1], '|', count($items);");
+        assert_eq!(run(&[&source]), "append|index|3|2|2", "{ty}");
+    }
+    assert_eq!(run(&[
+        "array<int>|array<string> $items = [1]; try { $items[] = 'bad'; } catch (TypeError $e) { echo 'arm|'; } $items[] = 2; echo count($items); ?array $bare = []; $bare[] = 'ok'; echo '|', $bare[0]; ?array<int> $nullable = null; $nullable[] = 7; echo '|', $nullable[0];",
+    ]), "arm|2|ok|7");
+}
+
+/// Indexed array writes reject string keys before promotion while numeric strings remain valid.
+#[test]
+fn generics_indexed_array_local_rejects_associative_key() {
+    assert_eq!(run(&[
+        "array<int> $items = [1]; try { $items['k'] = 2; } catch (TypeError $e) { echo 'key|'; } $items['0'] = 3; $items[] = 4; echo $items[0], '|', $items[1], '|', count($items); array<string, int> $map = ['k' => 1]; $map['more'] = 2; try { $map[0] = 3; } catch (TypeError $e) { echo '|map'; } echo '|', count($map);",
+    ]), "key|3|4|2|map|2");
+}
+
+/// Indexed array contracts reject associative values at local, parameter and return boundaries.
+#[test]
+fn generics_indexed_array_value_contract_rejects_associative_storage() {
+    assert_eq!(run(&[
+        "function length(array<int> $items): int { return count($items); } function bad(): array<int> { return ['k' => 1]; } try { length(['k' => 1]); } catch (TypeError $e) { echo 'argument|'; } try { bad(); } catch (TypeError $e) { echo 'return|'; } try { array<int> $items = ['k' => 1]; } catch (TypeError $e) { echo 'local'; }",
+    ]), "argument|return|local");
+}
+
+/// Constructor identity retains class arguments for variance, inference and nested bounds.
+#[test]
+fn generics_constructor_specializations_preserve_class_variance() {
+    assert_eq!(run(&[
+        "class Animal {} class Dog extends Animal {} class Box<out T> { public function __construct<U>(private T $value, private U $label) {} public function get(): T { return $this->value; } } function read(Box<Animal> $box): string { return get_class($box->get()); } function relay<V>(Box<V> $box): V { return $box->get(); } function bounded<V: Box<Animal>>(V $box): string { return read($box); } $i = new Box(new Dog(), 1); $s = new Box<Dog>(new Dog(), 'label'); echo read($i), '|', read($s), '|', get_class(relay($i)), '|', bounded($s), '|', get_class($i), '|', get_class($s);",
+    ]), "Dog|Dog|Dog|Dog|Box<Dog, int>|Box<Dog, string>");
+}
+
+/// Constructor slots leave nested inference, contravariance and invariant rejection intact.
+#[test]
+fn generics_constructor_slots_preserve_nested_type_contracts() {
+    assert_eq!(run(&[
+        "class Animal {} class Dog extends Animal {} class Box<out T> { public function __construct<U>(private T $value, private U $label) {} public function get(): T { return $this->value; } } function nested<V>(Box<Box<V>> $box): V { return $box->get()->get(); } $inner = new Box(new Dog(), 1); echo get_class(nested(new Box($inner, 'outer'))); class Sink<in T> { public function __construct<U>(private U $label) {} public function put(T $value): void {} } function write(Sink<Dog> $sink): string { $sink->put(new Dog()); return 'sink'; } echo '|', write(new Sink<Animal>(1)); class Invariant<T> { public function __construct<U>(private T $value, private U $label) {} } function reject(Invariant<Animal> $value): void {} try { reject(new Invariant(new Dog(), 1)); } catch (TypeError $e) { echo '|invariant'; } class Item { public function __construct<U>(public U $value) {} } function item(Item<int> $value): int { return $value->value; } echo '|', item(new Item(7)); try { item(new Item('bad')); } catch (TypeError $e) { echo '|constructor'; }",
+    ]), "Dog|sink|invariant|7|constructor");
 }

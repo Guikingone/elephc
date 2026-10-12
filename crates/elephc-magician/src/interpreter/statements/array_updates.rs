@@ -459,7 +459,7 @@ pub(super) fn eval_non_object_array_set_var_stmt(
         operands.push(index);
         let value = eval_owned_expr(value, context, scope, values)?;
         operands.push(value);
-        validate_generic_local_element(scope.local_type(name).cloned().as_ref(), index, value, context, values)?;
+        validate_generic_local_element(scope.local_type(name).cloned().as_ref(), array, index, value, context, values)?;
         let replacement = eval_array_set_target_for_index(array, index, values)?;
         if replacement != array {
             operands.push(replacement);

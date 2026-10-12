@@ -265,23 +265,32 @@ The Magician parser retains an `EvalGenericTemplate` containing a declaration pr
 tokens, lexical imports/namespace, and the token indexes of actual type-parameter uses. Replay
 substitutes those positions only, preserving unrelated identifiers and literal bytes. Constructor
 slots have separate lexical identities so promotion and shadowing remain correct.
+PHPDoc inheritance edits match the complete written parent name within the tag's `extends` or
+`implements` clause, with at most one inserted list per parent and native arguments taking priority.
 
 Runtime dispatch borrows arguments after their single source-order evaluation, completes bindings,
 checks bounds, and replays a concrete ordinary declaration. Functions and classes enter the normal
 context registries; method specializations are cached by declaring class and concrete method name.
+Constructor inference omits null and empty arrays using concrete runtime tags, so zero-property
+native objects still contribute their class types.
 Class relation registration instantiates generic parents, interfaces, and traits before ordinary
 validation. A recursion guard rejects cyclic generic inheritance, and type growth is bounded.
+Class identities put class and constructor slots in a single argument list. Constructor slots
+remain part of the registry key; class-shaped inference and variance compare only class slots.
 
 Generated-code context calls and callable dispatch use the same specialization resolver before
 ordinary binding. The public context-call entry points live in `interpreter/context_calls.rs`;
 first-class function callables may retain a template name until arguments determine its slots.
 
 Structural `EvalParameterTypeVariant::Generic` contracts validate boxed arrays and typed callbacks
-at existing argument and return boundaries. Typed local writes validate before mutation. No new
+at existing argument and return boundaries. Indexed contracts reject associative storage. Typed
+local writes validate before mutation, including nullable and union array arms, normalized keys,
+and the existing contents of a selected union arm. No new
 value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
 mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
-format 12 includes the retained templates, tokens, imports, structural types, and typed locals;
-its fingerprint guard covers every corresponding serialized type source.
+format 13 includes the retained templates, tokens, imports, structural types, and typed locals;
+it discards incorrectly rewritten PHPDoc parents from format 12. The serialized shape and its
+fingerprint are unchanged from format 12, whose guard covers the corresponding type sources.
 
 ## Parsing and cache
 

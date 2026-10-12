@@ -80,10 +80,10 @@ fn bind_template(
             else { let index = Some(variadic_index.map_or(position, |tail| position.min(tail))); position += 1; index };
         let Some(declared) = index.and_then(|index| types.get(index)).and_then(Option::as_ref) else { continue; };
         let declared = generic_type(declared).substitute(&aliases);
-        let actual = runtime_generic_type(arg.value, context, values, 0)?;
+        let actual = generic_inference_type(&runtime_generic_type(arg.value, context, values, 0)?, context);
         if matches!(&declared, Type::Nullable(_)) && actual == Type::atom("null") { continue; }
         if matches!(template.prototype.as_ref(), EvalStmt::ClassDecl(_))
-            && (actual == Type::atom("null") || values.is_array_like(arg.value)? && values.array_len(arg.value)? == 0) { continue; }
+            && (actual == Type::atom("null") || matches!(values.type_tag(arg.value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) && values.array_len(arg.value)? == 0) { continue; }
         let unified = if let (Type::Callable(params, ret), Type::Callable(actual_params, actual_ret)) = (&declared, &actual) {
             let mut result = Ok(());
             for (declared, actual) in params.iter().zip(actual_params).chain(std::iter::once((ret.as_ref(), actual_ret.as_ref()))) {
@@ -109,11 +109,8 @@ fn bind_template(
 
 /// Selects the concrete ordinary name for one set of declaration-order bindings.
 fn specialization_name(template: &EvalGenericTemplate, bindings: &Bindings) -> String {
-    let count = template.parameters.len();
-    let base = if count == 0 { template.name.clone() }
-        else { Type::Apply(template.name.clone(), bindings[..count].iter().map(|(_, ty)| ty.clone()).collect()).to_string() };
-    if template.constructor_parameters.is_empty() { base }
-    else { Type::Apply(base, bindings[count..].iter().map(|(_, ty)| ty.clone()).collect()).to_string() }
+    if bindings.is_empty() { template.name.clone() }
+    else { Type::Apply(template.name.clone(), bindings.iter().map(|(_, ty)| ty.clone()).collect()).to_string() }
 }
 
 /// Dispatches a generic function while preserving the existing evaluated argument owner boundary.
@@ -201,6 +198,8 @@ pub(in crate::interpreter) fn erased_generic_type(template: &EvalGenericTemplate
 pub(in crate::interpreter) fn generic_type_is_a(actual: &Type, bound: &Type, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
     if generic_signature_accepts(actual, bound, context) || *bound == Type::atom("mixed") { return Ok(true); }
     if let (Type::Apply(actual_name, actual_args), Type::Apply(bound_name, bound_args)) = (actual, bound) {
+        let actual_args = generic_class_arguments(actual_name, actual_args, context);
+        let bound_args = generic_class_arguments(bound_name, bound_args, context);
         if actual_name.eq_ignore_ascii_case(bound_name) && actual_args.len() == bound_args.len() {
             if let Some(template) = context.generic_template(actual_name).filter(|template| template.parameters.len() == actual_args.len()) {
                 for (param, (actual, expected)) in template.parameters.iter().zip(actual_args.iter().zip(bound_args)) {

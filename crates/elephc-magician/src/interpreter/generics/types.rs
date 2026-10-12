@@ -71,7 +71,8 @@ pub(in crate::interpreter) fn generic_value_accepts(ty: &Type, value: RuntimeCel
     match ty {
         Type::Atom(name) if name == "false" => Ok(values.type_tag(value)? == EVAL_TAG_BOOL && !values.truthy(value)?),
         Type::Apply(name, args) if name == "array" => {
-            if !values.is_array_like(value)? { return Ok(false); }
+            let tag = values.type_tag(value)?;
+            if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) || args.len() == 1 && tag != EVAL_TAG_ARRAY { return Ok(false); }
             let Some(element_type) = args.last() else { return Ok(false); };
             for index in 0..values.array_len(value)? {
                 if args.len() == 2 {
