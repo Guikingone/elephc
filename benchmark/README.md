@@ -120,10 +120,11 @@ without changing the source checkout or force-pushing.
 
 Each suite keeps the latest sample per **UTC artifact-upload day and platform**.
 A newer run can replace the existing sample for that day. Older dates remain
-saved after artifact expiry. `data/imports.json` checkpoints artifact IDs, so
-unchanged artifacts and legacy archives lacking newer suites are not downloaded
-again every night. Fetch failures or malformed saved results fail the refresh
-before replacing any history.
+saved after artifact expiry. Selection happens after reading each artifact's
+suite and platform. `data/imports.json` checkpoints sample metadata for each
+artifact, so unchanged or superseded artifacts and legacy archives lacking
+newer suites are not downloaded again every night. Fetch failures or malformed
+saved results fail the refresh before replacing any history.
 
 Manual refresh:
 

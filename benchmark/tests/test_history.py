@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from support import record
 from common import SUITES, atomic_json, effective_ms
-from fetch import cached_import, download_artifact, list_artifacts, read_artifact, refresh, sample_daily
+from fetch import cached_import, download_artifact, list_artifacts, read_artifact, refresh
 from history import current_results, empty_history, legacy_result, load_history, merge, migrate_native, validate_cases
 
 
@@ -193,10 +193,8 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(len(list_artifacts("owner/repo", "main")), 1)
             self.assertIn("name=benchmark-results", api.call_args.args[1])
 
-    def test_daily_selection_and_manifest_avoid_repeated_downloads(self):
-        a = {"id": 1, "created_at": "2026-10-10T10:00:00Z"}
+    def test_legacy_manifest_requires_the_imported_artifact_in_history(self):
         b = {"id": 2, "created_at": "2026-10-10T20:00:00Z"}
-        self.assertEqual(sample_daily([a, b]), [b])
         history = merge(empty_history("native"), [record(run_id=2)])
         self.assertTrue(cached_import(b, {"2": {"suites": ["native"]}}, {"native": history}))
         self.assertFalse(cached_import(b, {"2": {"suites": ["native"]}}, {"native": empty_history("native")}))

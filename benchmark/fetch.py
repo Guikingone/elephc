@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 from common import ROOT, SUITES, atomic_json
-from history import current_results, legacy_result, load_history, merge, timestamp
+from history import current_results, legacy_result, load_history, merge, order, record_key, timestamp
 
 ARTIFACT_NAME = "benchmark-results"
 
@@ -38,13 +38,6 @@ def list_artifacts(repo: str, branch: str) -> list[dict]:
             artifacts.append({"id": artifact["id"], "created_at": artifact["created_at"],
                               "run_id": run["id"], "sha": run["head_sha"]})
     return sorted(artifacts, key=lambda a: (timestamp(a["created_at"]), a["id"]))
-
-
-def sample_daily(artifacts: list[dict]) -> list[dict]:
-    by_day = {}
-    for artifact in artifacts:
-        by_day[timestamp(artifact["created_at"]).date().isoformat()] = artifact
-    return [by_day[day] for day in sorted(by_day)]
 
 
 def download_artifact(repo: str, meta: dict, directory: Path) -> None:
@@ -78,12 +71,21 @@ def read_artifact(directory: Path, meta: dict, branch: str) -> dict[str, dict]:
 
 
 def cached_import(meta: dict, imported: dict, histories: dict) -> bool:
-    """A manifest prevents repeatedly downloading legacy artifacts lacking hot-path."""
+    """Accept retained or superseded samples, with exact-ID fallback for old manifests."""
     cached = imported.get(str(meta["id"]))
     if not cached:
         return False
     for suite in cached["suites"]:
-        if not any(r.get("artifact_id") == meta["id"] for r in histories[suite]["series"]):
+        history = histories[suite]
+        sample = cached.get("samples", {}).get(suite)
+        if sample is None:
+            present = any(r.get("artifact_id") == meta["id"] for r in history["series"])
+        else:
+            all_runs = history["sampling"] == "all-runs"
+            key = record_key(sample, all_runs)
+            present = any(record_key(r, all_runs) == key and order(r) >= order(sample)
+                          for r in history["series"])
+        if not present:
             return False
     return True
 
@@ -96,20 +98,25 @@ def refresh(repo: str, branch: str, directory: Path, all_runs: bool = False) -> 
     if not isinstance(imported, dict):
         raise ValueError("invalid artifact import manifest")
     artifacts = list_artifacts(repo, branch)
-    if not all_runs:
-        artifacts = sample_daily(artifacts)
     pending = [meta for meta in artifacts if not cached_import(meta, imported, histories)]
-    print(f"{repo}/{branch}: {len(artifacts)} selected artifacts, {len(pending)} to import", flush=True)
+    print(f"{repo}/{branch}: {len(artifacts)} available artifacts, {len(pending)} to import", flush=True)
+    incoming = {suite: [] for suite in SUITES}
     with tempfile.TemporaryDirectory(prefix="elephc-benchmark-fetch-") as temporary:
         for index, meta in enumerate(pending, 1):
             dest = Path(temporary) / str(meta["id"])
             download_artifact(repo, meta, dest)
             records = read_artifact(dest, meta, branch)
             for suite, record in records.items():
-                histories[suite] = merge(histories[suite], [record])
-            imported[str(meta["id"])] = {"timestamp": meta["created_at"], "suites": sorted(records)}
+                incoming[suite].append(record)
+            imported[str(meta["id"])] = {
+                "timestamp": meta["created_at"], "suites": sorted(records),
+                "samples": {suite: {field: record.get(field) for field in
+                                    ("date", "timestamp", "run_id", "run_attempt", "artifact_id", "environment")}
+                            for suite, record in records.items()}}
             print(f"[{index}/{len(pending)}] {meta['created_at'][:10]} run {meta['run_id']}: "
                   + ", ".join(records), flush=True)
+    # Select by suite, UTC day, and platform before backfilling historical PHP gaps.
+    histories = {suite: merge(history, incoming[suite]) for suite, history in histories.items()}
     # An old artifact is no longer needed for refresh checkpointing after expiry.
     available_ids = {str(meta["id"]) for meta in artifacts}
     imported = {key: value for key, value in imported.items() if key in available_ids}
