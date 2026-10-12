@@ -75,6 +75,47 @@ try { class Exposed<out T> { use Hidden<T> { put as public; } } } catch (TypeErr
 "#]), "exposed");
 }
 
+/// Qualified visibility adaptations use the same concrete trait identity as composition.
+#[test]
+fn generics_review_qualified_trait_visibility() {
+    assert_eq!(run(&[r#"
+trait Put<T> { public function put(T $value): void {} }
+trait Hidden<T> { private function put(T $value): void {} }
+class Box<out T> { use Put<T> { pUt::put as private; } }
+echo get_class(new Box<int>());
+try { class Exposed<out T> { use Hidden<T> { Hidden::put as public; } } }
+catch (TypeError $e) { echo '|exposed'; }
+try { class Alias<out T> { use Put<T> { Put::put as private; Put::put as public exposed; } } }
+catch (TypeError $e) { echo '|alias'; }
+"#]), "Box<int>|exposed|alias");
+}
+
+/// Qualified selection resolves against all used traits before suppressing an unsafe method.
+#[test]
+fn generics_review_qualified_trait_selection() {
+    assert_eq!(run(&[r#"
+trait Get<T> { public function value(): T { throw new Exception('unused'); } }
+trait Other<T> { public function value(T $value): T { return $value; } }
+class Box<out T> { use Get<T>, Other<T> { Get::value insteadof Other; Get::value as copy; } }
+echo get_class(new Box<int>());
+try { class Alias<out T> { use Get<T>, Other<T> { Get::value insteadof Other; Other::value as exposed; } } }
+catch (TypeError $e) { echo '|alias'; }
+"#]), "Box<int>|alias");
+}
+
+/// Nested traits preserve qualified visibility changes at every import boundary.
+#[test]
+fn generics_review_nested_qualified_trait_visibility() {
+    assert_eq!(run(&[r#"
+trait Put<T> { public function put(T $value): void {} }
+trait Inner<T> { use Put<T> { Put::put as private; } }
+class Box<out T> { use Inner<T>; }
+echo get_class(new Box<int>());
+try { class Exposed<out T> { use Inner<T> { Inner::put as public; } } }
+catch (TypeError $e) { echo '|exposed'; }
+"#]), "Box<int>|exposed");
+}
+
 /// Class keyword casing must retain type-parameter evidence from constructor annotations.
 #[test]
 fn generics_review_docblock_keyword_case() {

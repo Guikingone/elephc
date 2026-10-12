@@ -363,6 +363,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             for declared in context.local_reference_types(*cell) { validate_generic_local(&declared, "reference", value, context, values)?; }
             if *cell != value && values.is_reference(*cell)? {
                 let previous = values.reference_replace(*cell, value)?;
+                context.copy_array_metadata(value, *cell);
                 eval_release_value(context, values, previous)?;
             }
             Ok(())

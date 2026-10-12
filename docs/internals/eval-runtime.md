@@ -278,7 +278,8 @@ validation. A recursion guard rejects cyclic generic inheritance, and type growt
 Signature compatibility projects concrete bindings through class and interface ancestors,
 including specializations that have not yet entered the runtime registry. Variance checks
 include public and protected trait members and nested trait uses, with method-local slots
-shielded from enclosing template substitutions.
+shielded from enclosing template substitutions. Qualified adaptations resolve against the
+complete trait-use list before the effective imported method surface is checked.
 Class identities put class and constructor slots in a single argument list. Constructor slots
 remain part of the registry key; class-shaped inference and variance compare only class slots.
 Written lists extending beyond class slots bind the combined class/constructor parameters, so
@@ -300,6 +301,8 @@ reference parameters, captures, and returned array references enforce the same c
 The metadata borrows runtime storage and uses allocation retirement tokens to prevent contracts
 from following reused addresses. Rejected typed declarations restore the previous local contract,
 and property writes preserve shared wrappers while validating before mutation.
+Replacing a wrapper's value refreshes its element aliases and cursor metadata from the RHS
+before releasing the previous payload; a replacement without metadata clears the old entries.
 Independent value copies retain their ordinary COW semantics.
 Float and bool keys use a temporary integer
 cell for contract validation; that cell is released on success and failure, while storage receives

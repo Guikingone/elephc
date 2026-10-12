@@ -688,3 +688,31 @@ echo Holder::$value[0], '|'; Holder::$value = [4]; echo Holder::$value[0];
 "#);
     assert_eq!(compile_and_run(&source), "static|index|append|3|4");
 }
+
+/// Qualified trait selections and visibility changes preserve the effective variance surface.
+#[test]
+fn test_eval_generics_review_qualified_trait_adaptations() {
+    let source = dynamic_eval(r#"
+trait Put<T> { public function put(T $value): void {} }
+trait Hidden<T> { private function put(T $value): void {} }
+trait Inner<T> { use Put<T> { Put::put as private; } }
+trait Get<T> { public function value(): T { throw new Exception('unused'); } }
+trait Other<T> { public function value(T $value): T { return $value; } }
+class PrivateBox<out T> { use Put<T> { pUt::put as private; } }
+class NestedBox<out T> { use Inner<T>; }
+class SelectedBox<out T> { use Get<T>, Other<T> { Get::value insteadof Other; Get::value as copy; } }
+echo get_class(new PrivateBox<int>()), '|', get_class(new NestedBox<int>()), '|', get_class(new SelectedBox<int>());
+try { class Exposed<out T> { use Hidden<T> { Hidden::put as public; } } }
+catch (TypeError $e) { echo '|exposed'; }
+try { class Alias<out T> { use Put<T> { Put::put as private; Put::put as public exposed; } } }
+catch (TypeError $e) { echo '|alias'; }
+try { class SelectedAlias<out T> { use Get<T>, Other<T> { Get::value insteadof Other; Other::value as exposed; } } }
+catch (TypeError $e) { echo '|selected_alias'; }
+try { class NestedExposed<out T> { use Inner<T> { Inner::put as public; } } }
+catch (TypeError $e) { echo '|nested'; }
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "PrivateBox<int>|NestedBox<int>|SelectedBox<int>|exposed|alias|selected_alias|nested");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

@@ -118,13 +118,14 @@ pub(in crate::interpreter) fn set_scope_cell(
 
 /// Applies a validated write without repeating the destination's contract checks.
 fn set_scope_cell_unchecked(
-    context: &ElephcEvalContext, scope: &mut ElephcEvalScope, name: String,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, name: String,
     cell: RuntimeCellHandle, ownership: ScopeCellOwnership, values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if let Some(reference) = visible_scope_cell(context, scope, &name) {
         if values.is_reference(reference)? {
             if reference == cell { return Ok(Vec::new()); }
             let previous = values.reference_replace(reference, cell)?;
+            context.copy_array_metadata(cell, reference);
             if let Some(global) = eval_superglobal_scope(context, scope, &name) {
                 unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?.mark_reference_changed(&name);
             } else if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {

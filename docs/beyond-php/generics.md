@@ -123,7 +123,8 @@ References share those contracts: writes through aliases, reference parameters, 
 and references returned inside arrays must satisfy every typed alias. Independent value copies
 remain unconstrained by the original local's declaration. Compatible child return types project
 their generic arguments through inherited class and interface contracts. Trait variance checks
-use the effective method visibility after trait aliases and overrides.
+use the effective method visibility after trait aliases and overrides, resolving qualified
+adaptations such as `Put::put as private` against the complete trait-use list.
 Nullable and union array locals validate writes against an array arm that accepts their existing
 contents. An indexed `array<T>` requires integer keys and rejects associative values; numeric
 string keys such as `'0'`, floats, and booleans use their normalized integer type for write

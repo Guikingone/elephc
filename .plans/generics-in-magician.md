@@ -105,3 +105,17 @@ All four primary interpreter regressions fail on `b5f94385a6` and pass after cor
 Focused validation passes: 564 parser, generic, cache, reference, trait, and ownership tests, with one existing ignored cache case, plus a warning-free build and Rust/diff hygiene. Native alias and escaped array-reference heap probes are clean. Ordinary closure captures independently retain runtime cells after context teardown; journal task `90e1d964` records that separate issue, and capture behavior checks remain separate from clean-heap assertions.
 
 Native validation passes across focused runs: 31 generic eval cases, 3 source-spelling/undefined-function cases, 1 persistent REPL case, and 2 existing reference-lifetime regressions. The final 9-case run covers failed typed declarations, static/instance property storage, globals, native writeback, ordinary call ownership, array contracts, and property/container reference lifetimes. Heap assertions pass where enabled. Literal by-reference argument keys independently retain temporary cells, tracked in journal task `4136c2d0`; the normalization fixture uses a named local key owner. Static/capture behavior fixtures remain separate from clean-heap assertions because ordinary teardown already retains their owners.
+
+## Sixth PR 1819 review and CI
+
+- [x] Reproduce qualified trait-visibility rejection and unsafe alias/selection cases on `c432a43f87`.
+- [x] Resolve qualified adaptations against every trait in the containing use list before variance validation.
+- [x] Reproduce both Linux CI failures in the unchanged native reference-conversion regression.
+- [x] Refresh persistent wrapper alias/cursor metadata before releasing a replaced value.
+- [x] Validate the focused interpreter and native regressions and prepare the corrections for publication.
+
+Greptile rates `c432a43f87` at 4/5 and flags qualified trait visibility. Three new interpreter regressions fail before correction, covering visibility-only adaptations, named aliases, nested traits, and `insteadof` selections. Variance validation now uses the same full-list qualifier resolution as ordinary class composition, including hidden methods exposed by qualified aliases.
+
+CI run `38308009535` fails `test_mbstring_conversion_input_references` in ordinary codegen shard 6/16 on both Linux architectures. The unchanged test fails locally with the same stale nested-reference output. Whole-value scope and Cell writes now refresh the persistent wrapper's metadata from the RHS before releasing the previous payload. A new interpreter regression fails before correction and covers both write routes, cursor replacement, removed keys, and clearing metadata on scalar replacement. No expected CI output or timeout is weakened.
+
+Latest validation passes: 206 focused Magician generic, reference, trait-adaptation and operand-ownership tests; 16 native generic, property/global, reference-lifetime and conversion regressions; a warning-free build; Rust documentation and diff hygiene. The unchanged native CI fixture now produces its original expected output. The qualified trait fixture reports a clean heap. Current-head CI and the subsequent Greptile review must be verified after publication.

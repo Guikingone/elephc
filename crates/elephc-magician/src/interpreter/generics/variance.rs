@@ -144,12 +144,13 @@ fn verify_trait_uses(
     traits: &[String], adaptations: &[crate::eval_ir::EvalTraitAdaptation], methods: &[crate::eval_ir::EvalClassMethod],
     slot: &str, variance: i8, bindings: &Bindings, context: &ElephcEvalContext, depth: usize, imports: &[TraitImport],
 ) -> bool {
+    let adaptations = concrete_trait_adaptations(adaptations, traits);
     for relation in traits {
         let Ok(Type::Apply(name, arguments)) = crate::parser::generics::parse_type_string(relation) else { continue; };
         let Some(template) = context.generic_template(&name) else { continue; };
         let bindings = template.parameters.iter().map(|param| param.name.clone()).zip(arguments.iter().map(|ty| ty.substitute(bindings))).collect();
         let import = TraitImport {
-            name: relation.clone(), adaptations: adaptations.to_vec(),
+            name: relation.clone(), adaptations: adaptations.clone(),
             overrides: methods.iter().map(|method| method.name().to_ascii_lowercase()).collect(),
         };
         let imports = std::iter::once(import).chain(imports.iter().cloned()).collect::<Vec<_>>();

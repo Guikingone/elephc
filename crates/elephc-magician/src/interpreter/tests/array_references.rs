@@ -80,3 +80,50 @@ fn mbstring_array_reference_value_copy_metadata() {
     assert_eq!(context.array_cursor(target), EvalArrayCursor::Position(0));
     assert!(owners.is_empty());
 }
+
+/// Whole-reference replacement updates alias and cursor metadata before releasing the old value.
+#[test]
+fn array_reference_replacement_refreshes_metadata() {
+    for through_cell in [false, true] {
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let old = values.array_new(1).unwrap();
+        let reference = values.reference_new(old).unwrap();
+        let stale = EvalArrayReferenceKey::Int(0);
+        let key = EvalArrayReferenceKey::String(b"new".to_vec());
+        let before = values.string("before").unwrap();
+        context.bind_array_element_alias(reference, stale.clone(), EvalReferenceTarget::Cell { cell: before });
+        context.set_array_cursor(reference, EvalArrayCursor::Invalid);
+        scope.set("array", reference, ScopeCellOwnership::Borrowed);
+        let replacement = values.array_new(1).unwrap();
+        let after = values.string("after").unwrap();
+        context.bind_array_element_alias(replacement, key.clone(), EvalReferenceTarget::Cell { cell: after });
+        context.set_array_cursor(replacement, EvalArrayCursor::Position(1));
+        let target = EvalReferenceTarget::Cell { cell: reference };
+        if through_cell {
+            write_back_method_ref_target(&target, replacement, &mut context, &mut values).unwrap();
+        } else {
+            for old in set_scope_cell(&mut context, &mut scope, "array", replacement, ScopeCellOwnership::Borrowed, &mut values).unwrap() {
+                values.release(old).unwrap();
+            }
+        }
+        assert!(context.array_element_alias(reference, &stale).is_none(), "through_cell={through_cell}");
+        assert_eq!(context.array_cursor(reference), EvalArrayCursor::Position(1));
+        let mut owners = Vec::new();
+        let current = read_owned_array_reference(reference, key.clone(), &mut context, &mut values, &mut owners).unwrap().unwrap();
+        assert_eq!(values.get(current), FakeValue::String("after".into()));
+        values.release(current).unwrap();
+        let scalar = values.int(7).unwrap();
+        if through_cell {
+            write_back_method_ref_target(&target, scalar, &mut context, &mut values).unwrap();
+        } else {
+            for old in set_scope_cell(&mut context, &mut scope, "array", scalar, ScopeCellOwnership::Borrowed, &mut values).unwrap() {
+                values.release(old).unwrap();
+            }
+        }
+        assert!(context.array_element_alias(reference, &key).is_none());
+        assert_eq!(context.array_cursor(reference), EvalArrayCursor::Position(0));
+        assert!(owners.is_empty());
+    }
+}
