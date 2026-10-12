@@ -9,6 +9,22 @@
 
 use crate::support::*;
 
+/// Throwing a nullable object local transfers its Mixed box instead of freeing it first.
+#[test]
+fn test_throw_nullable_object_local_preserves_exception_box() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function relay(?Throwable $error): void {
+    if ($error instanceof Throwable) { throw $error; }
+}
+try { relay(new RuntimeException("retained")); }
+catch (RuntimeException $caught) { echo $caught->getMessage(); unset($caught); }
+relay(null);
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "retained", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Descendants preserve properties and custom constructor behavior inherited through user parents.
 #[test]
 fn test_throwable_grandchildren_preserve_inherited_storage_and_constructor() {

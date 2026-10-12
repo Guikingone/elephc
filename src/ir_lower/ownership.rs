@@ -90,7 +90,11 @@ pub(crate) fn take_direct_local_load(
         };
         slot
     };
-    if matches!(
+    // Only a concrete payload extracted from a Mixed slot has acquired its own
+    // reference. A Mixed-to-Mixed load still borrows the slot's original box:
+    // move that box by clearing the slot, without decref before the throw.
+    if !matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
+        crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)) && matches!(
         ctx.builder.local_php_type(slot).codegen_repr(),
         crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)
     ) {
