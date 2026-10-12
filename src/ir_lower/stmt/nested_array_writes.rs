@@ -10,6 +10,16 @@
 
 use super::*;
 
+/// Writes an expression's captured nested update without repeating its key diagnoses.
+pub(crate) fn lower_nested_array_assign_after_read(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    lower_nested_array_assign_inner(ctx, target, value, span, true);
+}
+
 /// Lowers a nested array assignment that already carries an expression target.
 pub(super) fn lower_nested_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -199,7 +209,9 @@ fn lower_nested_assign_parent_with_diagnosed_key(
     // runtime wrapper and store the possibly reallocated container back.
     if let ExprKind::Variable(name) = &array.kind {
         let name = name.clone();
-        if let Some(parent) = lower_local_parent_fetch_for_write(ctx, &name, index, expr) {
+        if let Some(parent) = lower_local_parent_fetch_for_write(
+            ctx, &name, index, expr, key_already_diagnosed,
+        ) {
             return parent;
         }
     }
@@ -240,13 +252,15 @@ fn lower_nested_assign_parent_with_diagnosed_key(
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
 /// context, the possibly promoted/reallocated container is stored back into
 /// the local, and the guaranteed-present element is re-read as the parent
-/// cell. Every key shape keeps selected scalar storage attached, and keys are evaluated once.
+/// cell. Every key shape keeps selected scalar storage attached, keys are evaluated once,
+/// and a captured compound diagnosis is reused.
 /// Returns `None` for receiver or key shapes without a concrete lowering.
 pub(super) fn lower_local_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     index: &Expr,
     parent_expr: &Expr,
+    key_already_diagnosed: bool,
 ) -> Option<LoweredValue> {
     let span = parent_expr.span;
     let local_ty = ctx.local_type(name);
@@ -261,7 +275,9 @@ pub(super) fn lower_local_parent_fetch_for_write(
                         // Syntactic inference defaults variables/calls to integer keys. Their
                         // lowered values are authoritative, and must not be coerced to zero.
                         if ctx.is_ref_bound_local(name) && elem_ty.codegen_repr() == PhpType::Mixed {
-                            let cell = lower_indexed_parent_fetch_for_write(ctx, name, array, key, span);
+                            let cell = lower_indexed_parent_fetch_for_write(
+                                ctx, name, array, key, span, key_already_diagnosed,
+                            );
                             crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
                             return Some(cell);
                         }
@@ -272,13 +288,17 @@ pub(super) fn lower_local_parent_fetch_for_write(
                             Op::ArrayToHash.default_effects(), Some(span),
                         );
                         return Some(lower_hash_parent_fetch_for_write_with_key(
-                            ctx, name, hash, assoc_ty, key, span,
+                            ctx, name, hash, assoc_ty, key, span, key_already_diagnosed,
                         ));
                     }
                     // A nested write needs the attached child cell even for a typed string
                     // or boolean element. A plain read loses its writeback identity.
-                    let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
-                    Some(lower_indexed_parent_fetch_for_write(ctx, name, array, key, span))
+                    let key = coerce_array_key_to_int_at_span(
+                        ctx, key, Some(index.span), key_already_diagnosed,
+                    );
+                    Some(lower_indexed_parent_fetch_for_write(
+                        ctx, name, array, key, span, key_already_diagnosed,
+                    ))
                 }
                 PhpType::Str if elem_ty.codegen_repr() == PhpType::Mixed
                     && ctx.is_ref_bound_local(name) => {
@@ -286,7 +306,9 @@ pub(super) fn lower_local_parent_fetch_for_write(
                     // parent can promote storage, but must not reinterpret marker payloads.
                     let array = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
-                    let cell = lower_indexed_parent_fetch_for_write(ctx, name, array, key, span);
+                    let cell = lower_indexed_parent_fetch_for_write(
+                        ctx, name, array, key, span, key_already_diagnosed,
+                    );
                     release_persisted_string_operand(ctx, key, span);
                     Some(cell)
                 }
@@ -308,7 +330,9 @@ pub(super) fn lower_local_parent_fetch_for_write(
                         Op::ArrayToHash.default_effects(),
                         Some(span),
                     );
-                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
+                    Some(lower_hash_parent_fetch_for_write(
+                        ctx, name, hash, assoc_ty, index, span, key_already_diagnosed,
+                    ))
                 }
                 _ => None,
             }
@@ -319,7 +343,9 @@ pub(super) fn lower_local_parent_fetch_for_write(
             // Fetch-for-write normalizes typed entries in place and returns their attached
             // Mixed cells. Declare that result contract before publishing the changed hash.
             ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
-            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span))
+            Some(lower_hash_parent_fetch_for_write(
+                ctx, name, hash_value, assoc_ty, index, span, key_already_diagnosed,
+            ))
         }
         _ => None,
     }
@@ -334,13 +360,18 @@ fn lower_indexed_parent_fetch_for_write(
     array: LoweredValue,
     key: LoweredValue,
     span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
     ctx.prepare_mutated_local_owner(name, array, ensured_ty.clone(), Some(span));
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![array.value, key.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        Some(Immediate::RuntimeCall(if key_already_diagnosed {
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+        } else {
+            RuntimeCallTarget::ArrayFetchForWrite
+        })),
         ensured_ty.clone(),
         effects_lookup::runtime_effects(),
         Some(span),
@@ -360,16 +391,20 @@ fn lower_indexed_parent_fetch_for_write(
 /// possibly reallocated hash back into the local (the previous owner was
 /// already released by `prepare_mutated_local_owner`), and re-reads the
 /// stored cell (retained by `Op::HashGetForWrite`) as the parent of the leaf write.
-pub(super) fn lower_hash_parent_fetch_for_write(
+/// An earlier read's key diagnosis is preserved during this relocation.
+fn lower_hash_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     hash_value: LoweredValue,
     assoc_ty: PhpType,
     index: &Expr,
     span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let key = lower_expr(ctx, index);
-    lower_hash_parent_fetch_for_write_with_key(ctx, name, hash_value, assoc_ty, key, span)
+    lower_hash_parent_fetch_for_write_with_key(
+        ctx, name, hash_value, assoc_ty, key, span, key_already_diagnosed,
+    )
 }
 
 /// Uses an already evaluated hash key for both the ensure and stored-cell read, then retires it.
@@ -380,11 +415,16 @@ fn lower_hash_parent_fetch_for_write_with_key(
     assoc_ty: PhpType,
     key: LoweredValue,
     span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![hash_value.value, key.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        Some(Immediate::RuntimeCall(if key_already_diagnosed {
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+        } else {
+            RuntimeCallTarget::ArrayFetchForWrite
+        })),
         assoc_ty.clone(),
         effects_lookup::runtime_effects(),
         Some(span),
