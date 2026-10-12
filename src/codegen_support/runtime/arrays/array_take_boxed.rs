@@ -144,7 +144,7 @@ fn emit_take(emitter: &mut Emitter) {
     let mode = if emitter.target.arch == Arch::AArch64 { "x9" } else { "r10" };
     abi::load_at_offset(emitter, mode, 48);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("cbnz x9, __rt_array_take_skip_pop_rewind"),// shift rebuilds the next index instead of rewinding the tail
+        Arch::AArch64 => emitter.instruction("cbnz x9, __rt_array_take_skip_pop_rewind"), // shift rebuilds the next index instead of rewinding the tail
         Arch::X86_64 => {
             emitter.instruction("test r10, r10");                               // select pop-specific append-counter repair
             emitter.instruction("jnz __rt_array_take_skip_pop_rewind");         // shift reindexes survivors through the existing rebuild path

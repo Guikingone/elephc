@@ -18,7 +18,10 @@ $boxed = new HtmlBox<DOMDocument>($doc);
 echo $boxed->node->nodeName;
 $doc->loadHTML('<!DOCTYPE html><div title="it\'s">A<!not><!--hidden--> <span>B</span><b>C</b></div>', LIBXML_NOBLANKS);
 $div = $doc->getElementsByTagName('div')->item(0);
-foreach ($div->childNodes as $child) { echo $child->nodeValue; }
+foreach ($div->childNodes as $child) {
+    echo $child->nodeValue, $div->getElementsByTagName('span')->length;
+    foreach ($div->childNodes as $inner) { echo $inner->nodeName; }
+}
 echo $doc->saveXML($div);
 echo $doc->nodeValue === null ? 'N' : 'bad';
 $doc->loadHTML("<div title=\"&euro;&#x1F600;\r\n\">a&nbsp;\r\n<script>a<b&amp;]]></SCRIPT>x</ div>y</div>");
@@ -42,7 +45,8 @@ echo $doc->saveXML($doc->getElementsByTagName('div')->item(0));
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    assert!(assembly.contains(&crate::names::method_symbol("DOMNodeList", "valid")), "{target}");
+    assert!(assembly.contains(&crate::names::method_symbol("DOMNodeList", "getiterator")), "{target}: aggregate factory");
+    assert!(assembly.contains(&crate::names::method_symbol("__ElephcDOMNodeListIterator", "valid")), "{target}: independent iterator");
     assert!(assembly.contains(&crate::names::method_symbol("DOMProcessingInstruction", "__construct")), "{target}: PI construction");
     assert!(assembly.contains("__rt_array_take_boxed") || assembly.contains("__rt_hash_pop_boxed"), "{target}: stack pop path");
 }

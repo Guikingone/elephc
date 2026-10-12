@@ -11,6 +11,140 @@
 
 use crate::support::*;
 
+/// Repeated nested traversals, including early inner exits, release their fresh iterators.
+#[test]
+fn dom_html_sixth_review_iterator_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function walk(DOMNodeList $items): int {
+    $count = 0;
+    foreach ($items as $outer) {
+        foreach ($items as $inner) { $count++; break; }
+        $count++;
+    }
+    return $count;
+}
+$items = new DOMNodeList([1, 2]);
+for ($i = 0; $i < 16; $i++) { echo walk($items) === 4 ? 'Y' : 'bad'; }
+unset($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "YYYYYYYYYYYYYYYY", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Eval dispatch can construct and query the prelude that the host program registers.
+#[test]
+fn dom_html_sixth_review_eval_registered_surface() {
+    let out = compile_and_run(r#"<?php
+function enableDom(DOMDocument $doc): void {}
+echo eval('$doc = new DOMDocument(); $doc->loadHTML("<div>X</div>"); return $doc->getElementsByTagName("div")->item(0)->nodeValue;');
+"#);
+    assert_eq!(out, "X");
+}
+
+/// The real CLI repeats DOM discovery after loading a namespaced Composer renderer.
+#[test]
+fn dom_html_sixth_review_autoload_cli() {
+    let dir = make_cli_test_dir("elephc_dom_autoload_sixth");
+    let result: std::io::Result<(std::process::Output, Option<std::process::Output>)> = (|| {
+        std::fs::create_dir_all(dir.join("src"))?;
+        std::fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#)?;
+        std::fs::write(dir.join("src/Renderer.php"), r#"<?php
+namespace App;
+use DOMDocument as Document;
+class Renderer {
+    public function render(): string {
+        $doc = new Document();
+        $doc->loadHTML('<div>Hello</div>');
+        return $doc->getElementsByTagName('div')->item(0)->nodeValue;
+    }
+}
+"#)?;
+        std::fs::write(dir.join("main.php"), "<?php echo (new App\\Renderer())->render();")?;
+        let compiled = elephc_cli_command(&dir).arg("main.php").output()?;
+        let output = if compiled.status.success() {
+            Some(std::process::Command::new(dir.join("main")).output()?)
+        } else { None };
+        Ok((compiled, output))
+    })();
+    std::fs::remove_dir_all(&dir).expect("clean up CLI fixture on both success and failure");
+    let (compiled, output) = result.expect("run CLI fixture");
+    assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+    let output = output.expect("successful compilation must run");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello");
+}
+
+/// Runtime existence probes verify the registry's native and eval class support declarations.
+#[test]
+fn dom_html_sixth_review_class_catalog_support() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+echo class_exists('DOMCharacterData') ? '1' : '0';
+echo class_exists('DOMComment') ? '1' : '0';
+echo class_exists('DOMDocument') ? '1' : '0';
+echo class_exists('DOMElement') ? '1' : '0';
+echo class_exists('DOMNode') ? '1' : '0';
+echo class_exists('DOMNodeList') ? '1' : '0';
+echo class_exists('DOMProcessingInstruction') ? '1' : '0';
+echo class_exists('DOMText') ? '1' : '0';
+echo '|';
+echo eval('$names = ["DOMCharacterData", "DOMComment", "DOMDocument", "DOMElement", "DOMNode", "DOMNodeList", "DOMProcessingInstruction", "DOMText"]; $bits = ""; foreach ($names as $name) { $bits .= class_exists($name, false) ? "1" : "0"; } return $bits;');
+"#);
+    assert_eq!(out, "11111111|11111111");
+}
+
+/// Descendant queries must not consume the iterator of an active child traversal.
+#[test]
+fn dom_html_sixth_review_query_during_child_walk() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$doc->loadHTML('<div><span>A</span><b>B</b><span>C</span></div>');
+$div = $doc->getElementsByTagName('div')->item(0);
+foreach ($div->childNodes as $key => $child) {
+    echo $key, ':', $child->nodeName, ':', $div->getElementsByTagName('span')->length, ';';
+}
+"#);
+    assert_eq!(out, "0:span:2;1:b:2;2:span:2;");
+}
+
+/// Every nested traversal of the same list owns an independent cursor.
+#[test]
+fn dom_html_sixth_review_nested_child_walks() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$doc->loadHTML('<div><span>A</span><b>B</b></div>');
+$list = $doc->getElementsByTagName('div')->item(0)->childNodes;
+foreach ($list as $outerKey => $outer) {
+    echo $outerKey, ':', $outer->nodeName, '[';
+    foreach ($list as $innerKey => $inner) { echo $innerKey, ':', $inner->nodeName, ';'; }
+    echo ']';
+}
+"#);
+    assert_eq!(out, "0:span[0:span;1:b;]1:b[0:span;1:b;]");
+}
+
+/// A renderer loaded through Composer can be the only source of DOM references.
+#[test]
+fn dom_html_sixth_review_autoload_renderer() {
+    let out = compile_and_run_files(&[
+        ("composer.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
+        ("src/Renderer.php", r#"<?php
+namespace App;
+use DOMDocument as Document;
+class Renderer {
+    public function render(): string {
+        $doc = new Document();
+        $doc->loadHTML('<div>Hello</div>');
+        return $doc->getElementsByTagName('div')->item(0)->nodeValue;
+    }
+}
+"#),
+        ("main.php", "<?php echo (new App\\Renderer())->render();"),
+    ], "main.php");
+    assert_eq!(out, "Hello");
+}
+
 /// Leading comments and instructions remain document siblings, not Termwind body children.
 #[test]
 fn dom_html_fifth_review_document_leading_nodes() {

@@ -51,20 +51,20 @@ pub(super) fn rewind_after_pop(
         Arch::AArch64 => {
             emitter.instruction(&format!("cmn {key_len}, #1"));                 // only integer tail keys can rewind automatic indexing
             emitter.instruction(&format!("b.ne {done}"));                       // popping a string key preserves numeric insertion history
-            emitter.instruction(&format!("ldr x9, [{hash}, #{NEXT_INDEX_OFFSET}]"));// read the current next automatic integer key
+            emitter.instruction(&format!("ldr x9, [{hash}, #{NEXT_INDEX_OFFSET}]")); // read the current next automatic integer key
             emitter.instruction("sub x10, x9, #1");                             // match PHP's immediate predecessor rule, including saturation
             emitter.instruction(&format!("cmp {key}, x10"));                    // older numeric tail entries do not rewind a higher counter
             emitter.instruction(&format!("b.ne {done}"));                       // retain history unless this is the counter's predecessor
-            emitter.instruction(&format!("str {key}, [{hash}, #{NEXT_INDEX_OFFSET}]"));// let the next append reuse the popped numeric slot
+            emitter.instruction(&format!("str {key}, [{hash}, #{NEXT_INDEX_OFFSET}]")); // let the next append reuse the popped numeric slot
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {key_len}, -1"));                 // only integer tail keys can rewind automatic indexing
             emitter.instruction(&format!("jne {done}"));                        // popping a string key preserves numeric insertion history
-            emitter.instruction(&format!("mov r10, QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}]"));// read the persistent next automatic integer key
+            emitter.instruction(&format!("mov r10, QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}]")); // read the persistent next automatic integer key
             emitter.instruction("lea r11, [r10 - 1]");                          // match PHP's immediate predecessor rule, including saturation
             emitter.instruction(&format!("cmp {key}, r11"));                    // lower numeric tail entries preserve a higher insertion history
             emitter.instruction(&format!("jne {done}"));                        // rewind only when this key directly precedes the counter
-            emitter.instruction(&format!("mov QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}], {key}"));// let the next append reuse the popped numeric slot
+            emitter.instruction(&format!("mov QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}], {key}")); // let the next append reuse the popped numeric slot
         }
     }
     emitter.label(&done);

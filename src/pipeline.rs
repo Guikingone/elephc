@@ -508,6 +508,19 @@ pub(crate) fn compile(config: CliConfig) {
         };
     timings.record_since("autoload-run", phase_started);
 
+    // Discover DOM use inside newly loaded classes, resolving only injected declarations.
+    crate::progress::phase("dom-html-autoload-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("dom-html-autoload-prelude", phase_started);
+
     // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
     // spells a `(object)` cast, so other binaries carry nothing.
     //

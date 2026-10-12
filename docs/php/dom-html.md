@@ -7,7 +7,8 @@ sidebar:
 
 elephc injects a small **HTML-only DOM subset** when a program names `DOMDocument`,
 `DOMNode`, `DOMElement`, `DOMText`, `DOMComment`, `DOMCharacterData`, `DOMProcessingInstruction`, or
-`DOMNodeList` through the global prelude surface. References bound to user-defined
+`DOMNodeList` through the global prelude surface, including references inside
+Composer-autoloaded application classes. References bound to user-defined
 classes, including namespace and import aliases, keep their own definitions and
 do not trigger conflicting prelude declarations. The surface is enough for Termwind's `HtmlRenderer::parse` to
 walk a fragment such as `<div class="text-green-500">Hi</div>`: load the HTML,
@@ -40,7 +41,7 @@ foreach ($body->childNodes as $node) {
 | `new DOMDocument()` | Empty document. Optional constructor args are accepted and ignored. |
 | `loadHTML(string $source, int $options = 0): bool` | Forgiving HTML fragment parse. Wraps element/text content in `html`/`body`; unmatched closing tags are ignored, and a matching ancestor closes its open descendants. Text and attributes decode HTML4 named entities, `&apos;`, and numeric references. Script/style content remains raw until its matching closing tag. This is not full HTML tree-repair semantics. |
 | `getElementsByTagName(string $name): DOMNodeList` | Document-order descendant elements. Names are compared literally after HTML parse lowercases tag names. `*` matches every element. |
-| `DOMNodeList::item(int $index)` / `$length` / `foreach` | Indexed access and `Iterator` traversal. |
+| `DOMNodeList::item(int $index)` / `$length` / `foreach` | Indexed access and independent `IteratorAggregate` traversals, including nested walks and descendant queries during a walk. |
 | `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text, excluding comments and processing instructions. Document `nodeValue` remains `null`. A `DOMComment` retains its own comment body and serializes normally. |
 | `childNodes`, `previousSibling`, `nextSibling`, `parentNode`, `ownerDocument` | Wired after parse. The document's `ownerDocument` is `null`; child nodes refer to their document. The tree is treated as immutable. |
 | `DOMElement::getAttribute(string $name): string` | Attribute names are lowercased on parse; duplicate names keep their first value. Queries are compared literally, so `class` matches parsed `CLASS`, but a query for `CLASS` does not. Missing attributes return `""`. |
@@ -89,7 +90,17 @@ with data is discarded.
 - No SimpleXML and no DOM ↔ SimpleXML import.
 - `loadHTMLFile()`, encoding detection, error collection (`libxml_use_internal_errors`), and default `<head>` insertion are unimplemented.
 - Specialized Termwind renderers that need richer markup (`<table>`, `<code>`, `<pre>` via `getHtml()` / `saveXML` of mixed subtrees) are not the goal of this subset; `saveXML` covers a simple element so those paths can be added later.
-- The class surface is AOT-prelude only. `eval()` sees the `LIBXML_*` constants but not the DOM classes until #654 or a Magician binding lands.
+- Opaque `eval()` source alone does not trigger DOM injection. Once static program references load the prelude, `eval()` can discover, construct, and query the registered DOM classes through native dispatch. This remains a limited HTML subset, not full PHP DOM.
 
 Do not vendor Termwind itself. Compile programs that already depend on Termwind
 against this subset; keep Termwind's sources in the application tree.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+Classes: `DOMCharacterData`, `DOMComment`, `DOMDocument`, `DOMElement`, `DOMNode`, `DOMNodeList`, `DOMProcessingInstruction`, `DOMText`.
+
+<!-- elephc:generated:symbols:end -->

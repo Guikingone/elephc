@@ -719,10 +719,31 @@ class DOMNode {
     }
 }
 
-class DOMNodeList implements Iterator {
+class __ElephcDOMNodeListIterator implements Iterator {
+    private mixed $__items = [];
+    private int $__length = 0;
+    private int $__i = 0;
+
+    public function __construct(mixed $items, int $length) {
+        $this->__items = $items;
+        $this->__length = $length;
+    }
+
+    public function rewind(): void { $this->__i = 0; }
+    public function valid(): bool { return $this->__i < $this->__length; }
+    public function key(): mixed { return $this->__i; }
+    public function next(): void { $this->__i = $this->__i + 1; }
+
+    public function current(): mixed {
+        $_items = $this->__items;
+        if (!is_array($_items)) { return null; }
+        return $_items[$this->__i];
+    }
+}
+
+class DOMNodeList implements IteratorAggregate {
     public int $length = 0;
     public mixed $__items = [];
-    private int $__i = 0;
 
     public function __construct(mixed $items = []) {
         $_list = [];
@@ -731,7 +752,6 @@ class DOMNodeList implements Iterator {
         }
         $this->__items = $_list;
         $this->length = count($_list);
-        $this->__i = 0;
     }
 
     public function item(int $index): mixed {
@@ -745,28 +765,8 @@ class DOMNodeList implements Iterator {
         return $_items[$index];
     }
 
-    public function rewind(): void {
-        $this->__i = 0;
-    }
-
-    public function valid(): bool {
-        return $this->__i < $this->length;
-    }
-
-    public function current(): mixed {
-        $_items = $this->__items;
-        if (!is_array($_items)) {
-            return null;
-        }
-        return $_items[$this->__i];
-    }
-
-    public function key(): mixed {
-        return $this->__i;
-    }
-
-    public function next(): void {
-        $this->__i = $this->__i + 1;
+    public function getIterator(): Iterator {
+        return new __ElephcDOMNodeListIterator($this->__items, $this->length);
     }
 }
 
