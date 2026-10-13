@@ -87,6 +87,26 @@ fn deferred_error_default_keeps_its_message() {
     assert!(matches!(&resolved[0], Some(InvokerDefaultValue::DeferredError(value)) if value == message));
 }
 
+/// Complex normalized defaults select their EIR helper without depending on the eval bridge.
+#[test]
+fn nested_deferred_default_resolves_to_native_helper() {
+    let mut module = Module::new(Target::parse("linux-x86_64").unwrap());
+    let exception = Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("Error"),
+        args: vec![Expr::new(ExprKind::StringLiteral("lazy".into()), Span::dummy())],
+    }, Span::dummy());
+    let default = Expr::new(ExprKind::ArrayLiteral(vec![
+        Expr::new(ExprKind::Throw(Box::new(exception)), Span::dummy()),
+    ]), Span::dummy());
+    let mut helper = crate::ir::Function::new("native_default".into(), crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed);
+    helper.callable_default = Some(default.clone());
+    module.add_closure(helper);
+    let sig = signature(vec![("items".into(), PhpType::php_array())], vec![Some(default)], vec![true], None);
+    assert!(matches!(&resolve_invoker_defaults(&module, None, &sig)[0],
+        Some(InvokerDefaultValue::EirHelper(name)) if name == "native_default"));
+    assert!(!module.required_runtime_features.eval_bridge);
+}
+
 /// A lazy default uses the normal Error class and owner-cleaning unwind path on one target.
 fn deferred_error_default_on_target(target: &str) {
     let asm = emit_default_asm(target, &InvokerDefaultValue::DeferredError("lazy".to_string()));
@@ -95,6 +115,9 @@ fn deferred_error_default_on_target(target: &str) {
     assert!(asm.contains("__rt_throw_current"), "{target}");
     assert!(!asm.contains("invoker_unsupported_default"), "{target}");
     assert!(!asm.contains("_spl_argument_count_error_class_id"), "{target}");
+    let native = emit_default_asm(target, &InvokerDefaultValue::EirHelper("native_default".into()));
+    assert!(native.contains(&crate::names::function_symbol("native_default")), "{target}");
+    assert!(!native.contains("__elephc_eval"), "{target}");
 }
 
 /// Keeps each target's emitter validation inside the ordinary CI per-test budget.

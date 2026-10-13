@@ -46,6 +46,22 @@ class LexicalChild extends LexicalBase {
     public function make(): Closure { return fn(string $parent = parent::class, int $value = parent::A): string => $parent . $value; }
 }
 echo (new LexicalChild)->make()();
+class ParentlessClosure {
+    public function make(): Closure { return fn(string $name = parent::class): string => $name; }
+    public function nested(): Closure { return fn(array $names = ['parent' => parent::class]): array => $names; }
+}
+$missingClosure = (new ParentlessClosure())->make();
+echo $missingClosure('explicit');
+try { $missingClosure(); } catch (Error $error) { echo 'lexical-parent'; }
+$nestedClosure = (new ParentlessClosure())->nested();
+echo json_encode($nestedClosure([]));
+try { $nestedClosure(); } catch (Error $error) { echo 'nested-parent'; }
+$unscopedClosure = function(int $value = parent::A): int { return $value; };
+echo $unscopedClosure(4);
+try { $unscopedClosure(); } catch (Error $error) { echo 'unscoped-parent'; }
+$unscopedArrow = fn(string $name = self::class): string => $name;
+echo $unscopedArrow('explicit');
+try { $unscopedArrow(); } catch (Error $error) { echo 'unscoped-self'; }
 try { (new MethodConsumer())->value(); } catch (Error $error) { echo 'instance'; }
 try { MethodConsumer::staticValue(); } catch (Error $error) { echo 'static'; }
 try { call_user_func([MethodConsumer::class, 'staticValue']); }
@@ -77,10 +93,20 @@ echo (new MethodConsumer())->value(7), MethodConsumer::staticValue(value: 8);
             receiver: crate::parser::ast::StaticReceiver::Self_, ..
         }), "{target_name}: preserve source-visible constant receiver");
     let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    assert!(main.blocks.iter().any(|block| {
+        matches!(block.terminator, Some(crate::ir::Terminator::Throw { .. }))
+    }), "{target_name}: lazy lexical defaults lower through ordinary EIR exception control flow");
     assert!(main.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::Borrow),
         "{target_name}: metadata guards must borrow their receiver");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target_name}: {error:?}"));
+    let helper = module.closures.iter().find(|function| function.callable_default.is_some())
+        .expect("a nested lazy default has a native EIR helper");
+    assert!(helper.flags.is_synthetic, "{target_name}: default helpers are not PHP-visible declarations");
+    assert!(helper.instructions.iter().any(|instruction|
+        instruction.op == crate::ir::Op::ThrowException),
+        "{target_name}: helper errors use ordinary EIR exception control flow");
+    assert!(assembly.contains(&crate::names::function_symbol(&helper.name)), "{target_name}: native helper symbol");
     assert!(assembly.contains("__elephc_eval_register_native_property_default_error"), "{target_name}");
     for symbol in ["__elephc_eval_register_native_method_param_default_error",
         "__elephc_eval_register_native_static_method_param_default_error",

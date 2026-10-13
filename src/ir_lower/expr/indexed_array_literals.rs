@@ -131,6 +131,7 @@ pub(super) fn lower_array_literal_without_spread(
     array_ty: PhpType,
 ) -> LoweredValue {
     let elem_ty = indexed_array_literal_element_type(&array_ty);
+    let result_ty = array_ty.clone();
     let array = ctx.emit_value(
         Op::ArrayNew,
         Vec::new(),
@@ -139,9 +140,13 @@ pub(super) fn lower_array_literal_without_spread(
         Op::ArrayNew.default_effects(),
         Some(expr.span),
     );
+    let owner = crate::ir_lower::function::contains_deferred_error(expr)
+        .then(|| publish_constructed_container(ctx, array, expr.span));
     for item in items {
         let value = lower_expr(ctx, item);
         let value = coerce_array_literal_element_to_storage_type(ctx, value, elem_ty.as_ref(), item);
+        let array = owner.map(|slot| load_published_container(ctx, slot, result_ty.clone(), item.span))
+            .unwrap_or(array);
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -151,7 +156,7 @@ pub(super) fn lower_array_literal_without_spread(
         );
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
-    array
+    owner.map(|slot| take_published_container(ctx, slot, result_ty, expr.span)).unwrap_or(array)
 }
 
 /// Coerces an array literal element to the contextual storage type when needed.
@@ -590,7 +595,7 @@ pub(super) fn array_literal_element_type_for_ir(
         return storage;
     }
     match &item.kind {
-        ExprKind::Null => PhpType::Mixed,
+        ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
         ExprKind::Ternary { .. } => {
             // Keep array element ownership consistent with the lowered branch result.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, item))

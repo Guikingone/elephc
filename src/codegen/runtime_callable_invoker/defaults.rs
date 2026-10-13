@@ -13,6 +13,7 @@
 //! - A default is kept only when it is materializable end to end. Anything else stays `None` and
 //!   the invoker keeps its existing fatal diagnostic; nothing is ever replaced by null.
 //! - Compiler-generated lazy default Errors bypass constant folding and remain catchable throws.
+//! - Nested lazy Errors use native EIR helpers to preserve prefix effects and unwind cleanup.
 //! - Every refcounted default is FRESHLY allocated per invocation and hands the caller exactly one
 //!   owner, which `InvokerArgumentOwners` adopts and releases on the normal and escape paths alike.
 //! - Object defaults are constructed through the same pair of runtime entry points eval already
@@ -43,6 +44,7 @@ pub(in crate::codegen) type InvokerDefaults = Vec<Option<InvokerDefaultValue>>;
 #[derive(Clone, PartialEq)]
 pub(in crate::codegen) enum InvokerDefaultValue {
     DeferredError(String),
+    EirHelper(String),
     Scalar { kind: i64, payload: i64 },
     String(String),
     Array(Vec<InvokerDefaultArrayElement>),
@@ -85,6 +87,11 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
             let default = default.as_ref()?;
             if let Some(message) = deferred_error_message(default) {
                 return Some(InvokerDefaultValue::DeferredError(message.to_string()));
+            }
+            if let Some(helper) = module.closures.iter().find(|function|
+                function.callable_default.as_ref().is_some_and(|value|
+                    value == default && value.span == default.span)) {
+                return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
             }
             let value = resolve_const_default(default, &context)?;
             let value = normalize_invoker_default(module, value)?;
@@ -276,7 +283,7 @@ fn normalize_object_args_for_signature(
 /// fatal diagnostic instead of quietly becoming null or a half-built value.
 fn materializable(module: &Module, value: &InvokerDefaultValue) -> bool {
     match value {
-        InvokerDefaultValue::DeferredError(_) => true,
+        InvokerDefaultValue::DeferredError(_) | InvokerDefaultValue::EirHelper(_) => true,
         InvokerDefaultValue::Scalar { .. } | InvokerDefaultValue::String(_) => true,
         InvokerDefaultValue::Array(elements) => elements
             .iter()
@@ -317,6 +324,10 @@ pub(super) fn emit_const_default_to_result(
     data: &mut DataSection,
 ) -> PhpType {
     match default {
+        InvokerDefaultValue::EirHelper(name) => {
+            abi::emit_call_label(emitter, &crate::names::function_symbol(name));
+            PhpType::Mixed
+        }
         InvokerDefaultValue::DeferredError(message) => {
             super::emit_invoker_throwable(emitter, data, "_spl_error_class_id", message);
             PhpType::Never

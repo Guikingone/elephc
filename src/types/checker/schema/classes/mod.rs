@@ -25,6 +25,7 @@ mod state;
 pub(crate) use property_defaults::validate_trait_property_defaults;
 pub(crate) use property_defaults::collect_trait_default_origins;
 pub(crate) use constants::{normalize_property_default_in_scope, validate_compile_time_default_in_scope};
+pub(crate) use constants::normalize_lexical_default_in_scope;
 pub(crate) use constants::{deferred_default_error, is_missing_parent_default_error};
 
 use super::super::Checker;

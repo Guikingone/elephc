@@ -64,6 +64,7 @@ pub(crate) use loop_storage::loop_carried_storage_types;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 pub(crate) use schema::normalize_signature_default_receivers;
+pub(crate) use schema::normalize_lexical_callable_default;
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
 

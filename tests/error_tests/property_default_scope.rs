@@ -10,13 +10,28 @@
 
 use super::*;
 
-/// Closure and arrow parent class-name defaults fail at declaration time without a parent.
+/// Closure and arrow parent class-name defaults are legal declarations without a parent.
 #[test]
 fn test_property_default_sixth_review_parentless_closure_default() {
     for value in ["function(string $name = parent::class): string { return $name; }",
         "fn(string $name = parent::class): string => $name"] {
-        expect_error(&format!("<?php class Probe {{ public function make(): Closure {{ return {value}; }} }}"),
-            "Cannot use \"parent\" when current class scope has no parent");
+        check_source(&format!("<?php class Probe {{ public function make(): Closure {{ return {value}; }} }}"))
+            .expect("a missing parent is evaluated only when the closure argument is omitted");
+    }
+}
+
+/// A lazy lexical failure cannot hide forbidden late-static receivers in another array entry.
+#[test]
+fn test_property_default_seventh_review_closure_late_static_masking() {
+    for source in [
+        "<?php $value = fn(array $items = [self::class, static::class]): array => $items;",
+        "<?php class Probe { public function make(): Closure { return fn(array $items = [parent::A, static::class]): array => $items; } }",
+        "<?php trait Factory { public function make(): Closure { return fn(array $items = [parent::A, static::A]): array => $items; } } class Probe { use Factory; }",
+    ] {
+        let message = if source.contains("static::class") {
+            "static::class cannot be used for compile-time class name resolution"
+        } else { "\"static::\" is not allowed in compile-time constants" };
+        expect_error(source, message);
     }
 }
 

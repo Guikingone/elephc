@@ -2470,6 +2470,11 @@ fn push_default_value_arg(
     data: &mut DataSection,
 ) -> PhpType {
     let source_ty = emit_default_to_result(index, target_ty, emitter, ctx, data);
+    if source_ty.codegen_repr() == PhpType::Mixed {
+        // Native EIR helpers return one owned box. Reuse the same transfer path
+        // as owned hash cells when a typed slot borrows the unboxed payload.
+        return push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data);
+    }
     let pushed_ty = if source_ty.is_refcounted()
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
         && source_ty.codegen_repr() != PhpType::Mixed

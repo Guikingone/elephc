@@ -10,6 +10,193 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// Parentless lexical closures and arrows are declared and fail only when their default is used.
+#[test]
+fn test_property_default_seventh_review_parentless_lexical() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Probe {
+    public function closure(): Closure { return function(string $name = parent::class): string { return $name; }; }
+    public function arrow(): Closure { return fn(string $name = parent::class): string => $name; }
+}
+$probe = new Probe(); $closure = $probe->closure(); $arrow = $probe->arrow();
+echo $closure('X'), ':', $arrow('Y'), '|';
+try { $closure(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+try { $arrow(); } catch (Error $e) { echo $e->getMessage(); }
+unset($closure, $arrow, $probe);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    let message = "Cannot use \"parent\" when current class scope has no parent";
+    assert_eq!(out.stdout, format!("X:Y|{message}|{message}"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Enum lexical defaults remain lazy without growing the runtime's existing singleton baseline.
+#[test]
+fn test_property_default_seventh_review_enum_lexical() {
+    let retained = |iterations| {
+        let source = format!(r#"<?php
+enum Choice {{ case Item; public function make(): Closure {{ return fn(string $name = parent::class): string => $name; }} }}
+$closure = Choice::Item->make();
+echo $closure('Z'), '|';
+for ($i = 0; $i < {iterations}; $i++) {{
+    try {{ $closure(); }} catch (Error $e) {{ echo $e->getMessage(), '|'; }}
+}}
+unset($closure);
+"#);
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "{}", out.stderr);
+        let message = "Cannot use \"parent\" when current class scope has no parent|";
+        assert_eq!(out.stdout, format!("Z|{}", message.repeat(iterations)), "{}", out.stderr);
+        let totals = out.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: allocs=")).unwrap();
+        totals.split_once("live_blocks=").unwrap().1.split_once(" peak_live_bytes=").unwrap().0.to_string()
+    };
+    assert_eq!(retained(1), retained(24));
+}
+
+/// Trait consumers bind their own scope and preserve first-error ordering in nested array defaults.
+#[test]
+fn test_property_default_seventh_review_trait_array_lexical() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+trait Factory { public function make(): Closure { return fn(array $items = [parent::A, parent::class]): array => $items; } }
+class Orphan { use Factory; }
+class Base { const A = 7; }
+class Bound extends Base { use Factory; }
+$orphan = new Orphan(); $missing = $orphan->make();
+echo json_encode($missing([4, 'X'])), '|';
+try { $missing(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+$bound = new Bound(); $good = $bound->make(); echo json_encode($good());
+unset($missing, $good, $orphan, $bound);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[4,\"X\"]|Cannot access \"parent\" when current class scope has no parent|[7,\"Base\"]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Both class-name keywords outside a lexical class produce PHP's self no-scope message lazily.
+#[test]
+fn test_property_default_seventh_review_unscoped_class_names() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$parent = function(string $name = parent::class): string { return $name; };
+$self = fn(string $name = self::class): string => $name;
+$arrow = fn(string $name = parent::class): string => $name;
+echo $parent('P'), ':', $self('S'), ':', $arrow('A'), '|';
+try { $parent(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+try { $self(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+try { $arrow(); } catch (Error $e) { echo $e->getMessage(); }
+unset($parent, $self, $arrow);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    let message = "Cannot use \"self\" when no class scope is active";
+    assert_eq!(out.stdout, format!("P:S:A|{message}|{message}|{message}"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unscoped ordinary constants defer their access error and accept an explicit typed argument.
+#[test]
+fn test_property_default_seventh_review_unscoped_parent_constant() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$value = function(int $value = parent::A): int { return $value; };
+echo $value(4), '|';
+try { $value(); } catch (Error $e) { echo $e->getMessage(); }
+unset($value);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "4|Cannot access \"parent\" when no class scope is active", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A default array evaluates earlier constructors and retires its partial values before a lazy error.
+#[test]
+fn test_property_default_seventh_review_array_prefix_effects() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Value {
+    public function __construct() { echo 'C'; }
+    public function __destruct() { echo 'D'; }
+}
+class Factory { public function make(): Closure {
+    return fn(array $items = [new Value(), parent::class]): array => $items;
+} }
+$factory = new Factory(); $closure = $factory->make();
+echo json_encode($closure([])), '|';
+try { $closure(); } catch (Error $e) { echo $e->getMessage(); }
+unset($closure, $factory);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[]|CDCannot use \"parent\" when current class scope has no parent", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A native helper preserves a successful lazy branch and returns an owned array on every call.
+#[test]
+fn test_property_default_seventh_review_lazy_branches() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Factory { public function make(): Closure {
+    return fn(array $items = [true ? 'ok' : parent::class]): array => $items;
+} }
+$factory = new Factory(); $closure = $factory->make();
+for ($i = 0; $i < 12; $i++) { echo json_encode($closure()), '|'; }
+unset($closure, $factory);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[\"ok\"]|".repeat(12), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A successful native default transfers its owned object without retaining the helper's box.
+#[test]
+fn test_property_default_seventh_review_owned_helper_success() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Value {
+    public function __construct() { echo 'C'; }
+    public function __destruct() { echo 'D'; }
+}
+class Factory { public function make(): Closure {
+    return fn(object $value = new Value() ?? parent::class): object => $value;
+} }
+$factory = new Factory(); $closure = $factory->make();
+for ($i = 0; $i < 12; $i++) { $value = $closure(); unset($value); }
+unset($closure, $factory);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "CD".repeat(12), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested keyed defaults retire earlier object and string values when an unscoped error is caught.
+#[test]
+fn test_property_default_seventh_review_nested_keyed_cleanup() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Value {
+    public function __construct() { echo 'C'; }
+    public function __destruct() { echo 'D'; }
+}
+$closure = fn(array $items = ['owner' => new Value(), 'nested' => ['bad' => self::class]]): array => $items;
+for ($i = 0; $i < 12; $i++) {
+    try { $closure(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+}
+unset($closure);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "CDCannot use \"self\" when no class scope is active|".repeat(12), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Omitted versus explicit defaults, lexical scopes and closure cleanup remain independent of IR passes.
+#[test]
+fn test_property_default_seventh_review_without_ir_opt() {
+    without_ir_opt(|| {
+        test_property_default_seventh_review_parentless_lexical();
+        test_property_default_seventh_review_enum_lexical();
+        test_property_default_seventh_review_trait_array_lexical();
+        test_property_default_seventh_review_unscoped_class_names();
+        test_property_default_seventh_review_unscoped_parent_constant();
+        test_property_default_seventh_review_array_prefix_effects();
+        test_property_default_seventh_review_lazy_branches();
+        test_property_default_seventh_review_nested_keyed_cleanup();
+        test_property_default_seventh_review_owned_helper_success();
+    });
+}
+
 /// Eval callback default Errors keep identical ownership without EIR optimization.
 #[test]
 fn test_property_default_sixth_review_eval_callable_without_ir_opt() {

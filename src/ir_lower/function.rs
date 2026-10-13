@@ -31,6 +31,8 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+mod closure_defaults;
+pub(crate) use closure_defaults::contains_deferred_error;
 pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
@@ -1457,6 +1459,7 @@ pub(crate) fn lower_closure_function(
         captures,
         self_ref_callable_capture,
         loop_storage_scope,
+        None,
     )
 }
 
@@ -1518,6 +1521,7 @@ pub(crate) fn lower_closure_function_with_context(
         captures,
         self_ref_callable_capture,
         loop_storage_scope,
+        None,
     )
 }
 
@@ -1531,7 +1535,9 @@ fn lower_closure_function_with_signature(
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     loop_storage_scope: String,
+    callable_default: Option<Expr>,
 ) -> FunctionSig {
+    closure_defaults::lower_helpers(parent, name, &signature);
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
     let closure_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
@@ -1541,8 +1547,10 @@ fn lower_closure_function_with_signature(
         closure_body_return_type.clone(),
     );
     function.lexical_class = parent.current_class.clone();
+    function.callable_default = callable_default;
     function.flags = FunctionFlags {
         is_closure: true,
+        is_synthetic: function.callable_default.is_some(),
         by_ref_return: signature.by_ref_return,
         ..FunctionFlags::default()
     };
@@ -2237,9 +2245,12 @@ fn closure_signature_from_ast(
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
-    if let Some(owner) = ctx.current_class.as_deref() {
-        let parent = ctx.classes.get(owner).and_then(|class| class.parent.as_deref());
-        crate::types::checker::normalize_signature_default_receivers(&mut signature, owner, parent);
+    let owner = ctx.current_class.as_deref();
+    let parent = owner.and_then(|owner| ctx.classes.get(owner))
+        .and_then(|class| class.parent.as_deref());
+    for default in &mut signature.defaults {
+        *default = crate::types::checker::normalize_lexical_callable_default(default, owner, parent)
+            .expect("closure defaults passed lexical validation before EIR lowering");
     }
     signature.is_generator = crate::types::checker::yield_validation::body_contains_yield(body);
     if signature.is_generator {
