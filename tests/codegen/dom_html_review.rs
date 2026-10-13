@@ -11,6 +11,113 @@
 
 use crate::support::*;
 
+/// Trailing comments remain document siblings without introducing a second html/body wrapper.
+#[test]
+fn dom_html_eighth_review_explicit_document_tail_comments() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach ([0, LIBXML_NOBLANKS] as $extra) {
+    $doc->loadHTML('<html><body>x</body></html><!--tail-->', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR | $extra);
+    $html = $doc->getElementsByTagName('html')->item(0);
+    $body = $doc->getElementsByTagName('body')->item(0);
+    echo $doc->getElementsByTagName('html')->length, ':', $doc->getElementsByTagName('body')->length, ':';
+    echo $doc->childNodes->length, ':', $body->nodeValue, ':', $doc->saveXML($html), '|';
+    $tail = $doc->childNodes->item(1);
+    echo $tail instanceof DOMComment ? 'C' : 'bad';
+    echo ':', $tail->nodeValue, ':', $doc->saveXML($tail), '|';
+}
+"#);
+    assert_eq!(out, "1:1:2:x:<html><body>x</body></html>|C:tail:<!--tail-->|".repeat(2));
+}
+
+/// Explicit HTML document padding is ignored independently of fragment NOBLANKS filtering.
+#[test]
+fn dom_html_eighth_review_explicit_document_tail_whitespace() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach ([0, LIBXML_NOBLANKS] as $extra) {
+    foreach (["<html><body>x</body></html> \n\t", "<html><body>x</body></html> <!--tail--> \n"] as $source) {
+        $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR | $extra);
+        $html = $doc->getElementsByTagName('html')->item(0);
+        echo $doc->getElementsByTagName('html')->length, ':', $doc->getElementsByTagName('body')->length, ':';
+        echo $html->childNodes->length, ':', $doc->saveXML($html), '|';
+    }
+}
+"#);
+    assert_eq!(out, "1:1:1:<html><body>x</body></html>|".repeat(4));
+}
+
+/// Leading and trailing document nodes preserve their order, parents and bidirectional links.
+#[test]
+fn dom_html_eighth_review_explicit_document_siblings() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$doc->loadHTML('<!--lead--><html><head></head><body>x</body></html><!--tail--><?Tail data?>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+$lead = $doc->childNodes->item(0); $html = $doc->childNodes->item(1);
+$tail = $doc->childNodes->item(2); $pi = $doc->childNodes->item(3);
+echo $doc->childNodes->length, ':', $html->nodeName, ':', $doc->getElementsByTagName('body')->item(0)->nodeValue, '|';
+echo $lead->nextSibling === $html && $html->previousSibling === $lead ? 'L' : 'bad';
+echo $html->nextSibling === $tail && $tail->previousSibling === $html ? 'T' : 'bad';
+echo $tail->nextSibling === $pi && $pi->previousSibling === $tail ? 'P' : 'bad';
+echo $tail->parentNode === $doc && $pi->parentNode === $doc ? 'D' : 'bad';
+if ($pi instanceof DOMProcessingInstruction) {
+    echo ':I:', $pi->target, ':', $pi->data;
+} else { echo ':bad'; }
+echo ':', $doc->saveXML($html);
+"#);
+    assert_eq!(out, "4:html:x|LTPD:I:Tail:data?:<html><head/><body>x</body></html>");
+}
+
+/// An explicit body remains the sole body while its trailing comment stays inside the html wrapper.
+#[test]
+fn dom_html_eighth_review_explicit_body_tail() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$doc->loadHTML('<body>x</body><!--tail-->', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+$html = $doc->getElementsByTagName('html')->item(0);
+$tail = $html->childNodes->item(1);
+echo $doc->getElementsByTagName('body')->length, ':', $html->childNodes->length, ':';
+echo $tail instanceof DOMComment ? 'C' : 'bad';
+echo ':', $tail->parentNode === $html ? 'H' : 'bad';
+echo ':', $doc->saveXML($html);
+"#);
+    assert_eq!(out, "1:2:C:H:<html><body>x</body><!--tail--></html>");
+}
+
+/// Wrapper selection retires trailing-node partitions without tokenizer or cyclic DOM owners.
+#[test]
+fn dom_html_eighth_review_trailing_tree_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function enableDom(DOMDocument $doc): void {}
+for ($i = 0; $i < 16; $i++) {
+    $text = __elephc_dom_new_node('text', '#text', 'x', [], []);
+    $body = __elephc_dom_new_node('element', 'body', '', [], [$text]);
+    $html = __elephc_dom_new_node('element', 'html', '', [], [$body]);
+    $tail = __elephc_dom_new_node('comment', '#comment', 'tail', [], []);
+    $padding = __elephc_dom_new_node('text', '#text', ' ', [], []);
+    $tree = __elephc_dom_document_from_roots([$html, $tail, $padding], 0);
+    echo count($tree['children']), ':', __elephc_dom_text_of($tree), ':';
+    echo $tree['children'][1]['value'], '|';
+    unset($tree);
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:x:tail|".repeat(16), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Wrapper selection and trailing document-node ownership do not depend on IR optimization.
+#[test]
+fn dom_html_eighth_review_without_ir_opt() {
+    crate::support::without_ir_opt(|| {
+        dom_html_eighth_review_explicit_document_tail_comments();
+        dom_html_eighth_review_explicit_document_tail_whitespace();
+        dom_html_eighth_review_explicit_document_siblings();
+        dom_html_eighth_review_explicit_body_tail();
+        dom_html_eighth_review_trailing_tree_owners();
+    });
+}
+
 /// NOBLANKS filters html/head blanks while preserving title/body text and the no-flag control.
 #[test]
 fn dom_html_seventh_review_noblanks_wrappers() {

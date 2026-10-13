@@ -488,7 +488,7 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
         }
         return $_html;
     }
-    if (count($roots) === 1 && $roots[0]["kind"] === "element" && $roots[0]["name"] === "body") {
+    if (count($roots) > 0 && $roots[0]["kind"] === "element" && $roots[0]["name"] === "body") {
         return __elephc_dom_new_node("element", "html", "", [], $roots);
     }
     $_body = __elephc_dom_new_node("element", "body", "", [], $roots);
@@ -498,18 +498,33 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
 function __elephc_dom_parse_html(string $html, int $flags): mixed {
     $_tokens = __elephc_dom_tokenize($html, $flags);
     $_roots = __elephc_dom_build_forest($_tokens, $flags);
+    return __elephc_dom_document_from_roots($_roots, $flags);
+}
+
+// Keep wrapper selection separate from tokenization and balanced-tag construction.
+function __elephc_dom_document_from_roots(mixed $roots, int $flags): mixed {
     $_document_children = [];
     $_content = [];
+    $_trailing = [];
+    $_closed_html = false;
     $_leading = true;
-    foreach ($_roots as $_root) {
+    foreach ($roots as $_root) {
+        if ($_root["kind"] === "text" && ($_leading || $_closed_html)) {
+            $_padding = (string) $_root["value"];
+            if (trim($_padding) === "") {
+                // Document padding is ignored even without fragment NOBLANKS filtering.
+                continue;
+            }
+        }
         if ($_leading && ($_root["kind"] === "comment" || $_root["kind"] === "pi")) {
             $_document_children[] = $_root;
-        } elseif ($_leading && $_root["kind"] === "text" && trim((string) $_root["value"]) === "") {
-            // Whitespace before document content is not an implicit body's first child.
-            continue;
+        } elseif ($_closed_html && ($_root["kind"] === "comment" || $_root["kind"] === "pi")) {
+            // Nodes following an explicit document wrapper belong to the document, not its body.
+            $_trailing[] = $_root;
         } else {
             $_leading = false;
             $_content[] = $_root;
+            $_closed_html = count($_content) === 1 && $_root["kind"] === "element" && $_root["name"] === "html";
         }
     }
     if (($flags & LIBXML_NOBLANKS) !== 0) {
@@ -528,6 +543,9 @@ function __elephc_dom_parse_html(string $html, int $flags): mixed {
         $_value = __elephc_dom_text_of($_html);
         $_html["value"] = $_value;
         $_document_children[] = $_html;
+    }
+    foreach ($_trailing as $_node) {
+        $_document_children[] = $_node;
     }
     return __elephc_dom_new_node("document", "#document", $_value, [], $_document_children);
 }

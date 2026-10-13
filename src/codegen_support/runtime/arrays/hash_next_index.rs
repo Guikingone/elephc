@@ -49,6 +49,7 @@ pub(super) fn rewind_after_pop(
     let done = format!("{prefix}_next_index_done");
     match emitter.target.arch {
         Arch::AArch64 => {
+            // -- rewind the next key only when the popped integer is its immediate predecessor --
             emitter.instruction(&format!("cmn {key_len}, #1"));                 // only integer tail keys can rewind automatic indexing
             emitter.instruction(&format!("b.ne {done}"));                       // popping a string key preserves numeric insertion history
             emitter.instruction(&format!("ldr x9, [{hash}, #{NEXT_INDEX_OFFSET}]")); // read the current next automatic integer key
@@ -58,6 +59,7 @@ pub(super) fn rewind_after_pop(
             emitter.instruction(&format!("str {key}, [{hash}, #{NEXT_INDEX_OFFSET}]")); // let the next append reuse the popped numeric slot
         }
         Arch::X86_64 => {
+            // -- preserve append history unless the popped integer directly precedes it --
             emitter.instruction(&format!("cmp {key_len}, -1"));                 // only integer tail keys can rewind automatic indexing
             emitter.instruction(&format!("jne {done}"));                        // popping a string key preserves numeric insertion history
             emitter.instruction(&format!("mov r10, QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}]")); // read the persistent next automatic integer key

@@ -50,7 +50,9 @@ foreach ($body->childNodes as $node) {
 | `saveXML(?DOMNode $node = null): string` | Serializes a node or the whole document. Text escapes `&`, `<`, `>`, and CR; double-quoted attributes also escape `"`, LF, and TAB, but not `'`. Non-ASCII attribute code points use uppercase hexadecimal references, while text stays UTF-8. Script/style raw text serializes as safely split CDATA. No XML declaration (Termwind passes `LIBXML_NOXMLDECL`). |
 
 Leading comments and processing instructions remain document-level siblings before
-`html`. Comment-only and instruction-only sources do not create `html` or `body`.
+`html`. After an explicit `</html>`, trailing comments and instructions remain
+document-level siblings after it; trailing whitespace is ignored without adding
+another `html` or `body`. Comment-only and instruction-only sources do not create `html` or `body`.
 Ignored closing tags do not split adjacent text nodes. An unfinished comment and
 its remaining input are discarded, following the legacy libxml HTML tokenizer.
 
@@ -64,7 +66,7 @@ These constants are always available (including inside a namespace, and in
 | `LIBXML_NOXMLDECL` | 2 | Save flag; parse ignores it. `saveXML()` never emits `<?xml …?>`. |
 | `LIBXML_HTML_NODEFDTD` | 4 | No default doctype is added (none is added anyway). |
 | `LIBXML_NOERROR` | 32 | Parse is silent and forgiving. |
-| `LIBXML_NOBLANKS` | 256 | Drops trailing document-level whitespace padding and whitespace-only text directly under `html` or `head`. Whitespace inside `body`, `title`, and other elements remains, including between body siblings. Without this flag, wrapper and trailing padding are preserved. XML blank-node filtering is outside this HTML-only subset. |
+| `LIBXML_NOBLANKS` | 256 | Drops trailing document-level whitespace padding and whitespace-only text directly under `html` or `head`. Whitespace inside `body`, `title`, and other elements remains, including between body siblings. Without this flag, wrapper whitespace and trailing fragment padding are preserved; padding after an explicit `</html>` is always ignored. XML blank-node filtering is outside this HTML-only subset. |
 | `LIBXML_COMPACT` | 65536 | Accepted and ignored (libxml compaction is an optimizer hint). |
 
 ## Remaining gaps versus full PHP DOM

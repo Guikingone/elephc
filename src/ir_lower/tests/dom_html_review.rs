@@ -44,6 +44,11 @@ $div = $doc->getElementsByTagName('div')->item(0);
 echo $div->childNodes->length;
 $doc->loadHTML('<div>a<!--unfinished');
 echo $doc->saveXML($doc->getElementsByTagName('div')->item(0));
+$doc->loadHTML('<!--lead--><html><head></head><body>x</body></html><!--tail--><?Tail data?>');
+echo $doc->childNodes->length, $doc->getElementsByTagName('html')->length;
+foreach ($doc->childNodes as $child) { echo $child->nodeName; }
+$doc->loadHTML("<html><body>x</body></html> \n");
+echo $doc->saveXML($doc->getElementsByTagName('html')->item(0));
 $doc->loadHTML(' <div>Hi</div> ', LIBXML_NOBLANKS);
 echo count($doc->getElementsByTagName('body')->item(0)->childNodes);
 $doc->loadHTML("<html>\n<head> <title> A </title> </head>\n<body> <div>Hi</div> </body>\n</html>", LIBXML_NOBLANKS);
