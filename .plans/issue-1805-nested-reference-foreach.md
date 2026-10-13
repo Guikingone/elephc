@@ -9,7 +9,7 @@
 - [x] Compare PHP output and emit/assemble all five supported targets.
 - [x] Inspect the published revision in PR #1831 CI and classify its failures.
 - [x] Verify the conservative-effect assertion follow-up.
-- [ ] Publish the verified assertion follow-up.
+- [x] Publish the verified assertion follow-up.
 
 ## Scope and provenance
 
@@ -71,9 +71,10 @@ Linux test binary SHA-256 values:
 - ARM64: `46fbac3bb35229ad2269f353e97298fcaeb3f691b9d1c608d9ee59fcaf8f3386`.
 - x86_64: `faa06938343101646cc8f71f3ebe4202f3bd25aab8e05b61ec3a87c5bcaae8c4`.
 
-Detailed logs, source manifests, and compiler artifacts are retained locally by
-the author. The earlier interrupted x86_64 prerequisite builds are excluded
-from these test results. The pre-existing issue #1803 plan remains untouched.
+Detailed logs, source manifests, and compiler artifacts were retained for the
+original verification; their temporary copies were subsequently cleared.
+The earlier interrupted x86_64 prerequisite builds are excluded from these
+results. The pre-existing issue #1803 plan remains untouched.
 
 ## Published CI findings
 
@@ -92,3 +93,7 @@ corruption, which the issue explicitly distinguishes from #1789.
 The comparison was recorded in the earlier session. Its temporary logs were
 cleared before this follow-up; CI is not reported as fully green. The updated
 effect assertion passes its focused library test on the current source.
+
+The assertion follow-up was published as `bef7a80430ab1cf049084eb31e69228b7bb45b22`;
+GitHub confirmed it as PR #1831's head. It changes the regression assertion and
+this provenance document only. New CI completion remains pending.
