@@ -9,6 +9,15 @@ foreach ($scores as $index => $value) {
     echo $index . ": " . $value . "\n";
 }
 
+// An alias shares the source array: writes through the loop appear under both names.
+$labels = ['a', 'b', 'c'];
+$alias =& $labels;
+foreach ($alias as &$label) {
+    $label .= 'q';
+}
+unset($label);
+echo "aliased source: " . implode(",", $labels) . "\n";
+
 // The source can be any array the program can name, not just a local. The writes land in
 // the storage the expression reaches, whatever it takes to get there.
 class Team {

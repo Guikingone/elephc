@@ -26,6 +26,57 @@ fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     );
 }
 
+/// Promotion retires the indexed payload using its old layout, even without body writes.
+#[test]
+fn by_ref_foreach_over_an_integer_reference_alias_keeps_the_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1, 2];
+$r =& $a;
+foreach ($r as &$v) {}
+unset($v);
+echo count($a), "|", implode(",", $a), "\n";
+"#,
+    );
+    assert_clean(out, "2|1,2\n");
+}
+
+/// Wrong-layout retirement used to corrupt entries or exhaust the heap at table boundaries.
+#[test]
+fn by_ref_foreach_over_string_reference_aliases_is_balanced_at_capacity_boundaries() {
+    for size in [1, 2, 3, 4, 7, 8, 15, 16, 17] {
+        let values = (0..size).map(|i| format!("'v{i}'")).collect::<Vec<_>>().join(",");
+        let expected = (0..size).map(|i| format!("v{i}q")).collect::<Vec<_>>().join(",");
+        let source = format!(
+            r#"<?php
+$a = [{values}];
+$r =& $a;
+foreach ($r as &$v) {{ $v .= 'q'; }}
+unset($v);
+echo implode(',', $a), '|', implode(',', $r), "\n";
+"#
+        );
+        let out = compile_and_run_with_heap_debug(&source);
+        assert_clean(out, &format!("{expected}|{expected}\n"));
+    }
+}
+
+/// Retiring the alias's old indexed owner must preserve an independent by-value copy.
+#[test]
+fn by_ref_foreach_over_a_reference_alias_preserves_array_copy_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ['a', 'b', 'c'];
+$copy = $a;
+$r =& $a;
+foreach ($r as &$v) { $v .= 'q'; }
+unset($v);
+echo implode(",", $a), "|", implode(",", $copy), "\n";
+"#,
+    );
+    assert_clean(out, "aq,bq,cq|a,b,c\n");
+}
+
 /// A plain by-reference loop binds and releases one cell per entry with no residue.
 #[test]
 fn test_by_ref_foreach_releases_every_reference_cell() {
