@@ -9,11 +9,12 @@
 //! Key details:
 //! - The exhaustive match remains centralized so every new `EvalStmt` variant
 //!   must explicitly define its runtime control-flow behavior.
+//! - Only program-level generic templates are hoisted; nested declarations execute in source order.
 
 use super::*;
 
-/// Executes statements in source order and propagates the first eval `return`.
-pub(in crate::interpreter) fn execute_statements(
+/// Hoists unconditional program templates before executing the eval program's statement list.
+pub(in crate::interpreter) fn execute_program_statements(
     statements: &[EvalStmt],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -37,8 +38,30 @@ pub(in crate::interpreter) fn execute_statements(
             }
         }
     }
+    execute_statement_sequence(statements, true, context, scope, values)
+}
+
+/// Executes nested statements in source order without registering unreachable declarations.
+pub(in crate::interpreter) fn execute_statements(
+    statements: &[EvalStmt],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    execute_statement_sequence(statements, false, context, scope, values)
+}
+
+/// Propagates control flow while skipping only templates already hoisted at program entry.
+fn execute_statement_sequence(
+    statements: &[EvalStmt],
+    templates_registered: bool,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
     for stmt in statements {
         eval_pcntl_maybe_dispatch(context, values)?;
+        if templates_registered && matches!(stmt, EvalStmt::GenericDecl(_)) { continue; }
         match execute_stmt(stmt, context, scope, values)? {
             EvalControl::None => {}
             control => return Ok(control),
@@ -57,7 +80,16 @@ pub(in crate::interpreter) fn execute_stmt(
     let specialized = specialize_static_storage_statement(stmt, context, scope, values)?;
     let stmt = specialized.as_ref().unwrap_or(stmt);
     match stmt {
-        EvalStmt::GenericDecl(_) => Ok(EvalControl::None),
+        EvalStmt::GenericDecl(template) => {
+            if !context.define_generic_template(template.as_ref().clone()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if let Err(error) = verify_generic_variance(template, context, values) {
+                context.remove_generic_template(&template.name, matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. }));
+                return Err(error);
+            }
+            Ok(EvalControl::None)
+        },
         EvalStmt::ArrayAppendVar { name, value } => {
             eval_array_append_var_stmt(name, value, context, scope, values)?;
             Ok(EvalControl::None)

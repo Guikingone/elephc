@@ -88,6 +88,8 @@ mod tests {
     /// alongside main's source-spelling semantics. The combined layout has a fresh cache identity.
     /// BUMPED TO 15 with the same fingerprint: case-insensitive native class-like scopes
     /// now retain member PHPDoc types that earlier parsers silently omitted.
+    /// BUMPED TO 16 with the same fingerprint: complete-list lookahead preserves class
+    /// comparisons, invalidating stored parse failures without changing the serialized shape.
     const RECORDED_FINGERPRINT: u64 = 2604479976000790958;
 
     /// Returns a stable fingerprint of every source the stored format depends on.

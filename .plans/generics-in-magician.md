@@ -23,7 +23,7 @@ Keep source locations and namespace imports when retaining templates. Script-cac
 
 `elephc-generics` provides dependency-neutral type terms, binding conflicts, written arguments, dependent defaults, and depth limits. AOT adapts its existing type expressions through `src/generics/shared.rs`; Magician infers corresponding terms from runtime values.
 
-The parser retains declaration prototypes and tokens marked by lexical type-parameter identity. Replay preserves imports, namespaces, literal bytes, attributes, source lines, and constructor-local shadowing. Native syntax and PHPDoc provenance remain distinct for strict mode. File-cache format 15 covers the combined generic metadata and source-spelling semantics from main and invalidates older PHPDoc inheritance rewrites and member annotations discarded after case-insensitive native keywords.
+The parser retains declaration prototypes and tokens marked by lexical type-parameter identity. Replay preserves imports, namespaces, literal bytes, attributes, source lines, and constructor-local shadowing. Native syntax and PHPDoc provenance remain distinct for strict mode. File-cache format 16 covers the combined generic metadata and source-spelling semantics from main and invalidates older PHPDoc inheritance rewrites, dropped scoped member annotations, and cached parse failures for comparisons after class references.
 
 Concrete functions, class-like declarations, and methods use ordinary EvalIR execution. Function and class templates occupy separate PHP namespaces, and normal declarations reject conflicting templates. Persistent-context entry points, first-class callables, callback aliases, and call argument arrays resolve templates before normal binding. `interpreter/context_calls.rs` keeps the interpreter dispatcher small.
 
@@ -152,3 +152,36 @@ contents preserved by range-diff. Post-rebase validation repeats the warning-fre
 all 122 interpreter regressions, and all seven native fixtures successfully. Publication
 uses the previously reviewed remote head as an explicit lease; subsequent CI and review
 results must be attributed to the new published SHA.
+
+## Eighth PR 1819 review
+
+- [x] Read all comments, reviews, resolved/open threads, and expanded Greptile details on `d3770ff2fc`.
+- [x] Reproduce comparisons after `instanceof` being parsed as generic arguments.
+- [x] Reproduce unreachable declarations registering inside function and loop bodies.
+- [x] Claim class type arguments only after a complete-list lookahead succeeds.
+- [x] Hoist direct program declarations while registering nested templates at their statement position.
+- [x] Invalidate cached parse errors with file-cache format 16, preserving the serialized fingerprint.
+- [x] Validate parser/cache, control flow, previous findings, native ownership, and persistent REPL behavior.
+- [x] Prepare the validated corrections for publication and review-thread resolution.
+
+The complete snapshot contains seven PR comments, eight reviews, and eighteen inline threads.
+Pagination is complete for every connection, including comments inside resolved threads. Greptile
+rates `d3770ff2fc` at 3/5 and supplies two new P1 findings in both its summary and expanded fix
+prompts. Previous reference contracts, inherited returns, trait variance, keyword casing, qualified
+adaptations, and element metadata findings are acknowledged as fixed. Existing static/capture/key
+and temporary-foreach ownership limitations are explicitly excluded from new findings.
+
+Three primary unit regressions fail before correction, as do both native heap fixtures. Class
+reference lookahead now probes without modifying tokens or native-syntax provenance when `<`
+belongs to a PHP comparison. Complete nested generic lists still split closing shifts correctly.
+Only `execute_program_statements` performs batch template registration and variance checking.
+Nested statement lists register each declaration when reached, skip declarations after control
+flow exits, roll back failed variance registration, and retain actual redeclaration errors.
+
+File-cache format 16 refuses previously stored parse failures for valid class-reference comparisons;
+the stored IR shape and fingerprint `2604479976000790958` remain unchanged. Focused validation
+passes 575 parser, cache, generic, reference, trait-adaptation and ownership tests (one existing
+ignored cache case), all ten native eval/REPL regressions, a warning-free build, PHP comparison
+parity, Rust module/function documentation and diff hygiene. New native fixtures report clean
+heaps. The previous element-setter behavior fixtures retain their documented separate key-owner
+limitation. No unrelated ownership issue is claimed fixed by these corrections.

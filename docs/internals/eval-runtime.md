@@ -265,12 +265,17 @@ The Magician parser retains an `EvalGenericTemplate` containing a declaration pr
 tokens, lexical imports/namespace, and the token indexes of actual type-parameter uses. Replay
 substitutes those positions only, preserving unrelated identifiers and literal bytes. Constructor
 slots have separate lexical identities so promotion and shadowing remain correct.
+Class-reference type arguments are consumed only after lookahead parses a complete list;
+ordinary comparisons after `instanceof` or `new` remain expression operators.
 PHPDoc inheritance edits match the complete written parent name within the tag's `extends` or
 `implements` clause, with at most one inserted list per parent and native arguments taking priority.
 
 Runtime dispatch borrows arguments after their single source-order evaluation, completes bindings,
 checks bounds, and replays a concrete ordinary declaration. Functions and classes enter the normal
 context registries; method specializations are cached by declaring class and concrete method name.
+Program entry hoists direct generic declarations through `execute_program_statements`.
+Nested statement lists register and validate templates only when execution reaches their
+declaration, preserving return, throw, break, and continue behavior and redeclaration errors.
 Constructor inference omits null and empty arrays using concrete runtime tags, so zero-property
 native objects still contribute their class types.
 Class relation registration instantiates generic parents, interfaces, and traits before ordinary
@@ -312,10 +317,11 @@ cell for contract validation; that cell is released on success and failure, whil
 the original key so native normalization and diagnostics keep their existing operands. No new
 value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
 mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
-format 15 includes the retained templates, tokens, imports, structural types, and typed locals,
+format 16 includes the retained templates, tokens, imports, structural types, and typed locals,
 alongside preserved source spelling for direct and first-class function calls. It invalidates
 older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents and
 member annotations discarded after uppercase or mixed-case native class-like keywords.
+Version 16 also invalidates stored parse errors for valid comparisons after class references.
 The format guard covers the combined serialized IR and its corresponding type sources.
 
 ## Parsing and cache

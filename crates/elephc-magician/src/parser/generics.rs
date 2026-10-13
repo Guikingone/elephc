@@ -76,14 +76,14 @@ impl Parser {
         self.expect(TokenKind::Greater)
     }
 
-    /// Claims a written list only if it is followed by a call or static member separator.
+    /// Claims only complete type lists, requiring a call or static separator outside class targets.
     pub(super) fn parse_written_name(&mut self, name: String, always: bool) -> Result<String, EvalParseError> {
         if !matches!(self.current(), TokenKind::Less) { return Ok(name); }
-        if !always {
-            let mut probe = self.clone();
-            if probe.parse_type_arguments().is_err() || !matches!(probe.current(), TokenKind::LParen | TokenKind::DoubleColon) {
-                return Ok(name);
-            }
+        let mut probe = self.clone();
+        if probe.parse_type_arguments().is_err()
+            || !always && !matches!(probe.current(), TokenKind::LParen | TokenKind::DoubleColon)
+        {
+            return Ok(name);
         }
         let args = self.parse_type_arguments()?;
         Ok(Type::Apply(name, args).to_string())

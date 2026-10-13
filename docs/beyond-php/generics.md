@@ -107,6 +107,11 @@ the persistent eval context. Repeated calls reuse function, class, and method sp
 subsequent eval calls in that context can use the same templates. Generic classes retain separate
 identities and static storage, just as in AOT.
 
+Unconditional templates at the top level of an eval program support forward calls.
+Declarations inside functions, loops, or conditional blocks register when execution reaches
+their statement. A return, break, or continue skips later declarations in that block, and
+executing the same nested declaration again is a redeclaration error.
+
 Magician renders class and constructor arguments in one concrete identity: a `Pair<T>` with a
 constructor-local `U` produces `Pair<int, string>` for `new Pair<int>(7, 'seven')`. Constructor
 arguments distinguish concrete storage; class inference and variance use the declared class slots.

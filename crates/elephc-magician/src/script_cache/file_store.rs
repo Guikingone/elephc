@@ -79,7 +79,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Both prior layouts must be refused.
 /// BUMPED TO 15 because native class-like keyword casing now preserves member PHPDoc types.
 /// Stored declarations parsed with the earlier annotation rewrite must be refused.
-pub(crate) const FORMAT_VERSION: u32 = 15;
+/// BUMPED TO 16 because class-reference type-list lookahead now preserves PHP comparisons.
+/// Previously stored parse failures for those valid expressions must be reparsed.
+pub(crate) const FORMAT_VERSION: u32 = 16;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

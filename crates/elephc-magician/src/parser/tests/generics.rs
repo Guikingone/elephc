@@ -9,6 +9,33 @@
 
 use super::support::*;
 
+/// An incomplete type-list probe leaves PHP comparisons and native-syntax provenance intact.
+#[test]
+fn generics_review_instanceof_comparisons() {
+    for right in ["1", "$limit", "LIMIT", "limit()", "(1)"] {
+        let source = format!("echo $value instanceof C < {right};");
+        let program = parse_fragment(source.as_bytes()).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        assert!(matches!(&program.statements()[0], EvalStmt::Echo(EvalExpr::Binary { op: EvalBinOp::Lt, left, .. })
+            if matches!(left.as_ref(), EvalExpr::InstanceOf { .. })), "{source}");
+        assert!(!program.native_generic_syntax(), "{source}");
+    }
+    let program = parse_fragment(b"echo new C < $limit;").unwrap();
+    assert!(!program.native_generic_syntax());
+}
+
+/// Complete nested class type lists retain specialization before subsequent comparisons and shifts.
+#[test]
+fn generics_review_instanceof_complete_type_lists() {
+    for source in [
+        "echo $value instanceof Box<int> < 2;",
+        "echo $value instanceof Box<array<array<int>>> >> 1;",
+        "echo new Box<int>(1) instanceof Box<int>;",
+    ] {
+        let program = parse_fragment(source.as_bytes()).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        assert!(program.native_generic_syntax(), "{source}");
+    }
+}
+
 /// Every class-like keyword spelling retains scoped PHPDoc member types in its prototype.
 #[test]
 fn generics_docblock_classlike_keywords_are_case_insensitive() {

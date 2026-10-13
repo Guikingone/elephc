@@ -25,6 +25,52 @@ fn run(fragments: &[&str]) -> String {
     values.output
 }
 
+/// Returns before nested generic declarations must leave every declaration family unregistered.
+#[test]
+fn generics_review_unreachable_function_declarations() {
+    for declaration in [
+        "class Hidden<T> {}", "interface Hidden<T> {}", "trait Hidden<T> {}",
+        "function hidden<T>(T $value): T { return $value; }",
+        "class Hidden<out T> { public function put(T $value): void {} }",
+    ] {
+        let source = format!("function stop() {{ echo 'call|'; return; {declaration} }} stop(); stop(); echo 'done';");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        values.release(result).unwrap();
+        assert_eq!(values.output, "call|call|done", "{declaration}");
+        assert!(context.generic_template("Hidden").is_none(), "{declaration}");
+        assert!(context.generic_function_template("hidden").is_none(), "{declaration}");
+    }
+}
+
+/// Loop control must skip unreachable declarations instead of registering them each iteration.
+#[test]
+fn generics_review_unreachable_loop_declarations() {
+    assert_eq!(run(&[r#"
+for ($i = 0; $i < 2; $i++) { echo $i; continue; class Hidden<T> {} }
+for ($i = 0; $i < 2; $i++) { break; trait Skipped<T> {} }
+echo '|done';
+"#]), "01|done");
+}
+
+/// Reached nested templates become persistent and still reject a later redeclaration.
+#[test]
+fn generics_review_reached_nested_declarations() {
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let program = parse_fragment(b"function install_templates() { class Visible<T> {} } install_templates(); echo get_class(new Visible<int>());").unwrap();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    values.release(result).unwrap();
+    assert_eq!(values.output, "Visible<int>");
+    let repeat = parse_fragment(b"install_templates();").unwrap();
+    assert_eq!(execute_program_with_context(&mut context, &repeat, &mut scope, &mut values), Err(EvalStatus::RuntimeFatal));
+    assert!(context.generic_template("Visible").is_some());
+}
+
 /// Aliases and reference parameters must enforce the original typed local before mutation.
 #[test]
 fn generics_review_reference_local_contracts() {

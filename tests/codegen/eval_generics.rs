@@ -15,6 +15,43 @@ fn dynamic_eval(body: &str) -> String {
     format!("<?php\n$code = $argc > 1 ? $argv[1] : <<<'CODE'\n{body}\nCODE;\neval($code);\n")
 }
 
+/// PHP comparisons after instanceof coexist with fully written nested generic class targets.
+#[test]
+fn test_eval_generics_review_instanceof_comparisons() {
+    let source = dynamic_eval(r#"
+class C {} class Other {} $value = new C(); $limit = 2;
+echo (int) ($value instanceof C < 1), '|', (int) ($value instanceof Other < $limit);
+echo '|', (int) ($value instanceof Other < strlen('xx'));
+class Box<T> { public function __construct(public T $value) {} }
+$box = new Box<array<array<int>>>([[1]]);
+echo '|', (int) ($box instanceof Box<array<array<int>>> < 1);
+echo '|', $box instanceof Box<array<array<int>>> >> 1;
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "0|1|1|0|0");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Nested templates follow return/continue/break while top-level forward calls remain available.
+#[test]
+fn test_eval_generics_review_unreachable_declarations() {
+    let source = dynamic_eval(r#"
+echo identity(7), '|';
+function identity<T>(T $value): T { return $value; }
+function stop() { echo 'R'; return; class Hidden<T> {} }
+stop(); stop(); echo '|';
+for ($i = 0; $i < 2; $i++) { echo $i; continue; trait Skipped<T> {} }
+for ($i = 0; $i < 2; $i++) { break; interface Ignored<T> {} }
+function install_templates() { class Visible<T> {} function nested<T>(T $value): T { return $value; } }
+install_templates(); echo '|', get_class(new Visible<int>()), '|', nested(9);
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "7|RR|01|Visible<int>|9");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Native templates persist across eval barriers and specialize scalar and nested array calls.
 #[test]
 fn test_eval_generics_functions_persist() {
