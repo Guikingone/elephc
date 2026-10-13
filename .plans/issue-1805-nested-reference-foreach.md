@@ -7,7 +7,9 @@
 - [x] Add 11 heap-debug regressions, an example, and ownership documentation.
 - [x] Validate focused tests on macOS and both Linux architectures, with optimization on/off.
 - [x] Compare PHP output and emit/assemble all five supported targets.
-- [ ] Verify the published revision in PR #1831 CI.
+- [x] Inspect the published revision in PR #1831 CI and classify its failures.
+- [x] Verify the conservative-effect assertion follow-up.
+- [ ] Publish the verified assertion follow-up.
 
 ## Scope and provenance
 
@@ -72,3 +74,21 @@ Linux test binary SHA-256 values:
 Detailed logs, source manifests, and compiler artifacts are retained locally by
 the author. The earlier interrupted x86_64 prerequisite builds are excluded
 from these test results. The pre-existing issue #1803 plan remains untouched.
+
+## Published CI findings
+
+CI run `38393823265` tested `4e332ca50c935981c203ece07068eef6e11f731c`.
+The iterator effect test still asserted that `IterCurrentValueRef` could not
+have all effects. Retirement can invoke a destructor, so that assertion is
+updated to require the same conservative effects as the other iterator callbacks.
+
+Five `foreach_by_ref_family` cases fail on all three executable CI targets:
+numeric and associative appends after tail deletion, tail and mid-loop appends
+through instance properties, and source reassignment. Each reproduces with the
+saved starting compiler at `44c0716a87` and produces identical stdout with the
+published compiler. PHP confirms the expected test output. These are inherited
+append/source-replacement divergences, separate from issue #1805's nested alias
+corruption, which the issue explicitly distinguishes from #1789.
+The comparison was recorded in the earlier session. Its temporary logs were
+cleared before this follow-up; CI is not reported as fully green. The updated
+effect assertion passes its focused library test on the current source.
