@@ -50,15 +50,18 @@ pub(super) fn lower_offset(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Applies the same dispatch to a dynamically typed key without silently coercing arrays.
 fn lower_boxed_offset(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    // -- read the boxed key's runtime tag and payload --
     ctx.load_value_to_result(key)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let done = ctx.next_label("string_write_offset_done");
     let labels: Vec<_> = (0..9).map(|tag| ctx.next_label(&format!("string_write_offset_tag_{tag}"))).collect();
+    // -- dispatch each supported tag to its PHP offset conversion --
     for (tag, label) in labels.iter().enumerate() {
         ins(ctx, &format!("cmp x0, #{tag}"), &format!("cmp rax, {tag}"));
         ins(ctx, &format!("b.eq {label}"), &format!("je {label}"));
     }
     emit_invalid_offset(ctx, "resource");
+    // -- normalize scalar payloads or construct the selected TypeError --
     for (tag, label) in labels.iter().enumerate() {
         ctx.emitter.label(label);
         match tag {
@@ -97,6 +100,7 @@ fn lower_boxed_offset(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()>
 
 /// Rejects noninteger numeric spellings while diagnosing a legal leading-integer suffix once.
 fn lower_string_offset(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    // -- materialize string bytes for the bounded numeric scanner --
     ctx.load_value_to_result(key)?;
     if ctx.value_php_type(key)?.codegen_repr() != PhpType::Str {
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -109,6 +113,7 @@ fn lower_string_offset(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()
     let invalid = ctx.next_label("string_write_offset_invalid");
     let valid = ctx.next_label("string_write_offset_valid");
     let ready = ctx.next_label("string_write_offset_ready");
+    // -- reject noninteger numeric spellings before using the offset --
     ins(ctx, "cmp x0, #0", "cmp rax, 0");
     ins(ctx, &format!("b.ne {invalid}"), &format!("jne {invalid}"));
     ins(ctx, "cmp x2, #2", "cmp rdx, 2");
@@ -116,6 +121,7 @@ fn lower_string_offset(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()
     ctx.emitter.label(&invalid);
     emit_invalid_offset(ctx, "string");
     ctx.emitter.label(&valid);
+    // -- retain the converted offset while diagnosing a trailing suffix --
     abi::emit_push_reg(ctx.emitter, crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target));
     ins(ctx, "cmp x2, #0", "cmp rdx, 0");
     ins(ctx, &format!("b.eq {ready}"), &format!("je {ready}"));
@@ -127,6 +133,7 @@ fn lower_string_offset(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()
     }
     emit_current_diagnostic(ctx, false);
     static_diagnostic(ctx, "\"\n", true);
+    // -- restore the offset after the warning handler returns --
     ctx.emitter.label(&ready);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(())
@@ -134,6 +141,7 @@ fn lower_string_offset(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()
 
 /// Preserves the normalized offset while dispatching PHP's scalar cast warning.
 fn emit_cast_diagnostic(ctx: &mut FunctionContext<'_>) {
+    // -- preserve the offset around PHP's scalar-cast warning --
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     static_diagnostic(ctx, "Warning: String offset cast occurred\n", true);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -155,6 +163,7 @@ fn static_diagnostic(ctx: &mut FunctionContext<'_>, text: &str, complete: bool) 
 
 /// Maps the native string result to the shared warning producer's ABI.
 fn emit_current_diagnostic(ctx: &mut FunctionContext<'_>, complete: bool) {
+    // -- pass the diagnostic pointer and byte length through the target ABI --
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the borrowed diagnostic pointer
         ctx.emitter.instruction("mov rsi, rdx");                                // pass its explicit byte length
@@ -164,6 +173,7 @@ fn emit_current_diagnostic(ctx: &mut FunctionContext<'_>, complete: bool) {
 
 /// Adds static context around a runtime object class name before constructing its TypeError.
 fn concat_fragment(ctx: &mut FunctionContext<'_>, text: &str, prefix: bool) {
+    // -- materialize static context around the runtime class name --
     let (label, len) = ctx.data.add_string(text.as_bytes());
     let (ptr, length) = abi::string_result_regs(ctx.emitter);
     let (right, right_len) = if ctx.emitter.target.arch == Arch::AArch64 { ("x3", "x4") } else { ("rdi", "rsi") };

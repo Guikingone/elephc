@@ -1689,6 +1689,7 @@ fn emit_hash_mixed_value_read(ctx: &mut FunctionContext<'_>) {
     let ordinary = ctx.next_label("hash_get_mixed_ordinary");
     let done = ctx.next_label("hash_get_mixed_value_done");
     let result = abi::int_result_reg(ctx.emitter);
+    // -- distinguish a boxed invoker reference from an ordinary value --
     abi::emit_branch_if_int_result_zero(ctx.emitter, &ordinary);
     let tag = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, tag, result, 0);
@@ -1702,9 +1703,11 @@ fn emit_hash_mixed_value_read(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("jne {ordinary}"));                // ordinary cells keep their existing detached read behavior
         }
     }
+    // -- read caller storage through the invoker reference marker --
     super::arrays::emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, result);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&ordinary);
+    // -- detach an ordinary boxed hash value for PHP value-read semantics --
     abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
     ctx.emitter.label(&done);
 }
