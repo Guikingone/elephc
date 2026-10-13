@@ -3342,6 +3342,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashArrayUnion
                     | Op::ArrayToHash
                     | Op::ObjectNew
+                    | Op::ObjectHandleReserve
+                    | Op::ObjectNewReserved
                     | Op::ObjectCloneShallow
                     | Op::DynamicObjectNew
                     | Op::DynamicObjectNewMixed
@@ -4806,6 +4808,8 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
             | Op::EvalFunctionCall
             | Op::EvalFunctionCallArray
             | Op::ObjectNew
+            | Op::ObjectHandleReserve
+            | Op::ObjectNewReserved
             | Op::EvalObjectNew
             | Op::IteratorMethodCall
             | Op::IterStart

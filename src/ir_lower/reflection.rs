@@ -164,7 +164,7 @@ fn referenced_builtin_reflection_classes(module: &Module) -> BTreeSet<String> {
 
         for inst in &function.instructions {
             match inst.op {
-                Op::ObjectNew => {
+                Op::ObjectNew | Op::ObjectNewReserved => {
                     if let Some(class_name) = class_data_name(module, inst) {
                         insert_builtin_reflection_class(module, class_name, &mut classes);
                     }

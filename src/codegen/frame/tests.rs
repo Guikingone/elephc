@@ -122,14 +122,14 @@ fn hidden_argument_snapshot_enables_backtrace_activations_without_a_core_instruc
     });
     module.add_function(function);
 
-    let backtrace_enabled = module_uses_backtrace(&module);
-    assert!(backtrace_enabled);
+    // The backtrace activation is universal since the uncaught report walks every frame; the
+    // hidden argument snapshot keeps the frame reader able to print `args` either way.
     let layout = layout_for_function(
         &module.functions[0],
         target,
         false,
         true,
-        backtrace_enabled,
+        true,
     );
     assert!(layout.backtrace_activation);
     assert!(layout.exception_activation_offset.is_some());

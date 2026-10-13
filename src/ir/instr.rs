@@ -928,6 +928,17 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    /// Reserves one PHP object handle WITHOUT binding it to a payload.
+    ///
+    /// php numbers a `new` receiver's handle BEFORE evaluating the constructor arguments,
+    /// so a nested `new ArrayObject(new ArrayObject($a))` numbers the outer object first.
+    /// The lowering reserves the handle first; the paired [`ObjectNewReserved`] binds it
+    /// once the payload exists.
+    ObjectHandleReserve,
+    /// Fixed-class object construction BINDING a previously reserved handle.
+    ///
+    /// Operand 0 is the reserved handle; operands 1.. are the constructor arguments.
+    ObjectNewReserved,
     EvalObjectNew,
     ObjectCloneShallow,
     DynamicObjectNew,
@@ -1246,6 +1257,7 @@ impl Op {
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
+            | ObjectHandleReserve | ObjectNewReserved
             | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
@@ -1673,6 +1685,8 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            ObjectHandleReserve => "object_handle_reserve",
+            ObjectNewReserved => "object_new_reserved",
             EvalObjectNew => "eval_object_new",
             ObjectCloneShallow => "object_clone_shallow",
             DynamicObjectNew => "dynamic_object_new",

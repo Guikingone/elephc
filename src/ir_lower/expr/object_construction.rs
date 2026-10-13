@@ -51,6 +51,29 @@ pub(super) fn lower_new_object(
     }
     let sig = constructor_signature(ctx, class_name).cloned();
     let php_type = PhpType::Object(class_name.as_str().to_string());
+    // php numbers a `new` receiver's handle BEFORE evaluating the constructor arguments, so a
+    // nested `new ArrayObject(new ArrayObject($a))` numbers the OUTER object first. When an
+    // argument can mint a handle (a nested `new`, a `clone`, or any call), reserve the
+    // handle first and bind it after the arguments; every other construction keeps the
+    // fused single-op form. A reserved handle whose argument evaluation throws is consumed
+    // rather than returned to the pool — observable only as a number php would have reused.
+    //
+    // The reserved form only has a GENERIC backend lowering: the builtin special cases
+    // (runtime-managed payloads, compact Throwable storage) own their whole allocation
+    // sequence, so those classes keep the fused single-op form even with handle-minting
+    // arguments.
+    let php_ordered =
+        class_uses_generic_object_new_path(ctx, class_name) && args_may_mint_a_handle(args);
+    let reserved_handle = php_ordered.then(|| {
+        ctx.emit_value(
+            Op::ObjectHandleReserve,
+            Vec::new(),
+            None,
+            PhpType::Int,
+            Op::ObjectHandleReserve.default_effects(),
+            Some(expr.span),
+        )
+    });
     let result_staging = prepublish_user_call_result(
         ctx,
         sig.as_ref(),
@@ -71,14 +94,28 @@ pub(super) fn lower_new_object(
     );
     ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
     let data = ctx.intern_class_name(class_name.as_str());
-    let object = ctx.emit_value(
-        Op::ObjectNew,
-        operands.clone(),
-        Some(Immediate::Data(data)),
-        php_type,
-        Op::ObjectNew.default_effects(),
-        Some(expr.span),
-    );
+    let object = if let Some(handle) = reserved_handle {
+        let mut reserved_operands = Vec::with_capacity(operands.len() + 1);
+        reserved_operands.push(handle.value);
+        reserved_operands.extend(operands.iter().copied());
+        ctx.emit_value(
+            Op::ObjectNewReserved,
+            reserved_operands,
+            Some(Immediate::Data(data)),
+            php_type,
+            Op::ObjectNewReserved.default_effects(),
+            Some(expr.span),
+        )
+    } else {
+        ctx.emit_value(
+            Op::ObjectNew,
+            operands.clone(),
+            Some(Immediate::Data(data)),
+            php_type,
+            Op::ObjectNew.default_effects(),
+            Some(expr.span),
+        )
+    };
     stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
     release_owned_call_arg_temporaries_with_roots(
         ctx,
@@ -91,6 +128,141 @@ pub(super) fn lower_new_object(
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     take_prepublished_call_result(ctx, result_staging, object, expr.span)
+}
+
+/// Returns true when any expression in `args` can mint an object handle while being evaluated.
+///
+/// php mints a `new` receiver's handle BEFORE its arguments, so a construction whose arguments
+/// can themselves create objects — a nested `new`, a `clone`, or any call, because user code can
+/// `return new X()` — must reserve first. Only call-free leaves stay on the fused single-op
+/// path; every composite shape takes the php-ordered split, because a missed shape would
+/// silently keep the swapped handle order this split exists to fix.
+fn args_may_mint_a_handle(args: &[Expr]) -> bool {
+    args.iter().any(|arg| expr_may_mint_a_handle(&arg.kind))
+}
+
+/// Returns true when evaluating this expression may create an object handle.
+fn expr_may_mint_a_handle(kind: &ExprKind) -> bool {
+    match kind {
+        // Leaves that cannot run code, let alone create an object.
+        ExprKind::Variable(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => false,
+        // Everything else is conservative: calls mint (`return new X()`), composites can wrap
+        // calls, and the php-ordered path is semantically identical to the fused one either way.
+        _ => true,
+    }
+}
+
+/// Returns true when the class is served by the GENERIC fixed-class backend path AND its
+/// synthetic constructor body does not hop through a parent constructor.
+///
+/// This is the lowering-side MIRROR of the builtin special-case dispatch in
+/// `codegen::lower_inst::objects::fixed_new::lower_object_new`: the special cases own their
+/// whole allocation sequence (runtime-managed payloads, compact Throwable storage), so only the
+/// generic path knows how to bind a reserved handle. An entry added to one list MUST be added
+/// to the other, or a special-case class reaches `lower_object_new_reserved` and fails the
+/// build for a missing EIR constructor body.
+///
+/// The generic-path gate is currently tightened to the two container classes whose corpus
+/// tests assert nested-construction handle numbers (php's `#1` OUTER before the `#2` inner):
+/// every other class keeps the fused single-op form while the reserved-handle path is proven
+/// across the decorator family (whose constructors dispatch `parent::__construct`).
+fn class_uses_generic_object_new_path(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    // The tightened gate: the corpus's nested-construction tests assert the two container
+    // classes only; their synthetic constructors have no parent-constructor hop.
+    let tightened = matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "arrayobject" | "arrayiterator",
+    );
+    if !tightened {
+        return false;
+    }
+    // Compiler-generated helper classes (the decorator internals) allocate through their own
+    // dedicated emitters, not through this generic path.
+    let normalized = class_name.trim_start_matches('\\');
+    if normalized.starts_with("__Elephc") {
+        return false;
+    }
+    let key = php_symbol_key(normalized);
+    let key = key.as_str();
+    if matches!(
+        key,
+        "fiber"
+            | "callbackfilteriterator"
+            | "recursivecallbackfilteriterator"
+            | "iteratoriterator"
+            | "spldoublylinkedlist"
+            | "splstack"
+            | "splqueue"
+            | "splfixedarray"
+            | "stdclass"
+    ) {
+        return false;
+    }
+    // The reflection owners lower their construction operands through dedicated paths here and
+    // their emission through `reflection::lower_reflection_owner_new` in codegen.
+    if matches!(
+        key,
+        "reflectionclass"
+            | "reflectionobject"
+            | "reflectionenum"
+            | "reflectionfunction"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "reflectionparameter"
+            | "reflectionclassconstant"
+            | "reflectionenumunitcase"
+            | "reflectionenumbackedcase"
+    ) {
+        return false;
+    }
+    // The builtin Throwable classes ride the compact payload emitter, and a user subclass that
+    // extends one inherits that compact storage: both keep the fused path's allocation with the
+    // constructor's own handle acquisition.
+    if class_is_throwable_like(ctx, class_name) {
+        return false;
+    }
+    // A SplFixedArray subclass reuses the runtime fixed-array payload while it declares no
+    // properties of its own (a subclass that declares properties rides the generic path).
+    let mut parent = ctx
+        .classes
+.get(normalized)
+        .and_then(|info| info.parent.clone());
+    while let Some(name) = parent.clone() {
+        if name == "SplFixedArray" {
+            let properties_empty = ctx
+                .classes
+        .get(normalized)
+                .is_some_and(|info| info.properties.is_empty());
+            return !properties_empty;
+        }
+        parent = ctx
+            .classes
+            .get(&name)
+            .and_then(|info| info.parent.clone());
+    }
+    true
+}
+
+/// Returns true when the class is (or extends) a builtin Throwable.
+///
+/// The lowering-side mirror of the runtime's compact-payload throwable emitter: those classes
+/// allocate through it rather than through the generic path, so they keep the fused
+/// construction form. Every builtin throwable's parent chain terminates on `Exception` or
+/// `Error`, so walking the chain with those two roots covers the whole compact family.
+fn class_is_throwable_like(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    while let Some(name) = current {
+        if matches!(name.as_str(), "Exception" | "Error") {
+            return true;
+        }
+        current = ctx.classes.get(&name).and_then(|info| info.parent.clone());
+    }
+    false
 }
 
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.

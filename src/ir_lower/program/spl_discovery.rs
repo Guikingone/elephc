@@ -63,7 +63,7 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
     {
         for inst in &function.instructions {
             match inst.op {
-                Op::ObjectNew => {
+                Op::ObjectNew | Op::ObjectNewReserved => {
                     if let Some(class_name) = class_data_name(module, inst) {
                         let construct_key = php_method_key("__construct");
                         push_supported_builtin_spl_method_for_receiver(

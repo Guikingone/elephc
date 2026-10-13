@@ -18,6 +18,22 @@ pub(super) fn emit_object_allocation(
     uninitialized_marker_offsets: &[usize],
     owned_reference_property_offsets: &[(usize, PhpType, bool)],
 ) -> Result<()> {
+    emit_object_allocation_impl(ctx, class_id, property_count, allow_dynamic_properties,
+        uninitialized_marker_offsets, owned_reference_property_offsets, None)
+}
+
+/// The allocation body. `reserved_handle` binds a handle the construction reserved BEFORE
+/// its arguments were evaluated (php numbers a `new` receiver first); `None` keeps the
+/// fused path's pool acquisition immediately after the allocation.
+pub(super) fn emit_object_allocation_impl(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    property_count: usize,
+    allow_dynamic_properties: bool,
+    uninitialized_marker_offsets: &[usize],
+    owned_reference_property_offsets: &[(usize, PhpType, bool)],
+    reserved_handle: Option<crate::ir::ValueId>,
+) -> Result<()> {
     let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
     let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
     let payload_size = dynamic_properties_offset + dynamic_properties_bytes;
@@ -28,7 +44,16 @@ pub(super) fn emit_object_allocation(
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks object instances for ownership helpers
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the object payload
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            match reserved_handle {
+                None => {
+                    ctx.emitter.instruction("bl __rt_object_handle_acquire");   // acquire the pool's next handle
+                }
+                Some(handle) => {
+                    ctx.emitter.instruction("mov x1, x0");                      // the bind takes the payload in x0 and the handle in x1
+                    ctx.load_value_to_reg(handle, "x1")?;
+                    ctx.emitter.instruction("bl __rt_object_handle_bind");      // bind the pre-reserved handle to the payload
+                }
+            }
             ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the compile-time class id
             ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
         }
@@ -41,7 +66,16 @@ pub(super) fn emit_object_allocation(
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
             ));
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            match reserved_handle {
+                None => {
+                    ctx.emitter.instruction("call __rt_object_handle_acquire"); // acquire the pool's next handle
+                }
+                Some(handle) => {
+                    ctx.emitter.instruction("mov rsi, rax");                    // the bind takes the payload in rax and the handle in rsi
+                    ctx.load_value_to_reg(handle, "rsi")?;
+                    ctx.emitter.instruction("call __rt_object_handle_bind");    // bind the pre-reserved handle to the payload
+                }
+            }
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
         }

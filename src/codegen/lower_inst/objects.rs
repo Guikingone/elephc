@@ -228,7 +228,7 @@ pub(super) use fiber_dynamic_entry::{
     lower_dynamic_object_new, lower_dynamic_object_new_mixed,
     lower_dynamic_object_new_without_constructor_mixed,
 };
-pub(super) use fixed_new::lower_object_new;
+pub(super) use fixed_new::{lower_object_new, lower_object_new_reserved, lower_object_handle_reserve};
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,

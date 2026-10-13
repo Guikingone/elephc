@@ -74,17 +74,151 @@ pub(crate) fn emit_object_handles(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_object_handle_acquire_arm64(emitter);
+            emit_object_handle_reserve_arm64(emitter);
+            emit_object_handle_bind_arm64(emitter);
             emit_object_handle_of_arm64(emitter);
             emit_object_handle_release_arm64(emitter);
             emit_spl_object_hash_arm64(emitter);
         }
         Arch::X86_64 => {
             emit_object_handle_acquire_x86_64(emitter);
+            emit_object_handle_reserve_x86_64(emitter);
+            emit_object_handle_bind_x86_64(emitter);
             emit_object_handle_of_x86_64(emitter);
             emit_object_handle_release_x86_64(emitter);
             emit_spl_object_hash_x86_64(emitter);
         }
     }
+}
+
+/// Emits the AArch64 `__rt_object_handle_reserve`.
+///
+/// Mints or pops one handle WITHOUT binding it to a payload: php numbers a `new` receiver
+/// BEFORE evaluating the constructor arguments, so a nested
+/// `new ArrayObject(new ArrayObject($a))` numbers the outer object first. The lowering
+/// reserves the handle first and binds it once the payload exists
+/// (`__rt_object_handle_bind`).
+///
+/// Input: none. Output: `x0` = the reserved handle (the pool starts at 1).
+fn emit_object_handle_reserve_arm64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_reserve ---");
+    emitter.label_global("__rt_object_handle_reserve");
+
+    emitter.instruction("stp x11, x12, [sp, #-32]!");
+    emitter.instruction("stp x13, x14, [sp, #16]");
+
+    abi::emit_symbol_address(emitter, "x11", "_obj_handle_free_top");
+    emitter.instruction("ldr x12, [x11]");
+    emitter.instruction("cbz x12, __rt_object_handle_reserve_fresh");
+    emitter.instruction("sub x12, x12, #1");
+    emitter.instruction("str x12, [x11]");
+    abi::emit_symbol_address(emitter, "x13", "_obj_handle_free");
+    emitter.instruction("ldr w14, [x13, x12, lsl #2]");
+    emitter.instruction("b __rt_object_handle_reserve_done");
+
+    emitter.label("__rt_object_handle_reserve_fresh");
+    abi::emit_symbol_address(emitter, "x13", "_obj_handle_next");
+    emitter.instruction("ldr x14, [x13]");
+    emitter.instruction("add x12, x14, #1");
+    emitter.instruction("str x12, [x13]");
+
+    emitter.label("__rt_object_handle_reserve_done");
+    emitter.instruction("mov x0, x14");
+    emitter.instruction("ldp x13, x14, [sp, #16]");
+    emitter.instruction("ldp x11, x12, [sp], #32");
+    emitter.instruction("ret");
+}
+
+/// Emits the AArch64 `__rt_object_handle_bind`.
+///
+/// Binds a previously RESERVED handle to a freshly allocated payload — the second half of
+/// php's numbering order, run after the constructor arguments have been evaluated.
+///
+/// Input: `x0` = object payload pointer, `x1` = the reserved handle. Output: none — both
+/// input registers are preserved.
+fn emit_object_handle_bind_arm64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_bind ---");
+    emitter.label_global("__rt_object_handle_bind");
+
+    emitter.instruction("stp x9, x10, [sp, #-16]!");
+    emitter.instruction("cbz x0, __rt_object_handle_bind_done");
+    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    emitter.instruction("subs x10, x0, x9");
+    emitter.instruction("b.lo __rt_object_handle_bind_done");
+    emitter.instruction("lsr x10, x10, #4");
+    abi::emit_symbol_address(emitter, "x9", "_obj_handle_index");
+    emitter.instruction("str w1, [x9, x10, lsl #2]");
+
+    emitter.label("__rt_object_handle_bind_done");
+    emitter.instruction("ldp x9, x10, [sp], #16");
+    emitter.instruction("ret");
+}
+
+/// Emits the x86_64 `__rt_object_handle_reserve` — see the AArch64 arm for the contract.
+fn emit_object_handle_reserve_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_reserve ---");
+    emitter.label_global("__rt_object_handle_reserve");
+
+    emitter.instruction("push r8");
+    emitter.instruction("push r9");
+    emitter.instruction("push r10");
+    emitter.instruction("push rcx");
+
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_free_top");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction("jz __rt_object_handle_reserve_fresh");
+    emitter.instruction("sub rcx, 1");
+    emitter.instruction("mov QWORD PTR [r8], rcx");
+    abi::emit_symbol_address(emitter, "r9", "_obj_handle_free");
+    emitter.instruction("mov r10d, DWORD PTR [r9 + rcx * 4]");
+    emitter.instruction("jmp __rt_object_handle_reserve_done");
+
+    emitter.label("__rt_object_handle_reserve_fresh");
+    abi::emit_symbol_address(emitter, "r9", "_obj_handle_next");
+    emitter.instruction("mov r10, QWORD PTR [r9]");
+    emitter.instruction("mov rcx, r10");
+    emitter.instruction("add rcx, 1");
+    emitter.instruction("mov QWORD PTR [r9], rcx");
+
+    emitter.label("__rt_object_handle_reserve_done");
+    emitter.instruction("mov rax, r10");
+    emitter.instruction("pop rcx");
+    emitter.instruction("pop r10");
+    emitter.instruction("pop r9");
+    emitter.instruction("pop r8");
+    emitter.instruction("ret");
+}
+
+/// Emits the x86_64 `__rt_object_handle_bind` — see the AArch64 arm for the contract.
+fn emit_object_handle_bind_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_bind ---");
+    emitter.label_global("__rt_object_handle_bind");
+
+    emitter.instruction("push rdx");
+    emitter.instruction("push r8");
+    emitter.instruction("push r11");
+
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_object_handle_bind_done");
+    abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    emitter.instruction("cmp rax, r11");
+    emitter.instruction("jb __rt_object_handle_bind_done");
+    emitter.instruction("mov rdx, rax");
+    emitter.instruction("sub rdx, r11");
+    emitter.instruction("shr rdx, 4");
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_index");
+    emitter.instruction("mov DWORD PTR [r8 + rdx * 4], esi");
+
+    emitter.label("__rt_object_handle_bind_done");
+    emitter.instruction("pop r11");
+    emitter.instruction("pop r8");
+    emitter.instruction("pop rdx");
+    emitter.instruction("ret");
 }
 
 /// Emits the AArch64 `__rt_object_handle_acquire`.
