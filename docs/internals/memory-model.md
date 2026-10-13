@@ -373,6 +373,18 @@ has its previous layout. Container store-back therefore retires that payload
 through `__rt_decref_any`, which dispatches on its heap kind, rather than choosing
 the destructor from the replacement's type. A conversion with its own acquired
 input consumes that input reference; store-back still retires the cell's old owner.
+
+A by-reference `foreach` value local receives no synthetic null store at loop
+entry: a re-entered inner loop may still alias the preceding walk's last element.
+Only a successful element binding retires a raw local owner or releases the
+previous entry-cell lease, without retiring the aliased payload. Fresh binding
+slots are zero-initialized by the frame; empty walks leave existing values and
+references unchanged. A stable hash cursor aimed at a tombstone follows its
+preserved successor chain, including multiple deleted entries. The iterator
+compares both the header and its separate entry allocation: rehashing can keep
+the header while moving the entries. After either identity changes, or a live
+slot is reused, the cursor is rebuilt from owned key anchors.
+
 Object-owned property reference cells use heap kind `7`, with their payload type
 in header bits `8..14`. Their two payload words remain the value's low word and
 its high word or string length. Class GC descriptor tag `11` identifies these

@@ -18,6 +18,15 @@ foreach ($alias as &$label) {
 unset($label);
 echo "aliased source: " . implode(",", $labels) . "\n";
 
+// Nested reference walks share live values while keeping independent cursors.
+$grid = [1, 2];
+foreach ($grid as &$row) {
+    foreach ($grid as &$column) {
+        echo "$row-$column\n";
+    }
+}
+unset($row, $column);
+
 // The source can be any array the program can name, not just a local. The writes land in
 // the storage the expression reaches, whatever it takes to get there.
 class Team {

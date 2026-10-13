@@ -294,14 +294,10 @@ pub(super) fn lower_foreach(
         // a `string` slot and echoed a pointer pair as a string.
         ctx.declare_local(value_var, value_ty.clone());
         ctx.set_local_type(value_var, value_ty.clone());
-        if value_ty == PhpType::Mixed {
-            initialize_foreach_mixed_local_if_needed(
-                ctx,
-                value_var,
-                value_needs_null_init,
-                array.span,
-            );
-        }
+        // Do not seed a by-reference value with boxed null. This preheader can run again
+        // while the local still aliases the previous traversal's last entry, so a synthetic
+        // store would overwrite that entry. IterCurrentValueRef retires raw storage only
+        // when an actual element is bound; an empty walk preserves the previous binding.
         if !value_needs_null_init {
             ctx.mark_local_initialized(value_var);
             if !ctx.is_ref_bound_local(value_var) {
@@ -325,37 +321,7 @@ pub(super) fn lower_foreach(
     let header = ctx.builder.create_named_block("foreach.next", Vec::new());
     let body_block = ctx.builder.create_named_block("foreach.body", Vec::new());
     let exit = ctx.builder.create_named_block("foreach.exit", Vec::new());
-    let first_nonempty = (value_by_ref
-        && value_needs_null_init
-        && foreach_ref_value_type(&source_ty) == PhpType::Mixed)
-        .then(|| {
-            ctx.builder
-                .create_named_block("foreach.first_nonempty", Vec::new())
-        });
-    if let Some(first_nonempty) = first_nonempty {
-        let has_next = ctx.emit_value(
-            Op::IterNext,
-            vec![iterator.value],
-            None,
-            PhpType::Bool,
-            Op::IterNext.default_effects(),
-            Some(array.span),
-        );
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: has_next.value,
-            then_target: first_nonempty,
-            then_args: Vec::new(),
-            else_target: exit,
-            else_args: Vec::new(),
-        });
-
-        ctx.builder.position_at_end(first_nonempty);
-        let value_slot = ctx.declare_local(value_var, PhpType::Mixed);
-        ctx.release_stored_local_value(value_var, value_slot, Some(array.span));
-        branch_to(ctx, body_block);
-    } else {
-        branch_to(ctx, header);
-    }
+    branch_to(ctx, header);
 
     ctx.builder.position_at_end(header);
     let has_next = ctx.emit_value(
