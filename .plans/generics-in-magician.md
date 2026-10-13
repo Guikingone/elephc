@@ -214,3 +214,35 @@ one existing ignored cache case, all twelve native eval/include/REPL regressions
 build, and Rust/diff hygiene. The new late-dependency fixture reports a clean heap. File-cache
 format 16 and fingerprint `2604479976000790958` stay unchanged because this correction changes
 runtime preparation and checking, not parsing or stored IR.
+
+## CI follow-up after the ninth review
+
+- [x] Read the complete current-head CI result and all review/comment connections.
+- [x] Identify the repeated macOS timeout in the existing five-target echo ownership fixture.
+- [x] Verify its PHP source, ownership checks and assembly emission are unchanged from main.
+- [x] Preserve every assertion while scheduling each supported target as its own test.
+- [x] Mark six obsolete review summaries as outdated and retain the current Greptile summary.
+- [x] Validate both library and CLI test binaries under the existing CI timeout.
+- [x] Prepare the validated correction for publication and exact-head CI/review verification.
+
+CI run `38440691945` on `5be0ef0378` passes 1,424 tests in macOS non-codegen shard 2/8.
+The CLI copy of `echo_retires_widened_string_reads_but_preserves_concrete_borrows` reaches
+both 60-second limits; its library copy passes in 46.136 seconds. The same composite fixture
+passes locally in 58.311 and 50.425 seconds across both binaries, leaving little margin.
+The other CI jobs pass, and the aggregate failure follows this one shard.
+
+A shared assertion helper retains the exact opaque-eval PHP source, detached-copy releases,
+concrete parameter borrows, storage-path presence checks and assembly generation. Five target
+tests independently cover macOS, both iOS variants and both Linux architectures. No global
+timeout, test expectation, production semantics or target coverage is changed.
+
+All twenty inline review threads are resolved, including the eleven authored by the maintainer.
+The six historical maintainer summaries are minimized with GitHub's outdated reason; their
+content remains available. The current Greptile 5/5 summary remains visible.
+
+Focused nextest validation passes all ten cases across the library and CLI binaries under the
+unchanged CI profile, with serial execution matching the macOS shard. Individual cases take
+9.083-11.562 seconds; all five targets generate assembly and retain every original ownership
+assertion. The source and assertion body are also compared exactly with the original fixture.
+The build is warning-free, and Rust documentation and diff hygiene pass. Aggregate compiler
+work remains comparable; this correction changes test scheduling rather than production speed.
