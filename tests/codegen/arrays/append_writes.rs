@@ -10,6 +10,122 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// An out-of-range negative string offset warns before rejecting an empty RHS.
+#[test]
+fn test_append_seventh_review_negative_empty_rhs() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = ['AB'];
+set_error_handler(function($level, $message) { echo $level, ':', $message, '|'; return true; });
+try { $items[0][-3] = ''; } catch (Error $e) { echo 'E:', $e->getMessage(), '|'; }
+restore_error_handler(); echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:Illegal string offset -3|[\"AB\"]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Invalid negative offsets do not invoke RHS string conversion.
+#[test]
+fn test_append_seventh_review_negative_stringable_rhs() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Text { public function __toString(): string { echo 'S'; return ''; } }
+$items = ['AB'];
+set_error_handler(function($level, $message) { echo $level, ':', $message, '|'; return true; });
+try { $items[0][-3] = new Text(); } catch (Error $e) { echo 'E:', $e->getMessage(), '|'; }
+restore_error_handler(); echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:Illegal string offset -3|[\"AB\"]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A returning deprecation handler observes only the false parent's empty-array promotion.
+#[test]
+fn test_append_seventh_review_false_handler_intermediate_state() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [false, 'q']; $alias = $items;
+set_error_handler(function($level, $message) use (&$items) { echo json_encode($items), '|'; return true; });
+$items[0]['x'] = 1;
+restore_error_handler(); echo json_encode($items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[],\"q\"]|[{\"x\":1},\"q\"]|[false,\"q\"]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing handler sees promotion before the keyed store finishes and rethrows the same object.
+#[test]
+fn test_append_seventh_review_false_throwing_handler_state() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [false, 'q']; $raised = new Error('handler');
+set_error_handler(function($level, $message) use (&$items, $raised) {
+    echo json_encode($items), '|'; throw $raised;
+});
+try { $items[0]['x'] = 1; } catch (Error $e) { echo $e === $raised ? 'same|' : 'other|'; }
+restore_error_handler(); echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[],\"q\"]|same|[{\"x\":1},\"q\"]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An owned object RHS survives the deferred store and is destroyed exactly once afterward.
+#[test]
+fn test_append_seventh_review_false_owned_rhs() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Value { public function __destruct() { echo 'D'; } }
+$items = [false, 'q'];
+set_error_handler(function($level, $message) use (&$items) {
+    echo json_encode($items), '|'; throw new Error('handler');
+});
+try { $items[0]['x'] = new Value(); } catch (Error $e) { echo 'C:'; }
+restore_error_handler(); echo get_class($items[0]['x']), '|';
+unset($items); echo 'done';
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[[],\"q\"]|C:Value|Ddone", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Pending handler exceptions preserve PHP's key-conversion state and TypeError chaining.
+#[test]
+fn test_append_seventh_review_false_pending_key_kinds() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+foreach ([0, 'x', null, true, 1.0, 1.5, [1], new stdClass()] as $key) {
+    $items = [false];
+    set_error_handler(function($level, $message) { throw new Error('handler'); });
+    try { $items[0][$key] = 1; }
+    catch (Throwable $e) {
+        echo gettype($key), ':', get_class($e), ':', $e->getMessage(), ':';
+        $previous = $e->getPrevious(); echo $previous === null ? '-' : $previous->getMessage();
+        echo ':', json_encode($items), '|';
+    }
+    restore_error_handler();
+}
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "integer:Error:handler:-:[[1]]|string:Error:handler:-:[{\"x\":1}]|",
+        "NULL:Error:handler:-:[[]]|boolean:Error:handler:-:[{\"1\":1}]|",
+        "double:Error:handler:-:[[]]|double:Error:handler:-:[[]]|",
+        "array:TypeError:Cannot access offset of type array on array:handler:[[]]|",
+        "object:TypeError:Cannot access offset of type stdClass on array:handler:[[]]|"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The seventh-review cases also retain their diagnostics and ownership without IR optimization.
+#[test]
+fn test_append_seventh_review_without_ir_opt() {
+    without_ir_opt(|| {
+        test_append_seventh_review_negative_empty_rhs();
+        test_append_seventh_review_negative_stringable_rhs();
+        test_append_seventh_review_false_handler_intermediate_state();
+        test_append_seventh_review_false_throwing_handler_state();
+        test_append_seventh_review_false_owned_rhs();
+        test_append_seventh_review_false_pending_key_kinds();
+    });
+}
+
 /// Runtime string writes preserve negative offsets, padding, cast warnings and invalid key types.
 #[test]
 fn test_append_sixth_review_string_offset_controls() {
@@ -72,7 +188,7 @@ restore_error_handler();
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// A throwing false-conversion handler observes the completed assignment and releases roots.
+/// Catching a throwing false-conversion handler observes the completed assignment and releases roots.
 #[test]
 fn test_append_sixth_review_throwing_conversion_handler() {
     let out = compile_and_run_with_heap_debug(r#"<?php

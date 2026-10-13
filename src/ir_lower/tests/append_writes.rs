@@ -82,6 +82,17 @@ function writeScalarChildren(string $key, mixed $inner): void {
     echo json_encode($strings), json_encode($false);
 }
 writeScalarChildren('0', '1abc');
+class OffsetText { public function __toString(): string { echo 'S'; return ''; } }
+function writeSeventhReview(mixed $inner): void {
+    $strings = ['AB'];
+    try { $strings[0][-3] = new OffsetText(); } catch (Error $error) { echo $error->getMessage(); }
+    $false = [false];
+    set_error_handler(function($level, $message) { throw new Error('handler'); });
+    try { $false[0][$inner] = 1; }
+    catch (Throwable $error) { echo $error->getMessage(), json_encode($false); }
+    restore_error_handler();
+}
+writeSeventhReview($argc);
 function hashReturn(string $key, mixed $value): array {
     $items = [$value]; $items[$key] = $value; return $items;
 }
@@ -109,6 +120,11 @@ echo json_encode(hashReturn('key', $argc));
         crate::ir::RuntimeCallTarget::StringWriteOffset))), "{target}: runtime string offsets are normalized");
     assert!(scalar.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
         crate::ir::RuntimeCallTarget::WriteDiagnostic))), "{target}: false conversion uses PHP's diagnostic channel");
+    let reviewed = module.functions.iter().find(|function| function.name == "writeSeventhReview").unwrap();
+    assert!(reviewed.instructions.iter().any(|inst| inst.op == crate::ir::Op::CatchBind),
+        "{target}: a throwing deprecation handler must be deferred until its keyed write completes");
+    assert!(reviewed.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+        crate::ir::RuntimeCallTarget::ExceptionChain))), "{target}: invalid offsets chain the pending handler error");
     let nested = asm.split("@fn name=writeConsumingParent ").nth(1)
         .expect("missing reference-variadic assembly body")
         .split("@endfn name=writeConsumingParent").next().unwrap();
