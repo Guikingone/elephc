@@ -76,7 +76,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// spelling. Version-12 entries still discarded capitalization on this expression path.
 /// BUMPED TO 14 to combine both spelling fixes with effective readonly setter visibility
 /// and implicit private-set finality, keeping pre-merge cache entries separate.
-pub(crate) const FORMAT_VERSION: u32 = 14;
+/// BUMPED TO 15 for retained abstract setter metadata logic in the fingerprinted EvalIR source.
+pub(crate) const FORMAT_VERSION: u32 = 15;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

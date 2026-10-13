@@ -81,7 +81,8 @@ mod tests {
     /// BUMPED TO 13 with the same fingerprint: first-class function callable names
     /// also retain source spelling without changing the serialized shape.
     /// BUMPED TO 14 for the merged effective setter/finality metadata and spelling fixes.
-    const RECORDED_FINGERPRINT: u64 = 3078654424804495908;
+    /// BUMPED TO 15 for the retained abstract setter builder in the fingerprinted EvalIR source.
+    const RECORDED_FINGERPRINT: u64 = 867696158957852547;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///
