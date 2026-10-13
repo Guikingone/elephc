@@ -119,3 +119,36 @@ Greptile rates `c432a43f87` at 4/5 and flags qualified trait visibility. Three n
 CI run `38308009535` fails `test_mbstring_conversion_input_references` in ordinary codegen shard 6/16 on both Linux architectures. The unchanged test fails locally with the same stale nested-reference output. Whole-value scope and Cell writes now refresh the persistent wrapper's metadata from the RHS before releasing the previous payload. A new interpreter regression fails before correction and covers both write routes, cursor replacement, removed keys, and clearing metadata on scalar replacement. No expected CI output or timeout is weakened.
 
 Latest validation passes: 206 focused Magician generic, reference, trait-adaptation and operand-ownership tests; 16 native generic, property/global, reference-lifetime and conversion regressions; a warning-free build; Rust documentation and diff hygiene. The unchanged native CI fixture now produces its original expected output. The qualified trait fixture reports a clean heap. Current-head CI and the subsequent Greptile review must be verified after publication.
+
+## Seventh PR 1819 review
+
+- [x] Reproduce array-element writeback losing sibling references and cursors on `2754c4f960`.
+- [x] Cover both scope-variable and nested persistent `Cell` writeback paths.
+- [x] Copy live receiver metadata onto each shallow clone before replacing shared storage.
+- [x] Validate new and existing reference regressions, ownership, and build hygiene.
+- [x] Prepare the validated fix for publication and verified review-thread resolution.
+
+The independent October 13 review rates `2754c4f960` at 3/5 while Greptile's older summary
+still rates that same SHA at 5/5. The new P1 exposes incomplete metadata propagation:
+element writeback creates a shallow array clone without the context side tables, so the
+whole-reference refresh erases sibling aliases and resets the cursor. Both new interpreter
+tests fail before correction, including the nested `Cell` route. The native regression also
+fails before correction, returning `1|x|1|x|9|0|7|1|reset` instead of PHP's
+`7|y|7|y|9|0|7|8|end`. It checks sibling references, whole-array aliases, independent COW
+values, and an exhausted cursor. Whole-value replacement retains its existing metadata
+refresh and scalar clearing behavior. Cache format and serialized IR remain unchanged.
+
+Focused validation passes: 122 interpreter regressions, both new native setter fixtures,
+and five existing native reference/conversion/ownership fixtures. Both setter fixtures fail
+on the reviewed head and match PHP after correction. Existing heap assertions pass. The
+new setter fixtures keep reference-target key ownership separate: even named string keys
+retain cells on the reviewed head, covered by journal task `4136c2d0`. The baseline debug
+probe retains four blocks (128 bytes) across two writes; the corrected eval probe retains
+two blocks (64 bytes). The metadata fix does not claim to solve that independent lifetime
+issue. Rust documentation and diff hygiene pass, and the build is warning-free.
+
+All nine feature/review commits replay cleanly onto main `32a77fc532`, with their patch
+contents preserved by range-diff. Post-rebase validation repeats the warning-free build,
+all 122 interpreter regressions, and all seven native fixtures successfully. Publication
+uses the previously reviewed remote head as an explicit lease; subsequent CI and review
+results must be attributed to the new published SHA.

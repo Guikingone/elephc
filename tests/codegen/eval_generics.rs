@@ -716,3 +716,31 @@ catch (TypeError $e) { echo '|nested'; }
     assert_eq!(output.stdout, "PrivateBox<int>|NestedBox<int>|SelectedBox<int>|exposed|alias|selected_alias|nested");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Shares PHP-compatible cursor, sibling-reference, and COW checks across eval/native setters.
+/// Reference-target key ownership is tracked separately in task 4136c2d0.
+fn element_writeback_metadata_body() -> &'static str {
+    r#"
+$index = 'x'; $other = 'y';
+$y = 1; $a = ['x' => 0, 'y' => &$y]; $alias =& $a; $copy = $a; next($a);
+set_x($a[$index]); $y = 7;
+echo $a[$other], '|', key($a), '|', $alias[$other], '|', key($alias), '|', $a[$index], '|', $copy[$index], '|', $copy[$other];
+next($a); set_x($a[$index]); $y = 8;
+echo '|', $a[$other], '|', key($a) === null ? 'end' : 'reset';
+"#
+}
+
+/// Eval element writeback preserves sibling aliases, array cursors, and independent COW copies.
+#[test]
+fn test_eval_generics_review_element_writeback_metadata() {
+    let source = dynamic_eval(&format!("function set_x(&$value) {{ $value = 9; }}\n{}", element_writeback_metadata_body()));
+    assert_eq!(compile_and_run(&source), "7|y|7|y|9|0|7|8|end");
+}
+
+/// Native setter writeback preserves sibling aliases, cursors, and independent COW copies.
+#[test]
+fn test_eval_generics_review_element_writeback_metadata_native() {
+    let source = dynamic_eval(element_writeback_metadata_body())
+        .replacen("<?php", "<?php\nfunction set_x(mixed &$value): void { $value = 9; }", 1);
+    assert_eq!(compile_and_run(&source), "7|y|7|y|9|0|7|8|end");
+}

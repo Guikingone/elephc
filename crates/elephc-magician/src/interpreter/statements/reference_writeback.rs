@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Invoker slots, arrays, nested arrays, object properties, and static properties preserve aliases.
+//! - Array writeback clones preserve element aliases and cursors before replacing shared storage.
 
 use super::*;
 
@@ -479,6 +480,7 @@ pub(super) fn write_back_invoker_heap_slot(
 }
 
 /// Stores one by-reference method result in a caller-side array element.
+/// Preserves the receiver's array metadata before writing the clone back to shared storage.
 pub(super) fn write_back_method_array_element_ref_target(
     scope: &mut ElephcEvalScope,
     array_name: &str,
@@ -498,7 +500,9 @@ pub(super) fn write_back_method_array_element_ref_target(
     {
         if values.is_array_like(existing.cell())? {
             ownership = existing.flags().ownership;
-            values.array_clone_shallow(existing.cell())?
+            let array = values.array_clone_shallow(existing.cell())?;
+            context.copy_array_metadata(existing.cell(), array);
+            array
         } else {
             eval_new_array_for_index(index, values)?
         }
@@ -513,6 +517,7 @@ pub(super) fn write_back_method_array_element_ref_target(
 }
 
 /// Stores one by-reference method result in an element of a nested caller-side array target.
+/// Copies the live receiver's metadata before replacing a nested persistent reference.
 pub(super) fn write_back_method_nested_array_element_ref_target(
     array_target: &EvalReferenceTarget,
     index: RuntimeCellHandle,
@@ -522,7 +527,9 @@ pub(super) fn write_back_method_nested_array_element_ref_target(
 ) -> Result<(), EvalStatus> {
     let current = eval_reference_target_value(array_target, context, values)?;
     let array = if values.is_array_like(current)? {
-        values.array_clone_shallow(current)?
+        let array = values.array_clone_shallow(current)?;
+        context.copy_array_metadata(current, array);
+        array
     } else {
         eval_new_array_for_index(index, values)?
     };

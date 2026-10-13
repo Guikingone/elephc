@@ -303,6 +303,9 @@ from following reused addresses. Rejected typed declarations restore the previou
 and property writes preserve shared wrappers while validating before mutation.
 Replacing a wrapper's value refreshes its element aliases and cursor metadata from the RHS
 before releasing the previous payload; a replacement without metadata clears the old entries.
+Array-element writeback copies the live receiver's metadata onto its shallow clone before
+replacing shared storage, including nested `Cell` targets. Updating one element preserves
+sibling references and the current or exhausted array cursor.
 Independent value copies retain their ordinary COW semantics.
 Float and bool keys use a temporary integer
 cell for contract validation; that cell is released on success and failure, while storage receives

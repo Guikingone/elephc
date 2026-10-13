@@ -1,5 +1,5 @@
 //! Purpose:
-//! Verifies native array-reference lookup treats original handles as opaque identity tokens.
+//! Verifies opaque array-reference lookup and metadata preservation across reference writes.
 //!
 //! Called from:
 //! - The focused Magician interpreter unit-test harness.
@@ -126,4 +126,58 @@ fn array_reference_replacement_refreshes_metadata() {
         assert_eq!(context.array_cursor(reference), EvalArrayCursor::Position(0));
         assert!(owners.is_empty());
     }
+}
+
+/// Exercises element writeback through either a scope variable or a nested persistent cell.
+fn assert_array_element_writeback_preserves_metadata(through_cell: bool) {
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let array = values.array_new(2).unwrap();
+    let index = values.int(0).unwrap();
+    let alias_index = values.int(1).unwrap();
+    let before = values.int(1).unwrap();
+    values.array_set(array, index, before).unwrap();
+    values.array_set(array, alias_index, before).unwrap();
+    let reference = values.reference_new(array).unwrap();
+    let alias = values.reference_new(before).unwrap();
+    let key = EvalArrayReferenceKey::Int(1);
+    context.bind_array_element_alias(reference, key.clone(), EvalReferenceTarget::Cell { cell: alias });
+    scope.set("array", reference, ScopeCellOwnership::Borrowed);
+    let target = if through_cell {
+        EvalReferenceTarget::NestedArrayElement {
+            array_target: Box::new(EvalReferenceTarget::Cell { cell: reference }), index,
+        }
+    } else {
+        EvalReferenceTarget::ArrayElement { scope: &mut scope, array_name: "array".into(), index }
+    };
+    for cursor in [EvalArrayCursor::Position(1), EvalArrayCursor::Invalid] {
+        context.set_array_cursor(reference, cursor);
+        let replacement = values.int(9).unwrap();
+        write_back_method_ref_target(&target, replacement, &mut context, &mut values).unwrap();
+        let written = values.array_get(reference, index).unwrap();
+        assert_eq!(values.get(written), FakeValue::Int(9));
+        values.release(written).unwrap();
+        assert_eq!(context.array_cursor(reference), cursor);
+        let after = values.int(7).unwrap();
+        let previous = values.reference_replace(alias, after).unwrap();
+        values.release(previous).unwrap();
+        let mut owners = Vec::new();
+        let read = read_owned_array_reference(reference, key.clone(), &mut context, &mut values, &mut owners).unwrap().unwrap();
+        assert_eq!(values.get(read), FakeValue::Int(7));
+        values.release(read).unwrap();
+        assert!(owners.is_empty());
+    }
+}
+
+/// Scope-array element writeback preserves sibling references and both valid and invalid cursors.
+#[test]
+fn array_element_writeback_preserves_scope_metadata() {
+    assert_array_element_writeback_preserves_metadata(false);
+}
+
+/// Nested element writeback into a persistent Cell preserves sibling references and cursors.
+#[test]
+fn array_element_writeback_preserves_cell_metadata() {
+    assert_array_element_writeback_preserves_metadata(true);
 }
