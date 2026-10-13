@@ -12,6 +12,23 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Legal readonly storage keeps the abstract setter from writing its backing slot.
+#[test]
+fn execute_program_asymmetric_eighth_review_abstract_setter_storage() {
+    let program = parse_fragment(br#"abstract class Base { abstract public int $x { set; } }
+abstract class Child extends Base {
+    public public(set) readonly int $x;
+    public function probe(): bool { $this->x = 4; return isset($this->x); }
+}
+class Grandchild extends Child {}
+return (new Grandchild())->probe();"#).expect("parse retained abstract setter");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("a concrete descendant can retain the abstract setter");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
 /// An abstract child can store readonly values without implementing its inherited abstract setter.
 #[test]
 fn execute_program_asymmetric_latest_review_abstract_set_readonly() {

@@ -374,6 +374,12 @@ pub(crate) fn eval_property_set_result(
                 values,
             );
         }
+        if property.requires_set_hook() && property.is_readonly() && !property.has_set_hook() {
+            // The inherited abstract setter is callable but has no body or backing-slot write.
+            return eval_inherited_abstract_setter_write(
+                &declaring_class, property.name(), value, context, values,
+            );
+        }
         if property.has_set_hook() {
             if !current_eval_property_hook_is(
                 &declaring_class,

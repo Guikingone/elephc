@@ -45,10 +45,23 @@ class ReadonlyGetter extends AbstractGetter {
     public function __construct() { $this->id = 42; }
 }
 abstract class AbstractSetter { abstract public int $id { get; set; } }
-abstract class AbstractReadonlyStorage extends AbstractSetter { public public(set) readonly int $id; }
+abstract class AbstractReadonlyStorage extends AbstractSetter {
+    public public(set) readonly int $id;
+    public function write(): void { $this->id = 4; }
+}
 class ReadonlyStorageDescendant extends AbstractReadonlyStorage {}
 echo (new ReflectionClass(AbstractReadonlyStorage::class))->isAbstract() ? '' : 'bad';
 echo (new ReflectionClass(ReadonlyStorageDescendant::class))->isAbstract() ? 'bad' : '';
+(new ReadonlyStorageDescendant())->write();
+echo count((new ReflectionProperty(ReadonlyStorageDescendant::class, 'id'))->getHooks());
+abstract class AbstractStringSetter { abstract public string $text { set; } }
+abstract class AbstractReadonlyStringStorage extends AbstractStringSetter { public public(set) readonly string $text; }
+class ReadonlyStringStorageDescendant extends AbstractReadonlyStringStorage {}
+function writeAbstractString(mixed $object, mixed $value, string $name): void {
+    $object->text = $value;
+    $object->{$name} = $value;
+}
+writeAbstractString(new ReadonlyStringStorageDescendant(), 'value', 'text');
 function acceptAbstractReadonlyStorage(): void {
     eval('abstract class DynamicAbstractReadonlyStorage extends AbstractSetter { public public(set) readonly int $id; }');
 }
@@ -69,6 +82,12 @@ echo count($properties);
     let module = super::lower_source_at_for_target(
         source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
     );
+    let storage = &module.class_infos["ReadonlyStorageDescendant"];
+    assert!(!storage.abstract_properties.contains("id"), "{target}: the storage property is concrete");
+    let contract = &storage.abstract_property_hooks["id"];
+    assert!(contract.get_type.is_none() && contract.set_type.is_some(),
+        "{target}: only the inherited setter remains abstract");
+    assert_eq!(contract.declaring_type, "AbstractSetter", "{target}: the hook keeps its original owner");
     for name in ["update", "updateNullable"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let insert = function.blocks.iter().find(|block| block.name == "coalesce_assign.default").unwrap();

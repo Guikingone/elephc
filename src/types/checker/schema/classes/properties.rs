@@ -431,7 +431,18 @@ fn apply_instance_property_redeclaration(
             .insert(prop.name.clone(), contract);
     } else {
         state.abstract_properties.remove(&prop.name);
-        state.abstract_property_hooks.remove(&prop.name);
+        if class.is_abstract && (class.is_readonly_class || prop.readonly)
+            && state.abstract_property_hooks.get(&prop.name)
+                .is_some_and(|contract| contract.set_type.is_some())
+        {
+            // Backing storage implements the getter, but the inherited setter stays abstract.
+            if let Some(contract) = state.abstract_property_hooks.get_mut(&prop.name) {
+                contract.get_type = None;
+                contract.get_by_ref = false;
+            }
+        } else {
+            state.abstract_property_hooks.remove(&prop.name);
+        }
     }
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
@@ -696,6 +707,15 @@ fn validate_abstract_property_contract(
         }
     }
     if let Some(required_set) = contract.set_type.as_ref() {
+        if !checker.type_accepts(&actual_ty, required_set) {
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Type of {}::${} must accept set property contract {} from {}",
+                    class.name, prop.name, required_set, parent_declaring_class
+                ),
+            ));
+        }
         if class.is_readonly_class || prop.readonly {
             if class.is_abstract {
                 return Ok(());
@@ -705,15 +725,6 @@ fn validate_abstract_property_contract(
                 &format!(
                     "Class {} contains 1 abstract method and must therefore be declared abstract or implement the remaining method ({}::${}::set)",
                     class.name, parent_declaring_class, prop.name
-                ),
-            ));
-        }
-        if !checker.type_accepts(&actual_ty, required_set) {
-            return Err(CompileError::new(
-                prop.span,
-                &format!(
-                    "Type of {}::${} must accept set property contract {} from {}",
-                    class.name, prop.name, required_set, parent_declaring_class
                 ),
             ));
         }

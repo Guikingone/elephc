@@ -9,6 +9,127 @@
 
 use super::*;
 
+/// Exercises the retained abstract setter through native, eval and native-parent eval classes.
+fn check_asymmetric_eighth_review_abstract_setter_storage(native_parent: Option<bool>) {
+    let parent = "abstract class Base { abstract public int $x { get; set; } }";
+    let child = r#"abstract class Child extends Base {
+    public public(set) readonly int $x;
+    public function write(): int { echo "R"; $this->x = 4; return 4; }
+    public function invalid(mixed $value): void {
+        try { $this->x = $value; echo "bad"; } catch (TypeError $error) { echo $error->getMessage(); }
+    }
+    public function probe(): void {
+        echo $this->write(), ":", isset($this->x) ? "isset" : "unset", ":";
+        try { echo $this->x; } catch (Error $error) { echo $error->getMessage(); }
+        echo "|", $this->write(), ":", isset($this->x) ? "isset" : "unset";
+    }
+}
+class Grandchild extends Child {}
+(new Grandchild())->probe();
+echo "|";
+(new Grandchild())->invalid("bad");
+foreach ((new ReflectionProperty(Grandchild::class, "x"))->getHooks() as $name => $hook) {
+    echo "|", $name, ":", $hook->isAbstract() ? "A" : "C", ":", $hook->getDeclaringClass()->getName();
+}"#;
+    let source = match native_parent {
+        None => format!("<?php {parent} {child}"),
+        Some(false) => format!("<?php eval('{parent} {child}');"),
+        Some(true) => format!("<?php {parent} echo (new ReflectionClass(Base::class))->isAbstract() ? '' : 'bad'; eval('{child}');"),
+    };
+    assert_eq!(compile_and_run(&source), "R4:unset:Typed property Child::$x must not be accessed before initialization|R4:unset|Base::$x::set(): Argument #1 ($value) must be of type int, string given|set:A:Base");
+}
+
+/// Native storage retains a no-op abstract setter instead of initializing the readonly slot.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_native() {
+    check_asymmetric_eighth_review_abstract_setter_storage(None);
+}
+
+/// Eval storage preserves the original abstract setter and its reflection owner.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_eval() {
+    check_asymmetric_eighth_review_abstract_setter_storage(Some(false));
+}
+
+/// Native parent metadata keeps an abstract setter when an eval child introduces storage.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_native_parent() {
+    check_asymmetric_eighth_review_abstract_setter_storage(Some(true));
+}
+
+/// Native abstract setter dispatch is independent of EIR optimization.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_native_no_ir_opt() {
+    crate::support::without_ir_opt(|| check_asymmetric_eighth_review_abstract_setter_storage(None));
+}
+
+/// Eval abstract setter dispatch is independent of EIR optimization.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_eval_no_ir_opt() {
+    crate::support::without_ir_opt(|| check_asymmetric_eighth_review_abstract_setter_storage(Some(false)));
+}
+
+/// Native-parent eval abstract setters preserve metadata without EIR optimization.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_native_parent_no_ir_opt() {
+    crate::support::without_ir_opt(|| check_asymmetric_eighth_review_abstract_setter_storage(Some(true)));
+}
+
+/// Named and runtime-name boxed receiver writes retire unused string setter arguments.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_argument_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+abstract class Base { abstract public string $x { set; } }
+abstract class Child extends Base { public public(set) readonly string $x; }
+class Grandchild extends Child {}
+function named(mixed $object, mixed $value): void { $object->x = $value; }
+function dynamic(mixed $object, mixed $value, string $name): void { $object->{$name} = $value; }
+for ($i = 0; $i < 16; $i++) {
+    $object = new Grandchild(); $value = str_repeat('x', 2);
+    named($object, $value); dynamic($object, $value, 'x');
+    echo isset($object->x) ? 'bad' : 'U';
+    unset($object, $value);
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "U".repeat(16), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Abstract setter argument retirement is also balanced without IR optimization.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_argument_owners_no_ir_opt() {
+    crate::support::without_ir_opt(test_asymmetric_eighth_review_abstract_setter_argument_owners);
+}
+
+/// A broader storage type neither broadens the setter nor leaks rejected fresh arguments.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_union_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+abstract class Base { abstract public int $x { set; } }
+abstract class Child extends Base {
+    public public(set) readonly int|string $x;
+    public function probe(): void {
+        try { $this->x = str_repeat('b', 2); echo 'bad'; }
+        catch (TypeError $error) { echo $error->getMessage(), '|'; }
+        $this->x = 4;
+        echo isset($this->x) ? 'bad' : 'U';
+    }
+}
+class Grandchild extends Child {}
+for ($i = 0; $i < 8; $i++) { $object = new Grandchild(); $object->probe(); unset($object); }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Base::$x::set(): Argument #1 ($value) must be of type int, string given|U".repeat(8), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Broader readonly storage keeps balanced setter rejection with IR optimization disabled.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_union_owners_no_ir_opt() {
+    crate::support::without_ir_opt(test_asymmetric_eighth_review_abstract_setter_union_owners);
+}
+
 /// An abstract child may add readonly storage while its inherited setter stays abstract.
 #[test]
 fn test_asymmetric_latest_review_abstract_set_readonly_storage() {

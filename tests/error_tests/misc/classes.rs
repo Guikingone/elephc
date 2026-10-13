@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// Abstract readonly storage must still accept every value of the inherited setter type.
+#[test]
+fn test_asymmetric_eighth_review_readonly_set_type() {
+    expect_error("<?php abstract class Base { abstract public int $x { set; } } abstract class Child extends Base { public public(set) readonly string $x; }",
+        "Type of Child::$x must accept set property contract int from Base");
+    expect_no_error("<?php abstract class Base { abstract public int $x { set; } } abstract class Child extends Base { public public(set) readonly int|string $x; }");
+}
+
 /// Setter narrowing reports the normalized inherited setter contract, matching PHP.
 #[test]
 fn test_asymmetric_fifth_review_setter_diagnostics() {

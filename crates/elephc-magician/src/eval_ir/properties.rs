@@ -143,6 +143,12 @@ impl EvalClassProperty {
         self
     }
 
+    /// Retains an inherited abstract setter without making its backing property abstract.
+    pub const fn with_inherited_abstract_setter(mut self) -> Self {
+        self.requires_set_hook = true;
+        self
+    }
+
     /// Returns a copy of this property recording whether its abstract `get` contract is declared
     /// `&get`, which `ReflectionMethod::returnsReference()` reports for the contract's hook.
     pub const fn with_get_contract_returns_by_ref(mut self, returns_by_ref: bool) -> Self {

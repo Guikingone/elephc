@@ -257,12 +257,20 @@ fn lower_property_assign_value(
     // jump to __rt_throw_current with the assigned temporary still pure SSA, so pin it in the
     // unwind chain for the store and retire the pin without releasing once the store returns.
     //
-    // Only a store that keeps an INDEPENDENT owner is pinned, which is exactly the condition
-    // `release_property_assignment_source_after_retaining_store` releases under. A store that
-    // instead transfers the temporary into the slot owes no release afterwards, and pinning it
-    // would leave one reference nothing retires.
+    // Physical stores need a pin when they keep an independent owner. A no-op abstract setter
+    // instead keeps argument ownership in EIR, including when a boxed receiver could dispatch
+    // to either a setter or an ordinary slot. Normal retirement below follows the same choice.
     let stored_property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
-    let pins = if property_store_keeps_independent_ref(
+    let retained_abstract_setter = match ctx.builder.value_php_type(object.value).codegen_repr() {
+        PhpType::Object(class) => ctx.classes.get(class.trim_start_matches('\\'))
+            .is_some_and(|info| info.retained_abstract_setter(property).is_some()),
+        PhpType::Mixed | PhpType::Union(_) => ctx.classes.values()
+            .any(|info| info.retained_abstract_setter(property).is_some()),
+        _ => false,
+    };
+    // A no-op setter consumes no storage owner, and its argument guard may throw.
+    // Scoped cleanup prevents any dispatch arm from adopting the original SSA owner.
+    let pins = if retained_abstract_setter || property_store_keeps_independent_ref(
         &stored_property_ty,
         &ctx.builder.value_php_type(value.value),
     ) {
@@ -299,7 +307,11 @@ fn lower_property_assign_value(
     // Undeclared dynamic properties store boxed Mixed values. Boxing retains a
     // concrete temporary payload just like a declared property store does.
     let property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
-    release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    if retained_abstract_setter {
+        release_magic_set_value_after_call(ctx, value, span);
+    } else {
+        release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    }
 }
 
 /// Boxes a concrete value assigned through a receiver whose CLASS is only known at run time.

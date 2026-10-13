@@ -337,9 +337,16 @@ A child class may redeclare a property inherited from a non-private parent. The 
 - Effective write visibility cannot narrow the inherited setter access. Without a `(set)` modifier, public readonly properties (including properties of readonly classes) have an implicit `protected(set)`; other properties use their read visibility. A getter-only virtual parent has no setter access contract to narrow.
 - Declared types are invariant. A typed parent property must be redeclared with the same type. A typed parent property cannot become untyped, and an untyped parent property cannot gain a type in the child.
 - The `readonly` modifier is invariant for non-private concrete inherited properties, including virtual getters. A child cannot add or remove `readonly`, even with explicit `public(set)` access. Abstract parent properties are exempt from this flag comparison, but their setter access and hook contracts still apply. Readonly storage can implement an abstract getter; over a getter/setter contract it is allowed on an abstract child, while a concrete child redeclaring the property still lacks the setter implementation. A private parent property is a separate slot and may be shadowed independently.
+
 - The by-reference qualifier on a property cannot change across inheritance.
 - `final` parent properties cannot be redeclared. A `private(set)` restriction on a public or protected property makes it implicitly final, including promoted properties. An entirely private property still permits a separate child property with the same name.
 - The child shares the parent's slot, so reads of the property from inherited methods see the child's value.
+
+An abstract readonly storage redeclaration must still accept the inherited setter's
+type. Its backing storage implements the getter, but the abstract setter remains a
+no-op and Reflection keeps its original declaring class. A concrete descendant
+without a redeclaration is legal; writes through that setter still leave the slot
+uninitialized, so reading it throws the typed-property initialization `Error`.
 
 Private parent properties are different: they are not overridden. A child may
 declare a same-named property, and elephc keeps a separate storage slot for each
