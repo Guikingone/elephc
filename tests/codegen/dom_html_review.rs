@@ -11,6 +11,77 @@
 
 use crate::support::*;
 
+/// NOBLANKS filters html/head blanks while preserving title/body text and the no-flag control.
+#[test]
+fn dom_html_seventh_review_noblanks_wrappers() {
+    let out = compile_and_run(r#"<?php
+$flags = LIBXML_NOERROR | LIBXML_COMPACT | LIBXML_HTML_NODEFDTD | LIBXML_NOBLANKS | LIBXML_NOXMLDECL;
+$doc = new DOMDocument();
+foreach (["<html><body><div>Hi</div></body> </html>", "<html> <body><div>Hi</div></body></html>",
+    "<html>\n<head></head>\n<body>x</body>\n</html>",
+    "<html> <head> <title> A </title> </head> <body> <div>Hi</div> </body> </html>"] as $source) {
+    $doc->loadHTML($source, $flags);
+    $html = $doc->getElementsByTagName('html')->item(0);
+    echo $html->childNodes->length, ':', json_encode($html->nodeValue), ':', $doc->saveXML($html), '|';
+}
+$doc->loadHTML('<html> <body>x</body> </html>', $flags & ~LIBXML_NOBLANKS);
+$html = $doc->getElementsByTagName('html')->item(0);
+echo $html->childNodes->length, ':', json_encode($html->nodeValue), ':', $doc->saveXML($html);
+"#);
+    assert_eq!(out, "1:\"Hi\":<html><body><div>Hi</div></body></html>|1:\"Hi\":<html><body><div>Hi</div></body></html>|2:\"x\":<html><head/><body>x</body></html>|2:\" A  Hi \":<html><head><title> A </title></head><body> <div>Hi</div> </body></html>|3:\" x \":<html> <body>x</body> </html>");
+}
+
+/// XML attributes use uppercase hexadecimal Unicode references while text remains UTF-8.
+#[test]
+fn dom_html_seventh_review_unicode_attributes() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$flags = LIBXML_NOERROR | LIBXML_COMPACT | LIBXML_HTML_NODEFDTD | LIBXML_NOBLANKS | LIBXML_NOXMLDECL;
+foreach (['é', 'a b', '€😀', '&é"\''] as $value) {
+    $doc->loadHTML('<?xml encoding="UTF-8"><div title="' . htmlspecialchars($value, ENT_COMPAT) . '">' . $value . '</div>', $flags);
+    $div = $doc->getElementsByTagName('div')->item(0);
+    echo $doc->saveXML($div), '|';
+}
+"#);
+    assert_eq!(out, "<div title=\"&#xE9;\">é</div>|<div title=\"a&#xA0;b\">a b</div>|<div title=\"&#x20AC;&#x1F600;\">€😀</div>|<div title=\"&amp;&#xE9;&quot;'\">&amp;é\"'</div>|");
+}
+
+/// Unicode references are inserted after existing XML escapes and cannot escape their own ampersand.
+#[test]
+fn dom_html_seventh_review_unicode_attribute_controls() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$doc->loadHTML("<?xml encoding=\"UTF-8\"><div title=\"é&#13;&#10;&#9;&amp;#xE9;\">é</div>", LIBXML_NOERROR | LIBXML_HTML_NODEFDTD);
+$div = $doc->getElementsByTagName('div')->item(0);
+echo $doc->saveXML($div);
+"#);
+    assert_eq!(out, "<div title=\"&#xE9;&#13;&#10;&#9;&amp;#xE9;\">é</div>");
+}
+
+/// Repeated attribute serialization releases its string arguments and intermediate byte probes.
+#[test]
+fn dom_html_seventh_review_unicode_attribute_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function enableDom(DOMDocument $doc): void {}
+for ($i = 0; $i < 16; $i++) { echo __elephc_dom_escape_attr("é€😀"); }
+echo '|', __elephc_dom_escape_attr('plain'), '|', __elephc_dom_escape_attr('');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}|plain|", "&#xE9;&#x20AC;&#x1F600;".repeat(16)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Both parser and serializer corrections remain observable with EIR optimization disabled.
+#[test]
+fn dom_html_seventh_review_without_ir_opt() {
+    crate::support::without_ir_opt(|| {
+        dom_html_seventh_review_noblanks_wrappers();
+        dom_html_seventh_review_unicode_attributes();
+        dom_html_seventh_review_unicode_attribute_controls();
+        dom_html_seventh_review_unicode_attribute_owners();
+    });
+}
+
 /// Termwind's NOBLANKS drops document padding, not interior or explicit-body spaces.
 #[test]
 fn dom_html_latest_review_document_padding() {

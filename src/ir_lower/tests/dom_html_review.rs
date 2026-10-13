@@ -46,6 +46,10 @@ $doc->loadHTML('<div>a<!--unfinished');
 echo $doc->saveXML($doc->getElementsByTagName('div')->item(0));
 $doc->loadHTML(' <div>Hi</div> ', LIBXML_NOBLANKS);
 echo count($doc->getElementsByTagName('body')->item(0)->childNodes);
+$doc->loadHTML("<html>\n<head> <title> A </title> </head>\n<body> <div>Hi</div> </body>\n</html>", LIBXML_NOBLANKS);
+echo $doc->saveXML($doc->getElementsByTagName('html')->item(0));
+$doc->loadHTML('<?xml encoding="UTF-8"><div title="é&nbsp;€😀">é</div>');
+echo $doc->saveXML($doc->getElementsByTagName('div')->item(0));
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
@@ -54,6 +58,9 @@ echo count($doc->getElementsByTagName('body')->item(0)->childNodes);
     assert!(assembly.contains(&crate::names::method_symbol("__ElephcDOMNodeListIterator", "valid")), "{target}: independent iterator");
     assert!(assembly.contains(&crate::names::method_symbol("DOMProcessingInstruction", "__construct")), "{target}: PI construction");
     assert!(assembly.contains("__rt_array_take_boxed") || assembly.contains("__rt_hash_pop_boxed"), "{target}: stack pop path");
+    assert!(module.functions.iter().any(|function| {
+        function.name == "__elephc_dom_escape_attr_non_ascii"
+    }), "{target}: Unicode attribute references use the ordinary target-aware PHP lowering path");
 }
 
 /// Schedules every target independently without weakening the CI timeout.

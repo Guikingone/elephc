@@ -390,12 +390,20 @@ function __elephc_dom_append_child(array $stack, mixed $node): array {
     return $stack;
 }
 
-function __elephc_dom_build_forest(mixed $tokens): mixed {
+function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
     $_stack = [];
     $_roots = [];
     foreach ($tokens as $_tok) {
         $_k = $_tok["k"];
         if ($_k === "text" || $_k === "cdata") {
+            if ($_k === "text" && ($flags & LIBXML_NOBLANKS) !== 0
+                && trim((string) $_tok["v"]) === "" && count($_stack) > 0) {
+                $_parent = $_stack[count($_stack) - 1];
+                // Legacy HTML filters wrapper blanks, not title/body or other element text.
+                if ($_parent["name"] === "html" || $_parent["name"] === "head") {
+                    continue;
+                }
+            }
             $_node = __elephc_dom_new_node($_k, "#text", (string) $_tok["v"], [], []);
             if (count($_stack) === 0) {
                 $_count = count($_roots);
@@ -489,7 +497,7 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
 
 function __elephc_dom_parse_html(string $html, int $flags): mixed {
     $_tokens = __elephc_dom_tokenize($html, $flags);
-    $_roots = __elephc_dom_build_forest($_tokens);
+    $_roots = __elephc_dom_build_forest($_tokens, $flags);
     $_document_children = [];
     $_content = [];
     $_leading = true;
@@ -510,7 +518,7 @@ function __elephc_dom_parse_html(string $html, int $flags): mixed {
             if ($_last["kind"] !== "text" || trim((string) $_last["value"]) !== "") {
                 break;
             }
-            // Legacy HTML NOBLANKS discards document padding, not element children.
+            // Wrapper blanks are filtered during construction; remove trailing document padding too.
             array_pop($_content);
         }
     }
@@ -531,7 +539,54 @@ function __elephc_dom_escape(string $s): string {
 function __elephc_dom_escape_attr(string $s): string {
     $_escaped = str_replace("\r", "&#13;", htmlspecialchars($s, ENT_COMPAT));
     $_escaped = str_replace("\n", "&#10;", $_escaped);
-    return str_replace("\t", "&#9;", $_escaped);
+    $_escaped = str_replace("\t", "&#9;", $_escaped);
+    return __elephc_dom_escape_attr_non_ascii($_escaped);
+}
+
+// Insert numeric references after XML escaping so their ampersands are not escaped again.
+function __elephc_dom_escape_attr_non_ascii(string $s): string {
+    $_out = "";
+    $_i = 0;
+    $_length = strlen($s);
+    while ($_i < $_length) {
+        $_first = __elephc_dom_entity_byte($s, $_i);
+        if ($_first < 194 || $_first > 244) {
+            $_out = $_out . substr($s, $_i, 1);
+            $_i++;
+            continue;
+        }
+        $_width = 2;
+        $_mask = 31;
+        if ($_first >= 240) {
+            $_width = 4;
+            $_mask = 7;
+        } elseif ($_first >= 224) {
+            $_width = 3;
+            $_mask = 15;
+        }
+        $_code = $_first & $_mask;
+        $_valid = $_i + $_width <= $_length;
+        for ($_offset = 1; $_offset < $_width; $_offset++) {
+            $_next = __elephc_dom_entity_byte($s, $_i + $_offset);
+            if ($_next < 128 || $_next > 191) {
+                $_valid = false;
+            }
+            $_code = ($_code << 6) | ($_next & 63);
+        }
+        if (($_width === 3 && $_code < 2048) || ($_width === 4 && $_code < 65536)
+            || ($_code >= 55296 && $_code <= 57343) || $_code > 1114111) {
+            $_valid = false;
+        }
+        if (!$_valid) {
+            // Encoding detection is outside this subset; do not drop undecodable input bytes.
+            $_out = $_out . substr($s, $_i, 1);
+            $_i++;
+            continue;
+        }
+        $_out = $_out . "&#x" . strtoupper(dechex($_code)) . ";";
+        $_i = $_i + $_width;
+    }
+    return $_out;
 }
 
 function __elephc_dom_serialize_node(mixed $node): string {
