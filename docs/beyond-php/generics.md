@@ -108,9 +108,12 @@ subsequent eval calls in that context can use the same templates. Generic classe
 identities and static storage, just as in AOT.
 
 Unconditional templates at the top level of an eval program support forward calls.
+Runtime included programs use the same rule and retain include returns and once semantics.
 Declarations inside functions, loops, or conditional blocks register when execution reaches
 their statement. A return, break, or continue skips later declarations in that block, and
 executing the same nested declaration again is a redeclaration error.
+Before specializing a class, Magician rechecks its variance against currently registered
+traits, parents, and interfaces, including dependencies declared later in a nested block.
 
 Magician renders class and constructor arguments in one concrete identity: a `Pair<T>` with a
 constructor-local `U` produces `Pair<int, string>` for `new Pair<int>(7, 'seven')`. Constructor

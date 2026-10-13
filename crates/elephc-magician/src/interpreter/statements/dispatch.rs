@@ -13,13 +13,18 @@
 
 use super::*;
 
-/// Hoists unconditional program templates before executing the eval program's statement list.
+/// Checks program provenance, seeds CLI globals, and hoists templates before eval/include execution.
 pub(in crate::interpreter) fn execute_program_statements(
-    statements: &[EvalStmt],
+    program: &EvalProgram,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    if program.native_generic_syntax() && crate::strict_php_mode::strict_php_mode() {
+        return Err(EvalStatus::ParseError);
+    }
+    seed_named_cli_superglobals(program, context, scope, values)?;
+    let statements = program.statements();
     let mut registered: Vec<(String, bool)> = Vec::new();
     for stmt in statements {
         if let EvalStmt::GenericDecl(template) = stmt {

@@ -150,14 +150,21 @@ pub(in crate::interpreter) fn generic_function_is_callable(name: &str, context: 
 }
 
 /// Ensures a class-like specialization exists before construction, relation checks, or static use.
+/// Rechecks variance against current dependencies before returning even a cached specialization.
 pub(super) fn ensure_generic_class(
     name: &str, args: Option<&[EvaluatedCallArg]>, method: &str, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    if context.resolve_class_like_name(name).is_some() { return Ok(name.to_string()); }
-    let (base, written) = split_generic_name(name)?;
+    let resolved = context.resolve_class_like_name(name);
+    let (base, written) = match split_generic_name(resolved.as_deref().unwrap_or(name)) {
+        Ok(split) => split,
+        Err(_) if resolved.is_some() => return Ok(name.to_string()),
+        Err(error) => return Err(error),
+    };
     let Some(template) = context.generic_template(&base).cloned() else { return Ok(name.to_string()); };
     if matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. }) { return Err(EvalStatus::RuntimeFatal); }
+    verify_generic_variance(&template, context, values)?;
+    if resolved.is_some() { return Ok(name.to_string()); }
     let mut bare = None;
     if written.is_none() && args.is_none() {
         let mut bindings = Vec::new();

@@ -144,11 +144,7 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    if program.native_generic_syntax() && crate::strict_php_mode::strict_php_mode() {
-        return Err(EvalStatus::ParseError);
-    }
-    seed_named_cli_superglobals(program, context, scope, values)?;
-    match execute_program_statements(program.statements(), context, scope, values) {
+    match execute_program_statements(program, context, scope, values) {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => {
             let result = if result.is_borrowed() { values.retain(result)? } else { result };

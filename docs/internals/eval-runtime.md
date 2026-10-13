@@ -273,7 +273,8 @@ PHPDoc inheritance edits match the complete written parent name within the tag's
 Runtime dispatch borrows arguments after their single source-order evaluation, completes bindings,
 checks bounds, and replays a concrete ordinary declaration. Functions and classes enter the normal
 context registries; method specializations are cached by declaring class and concrete method name.
-Program entry hoists direct generic declarations through `execute_program_statements`.
+Eval and included-program entry share strict-PHP checks, CLI-global seeding, and direct
+template hoisting through `execute_program_statements`.
 Nested statement lists register and validate templates only when execution reaches their
 declaration, preserving return, throw, break, and continue behavior and redeclaration errors.
 Constructor inference omits null and empty arrays using concrete runtime tags, so zero-property
@@ -282,7 +283,9 @@ Class relation registration instantiates generic parents, interfaces, and traits
 validation. A recursion guard rejects cyclic generic inheritance, and type growth is bounded.
 Signature compatibility projects concrete bindings through class and interface ancestors,
 including specializations that have not yet entered the runtime registry. Variance checks
-include public and protected trait members and nested trait uses, with method-local slots
+run again before specialization or cached class access, using the current dependency registry
+so later trait, class-parent, or interface declarations cannot invalidate an earlier promise.
+They include public and protected trait members and nested trait uses, with method-local slots
 shielded from enclosing template substitutions. Qualified adaptations resolve against the
 complete trait-use list before the effective imported method surface is checked.
 Class identities put class and constructor slots in a single argument list. Constructor slots

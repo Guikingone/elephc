@@ -52,6 +52,44 @@ install_templates(); echo '|', get_class(new Visible<int>()), '|', nested(9);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
+/// Runtime included files hoist forward templates across PHP tags and preserve returns and once.
+#[test]
+fn test_eval_generics_review_included_forward_calls() {
+    let source = dynamic_eval("echo include 'piece.php'; echo '|', require_once 'piece.php';");
+    let files = [
+        ("main.php", source.as_str()),
+        ("piece.php", "H<?php echo identity(7), '|'; return 9; function identity<T>(T $value): T { return $value; } ?>TAIL"),
+    ];
+    assert_eq!(compile_and_run_files(&files, "main.php"), "H7|9|1");
+}
+
+/// Nested classes recheck later trait/parent/interface dependencies before exposing variance.
+#[test]
+fn test_eval_generics_review_later_variance_dependencies() {
+    let source = dynamic_eval(r#"
+class Animal {} class Dog extends Animal {}
+function install_templates() {
+    class Box<out T> { use Put<T>; }
+    trait Put<T> { public function put(T $value): void {} }
+    class Child<out T> extends ParentBox<T> {}
+    class ParentBox<T> { public function put(T $value): void {} }
+    class Provider<out T> implements Consumer<T> { public function put(int $value): void {} }
+    interface Consumer<T> { public function put(T $value): void; }
+    class Safe<out T> { use HiddenPut<T> { HiddenPut::put as private; } }
+    trait HiddenPut<T> { public function put(T $value): void {} }
+}
+install_templates();
+try { new Box<Dog>(); echo 'unchecked'; } catch (TypeError $error) { echo 'trait'; }
+try { new Child<Dog>(); echo '|unchecked'; } catch (TypeError $error) { echo '|parent'; }
+try { new Provider<int>(); echo '|unchecked'; } catch (TypeError $error) { echo '|interface'; }
+echo '|', get_class(new Safe<Dog>());
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "trait|parent|interface|Safe<Dog>");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Native templates persist across eval barriers and specialize scalar and nested array calls.
 #[test]
 fn test_eval_generics_functions_persist() {

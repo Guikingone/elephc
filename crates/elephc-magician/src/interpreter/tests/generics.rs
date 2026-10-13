@@ -71,6 +71,35 @@ fn generics_review_reached_nested_declarations() {
     assert!(context.generic_template("Visible").is_some());
 }
 
+/// Later trait, class-parent, and interface definitions must not make earlier variance promises unsafe.
+#[test]
+fn generics_review_later_variance_dependencies() {
+    for (relation, later) in [
+        ("use Put<T>;", "trait Put<T> { public function put(T $value): void {} }"),
+        ("", "class Put<T> { public function put(T $value): void {} }"),
+        ("", "interface Put<T> { public function put(T $value): void; }"),
+    ] {
+        let header = if later.starts_with("class") { "extends Put<T>" }
+            else if later.starts_with("interface") { "implements Put<T>" } else { "" };
+        let method = if later.starts_with("interface") { "public function put(int $value): void {}" } else { "" };
+        let source = format!("function install_templates() {{ class Box<out T> {header} {{ {relation} {method} }} {later} }} install_templates(); try {{ new Box<int>(); }} catch (TypeError $error) {{ echo 'variance'; }}");
+        assert_eq!(run(&[&source]), "variance", "{later}");
+    }
+}
+
+/// Later safe traits respect qualified private adaptations when a nested class is specialized.
+#[test]
+fn generics_review_later_safe_trait_dependencies() {
+    assert_eq!(run(&[r#"
+function install_templates() {
+    class Box<out T> { use Put<T> { Put::put as private; } }
+    trait Put<T> { public function put(T $value): void {} }
+}
+install_templates(); echo get_class(new Box<int>()), '|', get_class(new Box<int>());
+class_alias('Box<int>', 'AliasBox'); echo '|', get_class(new AliasBox());
+"#]), "Box<int>|Box<int>|Box<int>");
+}
+
 /// Aliases and reference parameters must enforce the original typed local before mutation.
 #[test]
 fn generics_review_reference_local_contracts() {

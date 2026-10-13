@@ -185,3 +185,32 @@ ignored cache case), all ten native eval/REPL regressions, a warning-free build,
 parity, Rust module/function documentation and diff hygiene. New native fixtures report clean
 heaps. The previous element-setter behavior fixtures retain their documented separate key-owner
 limitation. No unrelated ownership issue is claimed fixed by these corrections.
+
+## Ninth PR 1819 review
+
+- [x] Read the subsequent full review and both new P1 threads on `e50e5c5c57`.
+- [x] Audit every nested statement execution caller and reproduce included forward-call failure.
+- [x] Share program preparation between eval and includes, retaining strict-PHP, return and once behavior.
+- [x] Reproduce unchecked variance when nested trait, parent and interface dependencies are declared later.
+- [x] Recheck variance with current dependencies before cold specialization or cached class access.
+- [x] Validate safe private adaptations, aliases, repeated construction and previous control-flow fixes.
+- [x] Prepare the verified corrections for publication and review-thread resolution.
+
+The automatic review of the eighth-review fix finds two missing paths. Runtime includes execute
+whole programs but still used the nested source-order entry. They now share EvalProgram preparation
+with direct eval, including strict-PHP checks and CLI-global seeding. An additional strict-mode
+include regression exposed the missing guard before correction. Include call-site restoration,
+inline HTML, return values, and once handling retain their existing replay behavior.
+
+Nested template registration remains source ordered. A dependency declared later can only be
+checked once it is registered, so class specialization revalidates the template against the current
+registry, including cached or aliased class access. Unsafe trait, parent, and interface consumers
+reject covariant promises before construction. Qualified private adaptations remain safe. Existing
+opaque native class names keep their cached resolution if generic parsing is inapplicable.
+
+Three primary unit regressions and both native fixtures fail on `e50e5c5c57` before correction.
+Validation passes 585 focused parser/cache/generic/reference/trait/include/ownership tests with
+one existing ignored cache case, all twelve native eval/include/REPL regressions, warning-free
+build, and Rust/diff hygiene. The new late-dependency fixture reports a clean heap. File-cache
+format 16 and fingerprint `2604479976000790958` stay unchanged because this correction changes
+runtime preparation and checking, not parsing or stored IR.
