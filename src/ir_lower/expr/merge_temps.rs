@@ -273,7 +273,11 @@ pub(super) fn coerce_value_for_temp(
         // `MixedUnbox` does not check the tag, so this arm relies on never seeing null: the
         // only producer of an object temp from a nullable value is `null_coalesce_result_type`,
         // and its value arm runs behind `IsNull`. Ternary, `match` and `?:` merges keep a
-        // nullable arm in a `Mixed` temp and never reach here.
+        // nullable arm in a `Mixed` temp and never reach here. The default arms of
+        // `??`/`??=` are safe the same way: their materialized type is `Object` only because
+        // `materialized_expr_type_for_merge` mirrors the result type each lowering actually
+        // stamps, so a default can never hand a null-bearing cell to this arm either — keep
+        // that mirroring if either side changes.
         PhpType::Object(_) | PhpType::Callable
             if source_ty == PhpType::Mixed && value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
         {
