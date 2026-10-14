@@ -157,10 +157,15 @@ fn terminate_enum_argument_error(
         register_owned_call_operand(ctx, ctx.local_slots[&slot], arg.span);
         staged.push(slot);
     }
-    if exception_class == "ArgumentCountError" && !args.iter().any(is_spread_arg) {
+    if exception_class == "ArgumentCountError" {
         if let Some((class, method, signature)) = selected {
-            let mut bindings: Vec<_> = (0..staged.len()).map(|index| (index, index)).collect();
-            if crate::types::call_args::has_named_args(args) {
+            let mut bindings: Vec<_> = staged.iter().enumerate().map(|(index, slot)|
+                (index, Expr::new(ExprKind::Variable(slot.clone()), span))).collect();
+            if let Some(projected) = staged_positional_spread_values(args, &staged, span) {
+                bindings = projected.into_iter().enumerate().collect();
+            } else if args.iter().any(is_spread_arg) {
+                bindings.clear();
+            } else if crate::types::call_args::has_named_args(args) {
                 // Ask the shared planner for supplied-slot provenance without making
                 // omitted slots a planning error. Placeholder defaults are never lowered.
                 let mut partial = signature.clone();
@@ -179,14 +184,25 @@ fn terminate_enum_argument_error(
                                 || *parameter >= required
                         }).filter_map(|(parameter, arg)| {
                             if let crate::types::call_args::PlannedRegularArg::Source { source_index, .. } = arg {
-                                Some((parameter, source_index))
+                                Some((parameter, Expr::new(
+                                    ExprKind::Variable(staged[source_index].clone()), span)))
                             } else { None }
                         }).collect()
                     }).unwrap_or_default();
             }
-            for (index, source) in bindings {
+            for (index, value) in bindings {
+                let value = if args.iter().any(is_spread_arg) {
+                    // Array access can produce tagged nullable scalar storage. Snapshot it
+                    // into a rooted Mixed cell before shared PHP predicates inspect its type.
+                    let argument = lower_expr(ctx, &value);
+                    let argument = ctx.box_value_as_mixed(argument, PhpType::Mixed, Some(span));
+                    let slot = ctx.declare_synthetic_php_local(PhpType::Mixed);
+                    store_value_into_temp(ctx, &slot, PhpType::Mixed, argument, span);
+                    register_owned_call_operand(ctx, ctx.local_slots[&slot], span);
+                    Expr::new(ExprKind::Variable(slot), span)
+                } else { value };
                 enum_argument_guards::guard_parameter(ctx, signature, index,
-                    &Expr::new(ExprKind::Variable(staged[source].clone()), span), class, method, span);
+                    &value, class, method, span);
             }
         }
     }
@@ -196,6 +212,26 @@ fn terminate_enum_argument_error(
     }, span);
     let exception = lower_expr(ctx, &exception);
     ctx.builder.terminate(Terminator::Throw { value: exception.value });
+}
+
+/// Projects shared-planner-approved static unpacks from their already evaluated source arrays.
+/// Reading staged elements preserves source ownership and never evaluates their expressions twice.
+fn staged_positional_spread_values(args: &[Expr], staged: &[String], span: Span) -> Option<Vec<Expr>> {
+    crate::types::call_args::expand_planned_positional_spreads(args)?;
+    let mut values = Vec::new();
+    for (arg, slot) in args.iter().zip(staged) {
+        let source = Expr::new(ExprKind::Variable(slot.clone()), span);
+        if let ExprKind::Spread(inner) = &arg.kind {
+            let ExprKind::ArrayLiteral(items) = &inner.kind else {
+                unreachable!("the shared static spread projection validated indexed literals");
+            };
+            values.extend(items.iter().enumerate().map(|(index, _)| Expr::new(ExprKind::ArrayAccess {
+                array: Box::new(source.clone()),
+                index: Box::new(Expr::new(ExprKind::IntLiteral(index as i64), span)),
+            }, span)));
+        } else { values.push(source); }
+    }
+    Some(values)
 }
 
 /// Maps shared binding failures to PHP's selected implementation exception and diagnostic.

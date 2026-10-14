@@ -836,8 +836,12 @@ Rules:
 - An enum can `implements` one or more interfaces and be used through them.
 - Calls through an enum interface bind runtime array unpacks against the selected
   implementation's parameter names and defaults. Supplied values are type-checked
-  before later missing arguments, and a method's returned reference remains usable
-  after unpacking.
+  before later missing arguments, including statically indexed array unpacks.
+  Literal `false`, `iterable` and `callable` hints are checked before storage
+  conversion. Variadic diagnostics report the supplied argument's PHP position,
+  not the collector parameter's position or name. Named variadic entries preserve
+  their keys without increasing the positional argument count. A method's returned
+  reference remains usable after unpacking.
 - Enums can `use` traits that provide methods, including `insteadof` and `as`
   adaptations. Traits with properties are rejected because PHP enums cannot have
   properties.

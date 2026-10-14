@@ -12,6 +12,7 @@
 //! - The wrapper roots synthesized Mixed arguments and collectors before entering PHP.
 //! - It preserves every return word while releasing temporary owners after the call.
 //! - Shorter variadic implementations use EIR and shared argument planning, not assembly packing.
+//! - Equally variadic typed-to-Mixed promotion uses EIR unpacking rather than raw-word forwarding.
 
 use std::collections::{HashMap, HashSet};
 
@@ -129,7 +130,9 @@ fn needs_eir_call_adapter(caller: &FunctionSig, physical: &FunctionSig) -> bool 
         if physical.variadic.is_none() || crate::func_args::sig_collects_surplus_args(physical) {
             return false;
         }
-        if !added_reference && source.len() == target.len() {
+        if !added_reference && source.len() == target.len()
+            && !has_promoted_variadic_transport(caller, physical, &source, &target)
+        {
             return false;
         }
         source.retain(|index| caller.variadic.as_deref() != Some(caller.params[*index].0.as_str()));
@@ -157,6 +160,22 @@ fn needs_eir_call_adapter(caller: &FunctionSig, physical: &FunctionSig) -> bool 
             || physical.variadic.as_deref() == Some(physical.params[index].0.as_str())
     });
     prefix && optional_tail
+}
+
+/// Requires an EIR unpack/rebox boundary for a by-value typed collector promoted to Mixed.
+/// Unchanged collectors retain their direct ABI; reference collectors cannot be rebuilt.
+fn has_promoted_variadic_transport(
+    caller: &FunctionSig, physical: &FunctionSig, source: &[usize], target: &[usize],
+) -> bool {
+    let (Some(&source), Some(&target)) = (source.last(), target.last()) else { return false; };
+    caller.variadic.as_deref() == Some(caller.params[source].0.as_str())
+        && physical.variadic.as_deref() == Some(physical.params[target].0.as_str())
+        && !caller.ref_params.get(source).copied().unwrap_or(false)
+        && !physical.ref_params.get(target).copied().unwrap_or(false)
+        && matches!(&caller.params[source].1, PhpType::Array(element)
+            if element.codegen_repr() != PhpType::Mixed)
+        && matches!(&physical.params[target].1, PhpType::Array(element)
+            if element.codegen_repr() == PhpType::Mixed)
 }
 
 /// Routes fixed source parameters absorbed by a shorter implementation variadic through EIR.
@@ -626,6 +645,29 @@ mod tests {
             deprecation: None,
             is_generator: false,
         }
+    }
+
+    /// Promotion of an equally variadic collector uses EIR, including hidden count transport.
+    #[test]
+    fn planner_reboxes_equally_variadic_collectors_without_weakening_reference_abi() {
+        let source = signature(vec![("x".into(), PhpType::Int),
+            ("rest".into(), PhpType::Array(Box::new(PhpType::Int)))], Some("rest".into()));
+        assert_eq!(plan_method_abi(&source, &source), Ok(MethodAbiPlan::Direct));
+        let mut physical = source.clone();
+        physical.params[1].1 = PhpType::Array(Box::new(PhpType::Mixed));
+        assert_eq!(plan_method_abi(&source, &physical), Ok(MethodAbiPlan::OptionalDefaults));
+        physical.params.insert(1, (crate::func_args::HIDDEN_ARGC_PARAM.into(), PhpType::Int));
+        physical.param_type_exprs.insert(1, None);
+        physical.param_attributes.insert(1, Vec::new());
+        physical.defaults.insert(1, None);
+        physical.ref_params.insert(1, false);
+        physical.declared_params.insert(1, false);
+        assert_eq!(plan_method_abi(&source, &physical), Ok(MethodAbiPlan::OptionalDefaults));
+        physical.ref_params[2] = true;
+        assert!(plan_method_abi(&source, &physical).is_err());
+        physical.ref_params[2] = false;
+        physical.params[2].1 = PhpType::Array(Box::new(PhpType::Str));
+        assert!(plan_method_abi(&source, &physical).is_err());
     }
 
     /// Shorter variadics absorb fixed slots through EIR without accepting incompatible references.

@@ -11,7 +11,7 @@
 //! - Hidden argument-count and collector slots use the same physical signature contract.
 
 use super::*;
-use super::enum_argument_guards::{concat, guard_parameter, throw_message};
+use super::enum_argument_guards::{concat, guard_parameter, guard_variadic_element, throw_message};
 
 /// Materializes a selected enum's runtime unpack without changing its return ABI.
 pub(super) fn lower_arguments(
@@ -226,7 +226,22 @@ fn collect_tail(
         }
         // The regular arguments have already passed their type and omission checks.
         // Variadic values now receive their own weak binding rather than raw Mixed casts.
-        guard_parameter(ctx, &element_signature, parameter, &value, class, method, span);
+        let named_base = Expr::new(ExprKind::Ternary {
+            condition: Box::new(Expr::new(ExprKind::BinaryOp {
+                left: Box::new(variable(argc, span)), op: BinOp::Gt,
+                right: Box::new(literal_int(regular as i64, span)),
+            }, span)),
+            then_expr: Box::new(variable(argc, span)),
+            else_expr: Box::new(literal_int(regular as i64, span)),
+        }, span);
+        let position = Expr::new(ExprKind::BinaryOp {
+            left: Box::new(Expr::new(ExprKind::Ternary {
+                condition: Box::new(is_name.clone()), then_expr: Box::new(named_base),
+                else_expr: Box::new(key.clone()),
+            }, span)),
+            op: BinOp::Add, right: Box::new(literal_int(1, span)),
+        }, span);
+        guard_variadic_element(ctx, &element_signature, parameter, &value, &position, class, method, span);
         let hash = ctx.load_local(&tail, Some(span));
         let value_expr = value;
         let value = lower_arg_with_signature(ctx, &element_signature, parameter, &value_expr);

@@ -16,6 +16,22 @@ pub(super) fn guard_parameter(
     ctx: &mut LoweringContext<'_, '_>, signature: &FunctionSig, index: usize,
     variable: &Expr, class: &str, method: &str, span: Span,
 ) {
+    guard_parameter_at(ctx, signature, index, variable, None, class, method, span);
+}
+
+/// Checks one variadic value using its unpacked PHP position rather than the collector slot.
+pub(super) fn guard_variadic_element(
+    ctx: &mut LoweringContext<'_, '_>, signature: &FunctionSig, index: usize,
+    variable: &Expr, position: &Expr, class: &str, method: &str, span: Span,
+) {
+    guard_parameter_at(ctx, signature, index, variable, Some(position), class, method, span);
+}
+
+/// Builds a selected-implementation TypeError without consuming the caller's rooted value.
+fn guard_parameter_at(
+    ctx: &mut LoweringContext<'_, '_>, signature: &FunctionSig, index: usize,
+    variable: &Expr, position: Option<&Expr>, class: &str, method: &str, span: Span,
+) {
     let Some((name, ty)) = signature.params.get(index) else { return; };
     if !signature.declared_params.get(index).copied().unwrap_or(false) { return; }
     let Some(accepted) = accepts_type(ty, variable, span) else { return; };
@@ -30,10 +46,15 @@ pub(super) fn guard_parameter(
     let argument = signature.params.iter().take(index).filter(|(name, _)|
         name != crate::func_args::HIDDEN_ARGC_PARAM && name != crate::func_args::HIDDEN_ARGS_PARAM
     ).count() + 1;
-    let prefix = Expr::new(ExprKind::StringLiteral(format!(
-        "{class}::{method}(): Argument #{argument} (${name}) must be of type {ty}, ",
-    )), span);
-    let message = concat(prefix, concat(runtime_type(variable, span),
+    let expected = diagnostic_type(ty);
+    let literal = |text| Expr::new(ExprKind::StringLiteral(text), span);
+    let prefix = if let Some(position) = position {
+        concat(literal(format!("{class}::{method}(): Argument #")),
+            concat(position.clone(), literal(format!(" must be of type {expected}, ")), span), span)
+    } else {
+        literal(format!("{class}::{method}(): Argument #{argument} (${name}) must be of type {expected}, "))
+    };
+    let message = concat(prefix, concat(runtime_type(variable, ty, span),
         Expr::new(ExprKind::StringLiteral(" given".to_string()), span), span), span);
     throw_message(ctx, "TypeError", message, span);
     ctx.builder.position_at_end(ok);
@@ -52,6 +73,15 @@ fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
             target: InstanceOfTarget::Name(Name::unqualified("Stringable")),
         }, span)),
         PhpType::Bool => predicate("is_scalar"),
+        PhpType::False => Expr::new(ExprKind::BinaryOp {
+            left: Box::new(value.clone()), op: BinOp::StrictEq,
+            right: Box::new(Expr::new(ExprKind::BoolLiteral(false), span)),
+        }, span),
+        PhpType::Iterable => either(predicate("is_array"), Expr::new(ExprKind::InstanceOf {
+            value: Box::new(value.clone()),
+            target: InstanceOfTarget::Name(Name::unqualified("Traversable")),
+        }, span)),
+        PhpType::Callable => predicate("is_callable"),
         PhpType::Array(_) | PhpType::AssocArray { .. } => predicate("is_array"),
         PhpType::Object(class) if class.is_empty() || class.eq_ignore_ascii_case("object") =>
             predicate("is_object"),
@@ -76,14 +106,21 @@ fn predicate(name: &str, value: &Expr, span: Span) -> Expr {
 }
 
 /// Produces PHP's diagnostic type names instead of gettype's historical aliases.
-fn runtime_type(value: &Expr, span: Span) -> Expr {
+fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
     let mut result = predicate("gettype", value, span);
     for (test, text) in [
         ("is_null", "null"), ("is_bool", "bool"), ("is_float", "float"), ("is_int", "int"),
     ] {
+        let text = if test == "is_bool" && contains_false(expected) {
+            Expr::new(ExprKind::Ternary {
+                condition: Box::new(value.clone()),
+                then_expr: Box::new(Expr::new(ExprKind::StringLiteral("true".into()), span)),
+                else_expr: Box::new(Expr::new(ExprKind::StringLiteral("false".into()), span)),
+            }, span)
+        } else { Expr::new(ExprKind::StringLiteral(text.to_string()), span) };
         result = Expr::new(ExprKind::Ternary {
             condition: Box::new(predicate(test, value, span)),
-            then_expr: Box::new(Expr::new(ExprKind::StringLiteral(text.to_string()), span)),
+            then_expr: Box::new(text),
             else_expr: Box::new(result),
         }, span);
     }
@@ -92,6 +129,24 @@ fn runtime_type(value: &Expr, span: Span) -> Expr {
         then_expr: Box::new(predicate("get_class", value, span)),
         else_expr: Box::new(result),
     }, span)
+}
+
+/// Expands iterable's PHP union spelling without changing stored declaration metadata.
+fn diagnostic_type(ty: &PhpType) -> String {
+    match ty {
+        PhpType::Iterable => "Traversable|array".into(),
+        PhpType::Union(members) => members.iter().map(diagnostic_type).collect::<Vec<_>>().join("|"),
+        _ => ty.to_string(),
+    }
+}
+
+/// Literal-bool constraints use PHP's true/false diagnostic names rather than generic bool.
+fn contains_false(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::False => true,
+        PhpType::Union(members) => members.iter().any(contains_false),
+        _ => false,
+    }
 }
 
 /// Joins owned diagnostic fragments through ordinary EIR string lowering.

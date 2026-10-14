@@ -1,5 +1,5 @@
 //! Purpose:
-//! Checks enum trait constants and adapted contracts on every supported target.
+//! Checks enum trait constants, adapted contracts and runtime argument binding on every target.
 //!
 //! Called from:
 //! - The AST-to-EIR unit test harness.
@@ -7,6 +7,7 @@
 //! Key details:
 //! - Each target is scheduled independently and emits its complete assembly.
 //! - Final enum self returns satisfy late-static trait and interface requirements.
+//! - Promoted variadics preserve declared hints/counts and Iterable receives raw payload storage.
 
 /// Lowers and emits a single target's enum contract fixture.
 fn verify_enum_review_target(target: &str) {
@@ -158,6 +159,30 @@ function reference_unpack(UnpackReferenceContract $value, array $args): int {
     $result = &$value->f(...$args); $result[0] += 10; return $result[0];
 }
 echo reference_unpack(UnpackReferenceValue::A, []), reference_unpack(UnpackReferenceValue::A, [2]);
+interface TransportContract { public function f(int $x, int ...$rest): int; }
+enum TransportValue implements TransportContract {
+    case A; public function f(int $x = 1, int ...$rest): int {
+        echo func_num_args(); foreach ($rest as $item) { $x += $item; } return $x;
+    }
+}
+function transport_unpack(TransportContract $value, array $args): int { return $value->f(...$args); }
+echo transport_unpack(TransportValue::A, [1, 2, 'extra' => 3]);
+interface IterableContract { public function f(iterable $value): int; }
+enum IterableValue implements IterableContract {
+    case A; public function f(iterable $value): int {
+        $sum = 0; foreach ($value as $item) { $sum += $item; } return $sum;
+    }
+}
+function iterable_unpack(IterableContract $value, array $args): int { return $value->f(...$args); }
+echo iterable_unpack(IterableValue::A, [[1, 2]]);
+try { iterable_unpack(IterableValue::A, [1]); } catch (\TypeError $error) { echo $error->getMessage(); }
+interface FalseContract { public function f(false $value): false; }
+enum FalseValue implements FalseContract { case A; public function f(false $value): false { return $value; } }
+function false_unpack(FalseContract $value, array $args): false { return $value->f(...$args); }
+try { false_unpack(FalseValue::A, [true]); } catch (\TypeError $error) { echo $error->getMessage(); }
+function spread_bad(): string { echo 'Y'; return 'no'; }
+function static_shortage(LaterRequiredContract $value): int { return $value->f(...[spread_bad()]); }
+try { static_shortage(LaterRequiredValue::A); } catch (\TypeError $error) { echo $error->getMessage(); }
 debug_print_backtrace();
 "#;
     let module = super::lower_source_at_for_target(
@@ -169,6 +194,22 @@ debug_print_backtrace();
         Some(&crate::parser::ast::TypeExpr::Int));
     assert_eq!(variadic.params.last().unwrap().1,
         crate::types::PhpType::Array(Box::new(crate::types::PhpType::Mixed)));
+    let transported = &module.class_infos["EnumReview\\TransportValue"];
+    let transport_signature = &transported.methods["f"];
+    assert_eq!(crate::types::signatures::variadic_source_element_type_expr(transport_signature),
+        Some(&crate::parser::ast::TypeExpr::Int));
+    assert_eq!(transport_signature.params.last().unwrap().1,
+        crate::types::PhpType::Array(Box::new(crate::types::PhpType::Mixed)));
+    assert!(crate::func_args::sig_has_hidden_argc_param(transport_signature));
+    let wrapper = crate::names::interface_method_wrapper_symbol(transported.class_id,
+        module.interface_infos["EnumReview\\TransportContract"].interface_id, "f");
+    assert!(module.functions.iter().any(|function| function.name == wrapper),
+        "{target}: promoted equally variadic transport must have an EIR reboxing adapter");
+    let iterable = module.functions.iter().find(|function| function.name == "EnumReview\\iterable_unpack")
+        .expect("missing iterable-unpack fixture");
+    assert!(iterable.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::MixedUnbox
+        && instruction.result_php_type == crate::types::PhpType::Iterable),
+        "{target}: Iterable receives an owned raw container rather than a Mixed cell");
     let unpack = module.functions.iter().find(|function| function.name == "EnumReview\\dynamic_unpack")
         .expect("missing dynamic-unpack fixture");
     assert!(unpack.blocks.iter().flat_map(|block| &block.instructions)
