@@ -1,5 +1,14 @@
 # Issue #1755 — eval array-callback receiver ownership
 
+- [x] Reproduce the original leak and implement scoped callable ownership.
+- [x] Migrate normalization consumers and preserve transferred receiver ownership.
+- [x] Validate ordinary/exception/closure cases and focused adjacent unit tests.
+- [x] Replay the original fixtures on macOS and both Linux architectures on/off.
+- [x] Run builtin documentation generation and audits.
+- [x] Validate curl self-clearing array callbacks and partial frame rollback.
+- [ ] Inspect exact-head CI after the review follow-up.
+- [ ] Clear the pre-existing iOS pcntl dependency blockers and validate iOS targets.
+
 Base: `32a77fc532184b39ff32cce597f95f1a09f92d51`.
 Branch: `fix/1755-eval-callback-receiver-ownership`, isolated and clean at entry.
 The refreshed issue is open and no dedicated open fix PR references it.
@@ -96,3 +105,42 @@ Host Magician staticlib SHA-256:
 The new regressions and example are validated against both the integration test
 profile and the final standalone compiler/bridge pair. Publication remains a
 draft while exact-head CI and the explicitly blocked iOS gates are outstanding.
+
+## Review follow-up — curl invocation ownership
+
+Reviewed head: `a1f2f2722ec6939f8e6bbf62fa2697d6ac94f038`.
+Open findings: `PRRT_kwDORs6r_s6sN7K2` (plan checklist) and
+`PRRT_kwDORs6r_s6sN7K8` (curl receiver ownership tests).
+
+The plan now starts with a checklist, retaining iOS dependency validation as an
+open gate. New runtime-source eval fixtures unregister their array-method callback
+inside a transfer, read the receiver afterwards, and compare destructor order and
+complete stdout against PHP. Zero/one/three transfers check scaling. Two further
+fixtures cover a borrowed property-string upload result and a throwing callback.
+
+The heap test first exposed the documented per-invocation argument/result leak:
+18 live blocks / 800 bytes after three transfers. Scoped cleanup now retains a
+borrowed result before releasing generated arguments, then releases that result
+after copying its integer or upload bytes. Partial argument construction and
+callback failures retire prior owners. A remaining six blocks / 264 bytes came
+from curl_init URL normalization; its temporary string and direct-expression
+argument are also retired, including bridge allocation failure.
+
+Final focused evidence: both new integration tests pass on/off, with five argv
+fixtures per mode (ten executions), PHP-exact stdout and clean heaps. Fifteen curl
+unit tests pass, including a failed partial frame setup on one/two handles and
+URL cleanup when the bridge cannot allocate. Removing frame rollback makes the
+new partial-setup unit regression fail; restoring it passes. The initial skipped
+native run and failing heap observations remain in the temporary evidence and
+are not counted as passing tests. Managed native curl was installed into a
+separate temporary project; no native manifest was added to this worktree.
+
+Evidence directory: `/private/tmp/elephc-1840-review`. The source is shared Rust;
+Linux and supported-target matrix execution for this follow-up remains a CI gate.
+The original pre-existing iOS pcntl blockers are still not a passing local gate.
+
+The final curl-feature dev build is warning-free. Three existing upload, caught
+callback-throw and nested-transfer controls pass after the last production edit.
+Builtin export/render, module sections, PHP comparison, catalog/site checks and
+the EIR architecture audit pass; generated registries/pages have no changes.
+Diff hygiene and all touched Rust module preambles pass. No full suite was run.
