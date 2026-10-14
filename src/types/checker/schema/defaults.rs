@@ -202,12 +202,8 @@ pub(crate) fn normalize_lexical_callable_default(
 /// Keeps unresolved trait parent defaults lazy, independent of the eventual caller scope.
 fn normalize_default_tree(default: &mut Option<Expr>, owner_class: &str, parent_class: Option<&str>) {
     let Some(value) = default.as_ref() else { return };
-    match super::classes::normalize_property_default_in_scope(value, owner_class, parent_class) {
+    match super::classes::normalize_lexical_default_in_scope(value, Some(owner_class), parent_class) {
         Ok(normalized) => { *default = Some(normalized); return; }
-        Err(error) if super::classes::is_missing_parent_default_error(&error) => {
-            *default = Some(super::classes::deferred_default_error(error.message, value.span));
-            return;
-        }
         Err(_) => {}
     }
     // Retain the existing direct scoped-constant normalization for non-property method defaults.

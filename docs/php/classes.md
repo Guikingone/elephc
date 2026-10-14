@@ -1377,7 +1377,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionClass::hasConstant()` | `new ReflectionClass($class_name)` | Return whether the reflected class-like symbol has the named class constant or enum case; lookup is case-sensitive |
 | `ReflectionClass::getConstant()` | `new ReflectionClass($class_name)` | Return the reflected constant value, enum case object, or `false` when no such constant is visible |
 | `ReflectionClass::getConstants()` | `new ReflectionClass($class_name)` | Return an associative array of visible constant values keyed by constant or enum-case name |
-| `ReflectionClass::getDefaultProperties()` | `new ReflectionClass($class_name)` | Return an associative array of supported materialized instance/static property defaults keyed by property name |
+| `ReflectionClass::getDefaultProperties()` | `new ReflectionClass($class_name)` | Return an associative array of supported materialized instance/static property defaults keyed by property name; deferred native property errors remain catchable inside eval instead of silently omitting the invalid slot |
 | `ReflectionClass::getStaticProperties()` | `new ReflectionClass($class_name)` | Return an associative array of supported materialized static property values keyed by property name |
 | `ReflectionClass::getStaticPropertyValue()` | `new ReflectionClass($class_name)` | Return a supported static property value, return the explicit default when the property is missing, or throw `ReflectionException` for supported missing-property lookups without a default |
 | `ReflectionClass::setStaticPropertyValue()` | `new ReflectionClass($class_name)` | Write a supported static property value |

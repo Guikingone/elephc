@@ -86,7 +86,7 @@ pub(crate) fn validate_compile_time_default_in_scope(
     rewrite_expr(value, class_name, parent).map(|_| ())
 }
 
-/// Binds closure defaults while keeping missing lexical scopes lazy and late-static errors hard.
+/// Binds callable defaults while keeping missing lexical scopes lazy and late-static errors hard.
 pub(crate) fn normalize_lexical_default_in_scope(
     value: &Expr, owner_class: Option<&str>, parent_class: Option<&str>,
 ) -> Result<Expr, CompileError> {

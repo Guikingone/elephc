@@ -40,6 +40,10 @@ class MethodConsumer {
     public function value(int $value = parent::A): int { return $value; }
     public static function staticValue(int $value = parent::A): int { return $value; }
 }
+class LazyMethod {
+    public static function value(array $items = [true ? 'ok' : parent::A]): array { return $items; }
+}
+echo json_encode(LazyMethod::value());
 interface ParentlessContract { public function value(int $value = parent::A); }
 class LexicalBase { const A = 3; }
 class LexicalChild extends LexicalBase {
@@ -73,6 +77,13 @@ echo (new MethodConsumer())->value(7), MethodConsumer::staticValue(value: 8);
     let module = super::lower_source_at_for_target(source, Path::new("main.php"), Path::new("."),
         Target::parse(target_name).unwrap());
     let consumer = &module.class_infos["Consumer"];
+    let lazy_default = module.class_infos["LazyMethod"].static_methods["value"].defaults[0]
+        .as_ref().expect("the method retains its default");
+    let crate::parser::ast::ExprKind::ArrayLiteral(items) = &lazy_default.kind
+        else { panic!("{target_name}: preserve the surrounding default array") };
+    assert!(matches!(&items[0].kind, crate::parser::ast::ExprKind::Ternary { else_expr, .. }
+        if matches!(else_expr.kind, crate::parser::ast::ExprKind::Throw(_))),
+        "{target_name}: defer only the unselected receiver expression");
     assert_eq!(consumer.deferred_property_default_error.as_deref(),
         Some("Cannot use \"parent\" when current class scope has no parent"),
         "{target_name}: initialization must resolve instance defaults before static defaults");

@@ -10,6 +10,84 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// Method default arrays retain lazy branches around missing parent constants.
+#[test]
+fn test_property_default_eighth_review_method_lazy_branches() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Probe {
+    public static function value(array $items = [true ? 'ok' : parent::A]): array { return $items; }
+    public function nested(array $items = ['kept' => ['ok' ?? parent::A]]): array { return $items; }
+    public static function missing(array $items = [false ? 'ok' : parent::A]): array { return $items; }
+}
+$probe = new Probe();
+for ($i = 0; $i < 8; $i++) {
+    echo json_encode(Probe::value()), ':', json_encode($probe->nested()), '|';
+    try { Probe::missing(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+}
+echo json_encode(Probe::missing(['explicit']));
+unset($probe);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    let expected = "[\"ok\"]:{\"kept\":[\"ok\"]}|Cannot access \"parent\" when current class scope has no parent|";
+    assert_eq!(out.stdout, format!("{}[\"explicit\"]", expected.repeat(8)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Method defaults retain earlier constructor effects and retire partial arrays on an error.
+#[test]
+fn test_property_default_eighth_review_method_prefix_cleanup() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Value { public function __construct() { echo 'C'; } public function __destruct() { echo 'D'; } }
+trait Factory { public static function value(array $items = [new Value(), parent::A]): array { return $items; } }
+class Probe { use Factory; }
+for ($i = 0; $i < 8; $i++) {
+    try { Probe::value(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+}
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "CDCannot access \"parent\" when current class scope has no parent|".repeat(8), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Opaque eval class reflection raises registered native default errors rather than skipping slots.
+#[test]
+fn test_property_default_eighth_review_eval_class_defaults() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Probe { public string $good = 'ok'; public int $bad = parent::A; }
+class Child extends Probe {}
+class Valid { public string $good = 'ok'; public static array $items = [1, 2]; }
+function run(string $code): void { echo eval($code); }
+for ($i = 0; $i < 8; $i++) {
+    run('try { (new ReflectionClass("Probe"))->getDefaultProperties(); } catch (Error $e) { return $e->getMessage() . "|"; } return "missed|";');
+    run('try { (new ReflectionClass("Child"))->getDefaultProperties(); } catch (Error $e) { return $e->getMessage() . "|"; } return "missed|";');
+}
+run('return json_encode((new ReflectionClass("Valid"))->getDefaultProperties());');
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("{}{{\"good\":\"ok\",\"items\":[1,2]}}",
+        "Cannot access \"parent\" when current class scope has no parent|".repeat(16)), "{}", out.stderr);
+    // Native ReflectionClass metadata has separate pre-existing retention. Isolated
+    // interpreter regressions assert zero temporary owners for this materialization path.
+}
+
+/// Method branch laziness stays independent of EIR optimization.
+#[test]
+fn test_property_default_eighth_review_method_lazy_no_ir_opt() {
+    without_ir_opt(test_property_default_eighth_review_method_lazy_branches);
+}
+
+/// Method prefix cleanup stays independent of EIR optimization.
+#[test]
+fn test_property_default_eighth_review_method_prefix_no_ir_opt() {
+    without_ir_opt(test_property_default_eighth_review_method_prefix_cleanup);
+}
+
+/// Native class-default Errors in eval stay independent of EIR optimization.
+#[test]
+fn test_property_default_eighth_review_eval_class_no_ir_opt() {
+    without_ir_opt(test_property_default_eighth_review_eval_class_defaults);
+}
+
 /// Parentless lexical closures and arrows are declared and fail only when their default is used.
 #[test]
 fn test_property_default_seventh_review_parentless_lexical() {
