@@ -277,7 +277,9 @@ pub(in crate::interpreter) fn eval_curl_setopt_callback(
     // failure only appeared as a silently skipped callback at transfer time. The probe is
     // `is_callable()`'s own.
     let callable_is_valid = match eval_callable(value, context, values) {
-        Ok(callable) => eval_callable_probe_exists(&callable, context, values)?,
+        Ok(callable) => callable.with_probe(context, values, |callable, context, values| {
+            eval_callable_probe_exists(callable, context, values)
+        })?,
         Err(_) => false,
     };
     if !callable_is_valid {
@@ -422,20 +424,32 @@ where
     V: RuntimeValueOps,
 {
     let mut installed = Vec::new();
-    for &table_id in handles {
-        for (slot, state) in context.stream_resources().curl_easy_callbacks(table_id) {
-            let callable = match state {
-                EvalCurlCallbackSlot::Callable(cell) => {
-                    // Normalized ONCE per transfer rather than once per callback
-                    // invocation: a write callback fires per chunk, and re-resolving a
-                    // method/closure callable thousands of times would be pure overhead.
-                    Some(eval_callable(cell, context, values)?)
-                }
-                EvalCurlCallbackSlot::Silent => None,
-                EvalCurlCallbackSlot::Empty => continue,
-            };
-            installed.push((table_id, slot, callable));
+    let mut receiver_owners = Vec::new();
+    let setup = (|| {
+        for &table_id in handles {
+            for (slot, state) in context.stream_resources().curl_easy_callbacks(table_id) {
+                let callable = match state {
+                    EvalCurlCallbackSlot::Callable(cell) => {
+                        // Normalized ONCE per transfer rather than once per callback
+                        // invocation: a write callback fires per chunk, and re-resolving a
+                        // method/closure callable thousands of times would be pure overhead.
+                        let (callable, owner) = eval_callable(cell, context, values)?.into_parts();
+                        receiver_owners.extend(owner);
+                        Some(callable)
+                    }
+                    EvalCurlCallbackSlot::Silent => None,
+                    EvalCurlCallbackSlot::Empty => continue,
+                };
+                installed.push((table_id, slot, callable));
+            }
         }
+        Ok::<(), EvalStatus>(())
+    })();
+    if let Err(status) = setup {
+        for owner in receiver_owners {
+            let _ = release_expr_result(owner, context, values);
+        }
+        return Err(status);
     }
     let mut frame = EvalCurlCallbackFrame {
         context: context as *mut ElephcEvalContext,
@@ -459,6 +473,11 @@ where
         // caller resumes it in the very next statement — it still has to consult the
         // bridge's gate to know a throw is why the transfer stopped, which is why resuming
         // is a separate call rather than an `Err` from here.
+        for owner in receiver_owners {
+            if let Err(status) = release_expr_result(owner, context, values) {
+                if frame.parked.is_none() { frame.parked = Some(status); }
+            }
+        }
         Ok((outcome, frame.parked.take()))
     }
 }
