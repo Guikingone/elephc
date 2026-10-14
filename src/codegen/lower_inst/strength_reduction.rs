@@ -195,7 +195,8 @@ fn emit_step(ctx: &mut FunctionContext<'_>, step: MulStep, acc: &str, tmp: &str)
                 ctx.emitter.instruction(&format!("neg {acc}, {acc}"));          // negate the product
             }
             MulStep::NegShl(k) => {
-                ctx.emitter.instruction(&format!("neg {acc}, {acc}, lsl #{k}"));// scale by 2^k and negate in one shifted negate
+                let negate = format!("neg {acc}, {acc}, lsl #{k}");
+                ctx.emitter.instruction(&negate);                               // scale by 2^k and negate in one shifted negate
             }
         },
         Arch::X86_64 => match step {
