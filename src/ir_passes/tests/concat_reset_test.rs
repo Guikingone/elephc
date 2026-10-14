@@ -997,3 +997,230 @@ fn concrete_array_iterator_and_scalar_cast_preserve_clean_concat_state() {
     assert_eq!(function.instruction(exit_reset).unwrap().op, Op::Nop);
     assert!(validate_function(&function).is_ok());
 }
+
+/// `Op::FToI` with `Immediate::FloatKeyDiagnostic` and `Op::ArrayGet` format warning
+/// diagnostics into `_concat_buf` at the current `_concat_off` without a capacity check,
+/// so both must act as concat barriers and prevent backward coalescing of a preceding reset.
+#[test]
+fn warning_producing_float_key_and_array_get_act_as_concat_barriers() {
+    let mut function = Function::new("warn_scratch_barriers".to_string(), IrType::I64, PhpType::Int);
+    let (then_reset_before_ftoi, then_reset_before_get, merge_reset);
+    {
+        let mut builder = Builder::new(&mut function);
+        let arr_slot = builder.add_local(
+            Some("arr".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+            LocalKind::PhpLocal,
+        );
+        let entry = builder.create_named_block("entry", vec![]);
+        let then_b = builder.create_named_block("then", vec![]);
+        let else_b = builder.create_named_block("else", vec![]);
+        let merge_b = builder.create_named_block("merge", vec![]);
+        builder.set_entry(entry);
+
+        builder.position_at_end(entry);
+        let cond = builder.emit_const_bool(true);
+        builder.terminate(Terminator::CondBr {
+            cond,
+            then_target: then_b,
+            then_args: vec![],
+            else_target: else_b,
+            else_args: vec![],
+        });
+
+        // `then` dirties scratch, resets, runs `FToI(FloatKeyDiagnostic)`, resets again,
+        // and runs `ArrayGet` before jumping to `merge`.
+        builder.position_at_end(then_b);
+        let n1 = builder.emit_const_i64(1);
+        let _s1 = builder
+            .emit(
+                Op::IToStr,
+                vec![n1],
+                None,
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Borrowed,
+            )
+            .expect("itostr produces a value");
+        then_reset_before_ftoi = emit_concat_reset(&mut builder);
+        let fkey = builder.emit_const_f64(1.5);
+        let ikey = builder
+            .emit_with_effects(
+                Op::FToI,
+                vec![fkey],
+                Some(Immediate::FloatKeyDiagnostic),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+                Effects::MAY_WARN,
+                None,
+            )
+            .expect("ftoi produces a value");
+        then_reset_before_get = emit_concat_reset(&mut builder);
+        let arr = builder.emit_load_local(
+            arr_slot,
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+        );
+        let _elem = builder
+            .emit(
+                Op::ArrayGet,
+                vec![arr, ikey],
+                None,
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .expect("array_get produces a value");
+        builder.terminate(Terminator::Br {
+            target: merge_b,
+            args: vec![],
+        });
+
+        // `else` leaves concat state dirty going into `merge`.
+        builder.position_at_end(else_b);
+        let n2 = builder.emit_const_i64(2);
+        let _s2 = builder
+            .emit(
+                Op::IToStr,
+                vec![n2],
+                None,
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Borrowed,
+            )
+            .expect("itostr produces a value");
+        builder.terminate(Terminator::Br {
+            target: merge_b,
+            args: vec![],
+        });
+
+        builder.position_at_end(merge_b);
+        merge_reset = emit_concat_reset(&mut builder);
+        let out = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Return { value: Some(out) });
+    }
+
+    run_to_fixed_point(&mut function);
+    assert_eq!(
+        function.instruction(then_reset_before_ftoi).unwrap().op,
+        Op::ConcatReset,
+        "reset before FToI(FloatKeyDiagnostic) must not coalesce across the warning formatter"
+    );
+    assert_eq!(
+        function.instruction(then_reset_before_get).unwrap().op,
+        Op::ConcatReset,
+        "reset before ArrayGet must not coalesce across the undefined-key warning formatter"
+    );
+    assert_eq!(
+        function.instruction(merge_reset).unwrap().op,
+        Op::ConcatReset
+    );
+    assert!(validate_function(&function).is_ok());
+}
+
+/// Mutual recursion between an array slot `$dst`, an element slot `$v`, and
+/// `Op::IterCurrentValue` over `$dst` (`$dst[$k] = $v; foreach ($dst as $k => $v)`)
+/// terminates without infinite recursion and fails closed (`false`).
+#[test]
+fn cyclic_iterator_over_mutated_array_slot_terminates_and_stays_conservative() {
+    let mut function = Function::new("cyclic_iter_slot".to_string(), IrType::I64, PhpType::Int);
+    let reset_after_iter;
+    {
+        let mut builder = Builder::new(&mut function);
+        let dst_slot = builder.add_local(
+            Some("dst".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            },
+            LocalKind::PhpLocal,
+        );
+        let val_slot = builder.add_local(
+            Some("v".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let iter_state = builder.add_local(
+            None,
+            IrType::Heap(IrHeapKind::Iterable),
+            PhpType::Iterable,
+            LocalKind::IteratorState,
+        );
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+
+        let init_hash = builder
+            .emit(
+                Op::HashNew,
+                vec![],
+                Some(Immediate::I64(0)),
+                IrType::Heap(IrHeapKind::Hash),
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Str),
+                    value: Box::new(PhpType::Mixed),
+                },
+                Ownership::Owned,
+            )
+            .expect("hash_new produces a value");
+        builder.emit_store_local(dst_slot, init_hash);
+
+        let dst_loaded = builder.emit_load_local(
+            dst_slot,
+            IrType::Heap(IrHeapKind::Hash),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            },
+        );
+        let key = builder.emit_const_str(DataId::from_raw(0));
+        let prev_v =
+            builder.emit_load_local(val_slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+        builder.emit(
+            Op::HashSet,
+            vec![dst_loaded, key, prev_v],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+
+        let iter_handle = builder
+            .emit(
+                Op::IterStart,
+                vec![dst_loaded],
+                Some(Immediate::IterStart(IterStartMetadata::new(
+                    iter_state, false, None, None,
+                ))),
+                IrType::Heap(IrHeapKind::Iterable),
+                PhpType::Iterable,
+                Ownership::Owned,
+            )
+            .expect("iter_start produces a handle");
+        let cur_v = builder
+            .emit(
+                Op::IterCurrentValue,
+                vec![iter_handle],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Borrowed,
+            )
+            .expect("iter_current_value produces a value");
+        builder.emit_store_local(val_slot, cur_v);
+        reset_after_iter = emit_concat_reset(&mut builder);
+        let zero = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Return { value: Some(zero) });
+    }
+
+    run_to_fixed_point(&mut function);
+    assert_eq!(
+        function.instruction(reset_after_iter).unwrap().op,
+        Op::ConcatReset
+    );
+    assert!(validate_function(&function).is_ok());
+}

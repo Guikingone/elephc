@@ -285,3 +285,39 @@ echo run_complex($argc + 2), "\n";
         "start:3|[dtor:p3]cap3:3|plain:3|throw=3:boom|[dtor:q3][dtor:cap3]ev:7\n",
     );
 }
+
+/// A branch that nearly fills the 64 KiB `_concat_buf` before executing a
+/// warning-producing float-key conversion (`FToI` with `FloatKeyDiagnostic`) and
+/// out-of-bounds array read (`ArrayGet`) must keep the `concat_reset` between the
+/// large concat and the warning even when the sibling branch leaves scratch dirty
+/// and the merge block starts with another `concat_reset`.
+#[test]
+fn test_concat_reset_preserves_reset_before_warning_after_near_full_scratch_branch() {
+    let source = r#"<?php
+function warn_after_near_full_scratch(int $n, string $pad): string {
+    $arr = [10, 20];
+    $big = "";
+    $x = 0;
+    $y = 0;
+    if ($n > 0) {
+        $big = $pad . $n;
+        $fk = $n + 0.5;
+        $x = $arr[$fk];
+        $y = $arr[$n + 99];
+    } else {
+        $big = "else:" . $n;
+    }
+    $after = "done:" . $n;
+    return strlen($big) . ":" . $x . ":" . ($y ?? -1) . ":" . $after;
+}
+$pad = str_repeat("x", 65520);
+echo warn_after_near_full_scratch($argc, $pad), "\n";
+"#;
+    let fixture = Fixture::new(source);
+    let opt_ir = fixture.function_ir(true, "warn_after_near_full_scratch");
+    assert!(
+        count_ir_concat_resets(&opt_ir) >= 3,
+        "expected concat_reset before FToI(FloatKeyDiagnostic), before ArrayGet, and at merge to survive:\n{opt_ir}"
+    );
+    fixture.assert_equiv(&[], "65521:20:-1:done:1\n");
+}

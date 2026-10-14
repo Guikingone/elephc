@@ -152,14 +152,20 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
 pub fn optimize_module(module: &mut Module) {
     let passes = default_passes();
 
-    for _ in 0..MAX_MODULE_ITERATIONS {
+    for round in 0..MAX_MODULE_ITERATIONS {
         let mut changed = false;
 
         // Module-level cross-function inliner.
-        changed |= super::inline::inline_small_functions(module);
+        let inlined = super::inline::inline_small_functions(module);
+        changed |= inlined;
         #[cfg(debug_assertions)]
-        if let Err(e) = crate::ir::validate_module(module) {
-            panic!("inline_small_functions produced invalid module: {:?}", e);
+        if round == 0 || inlined {
+            if let Err(e) = crate::ir::validate_module(module) {
+                panic!("inline_small_functions produced invalid module: {:?}", e);
+            }
+        }
+        if round > 0 && !inlined {
+            return; // module-level fixed point reached
         }
 
         // Per-function fixed-point passes over every function-like body.
@@ -216,13 +222,15 @@ pub fn run_function_passes(
             }
             let pass_changed = pass.run(function, data);
             #[cfg(debug_assertions)]
-            if let Err(error) = crate::ir::validate_function(function) {
-                panic!(
-                    "EIR pass '{}' produced invalid IR in function '{}': {:?}",
-                    pass.name(),
-                    function.name,
-                    error
-                );
+            if pass_changed {
+                if let Err(error) = crate::ir::validate_function(function) {
+                    panic!(
+                        "EIR pass '{}' produced invalid IR in function '{}': {:?}",
+                        pass.name(),
+                        function.name,
+                        error
+                    );
+                }
             }
             changed |= pass_changed;
         }
