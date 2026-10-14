@@ -40,6 +40,7 @@ mod bare_array_values;
 mod assoc_spread;
 mod widened_signatures;
 mod write_evaluation_order;
+mod computed_write_order;
 mod float_key_diagnostics;
 mod float_key_compound_receivers;
 mod literal_element_types;
