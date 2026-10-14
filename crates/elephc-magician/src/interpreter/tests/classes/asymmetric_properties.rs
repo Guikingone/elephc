@@ -12,6 +12,21 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Generic child redeclarations discard the parent's default and leave typed storage unset.
+#[test]
+fn execute_program_asymmetric_main_merge_generic_default_override() {
+    let program = parse_fragment(br#"class Base<T> { public int $value = 7; }
+class Child<T> extends Base<T> { public int $value; }
+$child = new Child<int>(); echo isset($child->value) ? 'bad' : 'unset'; return true;"#)
+        .expect("parse generic property redeclarations");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("allocate a generic child with an uninitialized override");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.output, "unset");
+}
+
 /// Legal readonly storage keeps the abstract setter from writing its backing slot.
 #[test]
 fn execute_program_asymmetric_eighth_review_abstract_setter_storage() {
