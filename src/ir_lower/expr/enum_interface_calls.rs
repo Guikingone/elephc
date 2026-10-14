@@ -35,9 +35,15 @@ pub(super) fn lower_enum_interface_call(
         .is_some_and(|context| context.depth == ctx.expression_depth);
     let dynamic_unpack = args.iter().any(is_spread_arg)
         && crate::types::call_args::expand_planned_positional_spreads(args).is_none();
+    let result_needs_owner = Ownership::php_type_needs_lifetime_tracking(&result_type)
+        && !matches!(result_type.codegen_repr(), PhpType::Buffer(_));
     let result = if reference_assignment { None } else {
         let name = ctx.declare_owned_hidden_temp(result_type.clone());
-        register_owned_call_operand(ctx, ctx.local_slots[&name], expr.span);
+        // Heap cleanup treats its slot as a pointer. Scalar result slots are neither heap
+        // owners nor zero-initialized, and a rejected branch never stores a result there.
+        if result_needs_owner {
+            register_owned_call_operand(ctx, ctx.local_slots[&name], expr.span);
+        }
         Some(name)
     };
     let (object, owner) = root_owned_call_operand(ctx, object, expr.span);
@@ -136,7 +142,9 @@ pub(super) fn lower_enum_interface_call(
     ctx.builder.position_at_end(merge);
     if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, expr.span); }
     Some(if let Some(result) = result {
-        unregister_owned_call_operand(ctx, ctx.local_slots[&result], expr.span);
+        if result_needs_owner {
+            unregister_owned_call_operand(ctx, ctx.local_slots[&result], expr.span);
+        }
         take_owned_temp(ctx, &result, expr.span)
     } else { lower_null(ctx, expr) })
 }

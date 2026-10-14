@@ -572,7 +572,10 @@ detach an arbitrary named record. On the normal path the slot is CLEARED rather
 than released, which transfers the single reference back to the expression's
 consumer; on the unwind path the record releases it exactly once, before the catch
 body runs. The slot is declared with the exact result type the call is emitted
-with. Two cases are deliberately excluded: a by-reference-returning callee, whose
+with. Only heap-bearing results publish heap-owner records. A rejected call can leave
+a scalar result slot uninitialized, and heap cleanup must never interpret its bits
+as a pointer. For heap-bearing results, two further cases are deliberately excluded:
+a by-reference-returning callee, whose
 result is the transferred cell the reference staging already owns, and a callee
 whose summary says its result may be one of its arguments, because that argument's
 release is guarded by a runtime alias comparison and rooting both would release one
