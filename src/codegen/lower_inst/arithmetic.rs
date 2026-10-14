@@ -27,26 +27,49 @@ pub(super) fn lower_int_binop(
     aarch64_mnemonic: &str,
     x86_64_mnemonic: &str,
 ) -> Result<()> {
+    if super::strength_reduction::try_lower_constant_multiply(ctx, inst)? { return Ok(()); }
     if super::immediate_operands::try_int_binop(ctx, inst)? { return Ok(()); }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
-    load_integer_operand(ctx, lhs, result_reg, inst)?;
-    load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // Three-operand forms read both register-allocated operands in place.
+            let lhs_reg = integer_operand_register(ctx, lhs, result_reg, inst)?;
+            let rhs_reg = integer_operand_register(ctx, rhs, scratch_reg, inst)?;
             ctx.emitter.instruction(
-                &format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)
+                &format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, lhs_reg, rhs_reg)
             );                                                                  // compute the integer arithmetic result from both SSA operands
         }
         Arch::X86_64 => {
+            load_integer_operand(ctx, lhs, result_reg, inst)?;
+            let rhs_reg = integer_operand_register(ctx, rhs, scratch_reg, inst)?;
             ctx.emitter.instruction(
                 &format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)
             );                                                                  // update the integer result register with the arithmetic operand
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns a register holding an integer operand that the consuming instruction only reads.
+///
+/// An `int`/`bool` value with an allocated register home is used in place; anything else is
+/// loaded into `fallback` with the usual null-to-zero coercion.
+pub(super) fn integer_operand_register(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    fallback: &str,
+    inst: &Instruction,
+) -> Result<String> {
+    if let Some(home) = ctx.allocation.register_of(value) {
+        if matches!(ctx.value_php_type(value)?, PhpType::Int | PhpType::Bool) {
+            return Ok(home.to_string());
+        }
+    }
+    load_integer_operand(ctx, value, fallback, inst)?;
+    Ok(fallback.to_string())
 }
 
 /// Lowers a checked integer binary operation that may overflow to float.

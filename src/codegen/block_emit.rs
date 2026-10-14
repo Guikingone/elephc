@@ -32,7 +32,9 @@ use crate::names::{
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
+use super::block_layout;
 use super::context::FunctionContext;
+use super::machine_peephole;
 use super::fibers;
 use super::frame;
 use super::function_variants;
@@ -1277,17 +1279,32 @@ fn emit_static_property_default_value(
     Ok(())
 }
 
-/// Emits every block in table order.
+/// Emits every block in machine layout order, then the function's deferred cold paths.
+///
+/// Hot blocks keep their table order and cold (`unreachable` / `fatal` / `throw`) blocks move
+/// last. Each block knows its layout successor so terminators can fall through instead of
+/// jumping. The finished region then goes through the late machine peepholes.
 fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let region_start = ctx.emitter.text_len();
     let blocks = ctx.function.blocks.clone();
-    for block in blocks {
-        emit_block(ctx, &block)?;
+    let order = block_layout::emission_order(ctx.function);
+    ctx.begin_cold_section();
+    for (position, &index) in order.iter().enumerate() {
+        ctx.machine_layout.next_block = order.get(position + 1).map(|&next| blocks[next].id);
+        emit_block(ctx, &blocks[index])?;
     }
+    ctx.machine_layout.next_block = None;
+    ctx.machine_layout.fused_compare = None;
+    ctx.flush_cold_section();
+    let target = ctx.emitter.target;
+    ctx.emitter
+        .rewrite_text_from(region_start, |text| machine_peephole::optimize(text, target));
     Ok(())
 }
 
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
+    ctx.machine_layout.fused_compare = block_layout::fusible_compare(ctx.function, block);
     ctx.emitter.comment(&format!("@block name={}", block.name));
     let block_label = ctx.block_label_for_id(block.id)?;
     ctx.emitter.label(&block_label);
