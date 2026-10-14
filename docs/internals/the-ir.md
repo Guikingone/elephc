@@ -768,9 +768,11 @@ the parser's static cursor could overwrite a key contributed by the spread.
 
 Spreading a hash copies its values in insertion order, preserving string keys and renumbering
 integer keys according to PHP unpacking. Spreading an indexed array first emits `ArrayToHash`,
-which consumes the array reference it receives and creates a Mixed-typed hash while
-copying each source slot with its original runtime value tag. Refcounted payloads are
-retained and strings are persisted; scalar values do not acquire a separate Mixed cell.
+which consumes the array reference it receives and first copies each source slot with its
+original runtime value tag. Refcounted payloads are retained and strings are persisted.
+This spread path requests a Mixed-valued result, so `ArrayToHash` then calls
+`__rt_hash_to_mixed`, which boxes each unboxed entry, including scalar values, in a separate
+Mixed cell.
 `HashSpread` then copies that promoted hash into the destination. Lowering always acquires a reference for the
 promotion to consume, so a borrowed source (a local, a global, a property, a static) keeps the
 reference it started with. The promoted hash is released after `HashSpread`, and an owning
