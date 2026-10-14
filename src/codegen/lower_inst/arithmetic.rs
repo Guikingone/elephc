@@ -233,7 +233,7 @@ pub(super) fn lower_float_div(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::X86_64 => {
             let bits_reg = abi::secondary_scratch_reg(ctx.emitter);
             ctx.emitter.instruction(&format!("movq {}, xmm0", bits_reg));       // raw IEEE-754 bits of the divisor
-            ctx.emitter.instruction(&format!("add {}, {}", bits_reg, bits_reg));// shift out the sign bit so -0.0 tests equal to +0.0 (NaN stays non-zero)
+            ctx.emitter.instruction(&format!("add {bits_reg}, {bits_reg}"));    // shift out the sign bit so -0.0 tests equal to +0.0 (NaN stays non-zero)
             ctx.emitter.instruction(&format!("jz {}", zero_label));             // branch to the zero-divisor throw for both +0.0 and -0.0
             ctx.emitter.instruction("divsd xmm1, xmm0");                        // divide the dividend by the divisor in the float scratch register
             ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the quotient into the float result register
