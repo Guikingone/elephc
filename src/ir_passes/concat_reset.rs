@@ -50,8 +50,32 @@ impl IrPass for ConcatResetElim {
         "concat-reset"
     }
 
-    /// Skips functions that contain no `concat_reset` instructions.
+    /// Skips functions with no `concat_reset` or single-block functions where
+    /// every `concat_reset` is already separated by an unconditional barrier.
     fn is_applicable(&self, function: &Function) -> bool {
+        if let [block] = function.blocks.as_slice() {
+            if !block
+                .terminator
+                .as_ref()
+                .is_some_and(terminator_preserves_concat_state)
+            {
+                let mut dirty_since_last_reset = false;
+                for &inst_id in &block.instructions {
+                    let Some(inst) = function.instruction(inst_id) else {
+                        continue;
+                    };
+                    if inst.op == Op::ConcatReset {
+                        if !dirty_since_last_reset {
+                            return true;
+                        }
+                        dirty_since_last_reset = false;
+                    } else if is_unconditional_concat_barrier(inst) {
+                        dirty_since_last_reset = true;
+                    }
+                }
+                return false;
+            }
+        }
         function
             .instructions
             .iter()
@@ -442,6 +466,36 @@ fn terminator_preserves_concat_state(term: &Terminator) -> bool {
         term,
         Terminator::Br { .. } | Terminator::CondBr { .. } | Terminator::Switch { .. }
     )
+}
+
+/// Returns whether `inst` is unconditionally non-inert regardless of operand or slot types.
+fn is_unconditional_concat_barrier(inst: &Instruction) -> bool {
+    !inst
+        .effects
+        .intersection(Effects::ALLOC_CONCAT | Effects::OUTPUT | Effects::MAY_WARN)
+        .is_empty()
+        || matches!(
+            inst.op,
+            Op::Call
+                | Op::FunctionVariantCall
+                | Op::LanguageConstructCall
+                | Op::EvalLiteralCall
+                | Op::EvalFunctionCall
+                | Op::EvalFunctionCallArray
+                | Op::EvalStaticMethodCall
+                | Op::RuntimeCall
+                | Op::ExternCall
+                | Op::MethodCall
+                | Op::NullsafeMethodCall
+                | Op::StaticMethodCall
+                | Op::ClosureCall
+                | Op::ExprCall
+                | Op::CallableDescriptorInvoke
+                | Op::PipeCall
+                | Op::IteratorMethodCall
+                | Op::SplRuntimeCall
+                | Op::FiberRuntimeCall
+        )
 }
 
 impl<'a> ConcatInertAnalysis<'a> {

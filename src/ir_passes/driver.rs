@@ -159,10 +159,8 @@ pub fn optimize_module(module: &mut Module) {
         let inlined = super::inline::inline_small_functions(module);
         changed |= inlined;
         #[cfg(debug_assertions)]
-        if round == 0 || inlined {
-            if let Err(e) = crate::ir::validate_module(module) {
-                panic!("inline_small_functions produced invalid module: {:?}", e);
-            }
+        if let Err(e) = crate::ir::validate_module(module) {
+            panic!("inline_small_functions produced invalid module: {:?}", e);
         }
         if round > 0 && !inlined {
             return; // module-level fixed point reached
@@ -222,15 +220,13 @@ pub fn run_function_passes(
             }
             let pass_changed = pass.run(function, data);
             #[cfg(debug_assertions)]
-            if pass_changed {
-                if let Err(error) = crate::ir::validate_function(function) {
-                    panic!(
-                        "EIR pass '{}' produced invalid IR in function '{}': {:?}",
-                        pass.name(),
-                        function.name,
-                        error
-                    );
-                }
+            if let Err(error) = crate::ir::validate_function(function) {
+                panic!(
+                    "EIR pass '{}' produced invalid IR in function '{}': {:?}",
+                    pass.name(),
+                    function.name,
+                    error
+                );
             }
             changed |= pass_changed;
         }
