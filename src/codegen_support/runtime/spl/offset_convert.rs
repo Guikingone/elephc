@@ -91,6 +91,7 @@ pub(crate) fn emit_spl_offset_runtime(emitter: &mut Emitter) {
 fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl offset convert ---");
+    // -- establish owned-offset spill slots before classification --
     emitter.label_global("__rt_spl_offset_convert");
     emitter.instruction("sub sp, sp, #64");                                     // reserve box, mode, status, payload and result slots
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the caller frame and return address
@@ -98,6 +99,7 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x0, x1, [sp]");                                    // keep the owned box and the conversion mode
     emitter.instruction("bl __rt_mixed_unbox");                                 // read the offset's tag and payload words
     emitter.instruction("stp x1, x2, [sp, #24]");                               // keep the payload across the classification calls
+    // -- classify the unboxed offset without changing its payload --
     emitter.instruction("cmp x0, #0");                                          // an int is already an index
     emitter.instruction("b.eq __rt_spl_offset_convert_int");                    // use the int payload as is
     emitter.instruction("cmp x0, #3");                                          // a bool is the index 0 or 1
@@ -124,6 +126,7 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x10, #{}", ROW_OBJECT));                  // anything else is reported as an object
     emitter.instruction("b __rt_spl_offset_convert_named");                     // report the fallback name
 
+    // -- accept an already integral offset --
     emitter.label("__rt_spl_offset_convert_int");
     emitter.instruction("ldr x9, [sp, #24]");                                   // the integer payload
     emitter.instruction("str x9, [sp, #40]");                                   // is the index
@@ -131,6 +134,7 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #16]");                                   // record the status
     emitter.instruction("b __rt_spl_offset_convert_release");                   // release the box and return
 
+    // -- apply the container-specific integer-string policy --
     emitter.label("__rt_spl_offset_convert_string");
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the mode
     emitter.instruction(&format!("cmp x9, #{}", SPL_OFFSET_MODE_FIXED));        // SplFixedArray takes canonical integer strings only
@@ -143,10 +147,12 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x9, #{}", SPL_OFFSET_STATUS_INT));        // status: converted
     emitter.instruction("str x9, [sp, #16]");                                   // record the status
     emitter.instruction("b __rt_spl_offset_convert_release");                   // release the box and return
+    // -- coerce numeric strings for linked-list offsets --
     emitter.label("__rt_spl_offset_convert_string_coerce");
     emitter.instruction("ldp x0, x1, [sp, #24]");                               // borrow the string pointer and length from the live box
     emitter.instruction("bl __rt_str_numeric_value");                           // parse it as weak-mode int coercion does
     emitter.instruction("cbnz x2, __rt_spl_offset_convert_string_rejected");    // only a fully numeric string coerces
+    // -- classify the unboxed offset without changing its payload --
     emitter.instruction("cmp x0, #0");                                          // did it parse as an integer?
     emitter.instruction("b.eq __rt_spl_offset_convert_string_int");             // store the integer
     emitter.instruction("str x1, [sp, #16]");                                   // keep the float's bits
@@ -184,6 +190,7 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x10, #{}", ROW_STRING));                  // report "string"
     emitter.instruction("b __rt_spl_offset_convert_named");                     // record the type error
 
+    // -- release the box before float diagnostics can invoke user code --
     emitter.label("__rt_spl_offset_convert_float");
     emitter.instruction("ldr x0, [sp]");                                        // the owned box holds nothing the float needs
     emitter.instruction("bl __rt_decref_mixed");                                // release it before a diagnostic can run user code
@@ -205,6 +212,7 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // status: type error
     emitter.instruction("b __rt_spl_offset_convert_return");                    // the box is already released
 
+    // -- preserve the different fixed-array and linked-list null rules --
     emitter.label("__rt_spl_offset_convert_null");
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the mode
     emitter.instruction(&format!("cmp x9, #{}", SPL_OFFSET_MODE_LIST));         // a linked-list index reads null as 0
@@ -224,6 +232,7 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #16]");                                   // record the status
     emitter.instruction("b __rt_spl_offset_convert_release");                   // release the box and return
 
+    // -- look up the rejected object class name --
     emitter.label("__rt_spl_offset_convert_object");
     emitter.instruction("ldr x13, [sp, #24]");                                  // the object pointer
     emitter.instruction("ldr x13, [x13]");                                      // its class id, kept outside the symbol helper's x9 scratch
@@ -239,6 +248,7 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_offset_convert_object_fallback");
     emitter.instruction(&format!("mov x10, #{}", ROW_OBJECT));                  // report "object"
 
+    // -- select a persistent diagnostic name row --
     emitter.label("__rt_spl_offset_convert_named");
     abi::emit_symbol_address(emitter, "x11", "_spl_offset_type_rows");
     emitter.instruction("add x11, x11, x10, lsl #4");                           // select the type-name row
@@ -247,11 +257,13 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #1");                                          // status: type error
     emitter.instruction("str x9, [sp, #16]");                                   // record the status
 
+    // -- consume the offset box and return status plus index or name --
     emitter.label("__rt_spl_offset_convert_release");
     emitter.instruction("ldr x0, [sp]");                                        // the owned boxed offset
     emitter.instruction("bl __rt_decref_mixed");                                // this helper consumes it
     emitter.instruction("ldr x0, [sp, #16]");                                   // return the status
     emitter.instruction("ldr x1, [sp, #40]");                                   // and the index or name row
+    // -- restore the caller frame --
     emitter.label("__rt_spl_offset_convert_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame and return address
     emitter.instruction("add sp, sp, #64");                                     // release the conversion frame
@@ -265,20 +277,27 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
 fn emit_throw_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl offset type error ---");
+    // -- preserve suffix, message and intermediate storage across calls --
     emitter.label_global("__rt_spl_throw_offset_type");
-    emitter.instruction("sub sp, sp, #48");                                     // reserve the suffix and message pairs and linkage
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish a Throwable-construction frame
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the suffix and message pairs and linkage
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish a Throwable-construction frame
     emitter.instruction("stp x3, x4, [sp, #16]");                               // keep the suffix across the first concat
+    // -- build and persist the complete PHP TypeError message --
     emitter.instruction("mov x9, x2");                                          // the name row
     emitter.instruction("mov x2, x1");                                          // left operand length: the prefix
     emitter.instruction("mov x1, x0");                                          // left operand pointer: the prefix
     emitter.instruction("ldp x3, x4, [x9]");                                    // right operand: the type or class name
     emitter.instruction("bl __rt_concat");                                      // build `<prefix><name>`
+    emitter.instruction("str x1, [sp, #32]");                                   // preserve the first concat allocation until the final message is stable
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // right operand: the suffix
     emitter.instruction("bl __rt_concat");                                      // append it
     emitter.instruction("bl __rt_str_persist");                                 // give the Throwable stable message ownership
     emitter.instruction("stp x1, x2, [sp]");                                    // keep the message pair across the allocation
+    // -- release the intermediate concat after persisting the final message --
+    emitter.instruction("ldr x0, [sp, #32]");                                   // recover the first concatenation buffer
+    emitter.instruction("bl __rt_heap_free");                                   // release heap-backed storage; concat scratch is ignored
+    // -- create the canonical Throwable object with owned message storage --
     emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Throwable object payload
     emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies a throwable object
@@ -292,9 +311,10 @@ fn emit_throw_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x0, #24]");                                  // code = 0
     emit_throwable_creation_line_unknown(emitter, "x0");
     emitter.instruction("str xzr, [x0, #40]");                                  // previous = null
+    // -- publish the error and unwind after retiring the construction frame --
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the Throwable for the unwinder
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the local frame
     emitter.instruction("b __rt_throw_current");                                // unwind, or report it uncaught and exit like PHP
 }
 
@@ -306,6 +326,7 @@ fn emit_throw_aarch64(emitter: &mut Emitter) {
 fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl offset convert ---");
+    // -- establish owned-offset spill slots before classification --
     emitter.label_global("__rt_spl_offset_convert");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the conversion frame
@@ -316,6 +337,7 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_unbox");                               // read the offset's tag and payload words
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // keep the payload low word
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // keep the payload high word
+    // -- classify the unboxed offset without changing its payload --
     emitter.instruction("cmp rax, 0");                                          // an int is already an index
     emitter.instruction("je __rt_spl_offset_convert_int_x");                    // use the int payload as is
     emitter.instruction("cmp rax, 3");                                          // a bool is the index 0 or 1
@@ -342,12 +364,14 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, {}", ROW_OBJECT));                   // anything else is reported as an object
     emitter.instruction("jmp __rt_spl_offset_convert_named_x");                 // report the fallback name
 
+    // -- accept an already integral offset --
     emitter.label("__rt_spl_offset_convert_int_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the integer payload
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // is the index
     emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT)); // status: converted
     emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
 
+    // -- apply the container-specific integer-string policy --
     emitter.label("__rt_spl_offset_convert_string_x");
     emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_FIXED)); // SplFixedArray takes canonical integer strings only
     emitter.instruction("jne __rt_spl_offset_convert_string_coerce_x");         // the linked lists coerce any numeric string
@@ -359,12 +383,14 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // the integer is the index
     emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT)); // status: converted
     emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
+    // -- coerce numeric strings for linked-list offsets --
     emitter.label("__rt_spl_offset_convert_string_coerce_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // borrow the string pointer from the live box
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // and its length
     emitter.instruction("call __rt_str_numeric_value");                         // parse it as weak-mode int coercion does
     emitter.instruction("test rdx, rdx");                                       // only a fully numeric string coerces
     emitter.instruction("jnz __rt_spl_offset_convert_string_rejected_x");       // anything else is a type error
+    // -- classify the unboxed offset without changing its payload --
     emitter.instruction("cmp rax, 0");                                          // did it parse as an integer?
     emitter.instruction("je __rt_spl_offset_convert_string_int_x");             // store the integer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // keep the float's bits
@@ -401,6 +427,7 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, {}", ROW_STRING));                   // report "string"
     emitter.instruction("jmp __rt_spl_offset_convert_named_x");                 // record the type error
 
+    // -- release the box before float diagnostics can invoke user code --
     emitter.label("__rt_spl_offset_convert_float_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned box holds nothing the float needs
     emitter.instruction("call __rt_decref_mixed");                              // release it before a diagnostic can run user code
@@ -420,6 +447,7 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 1");                                          // status: type error
     emitter.instruction("jmp __rt_spl_offset_convert_return_x");                // the box is already released
 
+    // -- preserve the different fixed-array and linked-list null rules --
     emitter.label("__rt_spl_offset_convert_null_x");
     emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_LIST)); // a linked-list index reads null as 0
     emitter.instruction("je __rt_spl_offset_convert_null_zero_x");              // use index 0
@@ -436,6 +464,7 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_NULL)); // status: null
     emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
 
+    // -- look up the rejected object class name --
     emitter.label("__rt_spl_offset_convert_object_x");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // the object pointer
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // its class id
@@ -451,6 +480,7 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_offset_convert_object_fallback_x");
     emitter.instruction(&format!("mov r10, {}", ROW_OBJECT));                   // report "object"
 
+    // -- select a persistent diagnostic name row --
     emitter.label("__rt_spl_offset_convert_named_x");
     emitter.instruction("shl r10, 4");                                          // scale the row index to the 16-byte row
     emitter.instruction("lea r11, [rip + _spl_offset_type_rows]");              // the type-name rows
@@ -459,11 +489,13 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_offset_convert_rejected_x");
     emitter.instruction("mov QWORD PTR [rbp - 24], 1");                         // status: type error
 
+    // -- consume the offset box and return status plus index or name --
     emitter.label("__rt_spl_offset_convert_release_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned boxed offset
     emitter.instruction("call __rt_decref_mixed");                              // this helper consumes it
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the status
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // and the index or name row
+    // -- restore the caller frame --
     emitter.label("__rt_spl_offset_convert_return_x");
     emitter.instruction("mov rsp, rbp");                                        // release the conversion frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -477,24 +509,31 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
 fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl offset type error ---");
+    // -- preserve suffix, message and intermediate storage across calls --
     emitter.label_global("__rt_spl_throw_offset_type");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a Throwable-construction frame
-    emitter.instruction("sub rsp, 32");                                         // reserve the suffix and message pairs, keeping rsp aligned
+    emitter.instruction("sub rsp, 48");                                         // reserve the suffix and message pairs, keeping rsp aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rcx");                        // keep the suffix pointer across the first concat
     emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // keep the suffix length
+    // -- build and persist the complete PHP TypeError message --
     emitter.instruction("mov r10, rdx");                                        // the name row
     emitter.instruction("mov rax, rdi");                                        // left operand pointer: the prefix
     emitter.instruction("mov rdx, rsi");                                        // left operand length: the prefix
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // right operand pointer: the type or class name
     emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // right operand length
     abi::emit_call_label(emitter, "__rt_concat");                               // build `<prefix><name>`
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the first concat allocation until the final message is stable
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // right operand pointer: the suffix
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // right operand length
     abi::emit_call_label(emitter, "__rt_concat");                               // append it
     abi::emit_call_label(emitter, "__rt_str_persist");                          // give the Throwable stable message ownership
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the message pointer across the allocation
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // keep the message byte length
+    // -- release the intermediate concat after persisting the final message --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the first concatenation buffer
+    abi::emit_call_label(emitter, "__rt_heap_free");                            // release heap-backed storage; concat scratch is ignored
+    // -- create the canonical Throwable object with owned message storage --
     emitter.instruction("mov rax, 56");                                         // canonical Throwable payload size
     abi::emit_call_label(emitter, "__rt_heap_alloc");                           // allocate the Throwable object payload (rax = payload)
     emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(6))); // magic + kind 6 identifies a throwable object
@@ -509,6 +548,7 @@ fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // code = 0
     emit_throwable_creation_line_unknown(emitter, "rax");
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous = null
+    // -- publish the error and unwind after retiring the construction frame --
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the Throwable for the unwinder
     emitter.instruction("mov rsp, rbp");                                        // release the local frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -518,6 +558,7 @@ fn emit_throw_x86_64(emitter: &mut Emitter) {
 /// Branches to `rejected` unless the float in `d0` fits PHP's int range: not NaN, below 2^63 and
 /// at or above -2^63 (`ZEND_DOUBLE_FITS_LONG`). Leaves `d0` intact; clobbers `x9` and `d1`.
 fn emit_int_range_check_aarch64(emitter: &mut Emitter, rejected: &str) {
+    // -- reject NaN and values outside the signed PHP integer range --
     emitter.instruction("fcmp d0, d0");                                         // is the float NaN?
     emitter.instruction(&format!("b.vs {rejected}"));                           // NaN is not an int
     abi::emit_load_int_immediate(emitter, "x9", POSITIVE_2_63);
@@ -533,6 +574,7 @@ fn emit_int_range_check_aarch64(emitter: &mut Emitter, rejected: &str) {
 /// Jumps to `rejected` unless the float in `xmm0` fits PHP's int range: not NaN, below 2^63 and
 /// at or above -2^63 (`ZEND_DOUBLE_FITS_LONG`). Leaves `xmm0` intact; clobbers `r10` and `xmm1`.
 fn emit_int_range_check_x86_64(emitter: &mut Emitter, rejected: &str) {
+    // -- reject NaN and values outside the signed PHP integer range --
     emitter.instruction("ucomisd xmm0, xmm0");                                  // is the float NaN?
     emitter.instruction(&format!("jp {rejected}"));                             // NaN is not an int
     abi::emit_load_int_immediate(emitter, "r10", POSITIVE_2_63);
