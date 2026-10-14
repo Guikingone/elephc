@@ -166,7 +166,7 @@ into the parameter homes, ordered as a parallel move; a cyclic dependency (such
 as a swap) falls back to the general stack-based copy.
 
 **Machine peepholes** (`src/codegen/machine_peephole.rs`) run over each finished
-function's text. They delete full-width self-moves and the second move of a
+small or loop-carrying function's text. They delete full-width self-moves and the second move of a
 `mov a, b` / `mov b, a` pair, forward a value stored to a frame slot into an
 adjacent reload of the same slot, and remove unconditional jumps to the label
 that immediately follows. Patterns only look through comments and blank lines:
@@ -174,9 +174,12 @@ a label is a join point and a directive is opaque. Conditional branches on
 AArch64 reach only ±1 MiB, so far branches are emitted as an inverted short
 branch over `b` (`cbz x0, 1f; b L; 1:`). The peephole folds that into one
 `cbnz x0, L` / `b.cond L` when `L` is a label of the same function and the
-function is provably smaller than the conditional reach. Function bodies larger
-than 1 MiB of assembly text (generated dispatch code such as an eval-heavy
-program's top level) skip the peepholes to keep compile time flat. Overflow code
+function is provably smaller than the conditional reach. The text peepholes run
+on functions that are small (up to 8 KiB of assembly text, typically the callees
+of hot loops) or contain a loop (an edge back to the same or an earlier block),
+up to 256 KiB. Larger loop-free and very large bodies (generated helpers and
+dispatch code such as an eval-heavy program's top level) skip them to keep
+compile time flat; block layout still removes their jumps to the next block. Overflow code
 moved to the cold tail repeats its instruction's `@src` marker, so debug line
 info and source maps keep pointing at the originating PHP statement.
 

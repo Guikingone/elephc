@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use crate::ir::{BasicBlock, Function, InstId, Op, Terminator, ValueId};
-use crate::ir_passes::terminator_uses;
+use crate::ir_passes::{successors, terminator_uses};
 
 /// Returns block-table indices in emission order: hot blocks first, cold blocks last.
 pub(super) fn emission_order(function: &Function) -> Vec<usize> {
@@ -39,6 +39,18 @@ fn is_cold(block: &BasicBlock) -> bool {
         block.terminator,
         Some(Terminator::Unreachable | Terminator::Fatal { .. } | Terminator::Throw { .. })
     )
+}
+
+/// Returns true when some edge targets the same or an earlier block of the table, which every
+/// loop needs (a retreating edge). Straight-line generated code returns false.
+pub(super) fn has_retreating_edge(function: &Function) -> bool {
+    function.blocks.iter().enumerate().any(|(index, block)| {
+        block.terminator.as_ref().is_some_and(|term| {
+            successors(term)
+                .iter()
+                .any(|target| (target.as_raw() as usize) <= index)
+        })
+    })
 }
 
 /// Counts every use of each value across instruction operands and terminators, once per function.
@@ -133,6 +145,12 @@ mod tests {
         let returned = if extra_use { cond } else { a };
         builder.terminate(Terminator::Return { value: Some(returned) });
         function
+    }
+
+    /// Verifies a loop-free diamond has no retreating edge.
+    #[test]
+    fn diamond_has_no_retreating_edge() {
+        assert!(!super::has_retreating_edge(&diamond(false)));
     }
 
     /// Verifies cold blocks move after hot ones while the first block stays first.

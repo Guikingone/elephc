@@ -222,13 +222,15 @@ impl Emitter {
         self.buf.len()
     }
 
-    /// Replaces the text written since `start` with `rewrite(text)`.
+    /// Replaces the text written since `start` with `rewrite(text)` when it returns `Some`.
     ///
-    /// Late machine peepholes run on one finished function region through this hook.
-    pub fn rewrite_text_from(&mut self, start: usize, rewrite: impl FnOnce(&str) -> String) {
-        let rewritten = rewrite(&self.buf[start..]);
-        self.buf.truncate(start);
-        self.buf.push_str(&rewritten);
+    /// Late machine peepholes run on one finished function region through this hook; `None`
+    /// leaves the region untouched without copying it.
+    pub fn rewrite_text_from(&mut self, start: usize, rewrite: impl FnOnce(&str) -> Option<String>) {
+        if let Some(rewritten) = rewrite(&self.buf[start..]) {
+            self.buf.truncate(start);
+            self.buf.push_str(&rewritten);
+        }
     }
 
     /// Appends already formatted assembly text verbatim.

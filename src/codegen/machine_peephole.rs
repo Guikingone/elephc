@@ -4,7 +4,7 @@
 //! drops jumps to the immediately following label, and shortens AArch64 wide branches.
 //!
 //! Called from:
-//! - `crate::codegen::block_emit::emit_blocks()` once per emitted function body.
+//! - `crate::codegen::block_emit::emit_blocks()` once per small or loop-carrying function body.
 //!
 //! Key details:
 //! - Every rewrite is local and only looks through comment and blank lines. A label is a
@@ -27,12 +27,15 @@ use crate::codegen::platform::{Arch, Target};
 const MAX_BYTES_PER_LINE: usize = 8;
 /// AArch64 `b.cond` / `cbz` / `cbnz` reach (±1 MiB), minus a safety margin.
 const AARCH64_COND_BRANCH_REACH: usize = 1_000_000;
-/// Bound on whole-region rewrite rounds; each round only ever shrinks the text.
-const MAX_ROUNDS: usize = 4;
-/// Regions larger than this (about 35k lines) are left untouched. Such bodies are generated
+/// Bound on whole-region rewrite rounds; a second round catches patterns a first one exposed.
+const MAX_ROUNDS: usize = 2;
+/// Regions larger than this (about 8k lines) are left untouched. Such bodies are generated
 /// dispatch code (an eval-heavy program's top level reaches millions of lines), not hot user
 /// loops; skipping them keeps compile time flat. The bound is in bytes so the check is free.
-pub(super) const MAX_REGION_BYTES: usize = 1 << 20;
+const MAX_REGION_BYTES: usize = 256 << 10;
+/// Loop-free regions up to this size (about 250 lines) are still optimized: small functions
+/// are cheap to rewrite and are often the callees of hot loops.
+pub(super) const SMALL_REGION_BYTES: usize = 8 << 10;
 
 /// One classified assembly line, borrowing the region text unless a rewrite replaced it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,31 +72,59 @@ impl Line<'_> {
 }
 
 /// Runs every machine peephole over one function region and returns the rewritten text.
-pub(super) fn optimize(text: &str, target: Target) -> String {
+#[cfg(test)]
+fn optimize(text: &str, target: Target) -> String {
+    optimize_region(text, target).unwrap_or_else(|| text.to_string())
+}
+
+/// Runs every machine peephole over one region; `None` means nothing changed.
+///
+/// Each round is one walk that dispatches on an instruction's first byte, so lines that no
+/// pattern can start with cost a byte compare. Deletions are tombstones compacted per round.
+pub(super) fn optimize_region(text: &str, target: Target) -> Option<String> {
     if text.len() > MAX_REGION_BYTES {
-        return text.to_string();
+        return None;
     }
+    let arch = target.arch;
     let comment = target.line_comment_prefix();
     let mut lines: Vec<Line<'_>> = text.lines().map(|line| classify(line, comment)).collect();
+    let region_labels = (arch == Arch::AArch64).then(|| shortening_labels(&lines)).flatten();
+    let mut any_change = false;
     for _ in 0..MAX_ROUNDS {
         let mut changed = false;
-        changed |= remove_redundant_moves(&mut lines, target.arch);
-        changed |= forward_stores_to_reloads(&mut lines, target.arch);
-        if target.arch == Arch::AArch64 {
-            changed |= shorten_wide_branches(&mut lines);
+        for index in 0..lines.len() {
+            let Some(first) = inst_at(&lines, index).and_then(|inst| inst.bytes().next()) else {
+                continue;
+            };
+            changed |= match first {
+                b'm' | b'f' => {
+                    try_remove_redundant_move(&mut lines, index, arch)
+                        || try_forward_store(&mut lines, index, arch)
+                }
+                b's' => try_forward_store(&mut lines, index, arch),
+                b'b' | b'c' | b'j' => {
+                    region_labels
+                        .as_ref()
+                        .is_some_and(|labels| try_shorten_wide_branch(&mut lines, index, labels))
+                        || try_remove_jump_to_next_label(&mut lines, index, arch)
+                }
+                _ => false,
+            };
         }
-        changed |= remove_jumps_to_next_label(&mut lines, target.arch);
         if !changed {
             break;
         }
-        // Rewrites only mark deletions, keeping every round linear in the region size.
+        any_change = true;
         lines.retain(|line| *line != Line::Removed);
+    }
+    if !any_change {
+        return None;
     }
     let mut out = String::with_capacity(text.len());
     for line in &lines {
         line.render(&mut out);
     }
-    out
+    Some(out)
 }
 
 /// Classifies one raw assembly line.
@@ -181,33 +212,24 @@ fn reg_move(arch: Arch, inst: &str) -> Option<(&str, &str)> {
     valid.then_some((dst, src))
 }
 
-/// Deletes self-moves and the second move of a `mov a, b` / `mov b, a` pair.
-fn remove_redundant_moves(lines: &mut [Line<'_>], arch: Arch) -> bool {
-    let mut changed = false;
-    let mut index = 0;
-    while index < lines.len() {
-        let Some((dst, src)) = inst_at(lines, index).and_then(|inst| reg_move(arch, inst)) else {
-            index += 1;
-            continue;
-        };
-        if dst == src {
-            lines[index] = Line::Removed;
-            changed = true;
-            index += 1;
-            continue;
-        }
-        let move_back = next_significant(lines, index).filter(|&next| {
-            inst_at(lines, next).and_then(|inst| reg_move(arch, inst)) == Some((src, dst))
-        });
-        if let Some(next) = move_back {
-            // After `dst = src`, copying `dst` back into `src` changes nothing.
-            lines[next] = Line::Removed;
-            changed = true;
-            continue;
-        }
-        index += 1;
+/// Deletes a self-move at `index`, or the second move of a `mov a, b` / `mov b, a` pair.
+fn try_remove_redundant_move(lines: &mut [Line<'_>], index: usize, arch: Arch) -> bool {
+    let Some((dst, src)) = inst_at(lines, index).and_then(|inst| reg_move(arch, inst)) else {
+        return false;
+    };
+    if dst == src {
+        lines[index] = Line::Removed;
+        return true;
     }
-    changed
+    let move_back = next_significant(lines, index).filter(|&next| {
+        inst_at(lines, next).and_then(|inst| reg_move(arch, inst)) == Some((src, dst))
+    });
+    let Some(next) = move_back else {
+        return false;
+    };
+    // After `dst = src`, copying `dst` back into `src` changes nothing.
+    lines[next] = Line::Removed;
+    true
 }
 
 /// Register class of a forwarded memory value.
@@ -309,36 +331,32 @@ fn qword_address(operand: &str) -> Option<&str> {
     (address.starts_with('[') && address.ends_with(']')).then_some(address)
 }
 
-/// Replaces a reload of the value just stored to the same address with a register move.
-fn forward_stores_to_reloads(lines: &mut [Line<'_>], arch: Arch) -> bool {
-    let mut changed = false;
-    for index in 0..lines.len() {
-        let Some((value, address, class)) = inst_at(lines, index).and_then(|inst| parse_store(arch, inst)) else {
-            continue;
-        };
-        let Some(next) = next_significant(lines, index) else {
-            break;
-        };
-        let Some((dst, load_address, load_class)) = inst_at(lines, next).and_then(|inst| parse_load(arch, inst)) else {
-            continue;
-        };
-        if load_address != address || load_class != class {
-            continue;
-        }
-        let replacement = if dst == value {
-            Line::Removed
-        } else {
-            let mnemonic = match (arch, class) {
-                (_, MemClass::Gpr) => "mov",
-                (Arch::AArch64, MemClass::Fpr) => "fmov",
-                (Arch::X86_64, MemClass::Fpr) => "movsd",
-            };
-            Line::Inst(Cow::Owned(format!("{mnemonic} {dst}, {value}")))
-        };
-        lines[next] = replacement;
-        changed = true;
+/// Replaces a reload of the value just stored at `index` with a register move (or nothing).
+fn try_forward_store(lines: &mut [Line<'_>], index: usize, arch: Arch) -> bool {
+    let Some((value, address, class)) = inst_at(lines, index).and_then(|inst| parse_store(arch, inst)) else {
+        return false;
+    };
+    let Some(next) = next_significant(lines, index) else {
+        return false;
+    };
+    let Some((dst, load_address, load_class)) = inst_at(lines, next).and_then(|inst| parse_load(arch, inst)) else {
+        return false;
+    };
+    if load_address != address || load_class != class {
+        return false;
     }
-    changed
+    let replacement = if dst == value {
+        Line::Removed
+    } else {
+        let mnemonic = match (arch, class) {
+            (_, MemClass::Gpr) => "mov",
+            (Arch::AArch64, MemClass::Fpr) => "fmov",
+            (Arch::X86_64, MemClass::Fpr) => "movsd",
+        };
+        Line::Inst(Cow::Owned(format!("{mnemonic} {dst}, {value}")))
+    };
+    lines[next] = replacement;
+    true
 }
 
 /// Returns the target of an unconditional jump instruction.
@@ -366,35 +384,31 @@ fn is_numeric_backward(target: &str) -> bool {
         .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// Deletes an unconditional jump whose target label is reached by falling through.
-fn remove_jumps_to_next_label(lines: &mut [Line<'_>], arch: Arch) -> bool {
-    let mut changed = false;
-    for index in 0..lines.len() {
-        let Some(target) = inst_at(lines, index).and_then(|inst| unconditional_jump_target(arch, inst)) else {
-            continue;
-        };
-        if is_numeric_backward(target) {
-            continue;
-        }
-        let wanted = forward_label_name(target);
-        let mut falls_into_target = false;
-        for line in &lines[index + 1..] {
-            match line {
-                Line::Trivia(_) | Line::Removed => {}
-                Line::Label(name) if *name == wanted => {
-                    falls_into_target = true;
-                    break;
-                }
-                Line::Label(_) => {}
-                Line::Inst(_) | Line::Other(_) => break,
+/// Deletes the unconditional jump at `index` when its target label is reached by falling through.
+fn try_remove_jump_to_next_label(lines: &mut [Line<'_>], index: usize, arch: Arch) -> bool {
+    let Some(target) = inst_at(lines, index).and_then(|inst| unconditional_jump_target(arch, inst)) else {
+        return false;
+    };
+    if is_numeric_backward(target) {
+        return false;
+    }
+    let wanted = forward_label_name(target);
+    let mut falls_into_target = false;
+    for line in &lines[index + 1..] {
+        match line {
+            Line::Trivia(_) | Line::Removed => {}
+            Line::Label(name) if *name == wanted => {
+                falls_into_target = true;
+                break;
             }
-        }
-        if falls_into_target {
-            lines[index] = Line::Removed;
-            changed = true;
+            Line::Label(_) => {}
+            Line::Inst(_) | Line::Other(_) => break,
         }
     }
-    changed
+    if falls_into_target {
+        lines[index] = Line::Removed;
+    }
+    falls_into_target
 }
 
 /// Returns the AArch64 condition code that is true exactly when `cond` is false.
@@ -463,8 +477,11 @@ fn may_emit_unbounded_bytes(line: &Line<'_>) -> bool {
         .any(|prefix| directive.starts_with(prefix))
 }
 
-/// Folds `b.cc 1f; b L; 1:` into `b.!cc L; 1:` when `L` is provably within conditional reach.
-fn shorten_wide_branches(lines: &mut [Line<'_>]) -> bool {
+/// Returns the region's labels when AArch64 wide branches may be shortened in it at all.
+///
+/// Shortening is only sound when every label of the region is within conditional reach of
+/// every branch, which the conservative per-line byte bound proves for the whole region.
+fn shortening_labels(lines: &[Line<'_>]) -> Option<HashSet<String>> {
     let code_lines = lines
         .iter()
         .filter(|line| matches!(line, Line::Inst(_) | Line::Other(_)))
@@ -472,41 +489,43 @@ fn shorten_wide_branches(lines: &mut [Line<'_>]) -> bool {
     if code_lines.saturating_mul(MAX_BYTES_PER_LINE) >= AARCH64_COND_BRANCH_REACH
         || lines.iter().any(may_emit_unbounded_bytes)
     {
+        return None;
+    }
+    Some(
+        lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::Label(name) => Some((*name).to_string()),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// Folds `b.cc 1f; b L; 1:` at `index` into `b.!cc L; 1:` when `L` is a region label.
+fn try_shorten_wide_branch(lines: &mut [Line<'_>], index: usize, region_labels: &HashSet<String>) -> bool {
+    let Some((inverted, skipped)) = inst_at(lines, index).and_then(parse_short_skip) else {
+        return false;
+    };
+    let skipped = skipped.to_string();
+    let Some(jump) = next_significant(lines, index) else {
+        return false;
+    };
+    let target = inst_at(lines, jump)
+        .and_then(|inst| unconditional_jump_target(Arch::AArch64, inst))
+        .filter(|target| region_labels.contains(*target))
+        .map(str::to_string);
+    let Some(target) = target else {
+        return false;
+    };
+    let lands_on_skip = next_significant(lines, jump)
+        .is_some_and(|after| matches!(lines[after], Line::Label(name) if name == skipped));
+    if !lands_on_skip {
         return false;
     }
-    let region_labels: HashSet<String> = lines
-        .iter()
-        .filter_map(|line| match line {
-            Line::Label(name) => Some((*name).to_string()),
-            _ => None,
-        })
-        .collect();
-    let mut changed = false;
-    for index in 0..lines.len() {
-        let Some((inverted, skipped)) = inst_at(lines, index).and_then(parse_short_skip) else {
-            continue;
-        };
-        let skipped = skipped.to_string();
-        let Some(jump) = next_significant(lines, index) else {
-            break;
-        };
-        let target = inst_at(lines, jump)
-            .and_then(|inst| unconditional_jump_target(Arch::AArch64, inst))
-            .filter(|target| region_labels.contains(*target))
-            .map(str::to_string);
-        let Some(target) = target else {
-            continue;
-        };
-        let lands_on_skip = next_significant(lines, jump)
-            .is_some_and(|after| matches!(lines[after], Line::Label(name) if name == skipped));
-        if !lands_on_skip {
-            continue;
-        }
-        lines[index] = Line::Inst(Cow::Owned(format!("{inverted}{target}")));
-        lines[jump] = Line::Removed;
-        changed = true;
-    }
-    changed
+    lines[index] = Line::Inst(Cow::Owned(format!("{inverted}{target}")));
+    lines[jump] = Line::Removed;
+    true
 }
 
 #[cfg(test)]
@@ -593,16 +612,15 @@ mod tests {
         );
     }
 
-    /// Verifies wide branches stay wide when the region could exceed the conditional reach.
+    /// Verifies the region size cap alone keeps shortened branches within conditional reach.
+    ///
+    /// Every instruction line is at least as long as the 4-byte encoding it assembles to, and
+    /// directives of unbounded size disable shortening, so a capped region cannot outgrow it.
     #[test]
-    fn keeps_wide_aarch64_branches_in_huge_regions() {
-        let mut arm = String::from(".L_t:\n    b.eq 1f\n    b .L_t\n1:\n");
-        // Under the region size cap, but past the conservative per-line reach bound.
-        for _ in 0..126_000 {
-            arm.push_str("    nop\n");
-        }
-        assert!(arm.len() <= super::MAX_REGION_BYTES);
-        assert_eq!(optimize(&arm, linux(Arch::AArch64)), arm);
+    fn region_cap_is_within_conditional_reach() {
+        const { assert!(super::MAX_REGION_BYTES < super::AARCH64_COND_BRANCH_REACH) };
+        let arm = ".L_t:\n    b.eq 1f\n    b .L_t\n1:\n    .p2align 4\n";
+        assert_eq!(optimize(arm, linux(Arch::AArch64)), arm);
     }
 
     /// Verifies regions over the size cap are returned unchanged.
