@@ -891,3 +891,233 @@ echo ($assoc[] += 3), ':', $assoc[10];
     assert_eq!(out.stdout, "7:7:3:3");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A failed compound append preserves the writable null slot after eager RHS evaluation.
+#[test]
+fn test_append_compound_error_preserves_new_slot() {
+    for (source, expected, warnings) in [
+        (r#"<?php
+$a = [];
+try { $a[] /= ($argc - 1); } catch (DivisionByZeroError $e) { echo get_class($e), "\n"; }
+var_dump($a);
+"#, r#"DivisionByZeroError
+array(1) {
+  [0]=>
+  NULL
+}
+"#, 0),
+        (r#"<?php
+$a = [10 => 3];
+try { $a[] %= ($argc - 1); } catch (DivisionByZeroError $e) { echo get_class($e), "\n"; }
+var_dump($a);
+"#, r#"DivisionByZeroError
+array(2) {
+  [10]=>
+  int(3)
+  [11]=>
+  NULL
+}
+"#, 0),
+        (r#"<?php
+$a = [];
+try { $a[][] /= ($argc - 1); } catch (DivisionByZeroError $e) { echo get_class($e), "\n"; }
+var_dump($a);
+"#, r#"DivisionByZeroError
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    NULL
+  }
+}
+"#, 0),
+        (r#"<?php
+$a = [];
+try { $a[]["slot"] /= ($argc - 1); } catch (DivisionByZeroError $e) { echo get_class($e), "\n"; }
+var_dump($a);
+"#, r#"DivisionByZeroError
+array(1) {
+  [0]=>
+  array(1) {
+    ["slot"]=>
+    NULL
+  }
+}
+"#, 1),
+        (r#"<?php
+class Holder { public array $items = []; }
+$h = new Holder();
+try { $h->items[] /= ($argc - 1); } catch (DivisionByZeroError $e) { echo get_class($e), "\n"; }
+var_dump($h->items);
+"#, r#"DivisionByZeroError
+array(1) {
+  [0]=>
+  NULL
+}
+"#, 0),
+        (r#"<?php
+class Holder { public static array $items = []; }
+try { Holder::$items[] /= ($argc - 1); } catch (DivisionByZeroError $e) { echo get_class($e), "\n"; }
+var_dump(Holder::$items);
+"#, r#"DivisionByZeroError
+array(1) {
+  [0]=>
+  NULL
+}
+"#, 0),
+        (r#"<?php
+function bad(): int { echo "rhs\n"; throw new RuntimeException("rhs"); }
+$a = [];
+try { $a[] /= bad(); } catch (RuntimeException $e) { echo get_class($e), "\n"; }
+var_dump($a);
+"#, r#"rhs
+RuntimeException
+array(0) {
+}
+"#, 0),
+        (r#"<?php
+$a = [7]; $copy = $a;
+try { $a[] /= ($argc - 1); } catch (DivisionByZeroError $e) { echo get_class($e), "\n"; }
+var_dump($a); var_dump($copy);
+"#, r#"DivisionByZeroError
+array(2) {
+  [0]=>
+  int(7)
+  [1]=>
+  NULL
+}
+array(1) {
+  [0]=>
+  int(7)
+}
+"#, 0),
+    ] {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, expected, "{}", out.stderr);
+        assert_eq!(out.stderr.matches("Undefined array key").count(), warnings, "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
+/// Throwing key diagnostics preserve published parents and release intermediate receivers.
+#[test]
+fn test_append_compound_throwing_key_handlers_and_namespace() {
+    for (source, expected) in [
+        (r#"<?php
+$items = [];
+set_error_handler(function($code, $message) { throw new RuntimeException("key"); });
+try { $items[][1.5] += 1; } catch (RuntimeException $e) { echo "caught\n"; }
+restore_error_handler(); var_dump($items);
+"#, r#"caught
+array(1) {
+  [0]=>
+  array(0) {
+  }
+}
+"#),
+        (r#"<?php
+$items = [];
+set_error_handler(function($code, $message) { throw new RuntimeException("key"); });
+try { $items[]["missing"] += 1; } catch (RuntimeException $e) { echo "caught\n"; }
+restore_error_handler(); var_dump($items);
+"#, r#"caught
+array(1) {
+  [0]=>
+  array(0) {
+  }
+}
+"#),
+        (r#"<?php
+namespace App;
+function array_key_last(array $a): mixed { throw new \RuntimeException("shadow"); }
+function intval(mixed $v): int { throw new \RuntimeException("shadow"); }
+$a = [];
+try { $a[] /= ($argc - 1); } catch (\DivisionByZeroError $e) { echo get_class($e), "\n"; }
+var_dump($a);
+"#, r#"DivisionByZeroError
+array(1) {
+  [0]=>
+  NULL
+}
+"#),
+        (r#"<?php
+$items = [[]];
+set_error_handler(function($code, $message) { throw new RuntimeException("key"); });
+try { echo $items[0]["missing"]; } catch (RuntimeException $e) { echo "caught\n"; }
+restore_error_handler(); var_dump($items);
+"#, r#"caught
+array(1) {
+  [0]=>
+  array(0) {
+  }
+}
+"#),
+    ] {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, expected, "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
+/// Diagnostic callbacks can replace parents while the selected detached place stays alive.
+#[test]
+fn test_append_compound_reentrant_parent_cell_and_owned_handler_values() {
+    let cases = [
+        (r#"<?php
+$items = [];
+set_error_handler(function($code, $message) use (&$items) {
+    if ($code === E_DEPRECATED) {  }
+    return true;
+});
+$items[][1.5]["leaf"] += 2;
+restore_error_handler(); var_dump($items);
+"#, "array(1) {\n  [0]=>\n  array(1) {\n    [1]=>\n    array(1) {\n      [\"leaf\"]=>\n      int(2)\n    }\n  }\n}\n"),
+        (r#"<?php
+$items = [];
+set_error_handler(function($code, $message) use (&$items) {
+    if ($code === E_DEPRECATED) { $items[0][1]=9; }
+    return true;
+});
+$items[][1.5]["leaf"] += 2;
+restore_error_handler(); var_dump($items);
+"#, "array(1) {\n  [0]=>\n  array(1) {\n    [1]=>\n    int(9)\n  }\n}\n"),
+        (r#"<?php
+$items = [];
+set_error_handler(function($code, $message) use (&$items) {
+    if ($code === E_DEPRECATED) { $items[0][1]=[]; }
+    return true;
+});
+$items[][1.5]["leaf"] += 2;
+restore_error_handler(); var_dump($items);
+"#, "array(1) {\n  [0]=>\n  array(1) {\n    [1]=>\n    array(0) {\n    }\n  }\n}\n"),
+        (r#"<?php
+$items = [];
+set_error_handler(function($code, $message) use (&$items) {
+    if ($code === E_DEPRECATED) { $items=[]; }
+    return true;
+});
+$items[][1.5]["leaf"] += 2;
+restore_error_handler(); var_dump($items);
+"#, "array(0) {\n}\n"),
+        (r#"<?php
+$items = [];
+set_error_handler(function($code, $message) use (&$items) {
+    if ($code === E_DEPRECATED) { $items[0][1] = ["held" => 9]; }
+    return true;
+});
+$items[][1.5]["leaf"] += 2;
+restore_error_handler(); var_dump($items);
+"#, "array(1) {\n  [0]=>\n  array(1) {\n    [1]=>\n    array(1) {\n      [\"held\"]=>\n      int(9)\n    }\n  }\n}\n"),
+    ];
+    for (source, expected) in cases {
+        for optimize in [true, false] {
+            let out = if optimize { compile_and_run_with_heap_debug(source) }
+                else { without_ir_opt(|| compile_and_run_with_heap_debug(source)) };
+            assert!(out.success, "{}", out.stderr);
+            assert_eq!(out.stdout, expected, "{source}");
+            assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        }
+    }
+}

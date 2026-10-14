@@ -93,8 +93,12 @@ pub(super) fn parse_append_write(
         }, span));
     }
     let mut lowerer = AppendLowerer { span, next_temp: 0, prelude, result: None };
-    let value = lowerer.nested_value(&dimensions, &rhs, &update);
-    lowerer.push(base, value)?;
+    if matches!(update, AppendUpdate::Assign) {
+        let value = lowerer.nested_value(&dimensions, &rhs, &update);
+        lowerer.push(base, value)?;
+    } else {
+        lowerer.update_reserved_slot(base, &dimensions, &rhs, &update)?;
+    }
     let result = marker.unwrap_or_else(|| lowerer.result.expect("append leaf binds its result"));
     Ok(Expr::new(ExprKind::Assignment {
         target: Box::new(result.clone()), value: Box::new(result), result_target: None,
@@ -281,6 +285,126 @@ impl AppendLowerer {
         let value = self.bind(value);
         self.result = Some(value.clone());
         value
+    }
+
+    /// Captures ordinary stored cells so a diagnostic cannot redirect an in-progress update.
+    fn update_reserved_slot(
+        &mut self, base: Expr, dimensions: &[Option<Expr>], rhs: &Expr, update: &AppendUpdate,
+    ) -> Result<(), CompileError> {
+        let target = self.reserve_append_slot(base)?;
+        let mut cell = if dimensions.is_empty() {
+            let alias = self.bind_slot_alias(target, true);
+            self.reset_slot_alias(&alias, Expr::new(ExprKind::Null, self.span));
+            alias
+        } else {
+            self.bind_slot_alias(target, false)
+        };
+        for (position, dimension) in dimensions.iter().enumerate() {
+            let target = if let Some(index) = dimension {
+                let index = if matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
+                    index.clone()
+                } else {
+                    let captured = self.bind(index.clone());
+                    self.normalize_dimension_key(captured)?
+                };
+                Expr::new(ExprKind::ArrayAccess {
+                    array: Box::new(cell), index: Box::new(index),
+                }, self.span)
+            } else {
+                self.reserve_append_slot(cell)?
+            };
+            let leaf = position + 1 == dimensions.len();
+            cell = if leaf {
+                // Diagnose before materializing a missing leaf, using the captured parent.
+                let current = self.bind(target.clone());
+                self.write_slot(target.clone(), current.clone())?;
+                let alias = self.bind_slot_alias(target, true);
+                self.reset_slot_alias(&alias, current.clone());
+                self.unset_temps(vec![current]);
+                alias
+            } else {
+                self.write_slot(target.clone(), Expr::new(ExprKind::Null, self.span))?;
+                self.bind_slot_alias(target, false)
+            };
+        }
+        let value = self.leaf(cell.clone(), rhs, update);
+        let ExprKind::Variable(name) = cell.kind else { unreachable!("cell alias is a local") };
+        self.prelude.push(Stmt::new(StmtKind::Assign { name, value }, self.span));
+        Ok(())
+    }
+
+    /// Restores the diagnosed leaf value after a writable fetch autovivifies a null slot.
+    fn reset_slot_alias(&mut self, alias: &Expr, value: Expr) {
+        let ExprKind::Variable(name) = &alias.kind else { unreachable!("cell alias is a local") };
+        self.prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value }, self.span));
+    }
+
+    /// Marks a temporary ordinary-cell lease; EIR does not promote it into a PHP reference set.
+    fn bind_slot_alias(&mut self, source: Expr, leaf: bool) -> Expr {
+        let name = crate::names::generated_append_update_alias(
+            self.span, self.next_temp, leaf,
+        );
+        self.next_temp += 1;
+        self.prelude.push(Stmt::new(StmtKind::RefAssign {
+            target: name.clone(), source,
+        }, self.span));
+        Expr::new(ExprKind::Variable(name), self.span)
+    }
+
+    /// Reserves a null element and freezes the integer key allocated by the existing append path.
+    fn reserve_append_slot(&mut self, base: Expr) -> Result<Expr, CompileError> {
+        self.push(base.clone(), Expr::new(ExprKind::Null, self.span))?;
+        // Give the edge-key call a borrowed local; an owned nested projection must not escape
+        // through its argument lifetime. Retire that local before the operation can run user code.
+        let container = self.bind(base.clone());
+        let boxed_key = self.bind(self.global_call("array_key_last", vec![container.clone()]));
+        let index = self.bind(self.global_call("intval", vec![boxed_key.clone()]));
+        self.unset_temps(vec![container, boxed_key]);
+        Ok(Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(base), index: Box::new(index),
+        }, self.span))
+    }
+
+    /// Uses the shared array writer once to normalize a key before repeated read/write access.
+    fn normalize_dimension_key(&mut self, key: Expr) -> Result<Expr, CompileError> {
+        // Start with hash storage already owned by a local, so a throwing key diagnostic cannot
+        // abandon an unpublished promotion. Updating the seed itself still returns the same key.
+        let seed = Expr::new(ExprKind::StringLiteral(String::new()), self.span);
+        let keys = self.bind(Expr::new(ExprKind::ArrayLiteralAssoc(vec![
+            (seed, Expr::new(ExprKind::Null, self.span)),
+        ]), self.span));
+        let target = Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(keys.clone()), index: Box::new(key),
+        }, self.span);
+        self.write_slot(target, Expr::new(ExprKind::Null, self.span))?;
+        let normalized = self.bind(self.global_call("array_key_last", vec![keys.clone()]));
+        self.unset_temps(vec![keys]);
+        Ok(normalized)
+    }
+
+    /// Constructs globally resolved calls with distinct identities for checked-call metadata.
+    /// Their source-independent spans prevent sibling helpers from sharing cached result types.
+    fn global_call(&self, name: &str, args: Vec<Expr>) -> Expr {
+        Expr::new(ExprKind::FunctionCall {
+            name: crate::names::Name::from_parts(
+                crate::names::NameKind::FullyQualified, vec![name.to_string()],
+            ),
+            args,
+        }, Span::synthetic())
+    }
+
+    /// Ends helper-local ownership as soon as its value has been copied out.
+    fn unset_temps(&mut self, values: Vec<Expr>) {
+        self.prelude.push(Stmt::new(
+            StmtKind::ExprStmt(self.global_call("unset", values)), self.span,
+        ));
+    }
+
+    /// Reuses ordinary lvalue stores so nested/property writes preserve COW and ownership.
+    fn write_slot(&mut self, target: Expr, value: Expr) -> Result<(), CompileError> {
+        let statement = crate::parser::stmt::assignment_target_store_stmt(target, value, self.span)?;
+        self.prelude.push(Stmt::new(statement, self.span));
+        Ok(())
     }
 
     /// Uses the existing target-aware append lowering, including nested COW write-back.

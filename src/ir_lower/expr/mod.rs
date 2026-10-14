@@ -69,6 +69,9 @@ mod call_return_types;
 mod indexed_array_literals;
 mod assoc_array_literals;
 mod match_expr;
+/// Scoped stored-cell leases for compiler-generated compound append updates.
+mod append_updates;
+pub(crate) use append_updates::store_alias as store_append_update_cell;
 mod array_access;
 mod array_access_types;
 mod ternary_cast;

@@ -1004,3 +1004,21 @@ mod tests {
         assert!(!is_generated_local_name(SYNTHETIC_PLACE_LOCAL_STEM));
     }
 }
+
+/// Identifies compiler-only aliases to ordinary stored cells during append updates.
+const APPEND_UPDATE_ALIAS_PREFIX: &str = "__elephc_append_update_cell_";
+
+/// Constructs an unforgeable temporary-cell alias and records whether its slot is the leaf.
+pub(crate) fn generated_append_update_alias(span: crate::span::Span, index: usize, leaf: bool) -> String {
+    let role = if leaf { "leaf" } else { "parent" };
+    generated_local_name(&format!("{}{}_{}_{}_{}_{}", APPEND_UPDATE_ALIAS_PREFIX, span.source_id(), span.line, span.col, index, role))
+}
+
+/// Returns the compiler cell-alias role; PHP source cannot spell the generated-local suffix.
+pub(crate) fn append_update_alias_kind(name: &str) -> Option<bool> {
+    let stem = name.strip_suffix(GENERATED_LOCAL_MARKER)?;
+    if !stem.starts_with(APPEND_UPDATE_ALIAS_PREFIX) { return None; }
+    if stem.ends_with("_leaf") { Some(true) }
+    else if stem.ends_with("_parent") { Some(false) }
+    else { None }
+}

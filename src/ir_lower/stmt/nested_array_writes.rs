@@ -76,7 +76,8 @@ pub(super) fn lower_nested_array_assign(
             crate::ir_lower::expr::unpin_in_flight_owners(ctx, parent_pins, span);
         }
         release_persisted_string_operand(ctx, key, span);
-        release_persisted_string_operand(ctx, value, span);
+        // The setter boxes/retains its stored value; retire the caller's temporary owner.
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         // Parent subscript reads of Mixed/refcounted elements are owning
         // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
         // reference — fresh, retained, or installed by autovivification). The
@@ -107,7 +108,7 @@ pub(super) fn lower_nested_array_assign(
 /// undefined-key warning for these legal writes, and neither does this path.
 /// Shapes without a for-write lowering fall back to the plain read used
 /// before (ArrayAccess objects, non-container receivers).
-pub(super) fn lower_nested_assign_parent(
+pub(crate) fn lower_nested_assign_parent(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
     span: Span,

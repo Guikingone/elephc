@@ -221,7 +221,7 @@ pub(crate) fn lower_nested_append_assignment(
 /// Builds the statement that writes `value` back into an already-stabilized
 /// assignment target. Supports the same local, property, static property, and
 /// array target families as postfix assignment lowering.
-fn assignment_target_store_stmt(
+pub(crate) fn assignment_target_store_stmt(
     target: Expr,
     value: Expr,
     span: Span,

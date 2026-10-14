@@ -18,7 +18,7 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 ) -> LoweredValue {
     let ty = ctx.local_type(name);
     let value = ctx.load_local(name, Some(span));
-    if ty.codegen_repr() != PhpType::Mixed {
+    if ty.codegen_repr() != PhpType::Mixed || ctx.append_update_cell_aliases.contains(name) {
         return value;
     }
     let detached = ctx.emit_owned_value(

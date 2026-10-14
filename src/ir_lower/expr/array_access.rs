@@ -234,6 +234,10 @@ pub(crate) fn lower_array_access_from_values(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    // Key coercion and missing-key warnings can invoke a throwing user handler. Keep an
+    // owning intermediate receiver reachable until the read finishes; the normal release
+    // below still retires it after the independent result has been stabilized.
+    let receiver_pins = super::pin_in_flight_owners(ctx, &[array_value.value], expr.span);
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let index_ty = lowered_index_expr_key_type(ctx, index, index_value.value);
@@ -313,6 +317,7 @@ pub(crate) fn lower_array_access_from_values(
         op.default_effects(),
         Some(expr.span),
     );
+    super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
     // path) is consumed by the read without any runtime refcount operation on
     // the key, and the result is freshly allocated storage that never aliases

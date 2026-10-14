@@ -28,10 +28,6 @@ pub(super) fn lower_nested_set(
     branch(ctx, string, string_write, array_write);
     ctx.builder.position_at_end(string_write);
     lower_string_write(ctx, parent, key, value, span);
-    // A string write converts or rejects its RHS without transferring it into a container.
-    if ctx.builder.value_php_type(value.value).codegen_repr() != PhpType::Str {
-        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-    }
     ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
     ctx.builder.position_at_end(array_write);
     ctx.restore_initialized_slots(initialized.clone());
