@@ -1224,3 +1224,334 @@ fn cyclic_iterator_over_mutated_array_slot_terminates_and_stays_conservative() {
     );
     assert!(validate_function(&function).is_ok());
 }
+
+/// Spreading an associative array whose elements may hold `__destruct` objects via
+/// `Op::HashSpread` records the spread source as a dependency of the `Op::HashNew`
+/// allocation, so releasing the spread result or its local slot preserves the
+/// following `Op::ConcatReset`.
+#[test]
+fn hash_spread_of_destructor_bearing_source_preserves_reset_after_release() {
+    let mut function = Function::new("hash_spread_dtor".to_string(), IrType::I64, PhpType::Int);
+    let (reset_after_spread, reset_after_slot_release, reset_after_val_release);
+    {
+        let mut builder = Builder::new(&mut function);
+        let dtor_assoc_ty = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Object("Dtor".to_string())),
+        };
+        let mixed_assoc_ty = PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Object("Dtor".to_string())),
+        };
+        let src_slot = builder.add_local(
+            Some("src".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            dtor_assoc_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let copy_slot = builder.add_local(
+            Some("copy".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            mixed_assoc_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+
+        let hash = builder
+            .emit(
+                Op::HashNew,
+                vec![],
+                Some(Immediate::I64(0)),
+                IrType::Heap(IrHeapKind::Hash),
+                mixed_assoc_ty.clone(),
+                Ownership::Owned,
+            )
+            .expect("hash_new produces a value");
+        let src = builder.emit_load_local(
+            src_slot,
+            IrType::Heap(IrHeapKind::Hash),
+            dtor_assoc_ty.clone(),
+        );
+        builder.emit(
+            Op::HashSpread,
+            vec![hash, src],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.emit_store_local(copy_slot, hash);
+
+        reset_after_spread = emit_concat_reset(&mut builder);
+        builder.emit(
+            Op::ReleaseLocalSlot,
+            vec![],
+            Some(Immediate::LocalSlot(copy_slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        reset_after_slot_release = emit_concat_reset(&mut builder);
+
+        let hash2 = builder
+            .emit(
+                Op::HashNew,
+                vec![],
+                Some(Immediate::I64(0)),
+                IrType::Heap(IrHeapKind::Hash),
+                mixed_assoc_ty,
+                Ownership::Owned,
+            )
+            .expect("hash_new produces a value");
+        let src2 = builder.emit_load_local(src_slot, IrType::Heap(IrHeapKind::Hash), dtor_assoc_ty);
+        builder.emit(
+            Op::HashSpread,
+            vec![hash2, src2],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        let _clean_before_val_release = emit_concat_reset(&mut builder);
+        builder.emit(
+            Op::Release,
+            vec![hash2],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        reset_after_val_release = emit_concat_reset(&mut builder);
+
+        let n = builder.emit_const_i64(7);
+        let _s = builder
+            .emit(
+                Op::IToStr,
+                vec![n],
+                None,
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Borrowed,
+            )
+            .expect("itostr produces a value");
+        let zero = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Return { value: Some(zero) });
+    }
+
+    run_to_fixed_point(&mut function);
+    assert_eq!(
+        function.instruction(reset_after_spread).unwrap().op,
+        Op::ConcatReset
+    );
+    assert_eq!(
+        function.instruction(reset_after_slot_release).unwrap().op,
+        Op::ConcatReset,
+        "ConcatReset after releasing a HashSpread local slot that may hold destructors must stay"
+    );
+    assert_eq!(
+        function.instruction(reset_after_val_release).unwrap().op,
+        Op::ConcatReset,
+        "ConcatReset after releasing a HashSpread SSA value that may hold destructors must stay"
+    );
+    assert!(validate_function(&function).is_ok());
+}
+
+/// Spreading a destructor-free `int[]` promoted via `Op::ArrayToHash` keeps the
+/// resulting `Op::HashNew` allocation destructor-free so releasing it preserves clean state.
+#[test]
+fn hash_spread_of_destructor_free_array_to_hash_allows_clean_release_reset_elimination() {
+    let mut function =
+        Function::new("hash_spread_int_clean".to_string(), IrType::I64, PhpType::Int);
+    let (reset_after_spread, reset_after_release);
+    {
+        let mut builder = Builder::new(&mut function);
+        let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
+        let int_hash_ty = PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Int),
+        };
+        let src_slot = builder.add_local(
+            Some("src".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            int_arr_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let copy_slot = builder.add_local(
+            Some("copy".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            int_hash_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+
+        let init_arr = builder
+            .emit(
+                Op::ArrayNew,
+                vec![],
+                Some(Immediate::I64(1)),
+                IrType::Heap(IrHeapKind::Array),
+                int_arr_ty.clone(),
+                Ownership::Owned,
+            )
+            .expect("array_new produces a value");
+        let one = builder.emit_const_i64(1);
+        builder.emit(
+            Op::ArrayPush,
+            vec![init_arr, one],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.emit_store_local(src_slot, init_arr);
+
+        let hash = builder
+            .emit(
+                Op::HashNew,
+                vec![],
+                Some(Immediate::I64(0)),
+                IrType::Heap(IrHeapKind::Hash),
+                int_hash_ty.clone(),
+                Ownership::Owned,
+            )
+            .expect("hash_new produces a value");
+        let src = builder.emit_load_local(src_slot, IrType::Heap(IrHeapKind::Array), int_arr_ty);
+        let promoted = builder
+            .emit(
+                Op::ArrayToHash,
+                vec![src],
+                None,
+                IrType::Heap(IrHeapKind::Hash),
+                int_hash_ty,
+                Ownership::Owned,
+            )
+            .expect("array_to_hash produces a value");
+        builder.emit(
+            Op::HashSpread,
+            vec![hash, promoted],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.emit_store_local(copy_slot, hash);
+
+        reset_after_spread = emit_concat_reset(&mut builder);
+        builder.emit(
+            Op::ReleaseLocalSlot,
+            vec![],
+            Some(Immediate::LocalSlot(copy_slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        reset_after_release = emit_concat_reset(&mut builder);
+        let n = builder.emit_const_i64(7);
+        let _s = builder
+            .emit(
+                Op::IToStr,
+                vec![n],
+                None,
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Borrowed,
+            )
+            .expect("itostr produces a value");
+        let zero = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Return { value: Some(zero) });
+    }
+
+    run_to_fixed_point(&mut function);
+    assert_eq!(
+        function.instruction(reset_after_spread).unwrap().op,
+        Op::ConcatReset
+    );
+    assert_eq!(
+        function.instruction(reset_after_release).unwrap().op,
+        Op::Nop,
+        "releasing a HashSpread slot populated only from destructor-free int[] should stay clean"
+    );
+    assert!(validate_function(&function).is_ok());
+}
+
+/// Passing an empty-array local (`Array(Never)`) to an opaque runtime/user call
+/// disqualifies the slot from being treated as destructor-free on subsequent release.
+#[test]
+fn opaque_call_use_of_empty_array_local_disqualifies_slot_release() {
+    let mut function =
+        Function::new("opaque_empty_array_escape".to_string(), IrType::I64, PhpType::Int);
+    let reset_after_release;
+    {
+        let mut builder = Builder::new(&mut function);
+        let empty_arr_ty = PhpType::Array(Box::new(PhpType::Never));
+        let arr_slot = builder.add_local(
+            Some("arr".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            empty_arr_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+
+        let init_arr = builder
+            .emit(
+                Op::ArrayNew,
+                vec![],
+                Some(Immediate::I64(0)),
+                IrType::Heap(IrHeapKind::Array),
+                empty_arr_ty.clone(),
+                Ownership::Owned,
+            )
+            .expect("array_new produces a value");
+        builder.emit_store_local(arr_slot, init_arr);
+
+        let loaded =
+            builder.emit_load_local(arr_slot, IrType::Heap(IrHeapKind::Array), empty_arr_ty);
+        builder.emit_with_effects(
+            Op::Call,
+            vec![loaded],
+            Some(Immediate::FunctionRef(crate::ir::FunctionId::from_raw(0))),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Effects::PURE,
+            None,
+        );
+        let _reset_after_call = emit_concat_reset(&mut builder);
+        builder.emit(
+            Op::ReleaseLocalSlot,
+            vec![],
+            Some(Immediate::LocalSlot(arr_slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        reset_after_release = emit_concat_reset(&mut builder);
+        let n = builder.emit_const_i64(7);
+        let _s = builder
+            .emit(
+                Op::IToStr,
+                vec![n],
+                None,
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Borrowed,
+            )
+            .expect("itostr produces a value");
+        let zero = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Return { value: Some(zero) });
+    }
+
+    run_to_fixed_point(&mut function);
+    assert_eq!(
+        function.instruction(reset_after_release).unwrap().op,
+        Op::ConcatReset,
+        "releasing an array slot that escaped to a call must preserve the following ConcatReset"
+    );
+    assert!(validate_function(&function).is_ok());
+}

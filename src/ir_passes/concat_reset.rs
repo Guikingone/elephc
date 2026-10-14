@@ -116,6 +116,7 @@ struct ConcatInertAnalysis<'a> {
     slot_saw_store: Vec<bool>,
     slot_disqualified: Vec<bool>,
     slot_value_deps: Vec<Vec<ValueId>>,
+    alloc_disqualified: Vec<bool>,
     alloc_value_deps: Vec<Vec<ValueId>>,
     block_param_disqualified: Vec<bool>,
     block_param_incoming: Vec<Vec<ValueId>>,
@@ -520,6 +521,7 @@ impl<'a> ConcatInertAnalysis<'a> {
         let mut slot_saw_store = vec![false; num_slots];
         let mut slot_disqualified = vec![false; num_slots];
         let mut slot_value_deps = vec![Vec::new(); num_slots];
+        let mut alloc_disqualified = vec![false; num_values];
         let mut alloc_value_deps = vec![Vec::new(); num_values];
 
         for inst in &function.instructions {
@@ -593,31 +595,24 @@ impl<'a> ConcatInertAnalysis<'a> {
                 }
             }
 
-            if matches!(
-                inst.op,
-                Op::ArrayPush
-                    | Op::MixedArrayAppend
-                    | Op::HashAppend
-                    | Op::ArraySet
-                    | Op::ArraySetMixedKey
-                    | Op::HashSet
-            ) {
+            if is_tracked_container_write_op(inst.op) {
                 if let Some(&container) = inst.operands.first() {
-                    let c_idx = container.as_raw() as usize;
-                    if c_idx < num_values {
-                        alloc_value_deps[c_idx].extend(inst.operands.iter().skip(1).copied());
-                    }
-                    if let Some(def) = super::rewrite::defining_instruction(function, container) {
-                        if def.op == Op::LoadLocal {
-                            if let Some(Immediate::LocalSlot(slot)) = def.immediate {
-                                let s_idx = slot.as_raw() as usize;
-                                if s_idx < num_slots {
-                                    slot_value_deps[s_idx]
-                                        .extend(inst.operands.iter().skip(1).copied());
-                                }
-                            }
-                        }
-                    }
+                    record_container_write_deps(
+                        function,
+                        container,
+                        &inst.operands[1..],
+                        &mut alloc_value_deps,
+                        &mut slot_value_deps,
+                    );
+                }
+            } else if inst_may_mutate_or_alias_operand(inst) {
+                for &op_val in &inst.operands {
+                    disqualify_container_chain(
+                        function,
+                        op_val,
+                        &mut alloc_disqualified,
+                        &mut slot_disqualified,
+                    );
                 }
             }
         }
@@ -680,6 +675,7 @@ impl<'a> ConcatInertAnalysis<'a> {
             slot_saw_store,
             slot_disqualified,
             slot_value_deps,
+            alloc_disqualified,
             alloc_value_deps,
             block_param_disqualified,
             block_param_incoming,
@@ -930,19 +926,22 @@ impl<'a> ConcatInertAnalysis<'a> {
         let Some(local) = self.function.locals.get(idx) else {
             return false;
         };
-        if php_type_is_destructor_free(&local.php_type) {
+        if php_type_is_scalar_destructor_free(&local.php_type) {
             return true;
         }
-        // Parameter slots have an initial incoming value from the caller that is not
-        // represented by an in-body `StoreLocal`.
-        if idx < self.function.params.len() {
-            return false;
-        }
-        if !matches!(
-            local.php_type.codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
-        ) {
-            return false;
+        let statically_typed_destructor_free = php_type_is_destructor_free(&local.php_type);
+        if !statically_typed_destructor_free {
+            // Parameter slots have an initial incoming value from the caller that is not
+            // represented by an in-body `StoreLocal`.
+            if idx < self.function.params.len() {
+                return false;
+            }
+            if !matches!(
+                local.php_type.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+            ) {
+                return false;
+            }
         }
         match self.slot_state.get(idx).copied() {
             Some(VisitState::Done(ans)) => return ans,
@@ -952,7 +951,8 @@ impl<'a> ConcatInertAnalysis<'a> {
             }
         }
 
-        let mut all_ok = !self.slot_disqualified[idx] && self.slot_saw_store[idx];
+        let mut all_ok = !self.slot_disqualified[idx]
+            && (statically_typed_destructor_free || self.slot_saw_store[idx]);
         if all_ok {
             let dep_len = self.slot_value_deps[idx].len();
             for dep_idx in 0..dep_len {
@@ -976,14 +976,8 @@ impl<'a> ConcatInertAnalysis<'a> {
         let Some(meta) = self.function.value(value) else {
             return false;
         };
-        if php_type_is_destructor_free(&meta.php_type) {
+        if php_type_is_scalar_destructor_free(&meta.php_type) {
             return true;
-        }
-        if !matches!(
-            meta.php_type.codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
-        ) {
-            return false;
         }
         match self.value_state.get(idx).copied() {
             Some(VisitState::Done(ans)) => return ans,
@@ -991,6 +985,25 @@ impl<'a> ConcatInertAnalysis<'a> {
             Some(VisitState::Unvisited) => {
                 self.value_state[idx] = VisitState::Visiting;
             }
+        }
+
+        if self.alloc_disqualified.get(idx).copied().unwrap_or(true)
+            || !self.array_allocation_is_destructor_free(value)
+        {
+            self.value_state[idx] = VisitState::Done(false);
+            return false;
+        }
+
+        if php_type_is_destructor_free(&meta.php_type) {
+            self.value_state[idx] = VisitState::Done(true);
+            return true;
+        }
+        if !matches!(
+            meta.php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) {
+            self.value_state[idx] = VisitState::Done(false);
+            return false;
         }
 
         let result = match meta.def {
@@ -1007,26 +1020,38 @@ impl<'a> ConcatInertAnalysis<'a> {
                         | Op::ConstF64
                         | Op::ConstStr
                         | Op::ConstBool
-                        | Op::ConstNull => true,
-                        Op::ArrayNew | Op::HashNew => {
-                            self.array_allocation_is_destructor_free(value)
-                        }
+                        | Op::ConstNull
+                        | Op::ArrayNew
+                        | Op::HashNew => true,
                         Op::IterCurrentValue => self.iter_op_is_concat_inert(inst),
                         Op::Acquire
                         | Op::Borrow
                         | Op::Move
+                        | Op::EnsureOwned
                         | Op::Cast
                         | Op::MixedBox
                         | Op::MixedClone
+                        | Op::MixedUnbox
                         | Op::ArrayCloneShallow
                         | Op::HashCloneShallow
                         | Op::ArrayEnsureUnique
                         | Op::HashEnsureUnique
                         | Op::ArrayToMixed
-                        | Op::HashToMixed => inst
+                        | Op::HashToMixed
+                        | Op::ArrayToHash => inst
                             .operands
                             .first()
                             .is_some_and(|&src| self.value_is_statically_destructor_free(src)),
+                        Op::ArrayUnion
+                        | Op::HashUnion
+                        | Op::ArrayHashUnion
+                        | Op::HashArrayUnion => {
+                            !inst.operands.is_empty()
+                                && inst
+                                    .operands
+                                    .iter()
+                                    .all(|&op| self.value_is_statically_destructor_free(op))
+                        }
                         Op::LoadLocal => {
                             if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
                                 self.slot_is_statically_destructor_free(slot)
@@ -1070,6 +1095,9 @@ impl<'a> ConcatInertAnalysis<'a> {
     /// container `alloc_val` stores a destructor-free value.
     fn array_allocation_is_destructor_free(&mut self, alloc_val: ValueId) -> bool {
         let idx = alloc_val.as_raw() as usize;
+        if self.alloc_disqualified.get(idx).copied().unwrap_or(true) {
+            return false;
+        }
         let Some(deps_len) = self.alloc_value_deps.get(idx).map(Vec::len) else {
             return true;
         };
@@ -1323,36 +1351,214 @@ fn value_is_acquire_of_str_concat(function: &Function, value: ValueId) -> bool {
         .is_some_and(|src_inst| src_inst.op == Op::StrConcat)
 }
 
+/// Returns true when `op` is a tracked in-place container write whose target container is
+/// `operands[0]` and whose written key/value/spread operands are `operands[1..]`.
+fn is_tracked_container_write_op(op: Op) -> bool {
+    matches!(
+        op,
+        Op::ArrayPush
+            | Op::MixedArrayAppend
+            | Op::HashAppend
+            | Op::ArraySet
+            | Op::ArraySetMixedKey
+            | Op::HashSet
+            | Op::DescriptorArgSet
+            | Op::HashSpread
+    )
+}
+
+/// Returns the underlying source `ValueId` when `inst` forwards, clones, boxes, or converts
+/// a single container/value operand without introducing a new independent container root.
+fn container_forwarding_source(inst: &Instruction) -> Option<ValueId> {
+    if matches!(
+        inst.op,
+        Op::Acquire
+            | Op::Borrow
+            | Op::Move
+            | Op::EnsureOwned
+            | Op::Cast
+            | Op::MixedBox
+            | Op::MixedClone
+            | Op::MixedUnbox
+            | Op::ArrayCloneShallow
+            | Op::HashCloneShallow
+            | Op::ArrayEnsureUnique
+            | Op::HashEnsureUnique
+            | Op::ArrayToMixed
+            | Op::HashToMixed
+            | Op::ArrayToHash
+    ) {
+        inst.operands.first().copied()
+    } else {
+        None
+    }
+}
+
+/// Records `written_values` as dependencies of `container` and every value or local slot
+/// along its forwarding/conversion chain.
+fn record_container_write_deps(
+    function: &Function,
+    container: ValueId,
+    written_values: &[ValueId],
+    alloc_value_deps: &mut [Vec<ValueId>],
+    slot_value_deps: &mut [Vec<ValueId>],
+) {
+    let mut cur = container;
+    for _ in 0..=function.values.len() {
+        let c_idx = cur.as_raw() as usize;
+        if let Some(deps) = alloc_value_deps.get_mut(c_idx) {
+            deps.extend_from_slice(written_values);
+        }
+        let Some(def) = super::rewrite::defining_instruction(function, cur) else {
+            break;
+        };
+        if matches!(def.op, Op::LoadLocal | Op::LoadRefCell) {
+            if let Some(Immediate::LocalSlot(slot)) = def.immediate {
+                if let Some(slot_deps) = slot_value_deps.get_mut(slot.as_raw() as usize) {
+                    slot_deps.extend_from_slice(written_values);
+                }
+            }
+            break;
+        }
+        if let Some(prev) = container_forwarding_source(def) {
+            cur = prev;
+        } else {
+            break;
+        }
+    }
+}
+
+/// Marks `value` and every container value or local slot along its forwarding chain as
+/// disqualified when `value` escapes into an instruction that may mutate it or take its address.
+fn disqualify_container_chain(
+    function: &Function,
+    value: ValueId,
+    alloc_disqualified: &mut [bool],
+    slot_disqualified: &mut [bool],
+) {
+    let mut cur = value;
+    for _ in 0..=function.values.len() {
+        let c_idx = cur.as_raw() as usize;
+        if let Some(flag) = alloc_disqualified.get_mut(c_idx) {
+            *flag = true;
+        }
+        let Some(def) = super::rewrite::defining_instruction(function, cur) else {
+            break;
+        };
+        if matches!(def.op, Op::LoadLocal | Op::LoadRefCell) {
+            if let Some(Immediate::LocalSlot(slot)) = def.immediate {
+                if let Some(flag) = slot_disqualified.get_mut(slot.as_raw() as usize) {
+                    *flag = true;
+                }
+            }
+            break;
+        }
+        if let Some(prev) = container_forwarding_source(def) {
+            cur = prev;
+        } else {
+            break;
+        }
+    }
+}
+
+/// Returns true when `inst` may mutate a container operand in place outside
+/// `is_tracked_container_write_op` or bind a `LoadLocal` operand by reference.
+fn inst_may_mutate_or_alias_operand(inst: &Instruction) -> bool {
+    matches!(
+        inst.op,
+        Op::Call
+            | Op::FunctionVariantCall
+            | Op::LanguageConstructCall
+            | Op::EvalLiteralCall
+            | Op::EvalFunctionCall
+            | Op::EvalFunctionCallArray
+            | Op::EvalStaticMethodCall
+            | Op::RuntimeCall
+            | Op::ExternCall
+            | Op::MethodCall
+            | Op::NullsafeMethodCall
+            | Op::StaticMethodCall
+            | Op::ClosureCall
+            | Op::ExprCall
+            | Op::CallableDescriptorInvoke
+            | Op::PipeCall
+            | Op::IteratorMethodCall
+            | Op::SplRuntimeCall
+            | Op::FiberRuntimeCall
+            | Op::CoreBuiltin
+            | Op::ObjectNew
+            | Op::EvalObjectNew
+            | Op::DynamicObjectNew
+            | Op::DynamicObjectNewMixed
+            | Op::DynamicObjectNewWithoutConstructorMixed
+            | Op::DynamicPdoStatementConstructorCall
+            | Op::DynamicPdoStatementInitialize
+            | Op::InvokerRefArg
+            | Op::AcquireRefCell
+            | Op::LoadArrayElemRefCell
+            | Op::LoadArrayElemRefCellExisting
+            | Op::ArrayElemAddr
+            | Op::ArrayGetForWrite
+            | Op::HashGetForWrite
+            | Op::MixedArrayGetForWrite
+            | Op::IterCurrentValueRef
+    ) || (inst.op == Op::ClosureCapture && matches!(inst.immediate, Some(Immediate::I64(1))))
+        || (inst.op == Op::IterStart
+            && (matches!(inst.immediate, Some(Immediate::IterStart(ref meta)) if meta.is_by_ref())
+                || matches!(inst.immediate, Some(Immediate::I64(1)))))
+}
+
+/// Returns true when `ty` is a non-container scalar, pointer, buffer, or packed value
+/// that cannot hold elements or objects with destructors.
+fn php_type_is_scalar_destructor_free(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::TaggedScalar
+            | PhpType::Pointer(_)
+            | PhpType::Buffer(_)
+            | PhpType::Packed(_)
+    )
+}
+
 /// Returns true when `PhpType` is guaranteed never to hold an object with a user `__destruct`
 /// or a closure/callable descriptor whose release can drop captured objects.
 ///
 /// `PhpType::Callable` and `PhpType::Resource` are intentionally excluded: releasing a
 /// callable descriptor (`__rt_callable_descriptor_release`) decrefs captured payloads or
 /// bound `$this` objects (which can run `__destruct`), and `PhpType::Resource` in PHP 8
-/// can represent object-backed handles or custom stream wrappers.
+/// can represent object-backed handles or custom stream wrappers. Empty-array placeholder
+/// element types (`Void`, `Never`) are excluded on containers so `ArrayNew` / `HashNew`
+/// allocations are always checked against their recorded in-place writes.
 fn php_type_is_destructor_free(ty: &PhpType) -> bool {
+    if php_type_is_scalar_destructor_free(ty) {
+        return true;
+    }
     match ty {
-        PhpType::Int
-        | PhpType::Float
-        | PhpType::Str
-        | PhpType::Bool
-        | PhpType::False
-        | PhpType::Void
-        | PhpType::Never
-        | PhpType::TaggedScalar
-        | PhpType::Pointer(_)
-        | PhpType::Buffer(_)
-        | PhpType::Packed(_) => true,
-        PhpType::Array(elem) => php_type_is_destructor_free(elem),
-        PhpType::AssocArray { key, value } => {
-            php_type_is_destructor_free(key) && php_type_is_destructor_free(value)
+        PhpType::Array(elem) => {
+            !matches!(elem.as_ref(), PhpType::Void | PhpType::Never)
+                && php_type_is_destructor_free(elem)
         }
-        PhpType::Union(members) => members.iter().all(php_type_is_destructor_free),
-        PhpType::Callable
-        | PhpType::Resource(_)
-        | PhpType::Object(_)
-        | PhpType::Iterable
-        | PhpType::Mixed => false,
+        PhpType::AssocArray { key, value } => {
+            !matches!(key.as_ref(), PhpType::Void | PhpType::Never)
+                && !matches!(value.as_ref(), PhpType::Void | PhpType::Never)
+                && php_type_is_destructor_free(key)
+                && php_type_is_destructor_free(value)
+        }
+        PhpType::Union(members) => {
+            !members.is_empty()
+                && members.iter().all(|member| {
+                    !matches!(member, PhpType::Void | PhpType::Never)
+                        && php_type_is_destructor_free(member)
+                })
+        }
+        _ => false,
     }
 }
 

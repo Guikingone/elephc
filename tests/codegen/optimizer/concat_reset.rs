@@ -300,7 +300,7 @@ function warn_after_near_full_scratch(int $n, string $pad): string {
     $x = 0;
     $y = 0;
     if ($n > 0) {
-        $big = $pad . $n;
+        $big = $pad . ($n > 0 ? "x" : "y");
         $fk = $n + 0.5;
         $x = $arr[$fk];
         $y = $arr[$n + 99];
@@ -310,7 +310,7 @@ function warn_after_near_full_scratch(int $n, string $pad): string {
     $after = "done:" . $n;
     return strlen($big) . ":" . $x . ":" . ($y ?? -1) . ":" . $after;
 }
-$pad = str_repeat("x", 65520);
+$pad = str_repeat("x", 65535);
 echo warn_after_near_full_scratch($argc, $pad), "\n";
 "#;
     let fixture = Fixture::new(source);
@@ -319,5 +319,53 @@ echo warn_after_near_full_scratch($argc, $pad), "\n";
         count_ir_concat_resets(&opt_ir) >= 3,
         "expected concat_reset before FToI(FloatKeyDiagnostic), before ArrayGet, and at merge to survive:\n{opt_ir}"
     );
-    fixture.assert_equiv(&[], "65521:20:-1:done:1\n");
+    fixture.assert_equiv(&[], "65536:20:-1:done:1\n");
+}
+
+/// Releasing an array constructed via `Op::HashSpread` (`[...$src]`) whose elements
+/// have a `__destruct` method that leaves `_concat_off` at the end of `_concat_buf`
+/// must not be treated as concat-inert; the `concat_reset` after `unset($copy)` must
+/// survive so subsequent `__rt_itoa` writes do not advance past `_concat_buf` and its
+/// 24-byte BSS padding into `_php_diagnostic_file_len` / `_php_diagnostic_file_ptr`.
+#[test]
+fn test_concat_reset_preserves_reset_after_hash_spread_destructor_release() {
+    let source = r#"<?php
+class SpreadScratchDtor {
+    public string $pad;
+    public int $n;
+
+    public function __construct(string $pad, int $n) {
+        $this->pad = $pad;
+        $this->n = $n;
+    }
+
+    public function __destruct() {
+        echo ($this->pad . ($this->n > 0 ? "Z" : "W"))[65535];
+    }
+}
+
+function run_hash_spread_dtor(int $n, string $pad): string {
+    $arr = [10, 20];
+    $src = ["k" => new SpreadScratchDtor($pad, $n)];
+    $copy = [...$src];
+    unset($src);
+    unset($copy);
+    $idx = (int)((string)($n + 1000000000000000000))
+        + (int)((string)($n + 2000000000000000000))
+        - 3000000000000000000
+        + 99;
+    $missing = $arr[$idx];
+    return ":" . $idx . ":" . ($missing ?? -1);
+}
+
+$pad = str_repeat("x", 65535);
+echo run_hash_spread_dtor($argc, $pad), "\n";
+"#;
+    let fixture = Fixture::new(source);
+    let opt_ir = fixture.function_ir(true, "run_hash_spread_dtor");
+    assert!(
+        count_ir_concat_resets(&opt_ir) >= 4,
+        "expected concat_reset after unset($copy) to survive in optimized IR:\n{opt_ir}"
+    );
+    fixture.assert_equiv(&[], "Z:101:-1\n");
 }
