@@ -33,7 +33,7 @@ pub fn emit_hash_value_diff_intersect(emitter: &mut Emitter) {
 
     // Frame: [0] hash1, [8] hash2, [16] result, [24] mode, [32] cursor1, [40] key lo, [48] key hi,
     // [56] value lo, [64] value hi, [72] value tag, [80] str1 ptr, [88] str1 len, [104] cursor2,
-    // [112] found, [120] concat snapshot, [128] box1, [136] value2 lo, [144] value2 hi,
+    // [96] converted owners, [112] found, [120] concat snapshot, [128] box1, [136] value2 lo, [144] value2 hi,
     // [152] value2 tag, [160] str2 ptr, [168] str2 len, [176] box2, [184] equal, [192] fp/lr.
     emitter.blank();
     emitter.comment("--- runtime: hash_value_diff_intersect ---");
@@ -44,6 +44,7 @@ pub fn emit_hash_value_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save hash1 pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save hash2 pointer
     emitter.instruction("str x2, [sp, #24]");                                   // save mode (0 = diff, 1 = intersect)
+    emitter.instruction("str x3, [sp, #96]");                                   // remember which converted argument hashes belong to this call
     emitter.instruction("ldr x0, [x0, #8]");                                    // x0 = hash1 capacity for the result hash
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash1 pointer
     emitter.instruction("ldr x1, [x9, #16]");                                   // x1 = hash1 value_type summary
@@ -105,6 +106,16 @@ pub fn emit_hash_value_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_value_diff_intersect_matched");            // record the comparison result
 
     emitter.label("__rt_hash_value_diff_intersect_cast");
+    emitter.instruction("ldr x9, [sp, #72]");                                   // inspect the left value before allocating comparison temporaries
+    emitter.instruction("cmp x9, #7");                                          // is the hash slot itself a boxed Mixed value?
+    let instruction = "b.ne __rt_hash_value_diff_intersect_callable_left_tag_ready";
+    emitter.instruction(instruction);                                           // direct payload tags are already authoritative
+    emitter.instruction("ldr x0, [sp, #56]");                                   // borrow the boxed value to inspect its effective tag
+    emitter.instruction("bl __rt_mixed_unbox");                                 // read the PHP value kind without allocating a temporary
+    emitter.instruction("mov x9, x0");                                          // use the unboxed PHP type for Closure rejection
+    emitter.label("__rt_hash_value_diff_intersect_callable_left_tag_ready");
+    emitter.instruction("cmp x9, #10");                                         // does PHP need to stringify a Closure?
+    emitter.instruction("b.eq __rt_hash_value_diff_intersect_callable_error");  // reject callable-to-string conversion with a catchable Error
     emitter.instruction("ldr x0, [sp, #72]");                                   // hash1 value tag
     emitter.instruction("ldr x1, [sp, #56]");                                   // hash1 value low word
     emitter.instruction("ldr x2, [sp, #64]");                                   // hash1 value high word
@@ -113,6 +124,17 @@ pub fn emit_hash_value_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast box1 to string: x1=ptr, x2=len
     emitter.instruction("str x1, [sp, #80]");                                   // save the hash1 string pointer
     emitter.instruction("str x2, [sp, #88]");                                   // save the hash1 string length
+    emitter.instruction("ldr x9, [sp, #152]");                                  // inspect the right value before allocating comparison temporaries
+    emitter.instruction("cmp x9, #7");                                          // is the hash slot itself a boxed Mixed value?
+    let instruction = "b.ne __rt_hash_value_diff_intersect_callable_right_tag_ready";
+    emitter.instruction(instruction);                                           // direct payload tags are already authoritative
+    emitter.instruction("ldr x0, [sp, #136]");                                  // borrow the boxed value to inspect its effective tag
+    emitter.instruction("bl __rt_mixed_unbox");                                 // read the PHP value kind without allocating a temporary
+    emitter.instruction("mov x9, x0");                                          // use the unboxed PHP type for Closure rejection
+    emitter.label("__rt_hash_value_diff_intersect_callable_right_tag_ready");
+    emitter.instruction("cmp x9, #10");                                         // does PHP need to stringify a Closure?
+    let instruction = "b.eq __rt_hash_value_diff_intersect_callable_right_error";
+    emitter.instruction(instruction);                                           // reject callable-to-string conversion with a catchable Error
     emitter.instruction("ldr x0, [sp, #152]");                                  // hash2 value tag
     emitter.instruction("ldr x1, [sp, #136]");                                  // hash2 value low word
     emitter.instruction("ldr x2, [sp, #144]");                                  // hash2 value high word
@@ -155,13 +177,26 @@ pub fn emit_hash_value_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_hash_value_diff_intersect_outer");       // diff drops values present in hash2
 
     emitter.label("__rt_hash_value_diff_intersect_keep");
+    emitter.instruction("ldr x9, [sp, #72]");                                   // even an empty comparison array requires a diff value string cast
+    emitter.instruction("cmp x9, #7");                                          // does the surviving slot contain a boxed value?
+    let instruction = "b.ne __rt_hash_value_diff_intersect_keep_left_tag_ready";
+    emitter.instruction(instruction);                                           // direct tags need no unboxing
+    emitter.instruction("ldr x0, [sp, #56]");                                   // borrow the boxed survivor to inspect its PHP type
+    emitter.instruction("bl __rt_mixed_unbox");                                 // inspect the value without allocating a temporary
+    emitter.instruction("mov x9, x0");                                          // test the effective PHP type
+    emitter.label("__rt_hash_value_diff_intersect_keep_left_tag_ready");
+    emitter.instruction("cmp x9, #10");                                         // would PHP have to stringify a Closure?
+    emitter.instruction("b.eq __rt_hash_value_diff_intersect_callable_error");  // reject the invalid string cast before retaining the result slot
     emitter.instruction("ldr x9, [sp, #72]");                                   // reload the kept value tag
     emitter.instruction("cmp x9, #1");                                          // is the kept value a string?
     emitter.instruction("b.eq __rt_hash_value_diff_intersect_persist");         // strings are persisted as an independent copy
+    emitter.instruction("cmp x9, #10");                                         // is this an owned callable descriptor?
+    emitter.instruction("b.eq __rt_hash_value_diff_intersect_retain");          // callable payloads need an independent result reference
     emitter.instruction("cmp x9, #4");                                          // is the value below the heap-backed tag range?
     emitter.instruction("b.lt __rt_hash_value_diff_intersect_insert");          // scalar values need no retain
     emitter.instruction("cmp x9, #7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("b.gt __rt_hash_value_diff_intersect_insert");          // non-heap tags need no retain
+    emitter.label("__rt_hash_value_diff_intersect_retain");
     emitter.instruction("ldr x0, [sp, #56]");                                   // load the kept heap-backed value
     emitter.instruction("bl __rt_incref");                                      // retain it for the result owner
     emitter.instruction("b __rt_hash_value_diff_intersect_insert");             // continue to the insertion
@@ -187,6 +222,10 @@ pub fn emit_hash_value_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #192]");                            // restore frame pointer and return address
     emitter.instruction("add sp, sp, #208");                                    // deallocate the stack frame
     emitter.instruction("ret");                                                 // return the result hash in x0
+    emit_callable_right_error(emitter, "__rt_hash_value_diff_intersect_callable_right_error", "__rt_hash_value_diff_intersect_callable_error",
+        ("[sp, #128]", "[sp, #80]", "[sp, #120]"));
+    emit_callable_comparison_error(emitter, "__rt_hash_value_diff_intersect_callable_error", 208, "[sp, #96]");
+
 }
 
 /// Emits the x86_64 Linux variant of `__rt_hash_value_diff_intersect`.
@@ -204,6 +243,7 @@ fn emit_hash_value_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save hash1 pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save hash2 pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save mode (0 = diff, 1 = intersect)
+    emitter.instruction("mov QWORD PTR [rbp - 192], rcx");                      // remember which converted argument hashes belong to this call
     emitter.instruction("mov rsi, QWORD PTR [rdi + 16]");                       // rsi = hash1 value_type summary
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // rdi = hash1 capacity for the result hash
     emitter.instruction("call __rt_hash_new");                                  // create the result hash table, rax = result
@@ -264,6 +304,17 @@ fn emit_hash_value_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_value_diff_intersect_matched_x86");      // record the comparison result
 
     emitter.label("__rt_hash_value_diff_intersect_cast_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // inspect the left value before allocating comparison temporaries
+    emitter.instruction("cmp r10, 7");                                          // is the hash slot itself a boxed Mixed value?
+    let instruction = "jne __rt_hash_value_diff_intersect_callable_left_tag_ready_x86";
+    emitter.instruction(instruction);                                           // direct payload tags are already authoritative
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // borrow the boxed value to inspect its effective tag
+    emitter.instruction("call __rt_mixed_unbox");                               // read the PHP value kind without allocating a temporary
+    emitter.instruction("mov r10, rax");                                        // use the unboxed PHP type for Closure rejection
+    emitter.label("__rt_hash_value_diff_intersect_callable_left_tag_ready_x86");
+    emitter.instruction("cmp r10, 10");                                         // does PHP need to stringify a Closure?
+    let instruction = "je __rt_hash_value_diff_intersect_callable_error_x86";
+    emitter.instruction(instruction);                                           // reject callable-to-string conversion with a catchable Error
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // hash1 value tag
     emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // hash1 value low word
     emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // hash1 value high word
@@ -273,6 +324,17 @@ fn emit_hash_value_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_cast_string");                         // cast box1 to string: rax=ptr, rdx=len
     emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // save the hash1 string pointer
     emitter.instruction("mov QWORD PTR [rbp - 96], rdx");                       // save the hash1 string length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 152]");                      // inspect the right value before allocating comparison temporaries
+    emitter.instruction("cmp r10, 7");                                          // is the hash slot itself a boxed Mixed value?
+    let instruction = "jne __rt_hash_value_diff_intersect_callable_right_tag_ready_x86";
+    emitter.instruction(instruction);                                           // direct payload tags are already authoritative
+    emitter.instruction("mov rax, QWORD PTR [rbp - 136]");                      // borrow the boxed value to inspect its effective tag
+    emitter.instruction("call __rt_mixed_unbox");                               // read the PHP value kind without allocating a temporary
+    emitter.instruction("mov r10, rax");                                        // use the unboxed PHP type for Closure rejection
+    emitter.label("__rt_hash_value_diff_intersect_callable_right_tag_ready_x86");
+    emitter.instruction("cmp r10, 10");                                         // does PHP need to stringify a Closure?
+    let instruction = "je __rt_hash_value_diff_intersect_callable_right_error_x86";
+    emitter.instruction(instruction);                                           // reject callable-to-string conversion with a catchable Error
     emitter.instruction("mov rax, QWORD PTR [rbp - 152]");                      // hash2 value tag
     emitter.instruction("mov rdi, QWORD PTR [rbp - 136]");                      // hash2 value low word
     emitter.instruction("mov rsi, QWORD PTR [rbp - 144]");                      // hash2 value high word
@@ -318,13 +380,27 @@ fn emit_hash_value_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_hash_value_diff_intersect_outer_x86");        // diff drops values present in hash2
 
     emitter.label("__rt_hash_value_diff_intersect_keep_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // even an empty comparison array requires a diff value string cast
+    emitter.instruction("cmp r10, 7");                                          // does the surviving slot contain a boxed value?
+    let instruction = "jne __rt_hash_value_diff_intersect_keep_left_tag_ready_x86";
+    emitter.instruction(instruction);                                           // direct tags need no unboxing
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // borrow the boxed survivor to inspect its PHP type
+    emitter.instruction("call __rt_mixed_unbox");                               // inspect the value without allocating a temporary
+    emitter.instruction("mov r10, rax");                                        // test the effective PHP type
+    emitter.label("__rt_hash_value_diff_intersect_keep_left_tag_ready_x86");
+    emitter.instruction("cmp r10, 10");                                         // would PHP have to stringify a Closure?
+    let instruction = "je __rt_hash_value_diff_intersect_callable_error_x86";
+    emitter.instruction(instruction);                                           // reject the invalid string cast before retaining the result slot
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // reload the kept value tag
     emitter.instruction("cmp r10, 1");                                          // is the kept value a string?
     emitter.instruction("je __rt_hash_value_diff_intersect_persist_x86");       // strings are persisted as an independent copy
+    emitter.instruction("cmp r10, 10");                                         // is this an owned callable descriptor?
+    emitter.instruction("je __rt_hash_value_diff_intersect_retain_x86");        // callable payloads need an independent result reference
     emitter.instruction("cmp r10, 4");                                          // is the value below the heap-backed tag range?
     emitter.instruction("jl __rt_hash_value_diff_intersect_insert_x86");        // scalar values need no retain
     emitter.instruction("cmp r10, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_hash_value_diff_intersect_insert_x86");        // non-heap tags need no retain
+    emitter.label("__rt_hash_value_diff_intersect_retain_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the kept heap-backed value
     emitter.instruction("call __rt_incref");                                    // retain it for the result owner
     emitter.instruction("jmp __rt_hash_value_diff_intersect_insert_x86");       // continue to the insertion
@@ -350,4 +426,133 @@ fn emit_hash_value_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 208");                                        // release the spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the result hash in rax
+    emit_callable_right_error(emitter, "__rt_hash_value_diff_intersect_callable_right_error_x86", "__rt_hash_value_diff_intersect_callable_error_x86",
+        ("[rbp - 128]", "[rbp - 88]", "[rbp - 120]"));
+    emit_callable_comparison_error(emitter, "__rt_hash_value_diff_intersect_callable_error_x86", 208, "[rbp - 192]");
+
+}
+
+/// Releases an unfinished result and throws PHP's fixed Closure string-conversion Error.
+/// The current helper frame owns the result at sp+16/rbp-24 and has no live cast temporaries.
+pub(super) fn emit_callable_comparison_error(
+    emitter: &mut Emitter, label: &str, frame_size: usize, converted_flags: &str,
+) {
+    let message = "Object of class Closure could not be converted to string";
+    let message_label = format!("{label}_message");
+    emitter.blank();
+    emitter.label(label);
+    emitter.comment("-- release backend-converted arguments abandoned by the throw --");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x9, {converted_flags}"));         // reload converted-argument ownership flags
+            let instruction = &format!("tbz x9, #1, {label}_converted_1_done");
+            emitter.instruction(instruction);                                   // skip borrowed input hashes
+            emitter.instruction("ldr x0, [sp, #8]");                            // load the converted input hash owner
+        }
+        Arch::X86_64 => {
+            let instruction = &format!("mov r10, QWORD PTR {converted_flags}");
+            emitter.instruction(instruction);                                   // reload converted-argument ownership flags
+            emitter.instruction("test r10, 2");                                 // does this input have a backend-created owner?
+            emitter.instruction(&format!("jz {label}_converted_1_done"));       // skip borrowed input hashes
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // load the converted input hash owner
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_decref_hash");
+    emitter.label(&format!("{label}_converted_1_done"));
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x9, {converted_flags}"));         // reload converted-argument ownership flags
+            let instruction = &format!("tbz x9, #0, {label}_converted_0_done");
+            emitter.instruction(instruction);                                   // skip borrowed input hashes
+            emitter.instruction("ldr x0, [sp, #0]");                            // load the converted input hash owner
+        }
+        Arch::X86_64 => {
+            let instruction = &format!("mov r10, QWORD PTR {converted_flags}");
+            emitter.instruction(instruction);                                   // reload converted-argument ownership flags
+            emitter.instruction("test r10, 1");                                 // does this input have a backend-created owner?
+            emitter.instruction(&format!("jz {label}_converted_0_done"));       // skip borrowed input hashes
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // load the converted input hash owner
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_decref_hash");
+    emitter.label(&format!("{label}_converted_0_done"));
+    emitter.comment("-- retire the partial result before allocating a catchable Error --");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp, #16]");                           // load the unfinished result's sole owner
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // load the unfinished result's sole owner
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_decref_hash");
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 56);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
+            emitter.instruction("str x9, [x0, #-8]");                           // publish the allocation's object kind before handle acquisition
+            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
+            emitter.instruction("str x9, [x0]");                                // store the native Error class id
+            abi::emit_symbol_address(emitter, "x9", &message_label);
+            emitter.instruction("str x9, [x0, #8]");                            // borrow the fixed diagnostic's static bytes
+            abi::emit_load_int_immediate(emitter, "x9", message.len() as i64);
+            emitter.instruction("str x9, [x0, #16]");                           // publish the complete diagnostic length
+            emitter.instruction("str xzr, [x0, #24]");                          // default the exception code to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
+            emitter.instruction("str xzr, [x0, #40]");                          // default the previous exception to null
+        }
+        Arch::X86_64 => {
+            let kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(6);
+            abi::emit_load_int_immediate(emitter, "r10", kind as i64);
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // publish the packed native throwable kind
+            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_error_class_id", 0);
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the native Error class id
+            abi::emit_symbol_address(emitter, "r10", &message_label);
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // borrow the fixed diagnostic's static bytes
+            let instruction = &format!("mov QWORD PTR [rax + 16], {}", message.len());
+            emitter.instruction(instruction);                                   // publish the complete diagnostic length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // default the exception code to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
+            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // default the previous exception to null
+        }
+    }
+    emitter.comment("-- publish the Error and unwind the current comparison frame --");
+    abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_exc_value", 0);
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_jump(emitter, "__rt_throw_current");
+    emitter.label(&message_label);
+    emitter.raw(&format!("    .ascii {message:?}\n    .p2align 2\n"));
+}
+
+/// Retires the completed left cast before a right-side Closure conversion throws.
+pub(super) fn emit_callable_right_error(
+    emitter: &mut Emitter, label: &str, failure: &str, slots: (&str, &str, &str),
+) {
+    emitter.label(label);
+    emitter.comment("-- retire the left conversion before propagating the right conversion Error --");
+    for (slot, helper) in [(slots.0, "__rt_decref_mixed"), (slots.1, "__rt_heap_free")] {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("ldr x0, {slot}"));                // load a completed left-cast owner
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov rax, QWORD PTR {slot}"));     // load a completed left-cast owner in the runtime ABI register
+            }
+        }
+        abi::emit_call_label(emitter, helper);
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x10, {}", slots.2));              // reload the saved concat cursor
+            abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov r10, QWORD PTR {}", slots.2));    // reload the saved concat cursor
+            abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);
+        }
+    }
+    abi::emit_jump(emitter, failure);
 }

@@ -1212,16 +1212,20 @@ impl RuntimeFnId {
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
             ),
+            // Value-set comparisons may invoke user __toString methods, warn, or throw.
+            RuntimeFnId::ArrayDiff | RuntimeFnId::ArrayDiffAssoc |
+            RuntimeFnId::ArrayIntersect | RuntimeFnId::ArrayIntersectAssoc =>
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::all().bits()
+                        & !crate::ir::Effects::BLOCKING_IO.bits()
+                        & !crate::ir::Effects::NETWORK_IO.bits(),
+                ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
             RuntimeFnId::ArrayCombine |
-            RuntimeFnId::ArrayDiff |
-            RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |
             RuntimeFnId::ArrayFillKeys |
-            RuntimeFnId::ArrayIntersect |
-            RuntimeFnId::ArrayIntersectAssoc |
             RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
             RuntimeFnId::ArrayKeyExists |

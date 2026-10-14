@@ -396,6 +396,8 @@ pub(super) fn lower_two_hash_arg_builtin_converting(
     let second = expect_operand(inst, 1)?;
     let conv0 = two_hash_operand_needs_conversion(ctx.value_php_type(first)?, name, converts)?;
     let conv1 = two_hash_operand_needs_conversion(ctx.value_php_type(second)?, name, converts)?;
+    let converted_owners = i64::from(conv0) | (i64::from(conv1) << 1);
+    let owners_reg = match ctx.emitter.target.arch { Arch::AArch64 => "x3", Arch::X86_64 => "rcx" };
     let result_reg = abi::int_result_reg(ctx.emitter);
 
     // -- materialize first operand into the result register, convert if indexed, then spill --
@@ -429,6 +431,7 @@ pub(super) fn lower_two_hash_arg_builtin_converting(
                 }
             }
         }
+        abi::emit_load_int_immediate(ctx.emitter, owners_reg, converted_owners);
         abi::emit_call_label(ctx.emitter, runtime_label);
         return store_if_result(ctx, inst);
     }
@@ -442,6 +445,7 @@ pub(super) fn lower_two_hash_arg_builtin_converting(
             if let Some(m) = mode {
                 ctx.emitter.instruction(&format!("mov x2, #{}", m));            // mode selector into the third argument register
             }
+            abi::emit_load_int_immediate(ctx.emitter, owners_reg, converted_owners);
             abi::emit_call_label(ctx.emitter, runtime_label);
             ctx.emitter.instruction("str x0, [sp, #-16]!");                     // spill the result; stack holds [result, h2, h1]
             if conv1 {
@@ -461,6 +465,7 @@ pub(super) fn lower_two_hash_arg_builtin_converting(
             if let Some(m) = mode {
                 ctx.emitter.instruction(&format!("mov edx, {}", m));            // mode selector into the third SysV argument register
             }
+            abi::emit_load_int_immediate(ctx.emitter, owners_reg, converted_owners);
             abi::emit_call_label(ctx.emitter, runtime_label);
             ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the result
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // spill the result; stack holds [result, h2, h1]

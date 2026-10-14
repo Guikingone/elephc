@@ -110,6 +110,7 @@ mod instanceof_operand_owners;
 mod boxed_array_set_comparators;
 mod boxed_array_write_owners;
 mod key_set_callable_owners;
+mod value_set_owners;
 mod static_callable_string_owners;
 mod boxed_array_implode;
 mod boxed_array_reference_outputs;
