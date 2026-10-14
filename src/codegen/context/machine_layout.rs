@@ -9,7 +9,8 @@
 //! Key details:
 //! - Cold text is only deferred while `block_emit` has opened a cold section for the function;
 //!   other emitters get the same code inline behind a jump, so nothing is ever lost.
-//! - Deferred text is appended after the last block, where no block can fall into it.
+//! - Deferred text is appended after the last block, where no block can fall into it, and
+//!   starts with its instruction's `@src` marker so line info stays with its PHP statement.
 
 use crate::codegen::abi;
 use crate::codegen::Result;
@@ -69,7 +70,14 @@ impl FunctionContext<'_> {
     ) -> Result<()> {
         if self.machine_layout.cold_text.is_some() {
             let scope = self.emitter.begin_out_of_line();
-            let result = emit(self);
+            // Repeat the originating instruction's source marker so debug line info and source
+            // maps attribute the out-of-line code to its PHP statement, not the last block.
+            let marker = match self.current_inst {
+                Some(inst) => crate::codegen::block_emit::emit_instruction_source_marker(self, inst),
+                None => Ok(()),
+            };
+            // Close the detached scope even on error, so the caller's text is restored.
+            let result = marker.and_then(|()| emit(self));
             let body = self.emitter.end_detached(scope);
             if let Some(cold) = self.machine_layout.cold_text.as_mut() {
                 cold.push_str(&body);

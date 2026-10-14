@@ -1288,23 +1288,27 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let region_start = ctx.emitter.text_len();
     let blocks = ctx.function.blocks.clone();
     let order = block_layout::emission_order(ctx.function);
+    let use_counts = block_layout::value_use_counts(ctx.function);
     ctx.begin_cold_section();
     for (position, &index) in order.iter().enumerate() {
         ctx.machine_layout.next_block = order.get(position + 1).map(|&next| blocks[next].id);
+        ctx.machine_layout.fused_compare =
+            block_layout::fusible_compare(ctx.function, &blocks[index], &use_counts);
         emit_block(ctx, &blocks[index])?;
     }
     ctx.machine_layout.next_block = None;
     ctx.machine_layout.fused_compare = None;
     ctx.flush_cold_section();
-    let target = ctx.emitter.target;
-    ctx.emitter
-        .rewrite_text_from(region_start, |text| machine_peephole::optimize(text, target));
+    if ctx.emitter.text_len() - region_start <= machine_peephole::MAX_REGION_BYTES {
+        let target = ctx.emitter.target;
+        ctx.emitter
+            .rewrite_text_from(region_start, |text| machine_peephole::optimize(text, target));
+    }
     Ok(())
 }
 
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
-    ctx.machine_layout.fused_compare = block_layout::fusible_compare(ctx.function, block);
     ctx.emitter.comment(&format!("@block name={}", block.name));
     let block_label = ctx.block_label_for_id(block.id)?;
     ctx.emitter.label(&block_label);
@@ -1324,7 +1328,7 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.
 /// The marker carries the EIR opcode spelling so v2 maps can label mappings at
 /// expression granularity.
-fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
+pub(super) fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     let Some(inst) = ctx.function.instruction(inst_id) else {
         return Err(CodegenIrError::missing_entry(
             "instruction",

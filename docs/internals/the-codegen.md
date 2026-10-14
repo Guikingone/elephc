@@ -174,7 +174,11 @@ a label is a join point and a directive is opaque. Conditional branches on
 AArch64 reach only ±1 MiB, so far branches are emitted as an inverted short
 branch over `b` (`cbz x0, 1f; b L; 1:`). The peephole folds that into one
 `cbnz x0, L` / `b.cond L` when `L` is a label of the same function and the
-function is provably smaller than the conditional reach.
+function is provably smaller than the conditional reach. Function bodies larger
+than 1 MiB of assembly text (generated dispatch code such as an eval-heavy
+program's top level) skip the peepholes to keep compile time flat. Overflow code
+moved to the cold tail repeats its instruction's `@src` marker, so debug line
+info and source maps keep pointing at the originating PHP statement.
 
 `examples/machine-peepholes/main.php` shows a fused loop test, an out-of-line
 overflow path, and strength-reduced multiplies.

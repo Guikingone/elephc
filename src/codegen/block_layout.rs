@@ -13,7 +13,9 @@
 //! - Every terminator lowers to explicit jumps except a jump to the block laid out next,
 //!   which is what makes any order semantically safe.
 
-use crate::ir::{BasicBlock, Function, InstId, Op, Terminator};
+use std::collections::HashMap;
+
+use crate::ir::{BasicBlock, Function, InstId, Op, Terminator, ValueId};
 use crate::ir_passes::terminator_uses;
 
 /// Returns block-table indices in emission order: hot blocks first, cold blocks last.
@@ -39,12 +41,31 @@ fn is_cold(block: &BasicBlock) -> bool {
     )
 }
 
+/// Counts every use of each value across instruction operands and terminators, once per function.
+pub(super) fn value_use_counts(function: &Function) -> HashMap<ValueId, usize> {
+    let mut counts: HashMap<ValueId, usize> = HashMap::new();
+    for operand in function.instructions.iter().flat_map(|inst| inst.operands.iter()) {
+        *counts.entry(*operand).or_insert(0) += 1;
+    }
+    for term in function.blocks.iter().filter_map(|block| block.terminator.as_ref()) {
+        for value in terminator_uses(term) {
+            *counts.entry(value).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
 /// Returns the integer compare that `block`'s `cond_br` can consume as flags, if any.
 ///
 /// The compare must be the block's last emitting instruction (only `nop`s may follow), and its
-/// boolean must have no use besides the branch condition, so skipping its materialization is
-/// unobservable and no instruction runs between the flag-setting compare and the branch.
-pub(super) fn fusible_compare(function: &Function, block: &BasicBlock) -> Option<InstId> {
+/// boolean must have no use besides the branch condition (`use_counts` from
+/// [`value_use_counts`]), so skipping its materialization is unobservable and no instruction
+/// runs between the flag-setting compare and the branch.
+pub(super) fn fusible_compare(
+    function: &Function,
+    block: &BasicBlock,
+    use_counts: &HashMap<ValueId, usize>,
+) -> Option<InstId> {
     let Some(Terminator::CondBr { cond, .. }) = &block.terminator else {
         return None;
     };
@@ -58,19 +79,7 @@ pub(super) fn fusible_compare(function: &Function, block: &BasicBlock) -> Option
     if inst.op != Op::ICmp || inst.result != Some(*cond) {
         return None;
     }
-    let operand_uses = function
-        .instructions
-        .iter()
-        .flat_map(|inst| inst.operands.iter())
-        .filter(|operand| **operand == *cond)
-        .count();
-    let terminator_use_count: usize = function
-        .blocks
-        .iter()
-        .filter_map(|block| block.terminator.as_ref())
-        .map(|term| terminator_uses(term).iter().filter(|value| **value == *cond).count())
-        .sum();
-    (operand_uses == 0 && terminator_use_count == 1).then_some(compare)
+    (use_counts.get(cond) == Some(&1)).then_some(compare)
 }
 
 #[cfg(test)]
@@ -84,7 +93,7 @@ mod tests {
     //! Key details:
     //! - Functions are built directly with the EIR builder so CFG shapes are exact.
 
-    use super::{emission_order, fusible_compare};
+    use super::{emission_order, fusible_compare, value_use_counts};
     use crate::ir::{
         Builder, CmpPredicate, Function, Immediate, IrType, Op, Ownership, Terminator,
     };
@@ -137,8 +146,10 @@ mod tests {
     #[test]
     fn only_single_use_branch_compares_fuse() {
         let function = diamond(false);
-        assert!(fusible_compare(&function, &function.blocks[0]).is_some());
+        let counts = value_use_counts(&function);
+        assert!(fusible_compare(&function, &function.blocks[0], &counts).is_some());
         let function = diamond(true);
-        assert!(fusible_compare(&function, &function.blocks[0]).is_none());
+        let counts = value_use_counts(&function);
+        assert!(fusible_compare(&function, &function.blocks[0], &counts).is_none());
     }
 }

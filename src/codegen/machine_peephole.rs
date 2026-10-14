@@ -14,7 +14,11 @@
 //!   inverted short branch over an unconditional `b`. That wide form is folded back into a
 //!   single conditional branch only when the target is a label of the same region and the
 //!   whole region is provably smaller than the conditional range.
+//! - Functions can reach millions of lines (eval-heavy programs), so lines borrow the input
+//!   text, deletions are tombstones compacted once per round, and every pattern rejects an
+//!   instruction by its first bytes before parsing it.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use crate::codegen::platform::{Arch, Target};
@@ -25,21 +29,27 @@ const MAX_BYTES_PER_LINE: usize = 8;
 const AARCH64_COND_BRANCH_REACH: usize = 1_000_000;
 /// Bound on whole-region rewrite rounds; each round only ever shrinks the text.
 const MAX_ROUNDS: usize = 4;
+/// Regions larger than this (about 35k lines) are left untouched. Such bodies are generated
+/// dispatch code (an eval-heavy program's top level reaches millions of lines), not hot user
+/// loops; skipping them keeps compile time flat. The bound is in bytes so the check is free.
+pub(super) const MAX_REGION_BYTES: usize = 1 << 20;
 
-/// One classified assembly line.
+/// One classified assembly line, borrowing the region text unless a rewrite replaced it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Line {
+enum Line<'a> {
     /// Blank or comment-only line (transparent to every pattern).
-    Trivia(String),
+    Trivia(&'a str),
     /// A label definition, without the trailing colon.
-    Label(String),
+    Label(&'a str),
     /// One instruction, trimmed of indentation.
-    Inst(String),
+    Inst(Cow<'a, str>),
     /// Anything else, such as a directive; opaque to every pattern.
-    Other(String),
+    Other(&'a str),
+    /// A line deleted by a rewrite; skipped by every pattern and dropped on compaction.
+    Removed,
 }
 
-impl Line {
+impl Line<'_> {
     /// Renders the line back to assembly text with the emitter's indentation.
     fn render(&self, out: &mut String) {
         match self {
@@ -52,6 +62,7 @@ impl Line {
                 out.push_str("    ");
                 out.push_str(text);
             }
+            Line::Removed => return,
         }
         out.push('\n');
     }
@@ -59,8 +70,11 @@ impl Line {
 
 /// Runs every machine peephole over one function region and returns the rewritten text.
 pub(super) fn optimize(text: &str, target: Target) -> String {
+    if text.len() > MAX_REGION_BYTES {
+        return text.to_string();
+    }
     let comment = target.line_comment_prefix();
-    let mut lines: Vec<Line> = text.lines().map(|line| classify(line, comment)).collect();
+    let mut lines: Vec<Line<'_>> = text.lines().map(|line| classify(line, comment)).collect();
     for _ in 0..MAX_ROUNDS {
         let mut changed = false;
         changed |= remove_redundant_moves(&mut lines, target.arch);
@@ -72,6 +86,8 @@ pub(super) fn optimize(text: &str, target: Target) -> String {
         if !changed {
             break;
         }
+        // Rewrites only mark deletions, keeping every round linear in the region size.
+        lines.retain(|line| *line != Line::Removed);
     }
     let mut out = String::with_capacity(text.len());
     for line in &lines {
@@ -81,29 +97,37 @@ pub(super) fn optimize(text: &str, target: Target) -> String {
 }
 
 /// Classifies one raw assembly line.
-fn classify(line: &str, comment: &str) -> Line {
+fn classify<'a>(line: &'a str, comment: &str) -> Line<'a> {
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.starts_with(comment) {
-        return Line::Trivia(line.to_string());
+        return Line::Trivia(line);
     }
     let indented = line.starts_with(' ') || line.starts_with('\t');
     if !indented {
         if let Some(name) = trimmed.strip_suffix(':') {
             if !name.is_empty() && !name.contains(char::is_whitespace) {
-                return Line::Label(name.to_string());
+                return Line::Label(name);
             }
         }
-        return Line::Other(line.to_string());
+        return Line::Other(line);
     }
     if trimmed.starts_with('.') {
-        return Line::Other(line.to_string());
+        return Line::Other(line);
     }
-    Line::Inst(trimmed.to_string())
+    Line::Inst(Cow::Borrowed(trimmed))
 }
 
-/// Returns the index of the next non-trivia line after `index`.
-fn next_significant(lines: &[Line], index: usize) -> Option<usize> {
-    (index + 1..lines.len()).find(|&i| !matches!(lines[i], Line::Trivia(_)))
+/// Returns the index of the next non-trivia, non-removed line after `index`.
+fn next_significant(lines: &[Line<'_>], index: usize) -> Option<usize> {
+    (index + 1..lines.len()).find(|&i| !matches!(lines[i], Line::Trivia(_) | Line::Removed))
+}
+
+/// Returns the instruction text at `index`, if that line is an instruction.
+fn inst_at<'l>(lines: &'l [Line<'_>], index: usize) -> Option<&'l str> {
+    match &lines[index] {
+        Line::Inst(text) => Some(text),
+        _ => None,
+    }
 }
 
 /// Splits `mnemonic a, b` into its mnemonic and two operands.
@@ -143,7 +167,10 @@ fn is_fpr(arch: Arch, reg: &str) -> bool {
 }
 
 /// Parses a full-width register-to-register move as `(dst, src)`.
-fn reg_move(arch: Arch, inst: &str) -> Option<(String, String)> {
+fn reg_move(arch: Arch, inst: &str) -> Option<(&str, &str)> {
+    if !(inst.starts_with("mov") || inst.starts_with("fmov")) {
+        return None;
+    }
     let (mnemonic, dst, src) = two_operands(inst)?;
     let valid = match (arch, mnemonic) {
         (_, "mov") => is_gpr64(arch, dst) && is_gpr64(arch, src),
@@ -151,36 +178,32 @@ fn reg_move(arch: Arch, inst: &str) -> Option<(String, String)> {
         (Arch::X86_64, "movsd") => is_fpr(arch, dst) && is_fpr(arch, src),
         _ => false,
     };
-    valid.then(|| (dst.to_string(), src.to_string()))
+    valid.then_some((dst, src))
 }
 
 /// Deletes self-moves and the second move of a `mov a, b` / `mov b, a` pair.
-fn remove_redundant_moves(lines: &mut Vec<Line>, arch: Arch) -> bool {
+fn remove_redundant_moves(lines: &mut [Line<'_>], arch: Arch) -> bool {
     let mut changed = false;
     let mut index = 0;
     while index < lines.len() {
-        let Line::Inst(inst) = &lines[index] else {
-            index += 1;
-            continue;
-        };
-        let Some((dst, src)) = reg_move(arch, inst) else {
+        let Some((dst, src)) = inst_at(lines, index).and_then(|inst| reg_move(arch, inst)) else {
             index += 1;
             continue;
         };
         if dst == src {
-            lines.remove(index);
+            lines[index] = Line::Removed;
             changed = true;
+            index += 1;
             continue;
         }
-        if let Some(next) = next_significant(lines, index) {
-            if let Line::Inst(next_inst) = &lines[next] {
-                if reg_move(arch, next_inst) == Some((src.clone(), dst.clone())) {
-                    // After `dst = src`, copying `dst` back into `src` changes nothing.
-                    lines.remove(next);
-                    changed = true;
-                    continue;
-                }
-            }
+        let move_back = next_significant(lines, index).filter(|&next| {
+            inst_at(lines, next).and_then(|inst| reg_move(arch, inst)) == Some((src, dst))
+        });
+        if let Some(next) = move_back {
+            // After `dst = src`, copying `dst` back into `src` changes nothing.
+            lines[next] = Line::Removed;
+            changed = true;
+            continue;
         }
         index += 1;
     }
@@ -195,20 +218,27 @@ enum MemClass {
 }
 
 /// Parses a full-width store as `(value register, address, class)`.
-fn parse_store(arch: Arch, inst: &str) -> Option<(String, String, MemClass)> {
-    let (mnemonic, first, second) = split_memory_operands(inst)?;
+fn parse_store(arch: Arch, inst: &str) -> Option<(&str, &str, MemClass)> {
     match arch {
         Arch::AArch64 => {
-            if !matches!(mnemonic, "str" | "stur") || !is_plain_address(&second) {
+            if !inst.starts_with("st") {
                 return None;
             }
-            reg_class(arch, &first).map(|class| (first, second, class))
+            let (mnemonic, first, second) = split_memory_operands(inst)?;
+            if !matches!(mnemonic, "str" | "stur") || !is_plain_address(second) {
+                return None;
+            }
+            reg_class(arch, first).map(|class| (first, second, class))
         }
         Arch::X86_64 => {
-            let address = second_is_qword_address(&first)?;
+            if !inst.starts_with("mov") || !inst.contains(" QWORD PTR [") {
+                return None;
+            }
+            let (mnemonic, first, second) = split_memory_operands(inst)?;
+            let address = qword_address(first)?;
             let class = match mnemonic {
-                "mov" if is_gpr64(arch, &second) => MemClass::Gpr,
-                "movsd" if is_fpr(arch, &second) => MemClass::Fpr,
+                "mov" if is_gpr64(arch, second) => MemClass::Gpr,
+                "movsd" if is_fpr(arch, second) => MemClass::Fpr,
                 _ => return None,
             };
             Some((second, address, class))
@@ -217,20 +247,27 @@ fn parse_store(arch: Arch, inst: &str) -> Option<(String, String, MemClass)> {
 }
 
 /// Parses a full-width load as `(destination register, address, class)`.
-fn parse_load(arch: Arch, inst: &str) -> Option<(String, String, MemClass)> {
-    let (mnemonic, first, second) = split_memory_operands(inst)?;
+fn parse_load(arch: Arch, inst: &str) -> Option<(&str, &str, MemClass)> {
     match arch {
         Arch::AArch64 => {
-            if !matches!(mnemonic, "ldr" | "ldur") || !is_plain_address(&second) {
+            if !inst.starts_with("ld") {
                 return None;
             }
-            reg_class(arch, &first).map(|class| (first, second, class))
+            let (mnemonic, first, second) = split_memory_operands(inst)?;
+            if !matches!(mnemonic, "ldr" | "ldur") || !is_plain_address(second) {
+                return None;
+            }
+            reg_class(arch, first).map(|class| (first, second, class))
         }
         Arch::X86_64 => {
-            let address = second_is_qword_address(&second)?;
+            if !inst.starts_with("mov") {
+                return None;
+            }
+            let (mnemonic, first, second) = split_memory_operands(inst)?;
+            let address = qword_address(second)?;
             let class = match mnemonic {
-                "mov" if is_gpr64(arch, &first) => MemClass::Gpr,
-                "movsd" if is_fpr(arch, &first) => MemClass::Fpr,
+                "mov" if is_gpr64(arch, first) => MemClass::Gpr,
+                "movsd" if is_fpr(arch, first) => MemClass::Fpr,
                 _ => return None,
             };
             Some((first, address, class))
@@ -239,7 +276,7 @@ fn parse_load(arch: Arch, inst: &str) -> Option<(String, String, MemClass)> {
 }
 
 /// Splits `mnemonic a, b` where one operand may itself contain commas inside brackets.
-fn split_memory_operands(inst: &str) -> Option<(&str, String, String)> {
+fn split_memory_operands(inst: &str) -> Option<(&str, &str, &str)> {
     let (mnemonic, rest) = inst.split_once(' ')?;
     let rest = rest.trim();
     let split = if rest.starts_with('[') || rest.starts_with("QWORD") {
@@ -247,9 +284,7 @@ fn split_memory_operands(inst: &str) -> Option<(&str, String, String)> {
     } else {
         rest.find(',')?
     };
-    let first = rest[..split].trim().to_string();
-    let second = rest[split + 1..].trim().to_string();
-    Some((mnemonic, first, second))
+    Some((mnemonic, rest[..split].trim(), rest[split + 1..].trim()))
 }
 
 /// Returns the register class of a full-width AArch64 or x86_64 register.
@@ -269,48 +304,39 @@ fn is_plain_address(address: &str) -> bool {
 }
 
 /// Returns the bracketed address of an x86_64 `QWORD PTR [..]` memory operand.
-fn second_is_qword_address(operand: &str) -> Option<String> {
+fn qword_address(operand: &str) -> Option<&str> {
     let address = operand.strip_prefix("QWORD PTR ")?;
-    (address.starts_with('[') && address.ends_with(']')).then(|| address.to_string())
+    (address.starts_with('[') && address.ends_with(']')).then_some(address)
 }
 
 /// Replaces a reload of the value just stored to the same address with a register move.
-fn forward_stores_to_reloads(lines: &mut Vec<Line>, arch: Arch) -> bool {
+fn forward_stores_to_reloads(lines: &mut [Line<'_>], arch: Arch) -> bool {
     let mut changed = false;
-    let mut index = 0;
-    while index < lines.len() {
-        let Line::Inst(inst) = &lines[index] else {
-            index += 1;
-            continue;
-        };
-        let Some((value, address, class)) = parse_store(arch, inst) else {
-            index += 1;
+    for index in 0..lines.len() {
+        let Some((value, address, class)) = inst_at(lines, index).and_then(|inst| parse_store(arch, inst)) else {
             continue;
         };
         let Some(next) = next_significant(lines, index) else {
             break;
         };
-        let Line::Inst(next_inst) = &lines[next] else {
-            index += 1;
+        let Some((dst, load_address, load_class)) = inst_at(lines, next).and_then(|inst| parse_load(arch, inst)) else {
             continue;
         };
-        if let Some((dst, load_address, load_class)) = parse_load(arch, next_inst) {
-            if load_address == address && load_class == class {
-                if dst == value {
-                    lines.remove(next);
-                } else {
-                    let mnemonic = match (arch, class) {
-                        (_, MemClass::Gpr) => "mov",
-                        (Arch::AArch64, MemClass::Fpr) => "fmov",
-                        (Arch::X86_64, MemClass::Fpr) => "movsd",
-                    };
-                    lines[next] = Line::Inst(format!("{mnemonic} {dst}, {value}"));
-                }
-                changed = true;
-                continue;
-            }
+        if load_address != address || load_class != class {
+            continue;
         }
-        index += 1;
+        let replacement = if dst == value {
+            Line::Removed
+        } else {
+            let mnemonic = match (arch, class) {
+                (_, MemClass::Gpr) => "mov",
+                (Arch::AArch64, MemClass::Fpr) => "fmov",
+                (Arch::X86_64, MemClass::Fpr) => "movsd",
+            };
+            Line::Inst(Cow::Owned(format!("{mnemonic} {dst}, {value}")))
+        };
+        lines[next] = replacement;
+        changed = true;
     }
     changed
 }
@@ -333,29 +359,28 @@ fn forward_label_name(target: &str) -> &str {
     }
 }
 
+/// Returns true for a numeric backward reference such as `1b`.
+fn is_numeric_backward(target: &str) -> bool {
+    target
+        .strip_suffix('b')
+        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Deletes an unconditional jump whose target label is reached by falling through.
-fn remove_jumps_to_next_label(lines: &mut Vec<Line>, arch: Arch) -> bool {
+fn remove_jumps_to_next_label(lines: &mut [Line<'_>], arch: Arch) -> bool {
     let mut changed = false;
-    let mut index = 0;
-    while index < lines.len() {
-        let Line::Inst(inst) = &lines[index] else {
-            index += 1;
+    for index in 0..lines.len() {
+        let Some(target) = inst_at(lines, index).and_then(|inst| unconditional_jump_target(arch, inst)) else {
             continue;
         };
-        let Some(target) = unconditional_jump_target(arch, inst) else {
-            index += 1;
-            continue;
-        };
-        if target.ends_with('b') && target[..target.len() - 1].bytes().all(|b| b.is_ascii_digit()) {
-            index += 1;
+        if is_numeric_backward(target) {
             continue;
         }
-        let wanted = forward_label_name(target).to_string();
-        let mut cursor = index + 1;
+        let wanted = forward_label_name(target);
         let mut falls_into_target = false;
-        while cursor < lines.len() {
-            match &lines[cursor] {
-                Line::Trivia(_) => {}
+        for line in &lines[index + 1..] {
+            match line {
+                Line::Trivia(_) | Line::Removed => {}
                 Line::Label(name) if *name == wanted => {
                     falls_into_target = true;
                     break;
@@ -363,14 +388,11 @@ fn remove_jumps_to_next_label(lines: &mut Vec<Line>, arch: Arch) -> bool {
                 Line::Label(_) => {}
                 Line::Inst(_) | Line::Other(_) => break,
             }
-            cursor += 1;
         }
         if falls_into_target {
-            lines.remove(index);
+            lines[index] = Line::Removed;
             changed = true;
-            continue;
         }
-        index += 1;
     }
     changed
 }
@@ -398,7 +420,7 @@ fn invert_aarch64_condition(cond: &str) -> Option<&'static str> {
 
 /// Parses a short AArch64 conditional skip (`b.cc Nf`, `cbz r, Nf`, `cbnz r, Nf`) and returns
 /// the inverted branch prefix (ready to append a target) together with the skipped label.
-fn parse_short_skip(inst: &str) -> Option<(String, String)> {
+fn parse_short_skip(inst: &str) -> Option<(String, &str)> {
     if let Some(rest) = inst.strip_prefix("b.") {
         let (cond, target) = rest.split_once(' ')?;
         let label = numeric_forward(target.trim())?;
@@ -425,13 +447,13 @@ fn parse_short_skip(inst: &str) -> Option<(String, String)> {
 }
 
 /// Returns `N` for a numeric forward reference `Nf`.
-fn numeric_forward(target: &str) -> Option<String> {
+fn numeric_forward(target: &str) -> Option<&str> {
     let number = target.strip_suffix('f')?;
-    (!number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())).then(|| number.to_string())
+    (!number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())).then_some(number)
 }
 
 /// Returns true for a directive whose assembled size the per-line bound cannot cover.
-fn may_emit_unbounded_bytes(line: &Line) -> bool {
+fn may_emit_unbounded_bytes(line: &Line<'_>) -> bool {
     let Line::Other(text) = line else {
         return false;
     };
@@ -442,7 +464,7 @@ fn may_emit_unbounded_bytes(line: &Line) -> bool {
 }
 
 /// Folds `b.cc 1f; b L; 1:` into `b.!cc L; 1:` when `L` is provably within conditional reach.
-fn shorten_wide_branches(lines: &mut Vec<Line>) -> bool {
+fn shorten_wide_branches(lines: &mut [Line<'_>]) -> bool {
     let code_lines = lines
         .iter()
         .filter(|line| matches!(line, Line::Inst(_) | Line::Other(_)))
@@ -455,44 +477,34 @@ fn shorten_wide_branches(lines: &mut Vec<Line>) -> bool {
     let region_labels: HashSet<String> = lines
         .iter()
         .filter_map(|line| match line {
-            Line::Label(name) => Some(name.clone()),
+            Line::Label(name) => Some((*name).to_string()),
             _ => None,
         })
         .collect();
     let mut changed = false;
-    let mut index = 0;
-    while index < lines.len() {
-        let Line::Inst(inst) = &lines[index] else {
-            index += 1;
+    for index in 0..lines.len() {
+        let Some((inverted, skipped)) = inst_at(lines, index).and_then(parse_short_skip) else {
             continue;
         };
-        let Some((inverted, skipped)) = parse_short_skip(inst) else {
-            index += 1;
-            continue;
-        };
+        let skipped = skipped.to_string();
         let Some(jump) = next_significant(lines, index) else {
             break;
         };
-        let target = match &lines[jump] {
-            Line::Inst(jump_inst) => unconditional_jump_target(Arch::AArch64, jump_inst)
-                .filter(|target| region_labels.contains(*target))
-                .map(str::to_string),
-            _ => None,
-        };
+        let target = inst_at(lines, jump)
+            .and_then(|inst| unconditional_jump_target(Arch::AArch64, inst))
+            .filter(|target| region_labels.contains(*target))
+            .map(str::to_string);
         let Some(target) = target else {
-            index += 1;
             continue;
         };
         let lands_on_skip = next_significant(lines, jump)
-            .is_some_and(|after| lines[after] == Line::Label(skipped.clone()));
+            .is_some_and(|after| matches!(lines[after], Line::Label(name) if name == skipped));
         if !lands_on_skip {
-            index += 1;
             continue;
         }
-        lines[index] = Line::Inst(format!("{inverted}{target}"));
-        lines.remove(jump);
+        lines[index] = Line::Inst(Cow::Owned(format!("{inverted}{target}")));
+        lines[jump] = Line::Removed;
         changed = true;
-        index += 1;
     }
     changed
 }
@@ -585,9 +597,21 @@ mod tests {
     #[test]
     fn keeps_wide_aarch64_branches_in_huge_regions() {
         let mut arm = String::from(".L_t:\n    b.eq 1f\n    b .L_t\n1:\n");
-        for _ in 0..200_000 {
+        // Under the region size cap, but past the conservative per-line reach bound.
+        for _ in 0..126_000 {
             arm.push_str("    nop\n");
         }
+        assert!(arm.len() <= super::MAX_REGION_BYTES);
         assert_eq!(optimize(&arm, linux(Arch::AArch64)), arm);
+    }
+
+    /// Verifies regions over the size cap are returned unchanged.
+    #[test]
+    fn skips_regions_over_the_size_cap() {
+        let mut x86 = String::from("    mov rax, rax\n");
+        while x86.len() <= super::MAX_REGION_BYTES {
+            x86.push_str("    nop\n");
+        }
+        assert_eq!(optimize(&x86, linux(Arch::X86_64)), x86);
     }
 }
