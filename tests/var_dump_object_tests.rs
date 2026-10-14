@@ -24,14 +24,15 @@
 //! - THE DIVERGENCE PINS IN THIS FILE are
 //!   `computed_debug_info_is_ignored_and_declared_properties_print_instead`,
 //!   `reflection_owner_classes_render_no_properties_because_public_names_are_unmodelled`,
-//!   `reflection_subclass_hides_inherited_backing_slots`
-//!   and `reflection_subclass_debug_info_projection_drops_backing_slots`. elephc honours
+//!   `reflection_subclass_hides_inherited_backing_slots`,
+//!   `reflection_subclass_debug_info_projection_drops_backing_slots`, and
+//!   `reflection_subclass_shadowed_backing_name_renders_once`. elephc honours
 //!   `__debugInfo()` only when its body is a static property projection (folded into
 //!   `_class_vd_desc_*` at compile time); a body that computes values falls back to the
 //!   declared-property list. And elephc models only the private `__*` backing slots of PHP's
 //!   builtin Reflection classes, not their public `name`, so those render as zero-property
 //!   objects; a `__debugInfo()` projection that READS such a slot drops the pair instead of
-//!   publishing the storage. All four tests assert elephc's ACTUAL output with PHP's
+//!   publishing the storage. All five tests assert elephc's ACTUAL output with PHP's
 //!   spelled out beside them, so they can never be mistaken for parity.
 //! - ENUM CASES ARE LAZY NOW, AND THAT CELL IS PARITY. Cases used to be created in
 //!   bulk in `main`'s prologue, which burnt one handle per case of every referenced
@@ -1900,4 +1901,86 @@ fn user_private_underscore_property_still_renders() {
             "}\n",
         )
     );
+}
+
+/// A user private property that shadows a Reflection backing name has one renderer row.
+/// PHP also exposes the public `name` property; that existing divergence is pinned above.
+#[test]
+fn reflection_subclass_shadowed_backing_name_renders_once() {
+    let out = run_php(
+        "vd_reflection_subclass_shadowed_backing_name",
+        concat!(
+            "<?php\n",
+            "class Mine extends ReflectionClass { private string $__name = 'user'; }\n",
+            "$m = new Mine('Mine');\n",
+            "echo (new ReflectionClass('Mine'))->getName(), \"\\n\";\n",
+            "var_dump($m); print_r($m); var_export($m); echo \"\\n\";\n",
+        ),
+    );
+    assert_eq!(out, r#"Mine
+object(Mine)#1 (1) {
+  ["__name":"Mine":private]=>
+  string(4) "user"
+}
+Mine Object
+(
+    [__name:Mine:private] => user
+)
+\Mine::__set_state(array(
+   '__name' => 'user',
+))
+"#);
+}
+
+/// Each private shadow slot keeps its declaring class, physical offset and value tag.
+#[test]
+fn private_shadowed_slots_keep_physical_owners() {
+    let out = run_php(
+        "vd_private_shadowed_slots_keep_physical_owners",
+        r#"<?php
+class Base { private int $p = 7; }
+class Child extends Base { private string $p = 'child'; }
+$c = new Child();
+var_dump($c); print_r($c); var_export($c); echo "\n";
+"#,
+    );
+    assert_eq!(out, r#"object(Child)#1 (2) {
+  ["p":"Base":private]=>
+  int(7)
+  ["p":"Child":private]=>
+  string(5) "child"
+}
+Child Object
+(
+    [p:Base:private] => 7
+    [p:Child:private] => child
+)
+\Child::__set_state(array(
+   'p' => 7,
+   'p' => 'child',
+))
+"#);
+}
+
+/// A debug-info projection selects the visible user slot instead of the hidden backing tuple.
+#[test]
+fn reflection_subclass_debug_info_uses_shadowed_user_property() {
+    let out = run_php(
+        "vd_reflection_subclass_debug_info_uses_shadowed_user_property",
+        r#"<?php
+class Mine extends ReflectionClass {
+    private string $__name = 'user';
+    public function __debugInfo(): array { return ['n' => $this->__name]; }
+}
+$m = new Mine('Mine');
+echo (new ReflectionClass('Mine'))->getName(), "\n";
+var_dump($m);
+"#,
+    );
+    assert_eq!(out, r#"Mine
+object(Mine)#1 (1) {
+  ["n"]=>
+  string(4) "user"
+}
+"#);
 }

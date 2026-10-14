@@ -1236,7 +1236,7 @@ pub(crate) fn emit_runtime_data_user(
         // (see `var_dump_debug_info_projection`), because `var_dump` is the only PHP
         // renderer that consults `__debugInfo` AND the only elephc renderer that
         // enumerates object properties at all.
-        let mut vd_rows = var_dump_descriptor_rows(class_info, class_name);
+        let mut vd_rows = var_dump_descriptor_rows(classes, class_info, class_name);
         if enums.contains_key(class_name.as_str()) {
             hoist_enum_name_row(&mut vd_rows);
         }
@@ -3280,35 +3280,36 @@ struct VarDumpRow {
 
 /// Builds the `var_dump` rows for a class: the `__debugInfo()` projection when the
 /// class declares a foldable one, otherwise every declared property in layout order.
-fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<VarDumpRow> {
+fn var_dump_descriptor_rows(
+    classes: &HashMap<String, ClassInfo>,
+    class_info: &ClassInfo,
+    class_name: &str,
+) -> Vec<VarDumpRow> {
     if let Some(projection) = var_dump_debug_info_projection(class_info) {
         return projection
             .into_iter()
             .filter_map(|(key, prop_name)| {
-                // A projection that reads a compiler-only backing slot (`return ['n' => $this->__name]`
-                // in a Reflection subclass) must not publish that slot either: PHP answers the
-                // inaccessible name as an undefined property, not the compiler storage.
-                if is_reflection_backing_slot(class_info, class_name, &prop_name) {
+                let layout_index = class_info.visible_property_index(&prop_name)?;
+                let (_, prop_ty) = class_info.properties.get(layout_index)?;
+                let (metadata, owner_name) = renderer_property_slot_metadata(
+                    classes, class_info, class_name, layout_index, &prop_name,
+                );
+                // Resolve the physical slot before filtering: a user property can shadow an
+                // inherited Reflection backing name without exposing the backing slot itself.
+                if is_reflection_backing_slot(metadata, owner_name, &prop_name) {
                     return None;
                 }
-                let (layout_index, (_, prop_ty)) = class_info
-                    .properties
-                    .iter()
-                    .enumerate()
-                    .find(|(_, (name, _))| *name == prop_name)?;
                 Some(VarDumpRow {
                     key: format!("\"{}\"", key),
-                    // A `__debugInfo()` projection key is a plain array key, so PHP
-                    // never annotates it with a visibility: print_r and var_export
-                    // both print the projected key verbatim.
+                    // Projection keys are array keys and carry no property visibility.
                     print_r_key: key.clone(),
                     plain_key: key,
-                    offset: class_info
+                    offset: metadata
                         .property_offsets
                         .get(&prop_name)
                         .copied()
                         .unwrap_or(8 + layout_index * 16),
-                    tag: prop_value_tag(class_info, &prop_name, prop_ty),
+                    tag: prop_value_tag(metadata, &prop_name, prop_ty),
                     type_name: var_dump_property_type_name(prop_ty),
                 })
             })
@@ -3318,18 +3319,25 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         .properties
         .iter()
         .enumerate()
-        .filter(|(_, (prop_name, _))| !is_reflection_backing_slot(class_info, class_name, prop_name))
-        .map(|(layout_index, (prop_name, prop_ty))| VarDumpRow {
-            key: var_dump_property_key(class_info, class_name, prop_name),
-            print_r_key: print_r_property_key(class_info, class_name, prop_name),
-            plain_key: prop_name.clone(),
-            offset: class_info
-                .property_offsets
-                .get(prop_name)
-                .copied()
-                .unwrap_or(8 + layout_index * 16),
-            tag: prop_value_tag(class_info, prop_name, prop_ty),
-            type_name: var_dump_property_type_name(prop_ty),
+        .filter_map(|(layout_index, (prop_name, prop_ty))| {
+            let (metadata, owner_name) = renderer_property_slot_metadata(
+                classes, class_info, class_name, layout_index, prop_name,
+            );
+            if is_reflection_backing_slot(metadata, owner_name, prop_name) {
+                return None;
+            }
+            Some(VarDumpRow {
+                key: var_dump_property_key(metadata, owner_name, prop_name),
+                print_r_key: print_r_property_key(metadata, owner_name, prop_name),
+                plain_key: prop_name.clone(),
+                offset: metadata
+                    .property_offsets
+                    .get(prop_name)
+                    .copied()
+                    .unwrap_or(8 + layout_index * 16),
+                tag: prop_value_tag(metadata, prop_name, prop_ty),
+                type_name: var_dump_property_type_name(prop_ty),
+            })
         })
         .collect()
 }
@@ -3366,6 +3374,34 @@ fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_nam
         .map(String::as_str)
         .unwrap_or(class_name);
     REFLECTION_CLASS_NAMES.contains(&declaring_class)
+}
+
+/// Resolves by-name metadata on the nearest ancestor where this physical slot is visible.
+///
+/// A child's private declaration appends a slot but replaces the name-keyed maps. Walking the
+/// ancestry for a hidden index recovers its original owner, visibility and byte offset.
+fn renderer_property_slot_metadata<'a>(
+    classes: &'a HashMap<String, ClassInfo>,
+    class_info: &'a ClassInfo,
+    class_name: &'a str,
+    layout_index: usize,
+    property: &str,
+) -> (&'a ClassInfo, &'a str) {
+    let mut metadata = class_info;
+    let mut owner_name = class_name;
+    loop {
+        if metadata.visible_property_index(property) == Some(layout_index) {
+            return (metadata, owner_name);
+        }
+        let Some(parent) = metadata.parent.as_deref() else {
+            return (class_info, class_name);
+        };
+        let Some(parent_info) = classes.get(parent) else {
+            return (class_info, class_name);
+        };
+        metadata = parent_info;
+        owner_name = parent;
+    }
 }
 
 /// Folds a class's `__debugInfo()` into the `(array key, property name)` pairs
