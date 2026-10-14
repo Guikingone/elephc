@@ -56,6 +56,13 @@ another `html` or `body`. Comment-only and instruction-only sources do not creat
 Ignored closing tags do not split adjacent text nodes. An unfinished comment and
 its remaining input are discarded, following the legacy libxml HTML tokenizer.
 
+An explicit `</body>` is honored: in `<body>A</body><div>B</div>`, the `div` is
+a sibling of `body`, whose child walk contains only `A`. Extra content after an
+explicit `</html>` follows the legacy PHP/libxml 2.9.14 fallback: it reopens an
+`html` child without adding another `body`, while immediately trailing comments
+and instructions stay after the outer `html`. This is not a promise to preserve
+source order for malformed whole documents; newer libxml tree-repair rules can differ.
+
 ### `LIBXML_*` flags Termwind uses
 
 These constants are always available (including inside a namespace, and in

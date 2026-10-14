@@ -49,6 +49,11 @@ echo $doc->childNodes->length, $doc->getElementsByTagName('html')->length;
 foreach ($doc->childNodes as $child) { echo $child->nodeName; }
 $doc->loadHTML("<html><body>x</body></html> \n");
 echo $doc->saveXML($doc->getElementsByTagName('html')->item(0));
+$doc->loadHTML('<body>A</body><div>B</div>');
+echo $doc->getElementsByTagName('body')->item(0)->nodeValue, $doc->saveXML();
+$doc->loadHTML('<html><body>A</body></html><?worker data><div>B</div><!--inside--><div>C</div>');
+echo $doc->getElementsByTagName('body')->length, $doc->saveXML();
+echo $doc->childNodes->item(0)->nextSibling === $doc->childNodes->item(1) ? 'linked' : 'bad';
 $doc->loadHTML(' <div>Hi</div> ', LIBXML_NOBLANKS);
 echo count($doc->getElementsByTagName('body')->item(0)->childNodes);
 $doc->loadHTML("<html>\n<head> <title> A </title> </head>\n<body> <div>Hi</div> </body>\n</html>", LIBXML_NOBLANKS);

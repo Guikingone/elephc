@@ -11,6 +11,83 @@
 
 use crate::support::*;
 
+/// Legacy PHP keeps content after a closed body beside it, not inside the selected body.
+#[test]
+fn dom_html_ninth_review_closed_body_following_content() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$doc->loadHTML('<body>A</body><div>B</div>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+$body = $doc->getElementsByTagName('body')->item(0);
+$div = $doc->getElementsByTagName('div')->item(0);
+$html = $doc->getElementsByTagName('html')->item(0);
+echo $body->nodeValue, ':', $body->childNodes->length, ':';
+echo $div->parentNode === $html && $body->nextSibling === $div ? 'siblings' : 'bad';
+echo ':', $doc->saveXML($html);
+"#);
+    assert_eq!(out, "A:1:siblings:<html><body>A</body><div>B</div></html>");
+}
+
+/// Legacy libxml reopens an html child without duplicating body or moving the document instruction.
+#[test]
+fn dom_html_ninth_review_closed_document_following_content() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach ([0, LIBXML_NOBLANKS] as $extra) {
+    $doc->loadHTML('<html><body>A</body></html><?worker data><div>B</div><!--inside--><div>C</div>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR | $extra);
+    $html = $doc->getElementsByTagName('html')->item(0);
+    $body = $doc->getElementsByTagName('body')->item(0);
+    $reopened = $html->childNodes->item(1);
+    $instruction = $doc->childNodes->item(1);
+    echo $doc->getElementsByTagName('html')->length, ':', $doc->getElementsByTagName('body')->length, ':';
+    echo $body->nodeValue, ':', $reopened->nodeName, ':', $reopened->childNodes->length, '|';
+    echo $html->nextSibling === $instruction && $instruction->previousSibling === $html ? 'linked' : 'bad';
+    echo ':', $instruction->parentNode === $doc ? 'document' : 'bad';
+    echo ':', $doc->saveXML();
+}
+"#);
+    assert_eq!(out, "2:1:A:html:3|linked:document:<html><body>A</body><html><div>B</div><!--inside--><div>C</div></html></html><?worker data?>".repeat(2));
+}
+
+/// Reopening a literal document tree keeps every temporary wrapper owner balanced.
+#[test]
+fn dom_html_ninth_review_reopened_tree_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function enableDom(DOMDocument $doc): void {}
+for ($i = 0; $i < 16; $i++) {
+    $text = __elephc_dom_new_node('text', '#text', 'A', [], []);
+    $body = __elephc_dom_new_node('element', 'body', '', [], [$text]);
+    $html = __elephc_dom_new_node('element', 'html', '', [], [$body]);
+    $instruction = __elephc_dom_new_node('pi', 'worker', 'data', [], []);
+    $later = __elephc_dom_new_node('element', 'div', '', [], [__elephc_dom_new_node('text', '#text', 'B', [], [])]);
+    $tree = __elephc_dom_document_from_roots([$html, $instruction, $later], 0);
+    echo count($tree['children']), ':', __elephc_dom_text_of($tree), ':';
+    echo $tree['children'][0]['children'][1]['name'], ':', $tree['children'][1]['name'], '|';
+    unset($tree);
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:AB:html:worker|".repeat(16), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Closed-body sibling behavior remains independent of EIR optimization.
+#[test]
+fn dom_html_ninth_review_closed_body_no_ir_opt() {
+    without_ir_opt(dom_html_ninth_review_closed_body_following_content);
+}
+
+/// Reopened-document topology and instruction links remain independent of EIR optimization.
+#[test]
+fn dom_html_ninth_review_closed_document_no_ir_opt() {
+    without_ir_opt(dom_html_ninth_review_closed_document_following_content);
+}
+
+/// Reopened-document temporary owners remain balanced without EIR optimization.
+#[test]
+fn dom_html_ninth_review_reopened_tree_no_ir_opt() {
+    without_ir_opt(dom_html_ninth_review_reopened_tree_owners);
+}
+
 /// Trailing comments remain document siblings without introducing a second html/body wrapper.
 #[test]
 fn dom_html_eighth_review_explicit_document_tail_comments() {

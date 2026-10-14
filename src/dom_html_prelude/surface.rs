@@ -481,8 +481,20 @@ function __elephc_dom_find_child(mixed $node, string $name): mixed {
 }
 
 function __elephc_dom_wrap_html(mixed $roots): mixed {
-    if (count($roots) === 1 && $roots[0]["kind"] === "element" && $roots[0]["name"] === "html") {
+    if (count($roots) > 0 && $roots[0]["kind"] === "element" && $roots[0]["name"] === "html") {
         $_html = $roots[0];
+        if (count($roots) > 1) {
+            // Legacy libxml reopens html beneath the original wrapper, not another body.
+            $_later = [];
+            for ($_i = 1; $_i < count($roots); $_i++) {
+                $_later_root = $roots[$_i];
+                $_later[] = $_later_root;
+            }
+            $_children = $_html["children"];
+            $_reopened = __elephc_dom_new_node("element", "html", "", [], $_later);
+            $_children[] = $_reopened;
+            $_html["children"] = $_children;
+        }
         if (__elephc_dom_find_child($_html, "body") === null) {
             $_html["children"] = [__elephc_dom_new_node("element", "body", "", [], $_html["children"])];
         }
