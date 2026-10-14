@@ -23,14 +23,15 @@
 //!   `hash_context_draws_an_object_handle_in_creation_order`, a parity assertion.
 //! - THE DIVERGENCE PINS IN THIS FILE are
 //!   `computed_debug_info_is_ignored_and_declared_properties_print_instead`,
-//!   `reflection_owner_classes_render_no_properties_because_public_names_are_unmodelled`
+//!   `reflection_owner_classes_render_no_properties_because_public_names_are_unmodelled`,
+//!   `reflection_subclass_hides_inherited_backing_slots`
 //!   and `reflection_subclass_debug_info_projection_drops_backing_slots`. elephc honours
 //!   `__debugInfo()` only when its body is a static property projection (folded into
 //!   `_class_vd_desc_*` at compile time); a body that computes values falls back to the
 //!   declared-property list. And elephc models only the private `__*` backing slots of PHP's
 //!   builtin Reflection classes, not their public `name`, so those render as zero-property
 //!   objects; a `__debugInfo()` projection that READS such a slot drops the pair instead of
-//!   publishing the storage. All three tests assert elephc's ACTUAL output with PHP's
+//!   publishing the storage. All four tests assert elephc's ACTUAL output with PHP's
 //!   spelled out beside them, so they can never be mistaken for parity.
 //! - ENUM CASES ARE LAZY NOW, AND THAT CELL IS PARITY. Cases used to be created in
 //!   bulk in `main`'s prologue, which burnt one handle per case of every referenced
