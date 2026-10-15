@@ -88,9 +88,8 @@ function __elephc_dom_is_name(string $c): bool {
 
 function __elephc_dom_is_void(string $name): bool {
     return $name === "area" || $name === "base" || $name === "br" || $name === "col"
-        || $name === "embed" || $name === "hr" || $name === "img" || $name === "input"
-        || $name === "link" || $name === "meta" || $name === "param" || $name === "source"
-        || $name === "track" || $name === "wbr";
+        || $name === "hr" || $name === "img" || $name === "input"
+        || $name === "link" || $name === "meta" || $name === "param";
 }
 
 function __elephc_dom_skip_ws(string $html, int $i): int {
@@ -483,6 +482,32 @@ function __elephc_dom_find_child(mixed $node, string $name): mixed {
 function __elephc_dom_wrap_html(mixed $roots): mixed {
     if (count($roots) > 0 && $roots[0]["kind"] === "element" && $roots[0]["name"] === "html") {
         $_html = $roots[0];
+        $_children = $_html["children"];
+        if (__elephc_dom_find_child($_html, "body") === null) {
+            // Imply a body only for original content, never around head or reopened roots.
+            $_prefix_children = [];
+            $_body_children = [];
+            $_original_children = $_html["children"];
+            for ($_child_index = 0; $_child_index < count($_original_children); $_child_index++) {
+                $_child = $_original_children[$_child_index];
+                $_prefix = $_child["kind"] === "comment" || $_child["kind"] === "pi"
+                    || ($_child["kind"] === "element" && $_child["name"] === "head");
+                if ($_child["kind"] === "text") {
+                    $_text = (string) $_child["value"];
+                    $_prefix = trim($_text) === "";
+                }
+                if (count($_body_children) === 0 && $_prefix) {
+                    $_prefix_children[] = $_child;
+                } else {
+                    $_body_children[] = $_child;
+                }
+            }
+            if (count($_body_children) > 0) {
+                $_body = __elephc_dom_new_node("element", "body", "", [], $_body_children);
+                $_prefix_children[] = $_body;
+            }
+            $_children = $_prefix_children;
+        }
         if (count($roots) > 1) {
             // Legacy libxml reopens html beneath the original wrapper, not another body.
             $_later = [];
@@ -490,14 +515,15 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
                 $_later_root = $roots[$_i];
                 $_later[] = $_later_root;
             }
-            $_children = $_html["children"];
-            $_reopened = __elephc_dom_new_node("element", "html", "", [], $_later);
+            $_first_later = $_later[0];
+            if (count($_later) === 1 && $_first_later["kind"] === "element" && $_first_later["name"] === "html") {
+                $_reopened = $_first_later;
+            } else {
+                $_reopened = __elephc_dom_new_node("element", "html", "", [], $_later);
+            }
             $_children[] = $_reopened;
-            $_html["children"] = $_children;
         }
-        if (__elephc_dom_find_child($_html, "body") === null) {
-            $_html["children"] = [__elephc_dom_new_node("element", "body", "", [], $_html["children"])];
-        }
+        $_html["children"] = $_children;
         return $_html;
     }
     if (count($roots) > 0 && $roots[0]["kind"] === "element" && $roots[0]["name"] === "body") {

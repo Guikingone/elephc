@@ -60,6 +60,10 @@ $doc->loadHTML("<html>\n<head> <title> A </title> </head>\n<body> <div>Hi</div> 
 echo $doc->saveXML($doc->getElementsByTagName('html')->item(0));
 $doc->loadHTML('<?xml encoding="UTF-8"><div title="é&nbsp;€😀">é</div>');
 echo $doc->saveXML($doc->getElementsByTagName('div')->item(0));
+$doc->loadHTML('<html><head></head><div>B</div></html><html><span>C</span></html>');
+echo $doc->saveXML(), $doc->getElementsByTagName('body')->item(0)->childNodes->item(0)->nodeName;
+$doc->loadHTML('<div>a<embed>b</embed><source>c</source><track>d</track><wbr>e</wbr></div>');
+echo $doc->saveXML();
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

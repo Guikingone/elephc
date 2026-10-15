@@ -63,6 +63,13 @@ explicit `</html>` follows the legacy PHP/libxml 2.9.14 fallback: it reopens an
 and instructions stay after the outer `html`. This is not a promise to preserve
 source order for malformed whole documents; newer libxml tree-repair rules can differ.
 
+When an explicit `html` has no `body`, its `head` and leading wrapper nodes stay
+outside the implied body. Content following that closed `html` is attached only
+after the original body is built; an explicit reopened `html` is not wrapped in
+another `html`. A head-only document does not gain an empty body. Legacy void
+elements exclude `embed`, `source`, `track`, and `wbr`, which can retain children
+under the libxml 2.9.14 compatibility behavior used here.
+
 ### `LIBXML_*` flags Termwind uses
 
 These constants are always available (including inside a namespace, and in
