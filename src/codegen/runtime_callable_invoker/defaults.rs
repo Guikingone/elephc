@@ -88,9 +88,10 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
             if let Some(message) = deferred_error_message(default) {
                 return Some(InvokerDefaultValue::DeferredError(message.to_string()));
             }
-            if let Some(helper) = module.closures.iter().find(|function|
+            if let Some(helper) = module.closures.iter().chain(module.functions.iter()).find(|function|
                 function.callable_default.as_ref().is_some_and(|value|
-                    value == default && value.span == default.span)) {
+                    value == default && value.span == default.span)
+                    && function.lexical_class.as_deref() == current_class) {
                 return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
             }
             let value = resolve_const_default(default, &context)?;

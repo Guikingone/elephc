@@ -654,6 +654,10 @@ pub(super) fn eval_reflection_parameter_object_result(
     values.release(default_value_constant_name)?;
     values.release(class_value)?;
     values.release(constructor)?;
+    if let Err(status) = attach_parameter_default_factory(object, parameter, context, values) {
+        let _ = eval_release_value(context, values, object);
+        return Err(status);
+    }
     Ok(object)
 }
 
@@ -690,6 +694,10 @@ pub(super) fn eval_reflection_parameter_default_value(
     let Some(default) = parameter.default_value.as_ref() else {
         return values.null();
     };
+    // The factory, not metadata construction, owns evaluation of a deferred tree.
+    if parameter_default_is_deferred(default) {
+        return values.null();
+    }
     if let Some(class_name) = parameter.declaring_class_name.as_deref() {
         context.push_class_scope(class_name.to_string());
         context.push_called_class_scope(class_name.to_string());

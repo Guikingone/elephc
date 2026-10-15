@@ -102,7 +102,9 @@ pub(super) fn register_eval_native_constructor(
             );
         }
     }
-    let default_context = EvalNativeDefaultContext::for_class(ctx.module, &registration.class_name);
+    let default_context = super::default_source::declaring_default_context(
+        ctx.module, &registration.class_name, "__construct", false,
+    );
     for (index, default) in registration.signature.defaults.iter().enumerate() {
         // The hidden count slot's synthesized `0` is not a PHP default and must not be reported.
         if !visible_indexes.contains(&index) {
@@ -124,7 +126,7 @@ pub(super) fn register_eval_native_constructor(
             continue;
         }
         if register_eval_native_param_default_error(ctx, context_offset,
-            (&class_name_label, class_name_len), index, default.as_ref(),
+            (&class_name_label, class_name_len), index, default.as_ref(), &default_context,
             "__elephc_eval_register_native_constructor_param_default_error") { continue; }
         if let Some(default) = default
             .as_ref()
@@ -149,7 +151,9 @@ pub(super) fn register_eval_native_constructor(
             "__construct",
             index,
         );
-        if ctx.module.functions.iter().any(|function| function.name == helper) {
+        if ctx.module.functions.iter().any(|function| function.name == helper)
+            && !default.as_ref().is_some_and(crate::types::deferred_defaults::contains_deferred_error)
+        {
             register_eval_native_constructor_compiled_default(
                 ctx,
                 context_offset,

@@ -33,14 +33,8 @@ pub(super) fn eval_native_property_default(
     default_context: &EvalNativeDefaultContext<'_>,
 ) -> Option<EvalNativePropertyDefault> {
     if let Some(default) = default {
-        if let ExprKind::Throw(exception) = &default.kind {
-            if let ExprKind::NewObject { class_name, args } = &exception.kind {
-                if let [Expr { kind: ExprKind::StringLiteral(message), .. }] = args.as_slice() {
-                    if class_name.as_str() == "Error" {
-                        return Some(EvalNativePropertyDefault::DeferredError(message.clone()));
-                    }
-                }
-            }
+        if let Some(message) = crate::types::deferred_defaults::unconditional_error_message(default) {
+            return Some(EvalNativePropertyDefault::DeferredError(message.to_string()));
         }
         return eval_native_literal_default(default)
             .or_else(|| eval_native_array_default(default, default_context, 0))

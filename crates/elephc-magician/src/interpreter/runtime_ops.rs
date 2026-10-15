@@ -29,6 +29,11 @@ thread_local! {
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Boxes a borrowed persistent native callable descriptor for Reflection default factories.
+    fn native_callable_from_raw(&mut self, _descriptor: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Publishes a successful eval-owned resource close to a shared native inventory.
     fn resource_closed(&mut self, _resource: RuntimeCellHandle) -> Result<(), EvalStatus> { Ok(()) }
 

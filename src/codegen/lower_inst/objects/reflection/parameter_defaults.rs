@@ -19,6 +19,16 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_deferred_default_value(default) {
         return Ok(Some(value));
     }
+    if let Some(helper) = ctx.module.functions.iter().chain(ctx.module.closures.iter())
+        .find(|function| function.lexical_class.as_deref().is_some_and(|scope|
+            scope == current_class || current_info.is_some_and(|info|
+                info.method_impl_classes.values().chain(info.static_method_impl_classes.values())
+                    .any(|owner| owner == scope)))
+            && function.callable_default.as_ref()
+                .is_some_and(|value| value == default && value.span == default.span))
+    {
+        return Ok(Some(ReflectionParameterDefaultValue::EirHelper(helper.name.clone())));
+    }
     if let Some(value) =
         reflection_object_parameter_default_value(ctx, current_class, current_info, default)?
     {
@@ -177,6 +187,7 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
         | ReflectionParameterDefaultValue::Float(_)
         | ReflectionParameterDefaultValue::Str(_)
         | ReflectionParameterDefaultValue::DeferredError(_)
+        | ReflectionParameterDefaultValue::EirHelper(_)
         | ReflectionParameterDefaultValue::Null => false,
     }
 }

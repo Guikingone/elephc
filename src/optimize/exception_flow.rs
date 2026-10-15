@@ -371,7 +371,7 @@ impl ExceptionFlowAnalysis {
                     class.deferred_property_default_error.is_some()
                         || class.methods.get("__construct").is_some_and(|signature| {
                             signature.defaults.iter().flatten()
-                                .any(|default| matches!(default.kind, ExprKind::Throw(_)))
+                                .any(crate::types::deferred_defaults::contains_deferred_error)
                         })
                 }).map(|(name, _)| php_symbol_key(name)).collect()
             }).unwrap_or_else(|| property_defaults::imported_default_errors(program)),
@@ -1047,7 +1047,13 @@ impl ExceptionFlowAnalysis {
         } else {
             ThrownTypes::default()
         };
-        let entry_check = if self.constructor_default_errors.contains(&php_symbol_key(class_name)) {
+        let entry_check = if self.constructor_default_errors.contains(&php_symbol_key(class_name))
+            || self.resolve_method_value(
+                class_name,
+                "__construct",
+                &self.instance_method_unresolved_defaults,
+            ) == Some(true)
+        {
             entry_check.combined(ThrownTypes::exact("Error"))
         } else {
             entry_check

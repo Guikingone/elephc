@@ -171,7 +171,8 @@ pub(super) fn lower_method_call(
     // A deferred default can throw before the invocation publishes its receiver.
     // Place this root above result staging so normal cleanup preserves LIFO order.
     let (object, default_receiver_owner) = if sig.as_ref().is_some_and(|signature| {
-        signature.defaults.iter().flatten().any(|default| matches!(default.kind, ExprKind::Throw(_)))
+        signature.defaults.iter().flatten()
+            .any(crate::types::deferred_defaults::contains_deferred_error)
     }) {
         root_owned_call_operand(ctx, object, expr.span)
     } else {

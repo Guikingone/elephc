@@ -276,6 +276,13 @@ A named `Foo::class` is a compile-time string, so it can be a property default a
 
 A trait consumer without a parent may be declared with a `parent::class` default. Ordinary or static property defaults then raise a catchable `Error` when the class initializes, including construction and static-property access. An imported method or promoted constructor parameter evaluates its default only when omitted, so passing that parameter explicitly remains valid. A directly declared `parent::class` property or method-parameter default with no parent is rejected at compile time. Ordinary `parent::CONST` defaults remain legal declarations even without a parent; materializing them raises `Cannot access "parent" when current class scope has no parent`, rather than the `Cannot use "parent"` diagnostic for class-name defaults.
 
+Deferred accesses inside default arrays remain part of the surrounding expression.
+An untaken literal ternary or coalescing branch does not evaluate the failing access.
+For method and constructor parameters, an omitted nested default keeps its
+`catch (Error)` handler and releases earlier supplied temporaries on failure.
+Callback calls and native `ReflectionParameter` use the same lazy default tree;
+reflection reports its presence before `getDefaultValue()` evaluates it.
+
 `ReflectionProperty::hasDefaultValue()` preserves the presence of a deferred default. `getDefaultValue()` raises its catchable `Error` only when that particular default is materialized, without evaluating other properties in the class. This also applies to native property metadata accessed through `eval()`.
 
 Interface method parameters may also declare a lazy `parent::CONST` default:

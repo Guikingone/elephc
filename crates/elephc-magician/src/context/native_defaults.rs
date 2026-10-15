@@ -14,6 +14,13 @@ use super::*;
 pub enum NativeCallableDefault {
     /// The declared default exists but raises this Error when it is materialized.
     DeferredError(String),
+    /// Compiler-generated default expression data, evaluated with its declaring class scope.
+    Expression {
+        expression: Box<crate::eval_ir::EvalExpr>,
+        lexical_class: String,
+        /// Persistent capture-free descriptor used only by protected native Reflection getters.
+        reflection_factory: Option<usize>,
+    },
     Null,
     Bool(bool),
     Int(i64),

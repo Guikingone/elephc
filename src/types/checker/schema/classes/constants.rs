@@ -98,7 +98,9 @@ pub(crate) fn normalize_lexical_default_in_scope(
     rewrite_expr(value, owner, validation_parent)?;
     let parent = if owner_class.is_none() { ParentScope::NoClass }
         else { parent_class.map(ParentScope::Bound).unwrap_or(ParentScope::MissingCallable) };
-    rewrite_expr(value, owner, parent)
+    let mut rewritten = rewrite_expr(value, owner, parent)?;
+    crate::types::deferred_defaults::prune_literal_branches(&mut rewritten);
+    Ok(rewritten)
 }
 
 /// Identifies errors that can remain lazy in imported or ordinary constant defaults.
@@ -439,9 +441,22 @@ fn rewrite_expr(
                 name: name.clone(),
             }
         }
-        ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
-            receiver: receiver.clone(),
-            args: rewrite_expr_list(args, class_name, parent_name)?,
+        ExprKind::NewScopedObject { receiver, args } => {
+            let args = rewrite_expr_list(args, class_name, parent_name)?;
+            let bound = match (receiver, parent_name) {
+                (StaticReceiver::Self_, _) if !class_name.is_empty() => Some(class_name),
+                (StaticReceiver::Parent, ParentScope::Bound(parent)) => Some(parent),
+                _ => None,
+            };
+            if let Some(class) = bound {
+                ExprKind::NewObject {
+                    class_name: Name::from_parts(NameKind::FullyQualified,
+                        class.trim_start_matches('\\').split('\\').map(str::to_string).collect()),
+                    args,
+                }
+            } else {
+                ExprKind::NewScopedObject { receiver: receiver.clone(), args }
+            }
         },
         ExprKind::Yield { key, value } => ExprKind::Yield {
             key: key

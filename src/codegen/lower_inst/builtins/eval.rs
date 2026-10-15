@@ -258,6 +258,7 @@ mod signature_metadata;
 mod default_expressions;
 mod default_constants;
 mod default_errors;
+mod default_source;
 mod user_constants;
 mod function_registration;
 mod method_registration;

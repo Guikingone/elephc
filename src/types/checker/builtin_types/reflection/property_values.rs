@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Invokes a private native default factory only when getDefaultValue requests its value.
+pub(super) fn reflection_parameter_lazy_factory_return(span: crate::span::Span) -> Stmt {
+    let factory = reflection_this_property("__default_factory", span);
+    Stmt::new(StmtKind::If {
+        condition: binary_expr(factory.clone(), BinOp::StrictNotEq, Expr::new(ExprKind::Null, span), span),
+        then_body: vec![Stmt::new(StmtKind::Return(Some(Expr::new(ExprKind::FunctionCall {
+            name: Name::unqualified("call_user_func"),
+            args: vec![factory],
+        }, span))), span)],
+        elseif_clauses: Vec::new(),
+        else_body: None,
+    }, span)
+}
+
 /// Materializes a property's retained default without initializing unrelated class defaults.
 pub(super) fn builtin_reflection_property_get_default_value_method() -> ClassMethod {
     let span = crate::span::Span::dummy();

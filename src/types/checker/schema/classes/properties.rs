@@ -47,8 +47,8 @@ pub(super) fn apply_properties(
             super::constants::validate_compile_time_default_in_scope(
                 default, &class.name, validation_parent,
             )?;
-            super::constants::normalize_property_default_in_scope(
-                default, &class.name, class.extends.as_deref(),
+            super::constants::normalize_lexical_default_in_scope(
+                default, Some(&class.name), class.extends.as_deref(),
             )
         }).transpose();
         let normalized = match normalized {
@@ -69,6 +69,14 @@ pub(super) fn apply_properties(
             }
             Err(error) => return Err(error),
         };
+        if let Some(message) = normalized.as_ref()
+            .and_then(crate::types::deferred_defaults::unconditional_error_message)
+        {
+            let imported = checker.trait_imported_properties.get(&class.name)
+                .is_some_and(|names| names.contains(&prop.name));
+            let priority = usize::from(prop.is_static) * 2 + usize::from(imported);
+            default_errors[priority].get_or_insert_with(|| message.to_string());
+        }
         if prop.is_static {
             apply_static_property(state, class, checker, prop)?;
         } else {

@@ -56,7 +56,7 @@ pub(super) fn collect(
         let methods = if static_methods { &class.static_methods } else { &class.methods };
         methods.iter()
             .filter(|(_, signature)| signature.defaults.iter().flatten()
-                .any(|default| matches!(default.kind, ExprKind::Throw(_))))
+                .any(crate::types::deferred_defaults::contains_deferred_error))
             .map(move |(method, signature)| (method_effect_key(class_name, method), signature.clone()))
     }).collect()
 }
@@ -69,5 +69,5 @@ pub(super) fn can_throw(signature: &FunctionSig, args: &[Expr], span: crate::spa
     plan.possible_default_argument_mask(signature).into_iter()
         .zip(&signature.defaults)
         .any(|(possible, default)| possible && default.as_ref()
-            .is_some_and(|value| matches!(value.kind, ExprKind::Throw(_))))
+            .is_some_and(crate::types::deferred_defaults::contains_deferred_error))
 }

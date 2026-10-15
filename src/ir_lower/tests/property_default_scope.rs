@@ -43,6 +43,18 @@ class MethodConsumer {
 class LazyMethod {
     public static function value(array $items = [true ? 'ok' : parent::A]): array { return $items; }
 }
+class NestedMethodConsumer {
+    public static function value(array $items = [parent::A]): array { return $items; }
+    public function instance(array $items = ['key' => [parent::A]]): array { return $items; }
+    public function __construct(array $items = [parent::A]) {}
+}
+$nestedParameter = new ReflectionParameter([NestedMethodConsumer::class, 'value'], 0);
+echo $nestedParameter->isDefaultValueAvailable();
+try { $nestedParameter->getDefaultValue(); } catch (Error $error) { echo 'nested-reflection'; }
+try { NestedMethodConsumer::value(); } catch (Error $error) { echo 'nested-static'; }
+try { new NestedMethodConsumer(); } catch (Error $error) { echo 'nested-constructor'; }
+try { call_user_func([NestedMethodConsumer::class, 'value']); }
+catch (Error $error) { echo 'nested-descriptor'; }
 echo json_encode(LazyMethod::value());
 interface ParentlessContract { public function value(int $value = parent::A); }
 class LexicalBase { const A = 3; }
@@ -81,9 +93,8 @@ echo (new MethodConsumer())->value(7), MethodConsumer::staticValue(value: 8);
         .as_ref().expect("the method retains its default");
     let crate::parser::ast::ExprKind::ArrayLiteral(items) = &lazy_default.kind
         else { panic!("{target_name}: preserve the surrounding default array") };
-    assert!(matches!(&items[0].kind, crate::parser::ast::ExprKind::Ternary { else_expr, .. }
-        if matches!(else_expr.kind, crate::parser::ast::ExprKind::Throw(_))),
-        "{target_name}: defer only the unselected receiver expression");
+    assert!(matches!(&items[0].kind, crate::parser::ast::ExprKind::StringLiteral(value) if value == "ok"),
+        "{target_name}: a validated literal condition skips its unselected Error");
     assert_eq!(consumer.deferred_property_default_error.as_deref(),
         Some("Cannot use \"parent\" when current class scope has no parent"),
         "{target_name}: initialization must resolve instance defaults before static defaults");
@@ -124,6 +135,17 @@ echo (new MethodConsumer())->value(7), MethodConsumer::staticValue(value: 8);
         "__elephc_eval_register_native_constructor_param_default_error"] {
         assert!(assembly.contains(symbol), "{target_name}: missing lazy callable default registration {symbol}");
     }
+    for symbol in ["__elephc_eval_register_native_method_param_default_expression",
+        "__elephc_eval_register_native_static_method_param_default_expression",
+        "__elephc_eval_register_native_constructor_param_default_expression"] {
+        assert!(assembly.contains(symbol), "{target_name}: missing nested default expression registration {symbol}");
+    }
+    assert_eq!(module.functions.iter().filter(|function| {
+        function.lexical_class.as_deref() == Some("NestedMethodConsumer")
+            && function.callable_default.is_some()
+    }).count(), 3, "{target_name}: native instance, static and constructor helpers");
+    assert!(module.class_infos["ReflectionParameter"].visible_property_index("__default_factory").is_some(),
+        "{target_name}: the native and eval paths share one lazy factory slot");
 }
 
 /// Separates target cases so each keeps CI's normal per-test timeout budget.
