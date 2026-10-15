@@ -24,6 +24,22 @@ pub(super) fn for_class(
     Some(super::stmt::lower_throw_access_error_expr(ctx, &message, span))
 }
 
+/// Raises the recorded initialization error while preserving an expression's expected type.
+pub(super) fn for_class_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    span: Span,
+    php_type: PhpType,
+) -> Option<LoweredValue> {
+    let message = ctx
+        .classes
+        .get(class_name.trim_start_matches('\\'))
+        .and_then(|class| class.deferred_property_default_error.clone())?;
+    Some(super::stmt::lower_throw_access_error_expr_as(
+        ctx, &message, span, php_type,
+    ))
+}
+
 /// Applies the class-wide check even when the accessed static property has a valid default.
 pub(super) fn for_receiver(
     ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, span: Span,

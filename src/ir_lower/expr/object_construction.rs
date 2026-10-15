@@ -16,8 +16,12 @@ pub(super) fn lower_new_object(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    if let Some(error) = crate::ir_lower::property_default_errors::for_class(
-        ctx, class_name.as_str(), expr.span,
+    let object_type = PhpType::Object(class_name.as_str().to_string());
+    if let Some(error) = crate::ir_lower::property_default_errors::for_class_as(
+        ctx,
+        class_name.as_str(),
+        expr.span,
+        object_type,
     ) {
         return error;
     }

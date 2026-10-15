@@ -216,6 +216,74 @@ fn test_nested_default_ninth_review_property_branches_no_ir_opt() {
     without_ir_opt(test_nested_default_ninth_review_property_branches);
 }
 
+/// Class-constant conditions keep deferred property branches lazy until initialization.
+#[test]
+fn test_nested_default_tenth_review_nonliteral_property_condition() {
+    check(r#"<?php
+class Probe {
+    public const ENABLED = true;
+    public array $items = [self::ENABLED ? 'ok' : parent::A];
+}
+for ($i = 0; $i < 4; $i++) {
+    $probe = new Probe();
+    echo json_encode($probe->items), '|';
+    unset($probe);
+}
+"#, "[\"ok\"]|".repeat(4).as_str(), true);
+}
+
+/// Nonliteral property conditions initialize identically without EIR optimization.
+#[test]
+fn test_nested_default_tenth_review_nonliteral_property_condition_no_ir_opt() {
+    without_ir_opt(test_nested_default_tenth_review_nonliteral_property_condition);
+}
+
+/// Dynamic and reflected allocation share the EIR property initializer for nonliteral branches.
+#[test]
+fn test_nested_default_tenth_review_nonliteral_dynamic_property_condition() {
+    check(r#"<?php
+class Probe {
+    public const ENABLED = true;
+    public array $items = [self::ENABLED ? 'ok' : parent::A];
+}
+$class = Probe::class;
+$reflection = new ReflectionClass(Probe::class);
+for ($i = 0; $i < 4; $i++) {
+    $dynamic = new $class();
+    $reflected = $reflection->newInstanceWithoutConstructor();
+    echo json_encode($dynamic->items), ':', json_encode($reflected->items), '|';
+    unset($dynamic, $reflected);
+}
+unset($reflection);
+"#, "[\"ok\"]:[\"ok\"]|".repeat(4).as_str(), false);
+}
+
+/// Dynamic nonliteral property initialization remains stable without EIR optimization.
+#[test]
+fn test_nested_default_tenth_review_nonliteral_dynamic_property_condition_no_ir_opt() {
+    without_ir_opt(test_nested_default_tenth_review_nonliteral_dynamic_property_condition);
+}
+
+/// Chained reads preserve their object type after a deferred property initializer throws.
+#[test]
+fn test_nested_default_tenth_review_chained_new_error() {
+    check(r#"<?php
+trait Defaults { public int $value = parent::A; }
+class Probe { use Defaults; }
+for ($i = 0; $i < 4; $i++) {
+    try { echo (new Probe())->value; }
+    catch (Error $error) { echo $error->getMessage(), '|'; }
+}
+echo 'after';
+"#, &format!("{}after", format!("{ERROR}|").repeat(4)), true);
+}
+
+/// Chained deferred construction errors retain their result type without EIR optimization.
+#[test]
+fn test_nested_default_tenth_review_chained_new_error_no_ir_opt() {
+    without_ir_opt(test_nested_default_tenth_review_chained_new_error);
+}
+
 /// A trait's native default helpers preserve each consuming class's constructor scope.
 #[test]
 fn test_nested_default_ninth_review_trait_helper_scope() {
