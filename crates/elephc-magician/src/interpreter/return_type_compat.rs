@@ -214,12 +214,6 @@ fn eval_property_class_type_matches(
     pending_class: Option<&EvalClass>,
     context: &ElephcEvalContext,
 ) -> bool {
-    if property_name
-        .trim_start_matches('\\')
-        .eq_ignore_ascii_case(required_name.trim_start_matches('\\'))
-    {
-        return true;
-    }
     let Some(property_resolved) =
         eval_resolve_return_class_type_name(property_name, property_owner, pending_class, context)
     else {

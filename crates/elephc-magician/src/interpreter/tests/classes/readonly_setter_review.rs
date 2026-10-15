@@ -40,6 +40,20 @@ fn execute_program_asymmetric_current_review_setter_class_supertype() {
 #[test]
 fn execute_program_asymmetric_current_review_setter_lexical_self() { verify("", "self", "Base|int"); }
 
+/// Identical `self` spellings still resolve against different declaration owners.
+#[test]
+fn execute_program_asymmetric_tenth_review_setter_self_owner_mismatch() {
+    let source = "abstract class Base { abstract public self $x { set; } } abstract class Child extends Base { public public(set) readonly self $x; } return true;";
+    let program = parse_fragment(source.as_bytes()).expect("parse owner-relative self storage");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    assert_eq!(
+        execute_program(&program, &mut scope, &mut values)
+            .expect_err("child self storage cannot accept every parent self setter value"),
+        EvalStatus::RuntimeFatal,
+    );
+}
+
 /// The setter-only abstract readonly exception does not relax other declaration contracts.
 #[test]
 fn execute_program_asymmetric_current_review_setter_refusals() {

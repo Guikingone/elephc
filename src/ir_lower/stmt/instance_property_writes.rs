@@ -238,7 +238,17 @@ fn lower_property_assign_value(
     // store would write the box POINTER into fixed field storage; with a coercion it would
     // silently truncate the overflow promotion the box exists to carry.
     let value = narrow_mixed_value_for_packed_int_field(ctx, object.value, property, value, span);
+    let retained_abstract_setter = receiver_retains_abstract_setter(ctx, object.value, property);
     let value = box_value_for_runtime_shaped_receiver(ctx, object, value, span);
+    // The backing slot may be wider than its inherited setter. Preserve the runtime value's
+    // tag through storage coercion so the backend can validate the setter contract itself.
+    let value = if retained_abstract_setter
+        && !matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed)
+    {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
+    } else {
+        value
+    };
     if magic_set_receiver_has_method(ctx, object.value, property) {
         lower_magic_property_set(ctx, object.value, property, value, span);
         return;
@@ -261,13 +271,6 @@ fn lower_property_assign_value(
     // instead keeps argument ownership in EIR, including when a boxed receiver could dispatch
     // to either a setter or an ordinary slot. Normal retirement below follows the same choice.
     let stored_property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
-    let retained_abstract_setter = match ctx.builder.value_php_type(object.value).codegen_repr() {
-        PhpType::Object(class) => ctx.classes.get(class.trim_start_matches('\\'))
-            .is_some_and(|info| info.retained_abstract_setter(property).is_some()),
-        PhpType::Mixed | PhpType::Union(_) => ctx.classes.values()
-            .any(|info| info.retained_abstract_setter(property).is_some()),
-        _ => false,
-    };
     // A no-op setter consumes no storage owner, and its argument guard may throw.
     // Scoped cleanup prevents any dispatch arm from adopting the original SSA owner.
     let pins = if retained_abstract_setter || property_store_keeps_independent_ref(
@@ -311,6 +314,21 @@ fn lower_property_assign_value(
         release_magic_set_value_after_call(ctx, value, span);
     } else {
         release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    }
+}
+
+/// Returns whether this receiver can dispatch the write through an inherited abstract setter.
+fn receiver_retains_abstract_setter(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    match ctx.builder.value_php_type(object).codegen_repr() {
+        PhpType::Object(class) => ctx.classes.get(class.trim_start_matches('\\'))
+            .is_some_and(|info| info.retained_abstract_setter(property).is_some()),
+        PhpType::Mixed | PhpType::Union(_) => ctx.classes.values()
+            .any(|info| info.retained_abstract_setter(property).is_some()),
+        _ => false,
     }
 }
 

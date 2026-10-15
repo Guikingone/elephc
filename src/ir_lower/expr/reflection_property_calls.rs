@@ -147,6 +147,13 @@ pub(super) fn lower_reflection_property_set_value(
     let slot = reflection_property_physical_ref(ctx, declaring_class, property)?;
     let retained_abstract_setter = ctx.classes.get(declaring_class.trim_start_matches('\\'))
         .is_some_and(|info| info.retained_abstract_setter(property).is_some());
+    let value = if retained_abstract_setter
+        && !matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed)
+    {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
+    } else {
+        value
+    };
     let pins = pin_in_flight_owners(ctx, &[object.value, value.value], expr.span);
     ctx.emit_void(
         Op::PropSet,

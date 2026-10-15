@@ -138,6 +138,57 @@ $result = read(new ResultBox()); echo $result[0];
 "#), "Dxx");
 }
 
+/// Retained setter guards reject null after nullable backing-storage materialization.
+#[test]
+fn test_readonly_setter_tenth_review_nullable_argument_guard() {
+    let source = r#"<?php
+abstract class Base { abstract public int $x { set; } }
+abstract class Child extends Base { public public(set) readonly ?int $x; }
+class Grandchild extends Child {}
+$object = new Grandchild();
+try { $object->x = null; }
+catch (TypeError $error) { echo $error->getMessage(), "|"; }
+try { (new ReflectionProperty(Grandchild::class, "x"))->setValue($object, null); }
+catch (TypeError $error) { echo $error->getMessage(), "|"; }
+echo (new ReflectionProperty(Grandchild::class, "x"))->isInitialized($object) ? "bad" : "U";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "Base::$x::set(): Argument #1 ($value) must be of type int, null given|".repeat(2) + "U",
+    );
+}
+
+/// Abstract setter storage accepts class supertypes declared later in schema order.
+#[test]
+fn test_readonly_setter_tenth_review_aot_class_supertype_order() {
+    assert_eq!(compile_and_run(r#"<?php
+abstract class AContract { abstract public ZValue $x { set; } }
+abstract class BStorage extends AContract { public public(set) readonly YBase $x; }
+class CConcrete extends BStorage {}
+class YBase {}
+class ZValue extends YBase {}
+$object = new CConcrete();
+$object->x = new ZValue();
+echo isset($object->x) ? "bad" : "U";
+"#), "U");
+}
+
+/// Lexical `self` setter and storage types resolve against their own declaring classes.
+#[test]
+fn test_readonly_setter_tenth_review_eval_self_owner() {
+    let out = compile_and_run_capture(r#"<?php
+echo "before";
+eval('abstract class EvalSelfBase { abstract public self $x { set; } }
+abstract class EvalSelfChild extends EvalSelfBase {
+    public public(set) readonly self $x;
+}
+echo "bad";');
+"#);
+    assert!(!out.success, "{}", out.stdout);
+    assert_eq!(out.stdout, "before", "{}", out.stderr);
+    assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
+}
+
 /// Each IR-off control is separately scheduled under the existing CI timeout.
 macro_rules! without_opt_test {
     ($name:ident, $case:ident) => {
@@ -155,3 +206,6 @@ without_opt_test!(test_readonly_setter_review_reflection_eval_no_ir_opt, test_re
 without_opt_test!(test_readonly_setter_review_reflection_native_parent_no_ir_opt, test_readonly_setter_review_reflection_native_parent);
 without_opt_test!(test_readonly_setter_review_reflection_owners_no_ir_opt, test_readonly_setter_review_reflection_owners);
 without_opt_test!(test_readonly_setter_review_reflected_result_owner_no_ir_opt, test_readonly_setter_review_reflected_result_owner);
+without_opt_test!(test_readonly_setter_tenth_review_nullable_argument_guard_no_ir_opt, test_readonly_setter_tenth_review_nullable_argument_guard);
+without_opt_test!(test_readonly_setter_tenth_review_aot_class_supertype_order_no_ir_opt, test_readonly_setter_tenth_review_aot_class_supertype_order);
+without_opt_test!(test_readonly_setter_tenth_review_eval_self_owner_no_ir_opt, test_readonly_setter_tenth_review_eval_self_owner);

@@ -8,6 +8,8 @@
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::errors::CompileError;
 use crate::parser::ast::{ClassProperty, Expr, ExprKind, Visibility};
 use crate::span::Span;
@@ -29,6 +31,7 @@ use super::{collect_attribute_args, collect_attribute_names};
 pub(super) fn apply_properties(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
 ) -> Result<(), CompileError> {
     for prop in &class.properties {
@@ -49,7 +52,7 @@ pub(super) fn apply_properties(
                     hooks.set |= inherited.set;
                 }
             }
-            apply_instance_property(state, class, checker, prop)?;
+            apply_instance_property(state, class, class_map, checker, prop)?;
             state.property_hooks.insert(prop.name.clone(), hooks);
         }
     }
@@ -224,6 +227,7 @@ fn validate_static_property_override(
 fn apply_instance_property(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     prop: &ClassProperty,
 ) -> Result<(), CompileError> {
@@ -258,6 +262,7 @@ fn apply_instance_property(
         return apply_instance_property_redeclaration(
             state,
             class,
+            class_map,
             checker,
             prop,
             &parent_declaring_class,
@@ -343,6 +348,7 @@ fn apply_instance_property(
 fn apply_instance_property_redeclaration(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     prop: &ClassProperty,
     parent_declaring_class: &str,
@@ -368,6 +374,7 @@ fn apply_instance_property_redeclaration(
     validate_instance_property_override(
         state,
         class,
+        class_map,
         checker,
         prop,
         declared_ty.as_ref(),
@@ -557,6 +564,7 @@ fn replace_active_property_flags(
 fn validate_instance_property_override(
     state: &ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     prop: &ClassProperty,
     declared_ty: Option<&PhpType>,
@@ -622,6 +630,7 @@ fn validate_instance_property_override(
             state,
             checker,
             class,
+            class_map,
             prop,
             declared_ty,
             parent_declaring_class,
@@ -673,6 +682,7 @@ fn validate_abstract_property_contract(
     state: &ClassBuildState,
     checker: &Checker,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     prop: &ClassProperty,
     declared_ty: Option<&PhpType>,
     parent_declaring_class: &str,
@@ -707,7 +717,7 @@ fn validate_abstract_property_contract(
         }
     }
     if let Some(required_set) = contract.set_type.as_ref() {
-        if !checker.type_accepts(&actual_ty, required_set) {
+        if !abstract_setter_storage_type_accepts(checker, class_map, &actual_ty, required_set) {
             return Err(CompileError::new(
                 prop.span,
                 &format!(
@@ -730,6 +740,58 @@ fn validate_abstract_property_contract(
         }
     }
     Ok(())
+}
+
+/// Checks setter-storage contravariance against every declaration, including classes whose
+/// alphabetic schema turn has not yet run.
+fn abstract_setter_storage_type_accepts(
+    checker: &Checker,
+    class_map: &HashMap<String, FlattenedClass>,
+    storage: &PhpType,
+    setter: &PhpType,
+) -> bool {
+    if checker.type_accepts(storage, setter) {
+        return true;
+    }
+    if let PhpType::Union(members) = setter {
+        return members.iter().all(|member| {
+            abstract_setter_storage_type_accepts(checker, class_map, storage, member)
+        });
+    }
+    if let PhpType::Union(members) = storage {
+        return members.iter().any(|member| {
+            abstract_setter_storage_type_accepts(checker, class_map, member, setter)
+        });
+    }
+    let (PhpType::Object(storage_name), PhpType::Object(setter_name)) = (storage, setter) else {
+        return false;
+    };
+    declared_class_is_a(class_map, setter_name, storage_name)
+}
+
+/// Walks the complete flattened declaration map instead of the partially built class table.
+fn declared_class_is_a(
+    class_map: &HashMap<String, FlattenedClass>,
+    class_name: &str,
+    ancestor_name: &str,
+) -> bool {
+    let canonical = |name: &str| crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    let ancestor = canonical(ancestor_name);
+    let mut current = canonical(class_name);
+    let mut seen = HashSet::new();
+    while seen.insert(current.clone()) {
+        if current == ancestor {
+            return true;
+        }
+        let Some(class) = class_map.iter()
+            .find_map(|(name, class)| (canonical(name) == current).then_some(class))
+        else {
+            return false;
+        };
+        let Some(parent) = class.extends.as_deref() else { return false };
+        current = canonical(parent);
+    }
+    false
 }
 
 /// Looks up the declared type of a static property named `property` from the
