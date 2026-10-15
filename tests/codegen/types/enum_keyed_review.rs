@@ -111,7 +111,10 @@ fn test_enum_keyed_review_named_second_no_ir_opt() {
 /// Verifies named last wins unpack binding and selected-method diagnostics.
 #[test]
 fn test_enum_keyed_review_named_last_wins() {
-    verify("['a' => bad(), 'a' => 3]", "SArgumentCountError:E::f(): Argument #2 ($b) not passed");
+    verify(
+        "['a' => bad(), 'a' => 3]",
+        "SArgumentCountError:Too few arguments to function E::f(), 1 passed and exactly 2 expected",
+    );
 }
 
 /// Preserves named last wins unpack behavior with EIR optimization disabled.
@@ -135,7 +138,10 @@ fn test_enum_keyed_review_numeric_valid_no_ir_opt() {
 /// Verifies named valid unpack binding and selected-method diagnostics.
 #[test]
 fn test_enum_keyed_review_named_valid() {
-    verify("['a' => 3]", "ArgumentCountError:E::f(): Argument #2 ($b) not passed");
+    verify(
+        "['a' => 3]",
+        "ArgumentCountError:Too few arguments to function E::f(), 1 passed and exactly 2 expected",
+    );
 }
 
 /// Preserves named valid unpack behavior with EIR optimization disabled.
@@ -228,4 +234,58 @@ for ($i = 0; $i < {iterations}; $i++) {{
 #[test]
 fn test_enum_keyed_review_owners_no_ir_opt() {
     without_ir_opt(test_enum_keyed_review_owners);
+}
+
+/// Integer-like duplicate keys collapse before unpacking without skipping source evaluation.
+#[test]
+fn test_enum_keyed_tenth_review_duplicate_positional_keys() {
+    let source = r#"<?php
+interface I { public function f(int $a, int $b): int; }
+enum E implements I { case A; public function f(int $a, int $b): int { return $a + $b; } }
+function mark(int $value): int { echo $value; return $value; }
+function invoke(I $value): int {
+    return $value->f(...[0 => mark(1), false => mark(2), '0' => mark(3)]);
+}
+function complete(I $value): int {
+    return $value->f(...[0 => mark(1), false => mark(2), '0' => mark(3), 1 => mark(4)]);
+}
+try { invoke(E::A); }
+catch (ArgumentCountError $error) { echo '|', $error->getMessage(); }
+echo '|', complete(E::A);
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "123|Too few arguments to function E::f(), 1 passed and exactly 2 expected|12347"
+    );
+}
+
+/// Duplicate positional-key normalization is independent of EIR optimization.
+#[test]
+fn test_enum_keyed_tenth_review_duplicate_positional_keys_no_ir_opt() {
+    without_ir_opt(test_enum_keyed_tenth_review_duplicate_positional_keys);
+}
+
+/// A final omitted named slot uses PHP's count diagnostic, not the interior-hole wording.
+#[test]
+fn test_enum_keyed_tenth_review_trailing_named_omission() {
+    let source = r#"<?php
+interface I { public function f(int $a, int $b): int; }
+enum E implements I { case A; public function f(int $a, int $b): int { return $a + $b; } }
+function direct(I $value): int { return $value->f(a: 1); }
+function unpack(I $value): int { return $value->f(...['a' => 1]); }
+foreach ([direct(...), unpack(...)] as $callable) {
+    try { $callable(E::A); }
+    catch (ArgumentCountError $error) { echo $error->getMessage(), '|'; }
+}
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "Too few arguments to function E::f(), 1 passed and exactly 2 expected|".repeat(2)
+    );
+}
+
+/// Trailing named-argument diagnostics are stable without EIR optimization.
+#[test]
+fn test_enum_keyed_tenth_review_trailing_named_omission_no_ir_opt() {
+    without_ir_opt(test_enum_keyed_tenth_review_trailing_named_omission);
 }

@@ -8,6 +8,8 @@
 //! Key details:
 //! - String keys become named arguments, numeric keys remain positional, and duplicate static keys follow PHP last-wins behavior.
 
+use std::collections::HashSet;
+
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 
@@ -99,12 +101,12 @@ pub(crate) fn validate_static_unpack_order(
         for (key, _) in pairs {
             match static_assoc_spread_key(key) {
                 Some(StaticAssocSpreadKey::Named(_)) => seen_named = true,
-                Some(StaticAssocSpreadKey::Positional) if seen_named => {
+                Some(StaticAssocSpreadKey::Positional(_)) if seen_named => {
                     return Err(super::plan::CallArgPlanError::PositionalAfterNamedUnpack {
                         span: arg.span,
                     });
                 }
-                Some(StaticAssocSpreadKey::Positional) => {}
+                Some(StaticAssocSpreadKey::Positional(_)) => {}
                 // A key that is not a literal says nothing about this array.
                 None => break,
             }
@@ -218,19 +220,27 @@ fn expand_static_spread(
 /// Converts an associative array literal's pairs into a flat list of expressions.
 /// String keys become `NamedArg` expressions with `ExpandedArgOrigin::StaticAssocNamed`;
 /// integer-like keys become positional expressions with `ExpandedArgOrigin::StaticAssocPositional`.
-/// Duplicate named keys follow PHP last-wins semantics.
+/// Duplicate named keys follow PHP last-wins semantics. A duplicate normalized positional key
+/// keeps the whole spread opaque so array construction can evaluate every overwritten value
+/// before the runtime binder observes the collapsed array.
 fn expand_static_assoc_spread(
     pairs: &[(Expr, Expr)],
     spread_span: Span,
 ) -> Option<Vec<(Expr, ExpandedArgOrigin)>> {
     let mut positional_args = Vec::new();
+    let mut positional_keys = HashSet::new();
     let mut named_args: Vec<(String, Expr)> = Vec::new();
     for (key, value) in pairs {
         match static_assoc_spread_key(key)? {
-            StaticAssocSpreadKey::Positional => positional_args.push((
-                Expr::new(value.kind.clone(), spread_span),
-                ExpandedArgOrigin::StaticAssocPositional,
-            )),
+            StaticAssocSpreadKey::Positional(key) => {
+                if !positional_keys.insert(key) {
+                    return None;
+                }
+                positional_args.push((
+                    Expr::new(value.kind.clone(), spread_span),
+                    ExpandedArgOrigin::StaticAssocPositional,
+                ));
+            }
             StaticAssocSpreadKey::Named(name) => {
                 if let Some((_, existing_value)) = named_args
                     .iter_mut()
@@ -262,7 +272,7 @@ fn expand_static_assoc_spread(
 /// Classifies a single array literal key as either a positional (integer-like)
 /// key or a named (string) key according to PHP array-unpack semantics.
 enum StaticAssocSpreadKey {
-    Positional,
+    Positional(i64),
     Named(String),
 }
 
@@ -271,11 +281,15 @@ enum StaticAssocSpreadKey {
 /// or `None` if the key is not a statically resolvable literal.
 fn static_assoc_spread_key(key: &Expr) -> Option<StaticAssocSpreadKey> {
     match &key.kind {
-        ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::FloatLiteral(_) => {
-            Some(StaticAssocSpreadKey::Positional)
+        ExprKind::IntLiteral(value) => Some(StaticAssocSpreadKey::Positional(*value)),
+        ExprKind::BoolLiteral(value) => {
+            Some(StaticAssocSpreadKey::Positional(i64::from(*value)))
+        }
+        ExprKind::FloatLiteral(value) => {
+            Some(StaticAssocSpreadKey::Positional(*value as i64))
         }
         ExprKind::StringLiteral(value) if crate::types::is_php_integer_array_key(value) => {
-            Some(StaticAssocSpreadKey::Positional)
+            Some(StaticAssocSpreadKey::Positional(value.parse().ok()?))
         }
         ExprKind::StringLiteral(value) => Some(StaticAssocSpreadKey::Named(value.clone())),
         _ => None,
@@ -413,5 +427,27 @@ mod tests {
         assert!(has_named_args(&[arg.clone()]));
         assert!(expand_planned_positional_spreads(&[arg.clone()]).is_none());
         assert!(coalesce_planned_indexed_spreads(&[arg.clone(), arg], |_| true).is_none());
+    }
+
+    /// Duplicate PHP-normalized positional keys retain the original spread for runtime collapse.
+    #[test]
+    fn duplicate_normalized_positional_keys_keep_source_array_evaluation() {
+        let arg = Expr::new(
+            ExprKind::Spread(Box::new(Expr::new(
+                ExprKind::ArrayLiteralAssoc(vec![
+                    (Expr::int_lit(0), Expr::int_lit(1)),
+                    (
+                        Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                        Expr::int_lit(2),
+                    ),
+                    (Expr::string_lit("0"), Expr::int_lit(3)),
+                ]),
+                Span::dummy(),
+            ))),
+            Span::dummy(),
+        );
+        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()]);
+        assert_eq!(expanded.args, vec![arg]);
+        assert!(expanded.origins == vec![ExpandedArgOrigin::Source]);
     }
 }

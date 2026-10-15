@@ -81,7 +81,9 @@ pub(super) fn lower_enum_interface_call(
                         "Too few arguments to function {class}::{method}(), {provided} passed and {bound} {required} expected"
                     ))
                 }),
-                Err(error) => Some(enum_argument_error(&class, method, &signature, error)),
+                Err(error) => Some(enum_argument_error(
+                    &class, method, &signature, args, error,
+                )),
             };
             if let Some((exception_class, message)) = error {
                 terminate_enum_argument_error(ctx, args, Some((&class, method, signature)),
@@ -261,15 +263,47 @@ fn staged_argument_bindings(
 
 /// Maps shared binding failures to PHP's selected implementation exception and diagnostic.
 fn enum_argument_error(
-    class: &str, method: &str, signature: &FunctionSig,
+    class: &str, method: &str, signature: &FunctionSig, args: &[Expr],
     error: crate::types::call_args::CallArgPlanError,
 ) -> (&'static str, String) {
     use crate::types::call_args::CallArgPlanError;
     match error {
-        CallArgPlanError::MissingRequired { param_idx, .. } => (
-            "ArgumentCountError", format!("{class}::{method}(): Argument #{} (${}) not passed",
-                param_idx + 1, signature.params[param_idx].0),
-        ),
+        CallArgPlanError::MissingRequired { param_idx, .. } => {
+            let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+            let later_named_parameter = expanded.iter().any(|arg| {
+                let ExprKind::NamedArg { name, .. } = &arg.kind else { return false };
+                crate::types::call_args::named_param_index(
+                    signature,
+                    crate::types::call_args::regular_param_count(signature),
+                    name,
+                ).is_some_and(|index| index > param_idx)
+            });
+            if !later_named_parameter
+                && !expanded.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            {
+                let required = crate::types::call_args::required_param_count(signature);
+                let bound = if required < crate::types::call_args::regular_param_count(signature) {
+                    "at least"
+                } else {
+                    "exactly"
+                };
+                return (
+                    "ArgumentCountError",
+                    format!(
+                        "Too few arguments to function {class}::{method}(), {} passed and {bound} {required} expected",
+                        expanded.len(),
+                    ),
+                );
+            }
+            (
+                "ArgumentCountError",
+                format!(
+                    "{class}::{method}(): Argument #{} (${}) not passed",
+                    param_idx + 1,
+                    signature.params[param_idx].0,
+                ),
+            )
+        }
         CallArgPlanError::UnknownNamed { name, .. } =>
             ("Error", format!("Unknown named parameter ${name}")),
         CallArgPlanError::Duplicate { name, .. } =>
