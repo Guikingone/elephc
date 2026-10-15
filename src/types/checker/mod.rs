@@ -65,6 +65,7 @@ pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 pub(crate) use schema::normalize_signature_default_receivers;
 pub(crate) use schema::normalize_lexical_callable_default;
+pub(crate) use builtin_types::REFLECTION_CLASS_NAMES;
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
 
