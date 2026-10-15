@@ -11,7 +11,7 @@ elephc compiles PHP to native code for five supported targets without PHP, the Z
 
 - [Installation](getting-started/installation.md) — install and manage elephc versions with elvm, or use Homebrew, a source build, a release download, or an unsupported nightly
 - [Your First Program](getting-started/your-first-program.md) — write, compile, and run your first PHP binary
-- [Benchmark Suite](https://github.com/illegalstudio/elephc/blob/main/benchmarks/README.md) — compare elephc against PHP and equivalent C fixtures
+- [Benchmark Suite](https://github.com/illegalstudio/elephc/blob/main/benchmark/README.md): compare elephc against PHP and equivalent C fixtures
 
 ## How-To
 
@@ -23,6 +23,7 @@ Task-oriented guides for building real programs with elephc.
 
 Everything about driving the compiler: the command-line flags and the full path from a `.php` or `.lfc` file to a native binary.
 
+- [Interactive REPL](compiling/repl.md): persistent eval sessions, multiline input, history, and cached native startup.
 - [Compiling Overview](compiling/overview.md) — basic invocation, output naming, defaults, and a map of this section
 - [The compilation pipeline](compiling/compilation-pipeline.md) — every phase from source text to binary, in order
 - [CLI reference](compiling/cli-reference.md) — the complete, authoritative list of every flag, value, default, and env override
@@ -58,7 +59,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
 - [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
 - [Sessions](php/sessions.md) — `session_start()`, `$_SESSION`, session ID and cookie management, file-based storage under `--web`
-- [OPcache](php/opcache.md) — the observable Zend OPcache API over elephc's compile-time script manifest: `opcache_get_status()`/`opcache_get_configuration()`, the `opcache.*` directive matrix, `ini_get`/`ini_get_all`, `extension_loaded()`
+- [OPcache](php/opcache.md): the Zend OPcache API over compiled scripts and the runtime cache for dynamic include/require, optional file caching, live statistics, and the `opcache.*` directive matrix
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
 - [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, stackful coroutine codegen

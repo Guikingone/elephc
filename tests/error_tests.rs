@@ -301,6 +301,8 @@ mod mbstring;
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]
 mod array_builtins;
+#[path = "error_tests/registry_arity.rs"]
+mod registry_arity;
 #[path = "error_tests/callables.rs"]
 mod callables;
 #[path = "error_tests/never.rs"]

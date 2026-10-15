@@ -822,7 +822,14 @@ integer. `IntegerRange` then propagates inclusive signed 64-bit intervals throug
 constants, branch comparisons, block arguments, masks, shifts, and integer
 arithmetic. It recognizes constant-step loop-carried parameters in natural loops
 and combines their initial value, comparison bound, and update step to constrain
-induction variables on the loop body and back edge.
+induction variables on the loop body and back edge. Basic recurrence recognition
+is shared with canonical loop optimization, which exposes invariant header values,
+coalesces counters with identical overflow semantics, and simplifies integer tests.
+LICM moves invariant bounds and step materializations from blocks that dominate
+every loop latch. Conditional constants stay near varying uses unless they
+accompany an invariant computation. Branch cleanup composes SSA forwarding
+arguments and merges single-predecessor loop update blocks. See
+[Canonical Loop Optimization](the-ir.md#canonical-loop-optimization).
 
 CFG states store only nonredundant path facts. Immutable scalar literals are read
 from their defining instructions, and an absent scalar integer fact denotes the
@@ -894,8 +901,13 @@ loop-invariant computations into loop preheaders, followed by CFG-aware dead
 instruction elimination for unused pure result-producing EIR instructions, CFG-aware dead
 store elimination
 for `store_local` writes to scalar PHP local slots that are never read before
-being overwritten, and branch simplification (constant-condition `cond_br`/`switch`
-folding, empty-block jump threading, and unreachable-block neutralization). These
+being overwritten, branch simplification (constant-condition `cond_br`/`switch`
+folding, empty-block jump threading, and unreachable-block neutralization), and
+concat scratch-state optimization (`src/ir_passes/concat_reset.rs`), which
+removes or coalesces statement-boundary `concat_reset` operations when CFG
+dataflow proves `_concat_off` is already at the frame base or post-dominated by
+another reset before any scratch allocation, call, output, exception, or `eval`
+path can observe it. These
 are rewrites the AST optimizer cannot express well because they need value
 identity, basic blocks, liveness, or dominance; see
 [Optimization Passes](the-ir.md#optimization-passes).

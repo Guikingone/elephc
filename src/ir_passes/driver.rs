@@ -27,6 +27,7 @@ use crate::ir::{DataPool, Function, Module};
 use super::branch_simplify::BranchSimplify;
 use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
+use super::concat_reset::ConcatResetElim;
 use super::const_fold::ConstFold;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
@@ -35,6 +36,7 @@ use super::identity_arith::IdentityArith;
 use super::immutable_local_loads::ImmutableLocalLoads;
 use super::integer_range::IntegerRange;
 use super::licm::Licm;
+use super::loop_optimize::LoopOptimize;
 use super::mem2reg::Mem2Reg;
 use super::peephole::Peephole;
 
@@ -76,9 +78,11 @@ pub trait IrPass {
 /// Builds the ordered set of transformation passes run on every function:
 /// identity arithmetic folding, peephole rewrites, scalar local promotion,
 /// immutable-local discovery, checked-arithmetic int-sink specialization,
-/// integer range specialization, boxed numeric-chain fusion, constant folding, common-subexpression
-/// elimination, loop-invariant code motion, dead instruction elimination,
-/// dead store elimination, and branch simplification.
+/// canonical loop optimization, integer range specialization, boxed numeric-chain
+/// fusion, constant folding, common-subexpression elimination, loop-invariant
+/// code motion, dead instruction elimination,
+/// dead store elimination, branch simplification, and concat scratch-state
+/// optimization.
 /// The cross-function small-function inliner is not a member here; it runs as a
 /// module-level phase in `optimize_module`, interleaved with these passes.
 ///
@@ -92,7 +96,11 @@ pub trait IrPass {
 /// `ICheckedNumericChainToInt` regions.
 /// CSE can then deduplicate those computations using canonical immutable loads,
 /// while LICM can move both the loads and their dependent arithmetic into loop
-/// preheaders. The redundant or relocated instructions these leave behind are
+/// preheaders. Canonical loop optimization shares equivalent scalar induction
+/// variables before range analysis, keeping checked updates checked, and exposes
+/// invariant header arguments plus simpler integer tests for subsequent passes. Branch cleanup composes
+/// SSA forwarding edges and merges straight-line loop update blocks.
+/// The redundant or relocated instructions these leave behind are
 /// cleaned up by dead instruction elimination, and any folded branch condition is
 /// collapsed by branch simplification — all converging through the fixed-point loop.
 fn default_passes() -> Vec<Box<dyn IrPass>> {
@@ -102,6 +110,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(Mem2Reg),
         Box::new(ImmutableLocalLoads),
         Box::new(CheckedIntSink),
+        Box::new(LoopOptimize),
         Box::new(IntegerRange),
         Box::new(CheckedNumericChain),
         Box::new(ConstFold),
@@ -110,6 +119,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(DeadInst),
         Box::new(DeadStore),
         Box::new(BranchSimplify),
+        Box::new(ConcatResetElim),
     ]
 }
 
@@ -142,14 +152,18 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
 pub fn optimize_module(module: &mut Module) {
     let passes = default_passes();
 
-    for _ in 0..MAX_MODULE_ITERATIONS {
+    for round in 0..MAX_MODULE_ITERATIONS {
         let mut changed = false;
 
         // Module-level cross-function inliner.
-        changed |= super::inline::inline_small_functions(module);
+        let inlined = super::inline::inline_small_functions(module);
+        changed |= inlined;
         #[cfg(debug_assertions)]
         if let Err(e) = crate::ir::validate_module(module) {
             panic!("inline_small_functions produced invalid module: {:?}", e);
+        }
+        if round > 0 && !inlined {
+            return; // module-level fixed point reached
         }
 
         // Per-function fixed-point passes over every function-like body.

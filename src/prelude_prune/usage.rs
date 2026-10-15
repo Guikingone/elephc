@@ -134,6 +134,7 @@ struct ClassProbe {
     member: Option<usize>,
 }
 
+/// Constructs a builtin-class usage probe with an optional member identifier.
 const fn probe(name: &'static str, class: usize, member: Option<usize>) -> ClassProbe {
     ClassProbe {
         name,

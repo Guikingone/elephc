@@ -386,6 +386,7 @@ fn injected_exception_final_override(
         && method_key == "getcode"
 }
 
+/// Builds the diagnostic for an attempt to override the selected final method.
 fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileError {
     CompileError::new(
         method.span,

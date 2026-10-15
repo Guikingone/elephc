@@ -228,7 +228,7 @@ pub(super) fn builtin_exception_get_line_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::getTrace()`.
-/// Body returns an empty array; the real backtrace is built at runtime by the compiler.
+/// Body returns an empty array; Throwable trace getters currently expose no frames.
 pub(super) fn builtin_exception_get_trace_method() -> ClassMethod {
     concrete_throwable_method(
         "getTrace",
@@ -241,7 +241,7 @@ pub(super) fn builtin_exception_get_trace_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::getTraceAsString()`.
-/// Body returns a dummy empty string; the real trace string is built at runtime by the compiler.
+/// Body returns an empty string; Throwable trace getters currently expose no frames.
 pub(super) fn builtin_exception_get_trace_as_string_method() -> ClassMethod {
     concrete_throwable_method(
         "getTraceAsString",

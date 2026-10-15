@@ -61,6 +61,7 @@ impl Checker {
         })
     }
 
+    /// Resolves a declared parameter type and rejects void or nested never types with contextual diagnostics.
     pub(crate) fn resolve_declared_param_type_hint(
         &self,
         type_expr: &TypeExpr,
