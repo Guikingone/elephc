@@ -106,6 +106,9 @@ echo json_encode(hashReturn('key', $argc));
     assert!(main.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
         crate::ir::RuntimeCallTarget::MixedArrayCellHasLiveOwner))),
         "{target}: pending compound appends query their selected cell without another retain");
+    assert!(main.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+        crate::ir::RuntimeCallTarget::PendingAppendFetchForWrite))),
+        "{target}: pending compound appends preserve the pre-callback parent selection");
     assert!(main.blocks.iter().any(|block| block.name.starts_with("append.update.cancel")),
         "{target}: detached parents bypass leaf materialization and the operator");
     let returning = module.functions.iter().find(|function| function.name == "hashReturn")
@@ -121,6 +124,13 @@ echo json_encode(hashReturn('key', $argc));
         "{target}: selected boxed strings must be guarded before nested writes");
     let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    let selected_owner_xor = if target == "linux-x86_64" {
+        "xor r11, r10"
+    } else {
+        "eor x0, x10, x11"
+    };
+    assert!(asm.contains(selected_owner_xor),
+        "{target}: cell and payload survivor ownership must be distinguished");
     let scalar = module.functions.iter().find(|function| function.name == "writeScalarChildren").unwrap();
     assert!(scalar.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
         crate::ir::RuntimeCallTarget::StringWriteOffset))), "{target}: runtime string offsets are normalized");

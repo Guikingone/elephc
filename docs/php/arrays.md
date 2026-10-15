@@ -51,8 +51,11 @@ detaches the selected array and no PHP owner keeps that array alive. The express
 then yields null without inserting the leaf or evaluating the operator, including
 division by zero. Appending an unrelated root sibling does not cancel the operation.
 A saved root-array copy can keep the old target live and receive its pending write.
-Separately boxed child copies keep the operator active, but pending writes becoming
-visible in those copies remain a runtime copy-on-write limitation.
+If a root mutation detaches the selected cell while a separately boxed child copy
+keeps its payload alive, that child copy receives the pending write and remains safe
+for later appends. When the original cell and an independent payload copy both survive,
+PHP instead cancels the stale target. A cancelled prefix increment still returns `1`.
+Each missing intermediate key emits its own warning before it is autovivified.
 
 ## String arrays
 ```php

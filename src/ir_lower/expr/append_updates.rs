@@ -23,6 +23,10 @@ pub(super) fn lower(
     )) { return None; }
     let mut aliases: Vec<(String, LocalSlotId, crate::span::Span)> = Vec::new();
     let cancellable = prelude.iter().any(|stmt| read_parent_alias(stmt).is_some());
+    let prefix_increment = matches!(
+        &result.kind,
+        ExprKind::Variable(name) if crate::names::is_append_prefix_increment_result(name)
+    );
     let selected = cancellable.then(|| ctx.declare_owned_hidden_temp(PhpType::Mixed));
     let merge = cancellable.then(|| ctx.builder.create_named_block("append.update.result", Vec::new()));
     let mut cancelled_initialized = None;
@@ -58,7 +62,7 @@ pub(super) fn lower(
                 }
                 ctx.append_update_cell_aliases.insert(target.clone());
                 aliases.push((target.clone(), slot, source.span));
-                if !leaf { normalize_null_parent(ctx, target, source.span); }
+                if !leaf { initialize_pending_parent(ctx, target, source.span); }
                 continue;
             }
         }
@@ -81,8 +85,12 @@ pub(super) fn lower(
             for (_, slot, span) in aliases.iter().rev() {
                 retire_owned_call_operand(ctx, *slot, *span);
             }
-            let null = lower_expr(ctx, &Expr::new(ExprKind::Null, stmt.span));
-            store_value_into_temp(ctx, selected, PhpType::Mixed, null, stmt.span);
+            let cancelled = if prefix_increment {
+                lower_expr(ctx, &Expr::new(ExprKind::IntLiteral(1), stmt.span))
+            } else {
+                lower_expr(ctx, &Expr::new(ExprKind::Null, stmt.span))
+            };
+            store_value_into_temp(ctx, selected, PhpType::Mixed, cancelled, stmt.span);
             cancelled_initialized = Some(ctx.initialized_slots_snapshot());
             branch_to(ctx, merge);
             ctx.builder.position_at_end(active);
@@ -115,26 +123,37 @@ fn read_parent_alias(stmt: &Stmt) -> Option<&str> {
     (crate::names::append_update_alias_kind(name) == Some(false)).then_some(name.as_str())
 }
 
-/// Publishes the fresh append's empty parent before a missing-key callback can inspect it.
-fn normalize_null_parent(
+/// Publishes the fresh append's preallocated parent before a missing-key callback can inspect it.
+fn initialize_pending_parent(
     ctx: &mut LoweringContext<'_, '_>, name: &str, span: crate::span::Span,
 ) {
     let parent = ctx.load_local(name, Some(span));
-    let null = ctx.emit_value(Op::IsNull, vec![parent.value], None, PhpType::Bool,
-        Op::IsNull.default_effects(), Some(span));
-    let promote = ctx.builder.create_named_block("append.parent.null.promote", Vec::new());
-    let done = ctx.builder.create_named_block("append.parent.ready", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: null.value, then_target: promote, then_args: Vec::new(),
-        else_target: done, else_args: Vec::new(),
-    });
-    ctx.builder.position_at_end(promote);
-    let empty = lower_expr(ctx, &Expr::new(ExprKind::ArrayLiteral(Vec::new()), span));
+    // Reserve one slot before any missing-key warning can invoke user code. A surviving
+    // payload copy must observe the pending write without a later promotion or relocation.
+    let container_ty = if crate::names::append_update_alias_prefers_hash(name) {
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        }
+    } else {
+        PhpType::Array(Box::new(PhpType::Mixed))
+    };
+    let op = if matches!(container_ty, PhpType::AssocArray { .. }) {
+        Op::HashNew
+    } else {
+        Op::ArrayNew
+    };
+    let empty = ctx.emit_owned_value(
+        op,
+        Vec::new(),
+        Some(Immediate::Capacity(1)),
+        container_ty,
+        op.default_effects(),
+        Some(span),
+    );
     ctx.emit_void(Op::RuntimeCall, vec![parent.value, empty.value], None,
         crate::ir_lower::effects_lookup::runtime_effects(), Some(span));
     crate::ir_lower::ownership::release_if_owned(ctx, empty, Some(span));
-    branch_to(ctx, done);
-    ctx.builder.position_at_end(done);
 }
 
 /// Publishes a value into the selected box before retiring its prior payload and source owner.

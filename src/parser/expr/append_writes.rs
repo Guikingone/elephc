@@ -41,7 +41,7 @@ pub(super) fn parse_append_write(
     let (update, rhs) = if property_suffix {
         (AppendUpdate::Assign, Expr::new(ExprKind::Null, span))
     } else if prefix_increment {
-        (AppendUpdate::Compound(BinOp::Add), Expr::new(ExprKind::IntLiteral(1), span))
+        (AppendUpdate::PreIncrement, Expr::new(ExprKind::IntLiteral(1), span))
     } else { match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::PlusPlus) => {
             *pos += 1;
@@ -107,7 +107,7 @@ pub(super) fn parse_append_write(
 }
 
 /// The operation that writes a newly appended element, never an existing array value.
-enum AppendUpdate { Assign, Compound(BinOp), PostIncrement }
+enum AppendUpdate { Assign, Compound(BinOp), PreIncrement, PostIncrement }
 
 /// Finds a property chain rooted in an implicit null append, never an ordinary assignment result.
 fn null_append_property_chain(target: &Expr) -> Option<(&Expr, Vec<Expr>)> {
@@ -218,6 +218,16 @@ impl AppendLowerer {
         Expr::new(ExprKind::Variable(name), self.span)
     }
 
+    /// Reserves a result local whose identity preserves prefix semantics across cancellation.
+    fn next_prefix_increment_result(&mut self) -> Expr {
+        let name = crate::names::generated_append_prefix_increment_result(
+            self.span,
+            self.next_temp,
+        );
+        self.next_temp += 1;
+        Expr::new(ExprKind::Variable(name), self.span)
+    }
+
     /// Captures one expression so the write and result never re-evaluate it.
     fn bind(&mut self, value: Expr) -> Expr {
         let target = self.next_temp();
@@ -271,6 +281,22 @@ impl AppendLowerer {
                     prelude: Vec::new(), conditional_value_temp: None,
                 }, self.span);
             }
+            AppendUpdate::PreIncrement => {
+                let value = Expr::new(ExprKind::BinaryOp {
+                    left: Box::new(current),
+                    op: BinOp::Add,
+                    right: Box::new(rhs.clone()),
+                }, self.span);
+                let result = self.next_prefix_increment_result();
+                self.result = Some(result.clone());
+                return Expr::new(ExprKind::Assignment {
+                    target: Box::new(result),
+                    value: Box::new(value),
+                    result_target: None,
+                    prelude: Vec::new(),
+                    conditional_value_temp: None,
+                }, self.span);
+            }
             AppendUpdate::PostIncrement => {
                 let current = self.bind(current);
                 let result = self.bind(current.clone());
@@ -293,11 +319,13 @@ impl AppendLowerer {
     ) -> Result<(), CompileError> {
         let target = self.reserve_append_slot(base)?;
         let mut cell = if dimensions.is_empty() {
-            let alias = self.bind_slot_alias(target, true);
+            let alias = self.bind_slot_alias(target, true, false);
             self.reset_slot_alias(&alias, Expr::new(ExprKind::Null, self.span));
             alias
         } else {
-            self.bind_slot_alias(target, false)
+            let associative = dimensions.first().and_then(Option::as_ref)
+                .is_some_and(crate::types::empty_array_key_requires_hash_storage);
+            self.bind_slot_alias(target, false, associative)
         };
         for (position, dimension) in dimensions.iter().enumerate() {
             let target = if let Some(index) = dimension {
@@ -317,14 +345,21 @@ impl AppendLowerer {
             cell = if leaf {
                 // Diagnose before materializing a missing leaf, using the captured parent.
                 let current = self.bind(target.clone());
-                self.write_slot(target.clone(), current.clone())?;
-                let alias = self.bind_slot_alias(target, true);
+                let alias = self.bind_slot_alias(target, true, false);
+                // Fetch-for-write installs a child container; restore the diagnosed leaf value
+                // before applying the scalar update through that attached cell.
                 self.reset_slot_alias(&alias, current.clone());
                 self.unset_temps(vec![current]);
                 alias
             } else {
-                self.write_slot(target.clone(), Expr::new(ExprKind::Null, self.span))?;
-                self.bind_slot_alias(target, false)
+                // Read first so every missing intermediate dimension emits its PHP warning.
+                // The following fetch-for-write materializes the stable stored child.
+                let current = self.bind(target.clone());
+                let associative = dimensions.get(position + 1).and_then(Option::as_ref)
+                    .is_some_and(crate::types::empty_array_key_requires_hash_storage);
+                let alias = self.bind_slot_alias(target, false, associative);
+                self.unset_temps(vec![current]);
+                alias
             };
         }
         let value = self.leaf(cell.clone(), rhs, update);
@@ -340,9 +375,9 @@ impl AppendLowerer {
     }
 
     /// Marks a temporary ordinary-cell lease; EIR does not promote it into a PHP reference set.
-    fn bind_slot_alias(&mut self, source: Expr, leaf: bool) -> Expr {
+    fn bind_slot_alias(&mut self, source: Expr, leaf: bool, associative_parent: bool) -> Expr {
         let name = crate::names::generated_append_update_alias(
-            self.span, self.next_temp, leaf,
+            self.span, self.next_temp, leaf, associative_parent,
         );
         self.next_temp += 1;
         self.prelude.push(Stmt::new(StmtKind::RefAssign {

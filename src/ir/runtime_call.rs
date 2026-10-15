@@ -76,10 +76,14 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Fetches through a pending append parent, preserving a payload-only survivor selected
+    /// before a diagnostic callback instead of separating it through ordinary COW.
+    PendingAppendFetchForWrite,
     /// Retains the concrete cell behind PHP wrappers and boxed caller-reference markers.
     MixedCellResolveForWrite,
-    /// Checks for a live array cell or payload owner beyond one pending compiler lease.
-    /// Non-array cells stay active; older compiler ancestor leases must already be retired.
+    /// Checks whether exactly one of the selected array cell and its payload survives beyond
+    /// the pending compiler lease. Non-array cells stay active; older compiler ancestor leases
+    /// must already be retired.
     MixedArrayCellHasLiveOwner,
     /// Converts a PHP string-write offset, preserving catchable errors and conversion warnings.
     StringWriteOffset,
@@ -143,7 +147,8 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
-            RuntimeCallTarget::ArrayFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
+            RuntimeCallTarget::ArrayFetchForWrite
+            | RuntimeCallTarget::PendingAppendFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
@@ -220,6 +225,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
             RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
             RuntimeCallTarget::MixedArrayCellHasLiveOwner => "array.mixed_cell_has_live_owner",

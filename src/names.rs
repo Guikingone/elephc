@@ -1008,9 +1008,20 @@ mod tests {
 /// Identifies compiler-only aliases to ordinary stored cells during append updates.
 const APPEND_UPDATE_ALIAS_PREFIX: &str = "__elephc_append_update_cell_";
 
-/// Constructs an unforgeable temporary-cell alias and records whether its slot is the leaf.
-pub(crate) fn generated_append_update_alias(span: crate::span::Span, index: usize, leaf: bool) -> String {
-    let role = if leaf { "leaf" } else { "parent" };
+/// Constructs an unforgeable temporary-cell alias and records its write role and storage shape.
+pub(crate) fn generated_append_update_alias(
+    span: crate::span::Span,
+    index: usize,
+    leaf: bool,
+    associative_parent: bool,
+) -> String {
+    let role = if leaf {
+        "leaf"
+    } else if associative_parent {
+        "parent_hash"
+    } else {
+        "parent"
+    };
     generated_local_name(&format!("{}{}_{}_{}_{}_{}", APPEND_UPDATE_ALIAS_PREFIX, span.source_id(), span.line, span.col, index, role))
 }
 
@@ -1019,6 +1030,29 @@ pub(crate) fn append_update_alias_kind(name: &str) -> Option<bool> {
     let stem = name.strip_suffix(GENERATED_LOCAL_MARKER)?;
     if !stem.starts_with(APPEND_UPDATE_ALIAS_PREFIX) { return None; }
     if stem.ends_with("_leaf") { Some(true) }
-    else if stem.ends_with("_parent") { Some(false) }
+    else if stem.ends_with("_parent") || stem.ends_with("_parent_hash") { Some(false) }
     else { None }
+}
+
+/// Returns whether a pending parent must begin in associative storage before callbacks run.
+pub(crate) fn append_update_alias_prefers_hash(name: &str) -> bool {
+    name.strip_suffix(GENERATED_LOCAL_MARKER)
+        .is_some_and(|stem| stem.starts_with(APPEND_UPDATE_ALIAS_PREFIX) && stem.ends_with("_parent_hash"))
+}
+
+/// Constructs the unforgeable result local for a prefix increment of an append target.
+pub(crate) fn generated_append_prefix_increment_result(
+    span: crate::span::Span,
+    index: usize,
+) -> String {
+    generated_local_name(&format!(
+        "__elephc_append_prefix_result_{}_{}_{}_{}",
+        span.source_id(), span.line, span.col, index,
+    ))
+}
+
+/// Recognizes only parser-generated prefix-increment append result locals.
+pub(crate) fn is_append_prefix_increment_result(name: &str) -> bool {
+    name.strip_suffix(GENERATED_LOCAL_MARKER)
+        .is_some_and(|stem| stem.starts_with("__elephc_append_prefix_result_"))
 }

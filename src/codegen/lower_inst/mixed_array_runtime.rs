@@ -19,7 +19,7 @@ pub(super) fn lower_binary_runtime_call(ctx: &mut FunctionContext<'_>, inst: &In
             lower_mixed_cell_runtime_assign(ctx, inst)
         }
         (PhpType::Mixed | PhpType::Union(_), _) => {
-            lower_mixed_array_runtime_get(ctx, inst, false)
+            lower_mixed_array_runtime_get(ctx, inst, false, false)
         }
         (PhpType::AssocArray { .. }, PhpType::Void) => hashes::lower_hash_append(ctx, inst),
         (other, _) => Err(CodegenIrError::unsupported(format!(
@@ -34,6 +34,7 @@ pub(super) fn lower_mixed_array_runtime_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     for_write: bool,
+    pending_append: bool,
 ) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
@@ -41,12 +42,20 @@ pub(super) fn lower_mixed_array_runtime_get(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             hashes::materialize_hash_key_aarch64(ctx, key)?;
-            ctx.load_value_to_reg(warn_on_missing, "x3")?;
+            if for_write {
+                abi::emit_load_int_immediate(ctx.emitter, "x3", i64::from(pending_append));
+            } else {
+                ctx.load_value_to_reg(warn_on_missing, "x3")?;
+            }
             ctx.load_value_to_reg(receiver, "x0")?;
         }
         Arch::X86_64 => {
             hashes::materialize_hash_key_x86_64(ctx, key)?;
-            ctx.load_value_to_reg(warn_on_missing, "rcx")?;
+            if for_write {
+                abi::emit_load_int_immediate(ctx.emitter, "rcx", i64::from(pending_append));
+            } else {
+                ctx.load_value_to_reg(warn_on_missing, "rcx")?;
+            }
             ctx.load_value_to_reg(receiver, "rdi")?;
         }
     }
@@ -74,6 +83,7 @@ pub(super) fn lower_mixed_array_runtime_get(
 pub(super) fn lower_array_fetch_for_write_runtime_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    pending_append: bool,
 ) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
@@ -83,10 +93,12 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
                     hashes::materialize_hash_key_aarch64(ctx, key)?;
+                    abi::emit_load_int_immediate(ctx.emitter, "x3", i64::from(pending_append));
                     ctx.load_value_to_reg(receiver, "x0")?;
                 }
                 Arch::X86_64 => {
                     hashes::materialize_hash_key_x86_64(ctx, key)?;
+                    abi::emit_load_int_immediate(ctx.emitter, "rcx", i64::from(pending_append));
                     ctx.load_value_to_reg(receiver, "rdi")?;
                 }
             }

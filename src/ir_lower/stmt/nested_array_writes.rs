@@ -139,10 +139,16 @@ pub(crate) fn lower_nested_assign_parent(
     let receiver = lower_nested_assign_parent(ctx, array, span);
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         let key = lower_expr(ctx, index);
+        let target = match &array.kind {
+            ExprKind::Variable(name) if ctx.append_update_cell_aliases.contains(name) => {
+                RuntimeCallTarget::PendingAppendFetchForWrite
+            }
+            _ => RuntimeCallTarget::ArrayFetchForWrite,
+        };
         let parent = ctx.emit_value(
             Op::RuntimeCall,
             vec![receiver.value, key.value],
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+            Some(Immediate::RuntimeCall(target)),
             PhpType::Mixed,
             effects_lookup::runtime_effects(),
             Some(expr.span),

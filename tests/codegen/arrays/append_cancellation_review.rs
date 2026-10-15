@@ -127,16 +127,124 @@ function run(array $items): void {
         echo 'W:'; $copy = $items[0]; $items[0]['other'] = 2; return true;
     });
     $result = ($items[]['k'] += 1);
-    restore_error_handler(); echo json_encode($result), ':', json_encode($items);
+    restore_error_handler();
+    $copy[] = 3;
+    echo json_encode($result), ':', json_encode($items), ':', json_encode($copy);
 }
 run([]);
-"#, r#"W:1:[{"other":2}]"#);
+"#, r#"W:1:[{"other":2}]:{"k":1,"0":3}"#);
 }
 
 /// Child payload ownership is preserved without EIR optimization.
 #[test]
 fn test_append_eighth_review_retained_child_copy_no_ir_opt() {
     without_ir_opt(test_append_eighth_review_retained_child_copy);
+}
+
+/// A payload copy alone does not keep the still-attached pending child writable.
+#[test]
+fn test_append_ninth_review_retained_child_without_root_separation() {
+    assert_output(r#"<?php
+function run(array $items): void {
+    $copy = [];
+    set_error_handler(function(int $level, string $message) use (&$items, &$copy): bool {
+        echo 'W:'; $copy = $items[0]; return true;
+    });
+    $result = ($items[]['k'] += 1);
+    restore_error_handler();
+    $copy[] = 3;
+    echo json_encode($result), ':', json_encode($items), ':', json_encode($copy);
+}
+run([]);
+"#, r#"W:null:[[]]:[3]"#);
+}
+
+/// Payload-only retention keeps ordinary cancellation semantics without EIR optimization.
+#[test]
+fn test_append_ninth_review_retained_child_without_root_separation_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_retained_child_without_root_separation);
+}
+
+/// Numeric dimensions preserve the selected indexed payload when the root separates.
+#[test]
+fn test_append_ninth_review_retained_indexed_child_copy() {
+    assert_output(r#"<?php
+function run(array $items): void {
+    $copy = [];
+    set_error_handler(function(int $level, string $message) use (&$items, &$copy): bool {
+        echo 'W:'; $copy = $items[0]; $items[0]['other'] = 2; return true;
+    });
+    $result = ($items[][0] += 1);
+    restore_error_handler();
+    $copy[] = 3;
+    echo json_encode($result), ':', json_encode($items), ':', json_encode($copy);
+}
+run([]);
+"#, r#"W:1:[{"other":2}]:[1,3]"#);
+}
+
+/// Indexed payload retention is unchanged without EIR optimization.
+#[test]
+fn test_append_ninth_review_retained_indexed_child_copy_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_retained_indexed_child_copy);
+}
+
+/// Independent cell and payload survivors together mean COW invalidated the pending target.
+#[test]
+fn test_append_ninth_review_retained_root_and_child_copies() {
+    assert_output(r#"<?php
+$items = []; $root = []; $child = [];
+set_error_handler(function(int $level, string $message) use (&$items, &$root, &$child): bool {
+    echo 'W:'; $root = $items; $child = $items[0]; $items[0]['other'] = 2; return true;
+});
+$result = ($items[]['k'] += 1);
+restore_error_handler();
+echo json_encode($result), ':', json_encode($items), ':', json_encode($root), ':', json_encode($child);
+"#, r#"W:null:[{"other":2}]:[[]]:[]"#);
+}
+
+/// Combined cell and payload survival cancels identically without EIR optimization.
+#[test]
+fn test_append_ninth_review_retained_root_and_child_copies_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_retained_root_and_child_copies);
+}
+
+/// Prefix increment returns the written scalar when its pending append is cancelled.
+#[test]
+fn test_append_ninth_review_separated_prefix_increment() {
+    assert_output(r#"<?php
+$items = [];
+set_error_handler(function(int $level, string $message) use (&$items): bool {
+    echo 'W:'; $items[0]['other'] = 2; return true;
+});
+$result = ++$items[]['k'];
+restore_error_handler(); echo json_encode($result), ':', json_encode($items);
+"#, r#"W:1:[{"other":2}]"#);
+}
+
+/// Cancelled prefix increment preserves its result without EIR optimization.
+#[test]
+fn test_append_ninth_review_separated_prefix_increment_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_separated_prefix_increment);
+}
+
+/// Every missing intermediate append dimension emits its ordinary PHP warning.
+#[test]
+fn test_append_ninth_review_missing_intermediate_warnings() {
+    assert_output(r#"<?php
+$items = [];
+set_error_handler(function(int $level, string $message): bool {
+    echo 'W:', $message, '|'; return true;
+});
+$result = ($items[]['k']['other'][] += 1);
+restore_error_handler(); echo json_encode($result), ':', json_encode($items);
+"#, r#"W:Undefined array key "k"|W:Undefined array key "other"|1:[{"k":{"other":[1]}}]"#);
+}
+
+/// Intermediate append diagnostics are unchanged without EIR optimization.
+#[test]
+fn test_append_ninth_review_missing_intermediate_warnings_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_missing_intermediate_warnings);
 }
 
 /// Replacing the root loses the selected container even if the replacement is value-equal.

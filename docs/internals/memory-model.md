@@ -1055,12 +1055,16 @@ reference sets. When a child lease replaces an older compiler parent, EIR pops t
 record, publishes the child, then releases the old parent slot. This keeps unwinding safe
 without making dead compiler ancestors look like live PHP owners.
 
-A fresh null parent becomes an attached empty array before its missing-key callback runs.
-After the read, a typed, non-retaining EIR query checks whether another cell owner or an
-independent array/hash payload owner preserves the selected target. If only the pending
-lease remains, a null result bypasses the leaf materialization and operator. Both normal
-and cancellation branches retire the active leases in LIFO order. ARM64 and x86_64 use
-the same uniform ownership headers; non-array offsets keep their ordinary dispatch.
+A fresh parent is preallocated with the indexed or associative representation required by
+its next key before the missing-key callback runs. After the read, a typed, non-retaining
+EIR query checks cell and payload survival independently. Exactly one survivor preserves
+the selected target: a stored cell with an unshared payload remains writable, while a
+detached cell can continue through an independently boxed payload copy. If neither or both
+survive, the pending target is stale and the operator is bypassed. The detached-payload
+case uses dedicated array conversion and hash insertion entries that preserve the already
+selected payload instead of crossing another COW boundary. Both normal and cancellation
+branches retire active leases in LIFO order. ARM64 and x86_64 use the same ownership
+rules; non-array offsets keep their ordinary dispatch.
 
 ## Memory limits and trade-offs
 
