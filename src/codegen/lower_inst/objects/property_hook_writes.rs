@@ -2,10 +2,10 @@
 //! Preserves inherited abstract setter dispatch over readonly backing storage.
 //!
 //! Called from:
-//! - Ordinary named and runtime-name EIR property-write dispatch.
+//! - Ordinary named, runtime-name and reflected EIR property-write dispatch.
 //!
 //! Key details:
-//! - Initializers and raw Reflection stores continue using physical property storage.
+//! - Initializers and eval's explicit raw Reflection stores keep physical property storage.
 //! - Setter argument guards run, but an abstract setter never initializes the backing slot.
 
 use super::*;

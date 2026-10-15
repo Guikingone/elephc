@@ -343,10 +343,15 @@ A child class may redeclare a property inherited from a non-private parent. The 
 - The child shares the parent's slot, so reads of the property from inherited methods see the child's value.
 
 An abstract readonly storage redeclaration must still accept the inherited setter's
+type. A setter-only contract permits a broader backing type, such as `int|string`
+storage over an `int` setter, in native and eval declarations, including native
+parents extended from eval. An inherited getter still constrains the readable
 type. Its backing storage implements the getter, but the abstract setter remains a
 no-op and Reflection keeps its original declaring class. A concrete descendant
 without a redeclaration is legal; writes through that setter still leave the slot
 uninitialized, so reading it throws the typed-property initialization `Error`.
+`ReflectionProperty::setValue()` also invokes that retained setter, validates its
+original parameter type and leaves the backing slot uninitialized.
 
 Private parent properties are different: they are not overridden. A child may
 declare a same-named property, and elephc keeps a separate storage slot for each

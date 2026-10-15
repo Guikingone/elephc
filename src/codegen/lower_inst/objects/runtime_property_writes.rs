@@ -29,7 +29,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
         ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, base_reg)?;
-        return emit_property_store(ctx, value, &slot, base_reg);
+        return emit_hook_aware_property_store(ctx, value, &slot, base_reg);
     }
     if let Some(Immediate::PropertyRef { class, property }) = inst.immediate {
         let slot = resolve_initializer_property_slot(ctx, object, class, property, inst)?;

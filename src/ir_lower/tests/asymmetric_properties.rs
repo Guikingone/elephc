@@ -62,6 +62,22 @@ function writeAbstractString(mixed $object, mixed $value, string $name): void {
     $object->{$name} = $value;
 }
 writeAbstractString(new ReadonlyStringStorageDescendant(), 'value', 'text');
+abstract class SetterOnlyBase { abstract public int $item { set; } }
+abstract class SetterSupertypeStorage extends SetterOnlyBase { public public(set) readonly int|string $item; }
+class SetterStorageDescendant extends SetterSupertypeStorage {}
+function reflectAbstractSetter(): void {
+    $object = new SetterStorageDescendant();
+    $property = new ReflectionProperty(SetterStorageDescendant::class, 'item');
+    $property->setValue($object, 4);
+    try { $property->setValue($object, 'bad'); } catch (TypeError $error) { echo $error->getMessage(); }
+    echo $property->isInitialized($object) ? 'bad' : 'unset';
+}
+reflectAbstractSetter();
+class ReflectedHeapBox { public array $data = ['value']; }
+function reflectedHeap(ReflectedHeapBox $box): mixed {
+    return (new ReflectionProperty(ReflectedHeapBox::class, 'data'))->getValue($box);
+}
+echo reflectedHeap(new ReflectedHeapBox())[0];
 function acceptAbstractReadonlyStorage(): void {
     eval('abstract class DynamicAbstractReadonlyStorage extends AbstractSetter { public public(set) readonly int $id; }');
 }
@@ -88,6 +104,10 @@ echo count($properties);
     assert!(contract.get_type.is_none() && contract.set_type.is_some(),
         "{target}: only the inherited setter remains abstract");
     assert_eq!(contract.declaring_type, "AbstractSetter", "{target}: the hook keeps its original owner");
+    let reflected = module.functions.iter().find(|function| function.name == "reflectAbstractSetter").unwrap();
+    assert!(reflected.instructions.iter().any(|instruction| instruction.op == Op::PropSet
+        && matches!(instruction.immediate, Some(crate::ir::Immediate::ReflectionPropertyRef { .. }))),
+        "{target}: the reflected write keeps its proven physical target and hook dispatch");
     for name in ["update", "updateNullable"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let insert = function.blocks.iter().find(|block| block.name == "coalesce_assign.default").unwrap();
