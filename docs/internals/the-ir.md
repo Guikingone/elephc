@@ -518,8 +518,10 @@ ownership marker in `x15` on AArch64 or `r11` on x86_64. A `Call` result with
 restores it after cleanup. Descriptor invokers consume the marker by retaining a
 borrowed result or transferring an owned result into the boxed return cell. This
 is a private compiler protocol; the public C ABI still returns one owned raw
-cell and exposes no ownership marker. Typed string returns keep their dedicated
-persist and ownership-transfer boxing path and do not consume this marker.
+cell and exposes no ownership marker. Typed string returns consume this marker.
+When `php_return_status` is set, `restore_concat_offset_after_nested_call` calls
+`emit_branch_if_owned` for `PhpType::Str`, which tests `x15` on AArch64 and
+`r11` on x86_64.
 
 ## Effects
 
