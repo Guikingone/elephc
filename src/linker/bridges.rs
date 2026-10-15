@@ -658,7 +658,7 @@ fn any_file_newer_than(directory: &Path, instant: std::time::SystemTime) -> bool
 /// a fixed download.
 ///
 /// That leaves one hole, and it is real rather than theoretical: the workspace root redirects
-/// `mysql` to `vendor/mysql-28.0.0` through `[patch.crates-io]`, and `elephc-pdo` names it by
+/// `mysql` to `vendor/mysql-28.0.3` through `[patch.crates-io]`, and `elephc-pdo` names it by
 /// VERSION, so nothing here sees the vendored tree. Editing it does not mark
 /// `libelephc_pdo.a` stale. Closing that means resolving patches, not just reading manifests;
 /// until then `cargo build -p elephc-pdo` after such an edit is the manual refresh.
