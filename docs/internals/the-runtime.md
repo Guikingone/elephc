@@ -760,7 +760,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (204 top-level files plus 7 nested target/debug helpers)
+**Source:** `src/codegen_support/runtime/arrays/` (205 top-level files plus 7 nested target/debug helpers)
 
 ### Core allocation
 
