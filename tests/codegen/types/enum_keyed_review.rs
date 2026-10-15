@@ -229,4 +229,3 @@ for ($i = 0; $i < {iterations}; $i++) {{
 fn test_enum_keyed_review_owners_no_ir_opt() {
     without_ir_opt(test_enum_keyed_review_owners);
 }
-

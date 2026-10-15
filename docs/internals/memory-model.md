@@ -1112,7 +1112,7 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 
 ### Unboxing a Mixed hands back a reference
 
-`Op::MixedUnbox` extracts concrete storage from a checked Mixed source. Typed local/property assignment and call-parameter coercion emit it for their supported payloads. Its lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so a refcounted payload carries its own reference rather than borrowing the box's.
+`Op::MixedUnbox` extracts concrete storage from a checked Mixed source. Typed local/property assignment, call-argument and closure coercion, static method-call receivers, typed foreach slots, and merge-temp coercion emit it for their supported payloads. The merge-temp path also hands a `??`-kept `?C` cell to an object or callable temporary (#1628). Its lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so a refcounted payload carries its own reference rather than borrowing the box's.
 
 Call parameters declared `iterable` receive a raw array, hash or Traversable pointer, not the surrounding Mixed cell. After runtime argument validation, their layout-neutral unbox acquires the payload before the source lease is released. Enum interface calls also keep static-unpack arrays and projected values rooted while checking types before a later arity shortage. A typed variadic collector promoted to Mixed storage must pass through an EIR unpack/rebox adapter; forwarding its raw words would confuse typed element storage with boxed entries and lose named keys or actual counts.
 
