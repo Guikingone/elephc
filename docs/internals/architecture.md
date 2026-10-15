@@ -271,6 +271,7 @@ src/
 ├── lib.rs                     Public module exports
 ├── main.rs                    CLI binary entry point
 ├── cli.rs                     Command-line option parsing
+├── repl/                      Interactive `elephc repl` session: parsing, cached native host, and history
 ├── pipeline.rs                Frontend/backend compilation pipeline
 │   └── artifact_io.rs         Generated-artifact write policy: preflight destination
 │                              validation and O_EXCL-staged atomic replacement
@@ -317,7 +318,7 @@ src/
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination, declaration reachability pruning
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
-├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, scalar local promotion, immutable integer-local loads, checked-integer sinking, integer range and induction-variable analysis, numeric-chain fusion, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, concat scratch-state optimization, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
+├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, scalar local promotion, immutable integer-local loads, checked-integer sinking, canonical loop optimization, integer range and induction-variable analysis, numeric-chain fusion, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, concat scratch-state optimization, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation with cost-aware constant rematerialization
 ├── codegen/                   Active EIR to target assembly backend
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
 ├── runtime_cache.rs           Cached shared runtime object preparation
@@ -497,11 +498,11 @@ src/
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (22 files)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (45 top-level files + 44 nested files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (46 top-level files + 44 nested files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
 │       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (17 files)
-│       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
+│       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers, including shared PHP offset conversion (4 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
 │
@@ -515,6 +516,7 @@ crates/
 ├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-curl/               Static libcurl easy, multi, share, callback, and multipart bridge
+├── elephc-generics/           Shared structural generic type terms, binding, and variance for AOT compilation and Magician
 ├── elephc-iconv/              Charset-conversion and RFC 2047 MIME bridge staticlib behind PHP `iconv*()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-instr/              Exact profiling instrumentation runtime
