@@ -836,7 +836,12 @@ Rules:
 - An enum can `implements` one or more interfaces and be used through them.
 - Calls through an enum interface bind runtime array unpacks against the selected
   implementation's parameter names and defaults. Supplied values are type-checked
-  before later missing arguments, including statically indexed array unpacks.
+  before later missing arguments, including static unpacks with numeric or named
+  keys. Source arrays run once, duplicate named keys keep their last value, and
+  binding stops at the first omitted required parameter. Named omissions are
+  diagnosed by the selected enum method at runtime rather than rejected before
+  argument side effects. Fractional key conversion is diagnosed only while
+  constructing the source array, not again when checking its supplied values.
   Literal `false`, `iterable` and `callable` hints are checked before storage
   conversion. Variadic diagnostics report the supplied argument's PHP position,
   not the collector parameter's position or name. Named variadic entries preserve

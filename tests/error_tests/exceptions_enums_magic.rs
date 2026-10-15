@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Runtime omission deferral is restricted to enum-only interface dispatch.
+#[test]
+fn test_enum_keyed_review_preserves_ordinary_missing_argument_errors() {
+    for unpack in ["[1 => 3]", "['a' => 3]"] {
+        let diagnostic = if unpack.starts_with("[1") { "expects 2 arguments, got 1" }
+            else { "missing required parameter" };
+        expect_error(&format!("<?php interface I {{ public function f(int $a, int $b): int; }} class C implements I {{ public function f(int $a, int $b): int {{ return $a + $b; }} }} function g(I $v): int {{ return $v->f(...{unpack}); }}"), diagnostic);
+        expect_error(&format!("<?php enum E {{ case A; public function f(int $a, int $b): int {{ return $a + $b; }} }} echo E::A->f(...{unpack});"), diagnostic);
+    }
+}
+
+/// Deferring enum binding still validates expressions inside the supplied unpack.
+#[test]
+fn test_enum_keyed_review_validates_rejected_argument_sources() {
+    for unpack in ["[1 => missing_source()]", "['a' => missing_source()]"] {
+        expect_error(&format!("<?php interface I {{ public function f(int $a, int $b): int; }} enum E implements I {{ case A; public function f(int $a, int $b): int {{ return $a + $b; }} }} function g(I $v): int {{ return $v->f(...{unpack}); }}"), "Undefined function");
+    }
+}
+
 /// Calling a missing enum interface method reports the declaration error without panicking.
 #[test]
 fn test_error_enum_third_review_missing_called_contract() {

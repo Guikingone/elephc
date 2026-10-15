@@ -131,6 +131,16 @@ pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
         .map_or(0, |index| index + 1)
 }
 
+/// Derives binding metadata where defaults before a later required slot cannot fill omissions.
+/// Declaration signatures stay unchanged for reflection and interface compatibility.
+pub(crate) fn required_argument_binding_signature(sig: &FunctionSig) -> FunctionSig {
+    let mut binding = sig.clone();
+    for default in binding.defaults.iter_mut().take(required_param_count(sig)) {
+        *default = None;
+    }
+    binding
+}
+
 /// Searches for a parameter named `name` among the first `regular_param_count` parameters.
 ///
 /// Returns its index within those parameters, or `None` if no visible parameter matches.

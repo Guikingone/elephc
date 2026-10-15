@@ -16,6 +16,7 @@ mod static_spread;
 
 pub(crate) use matching::{
     named_param_index, positional_param_type, regular_param_count, required_param_count,
+    required_argument_binding_signature,
     variadic_element_type,
 };
 pub(crate) use plan::{

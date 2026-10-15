@@ -331,11 +331,16 @@ impl Checker {
                         missing = true;
                         continue;
                     };
-                    // Final enum dispatch diagnoses positional shortages in the selected
-                    // branch, including defaults that precede a later required parameter.
-                    runtime_shortage |= crate::types::call_args::plan_call_args(
-                        &implementation, args, expr.span, false, true,
-                    ).is_ok_and(|plan| plan.statically_missing_positionals(&implementation).is_some());
+                    // Final enum dispatch diagnoses omissions in the selected branch,
+                    // including named slots and defaults before a later required parameter.
+                    let binding = crate::types::call_args::required_argument_binding_signature(&implementation);
+                    runtime_shortage |= match crate::types::call_args::plan_call_args(
+                        &binding, args, expr.span, false, true,
+                    ) {
+                        Ok(plan) => plan.statically_missing_positionals(&implementation).is_some(),
+                        Err(crate::types::call_args::CallArgPlanError::MissingRequired { .. }) => true,
+                        Err(_) => false,
+                    };
                     if self.check_user_declared_call(
                         &implementation, args, expr.span, env,
                         &format!("Method {name}::{method}"), &name,
@@ -344,7 +349,12 @@ impl Checker {
                         break;
                     }
                 }
-                if !accepted && !missing && !runtime_shortage { return Err(shared_error); }
+                if !accepted && !missing {
+                    if !runtime_shortage { return Err(shared_error); }
+                    // Deferring binding must not skip validation of the caller's source
+                    // expressions when a missing slot made every signature check stop early.
+                    for arg in args { self.infer_type(arg, env)?; }
+                }
             }
         } else {
             self.check_user_declared_call(

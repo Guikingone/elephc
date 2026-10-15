@@ -65,12 +65,7 @@ pub(super) fn lower_enum_interface_call(
             // PHP treats defaults before a later required parameter as required,
             // including named omissions. Keep declaration metadata unchanged.
             let regular = crate::types::call_args::regular_param_count(signature);
-            let required = signature.defaults.iter().take(regular).rposition(Option::is_none)
-                .map_or(0, |index| index + 1);
-            let mut binding_signature = signature.clone();
-            for default in binding_signature.defaults.iter_mut().take(required) {
-                *default = None;
-            }
+            let binding_signature = crate::types::call_args::required_argument_binding_signature(signature);
             let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
                 &binding_signature, args, expr.span, regular,
                 false, signature.variadic.is_some()
@@ -167,43 +162,19 @@ fn terminate_enum_argument_error(
     }
     if exception_class == "ArgumentCountError" {
         if let Some((class, method, signature)) = selected {
-            let mut bindings: Vec<_> = staged.iter().enumerate().map(|(index, slot)|
-                (index, Expr::new(ExprKind::Variable(slot.clone()), span))).collect();
-            if let Some(projected) = staged_positional_spread_values(args, &staged, span) {
-                bindings = projected.into_iter().enumerate().collect();
-            } else if args.iter().any(is_spread_arg) {
-                bindings.clear();
-            } else if crate::types::call_args::has_named_args(args) {
-                // Ask the shared planner for supplied-slot provenance without making
-                // omitted slots a planning error. Placeholder defaults are never lowered.
-                let mut partial = signature.clone();
-                for default in partial.defaults.iter_mut().take(
-                    crate::types::call_args::regular_param_count(signature))
-                {
-                    if default.is_none() { *default = Some(Expr::new(ExprKind::Null, span)); }
-                }
-                bindings = crate::types::call_args::plan_call_args(&partial, args, span, false, false)
-                    .map(|plan| {
-                        let required = signature.defaults.iter().take(
-                            crate::types::call_args::regular_param_count(signature))
-                            .rposition(Option::is_none).map_or(0, |index| index + 1);
-                        plan.regular_args.into_iter().enumerate().take_while(|(parameter, arg)| {
-                            !matches!(arg, crate::types::call_args::PlannedRegularArg::Default(_))
-                                || *parameter >= required
-                        }).filter_map(|(parameter, arg)| {
-                            if let crate::types::call_args::PlannedRegularArg::Source { source_index, .. } = arg {
-                                Some((parameter, Expr::new(
-                                    ExprKind::Variable(staged[source_index].clone()), span)))
-                            } else { None }
-                        }).collect()
-                    }).unwrap_or_default();
-            }
+            let bindings = staged_argument_bindings(ctx, args, &staged, signature, span);
             for (index, value) in bindings {
                 let value = if args.iter().any(is_spread_arg) {
                     // Array access can produce tagged nullable scalar storage. Snapshot it
                     // into a rooted Mixed cell before shared PHP predicates inspect its type.
                     let argument = lower_expr(ctx, &value);
-                    let argument = ctx.box_value_as_mixed(argument, PhpType::Mixed, Some(span));
+                    // Existing Mixed storage already owns the projected read. Boxing it is
+                    // a no-op at emission, so consuming its source would retire that owner.
+                    let argument = if matches!(argument.ir_type,
+                        IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+                    {
+                        argument
+                    } else { ctx.box_value_as_mixed(argument, PhpType::Mixed, Some(span)) };
                     let slot = ctx.declare_synthetic_php_local(PhpType::Mixed);
                     store_value_into_temp(ctx, &slot, PhpType::Mixed, argument, span);
                     register_owned_call_operand(ctx, ctx.local_slots[&slot], span);
@@ -222,24 +193,70 @@ fn terminate_enum_argument_error(
     ctx.builder.terminate(Terminator::Throw { value: exception.value });
 }
 
-/// Projects shared-planner-approved static unpacks from their already evaluated source arrays.
-/// Reading staged elements preserves source ownership and never evaluates their expressions twice.
-fn staged_positional_spread_values(args: &[Expr], staged: &[String], span: Span) -> Option<Vec<Expr>> {
-    crate::types::call_args::expand_planned_positional_spreads(args)?;
-    let mut values = Vec::new();
+/// Plans supplied parameter guards from staged values without reevaluating unpack expressions.
+fn staged_argument_bindings(
+    ctx: &mut LoweringContext<'_, '_>, args: &[Expr], staged: &[String],
+    signature: &FunctionSig, span: Span,
+) -> Vec<(usize, Expr)> {
+    let mut projected = Vec::new();
     for (arg, slot) in args.iter().zip(staged) {
         let source = Expr::new(ExprKind::Variable(slot.clone()), span);
-        if let ExprKind::Spread(inner) = &arg.kind {
-            let ExprKind::ArrayLiteral(items) = &inner.kind else {
-                unreachable!("the shared static spread projection validated indexed literals");
-            };
-            values.extend(items.iter().enumerate().map(|(index, _)| Expr::new(ExprKind::ArrayAccess {
-                array: Box::new(source.clone()),
-                index: Box::new(Expr::new(ExprKind::IntLiteral(index as i64), span)),
-            }, span)));
-        } else { values.push(source); }
+        let element = |index: Expr| Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(source.clone()), index: Box::new(index),
+        }, span);
+        match &arg.kind {
+            ExprKind::Spread(inner) => match &inner.kind {
+                ExprKind::ArrayLiteral(items)
+                    if !items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) =>
+                {
+                    projected.extend(items.iter().enumerate().map(|(index, _)|
+                        element(Expr::new(ExprKind::IntLiteral(index as i64), span))));
+                }
+                ExprKind::ArrayLiteralAssoc(pairs) => {
+                    let pairs = pairs.iter().map(|(key, _)| {
+                        // Key conversion already ran while staging the source array. Reuse
+                        // the diagnosed-key coercion rather than running PHP diagnostics again.
+                        let lookup = if matches!(key.kind, ExprKind::FloatLiteral(_)) {
+                            let value = lower_expr(ctx, key);
+                            let value = coerce_array_key_to_int_at_span(ctx, value, Some(key.span), true);
+                            let slot = ctx.declare_synthetic_php_local(PhpType::Int);
+                            store_value_into_temp(ctx, &slot, PhpType::Int, value, key.span);
+                            Expr::new(ExprKind::Variable(slot), span)
+                        } else { key.clone() };
+                        (key.clone(), element(lookup))
+                    }).collect();
+                    projected.push(Expr::new(ExprKind::Spread(Box::new(Expr::new(
+                        ExprKind::ArrayLiteralAssoc(pairs), arg.span,
+                    ))), arg.span));
+                }
+                _ => return Vec::new(),
+            },
+            ExprKind::NamedArg { name, .. } => projected.push(Expr::new(ExprKind::NamedArg {
+                name: name.clone(), value: Box::new(source),
+            }, arg.span)),
+            _ => projected.push(source),
+        }
     }
-    Some(values)
+    let projected = crate::types::call_args::expand_static_assoc_spread_args(&projected);
+    if projected.iter().any(is_spread_arg) { return Vec::new(); }
+    // Defaults are placeholders for the shared planner's omitted-slot provenance only.
+    // They are never evaluated, and guard iteration stops at the first required omission.
+    let regular = crate::types::call_args::regular_param_count(signature);
+    let required = crate::types::call_args::required_param_count(signature);
+    let mut partial = signature.clone();
+    for default in partial.defaults.iter_mut().take(regular) {
+        if default.is_none() { *default = Some(Expr::new(ExprKind::Null, span)); }
+    }
+    crate::types::call_args::plan_call_args(&partial, &projected, span, false, false)
+        .map(|plan| {
+            let defaults = plan.default_argument_mask();
+            plan.normalized_args().into_iter().take(regular).enumerate()
+                .take_while(|(parameter, _)|
+                    !defaults.get(*parameter).copied().unwrap_or(false) || *parameter >= required)
+                .filter(|(parameter, _)| !defaults.get(*parameter).copied().unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Maps shared binding failures to PHP's selected implementation exception and diagnostic.

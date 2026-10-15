@@ -183,6 +183,14 @@ try { false_unpack(FalseValue::A, [true]); } catch (\TypeError $error) { echo $e
 function spread_bad(): string { echo 'Y'; return 'no'; }
 function static_shortage(LaterRequiredContract $value): int { return $value->f(...[spread_bad()]); }
 try { static_shortage(LaterRequiredValue::A); } catch (\TypeError $error) { echo $error->getMessage(); }
+function keyed_shortage(LaterRequiredContract $value): int { return $value->f(...[1 => spread_bad()]); }
+function named_shortage(LaterRequiredContract $value): int { return $value->f(...['a' => spread_bad()]); }
+function named_gap(LaterRequiredContract $value): int { return $value->f(...['b' => spread_bad()]); }
+function fractional_shortage(LaterRequiredContract $value): int { return $value->f(...[1.5 => spread_bad()]); }
+try { keyed_shortage(LaterRequiredValue::A); } catch (\TypeError $error) { echo $error->getMessage(); }
+try { named_shortage(LaterRequiredValue::A); } catch (\TypeError $error) { echo $error->getMessage(); }
+try { named_gap(LaterRequiredValue::A); } catch (\ArgumentCountError $error) { echo $error->getMessage(); }
+try { fractional_shortage(LaterRequiredValue::A); } catch (\TypeError $error) { echo $error->getMessage(); }
 debug_print_backtrace();
 "#;
     let module = super::lower_source_at_for_target(
