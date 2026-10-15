@@ -1048,6 +1048,20 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 
 Converting a boxed `Mixed` value into a concrete scalar, string, or object property does not transfer the source box. EIR releases an owning temporary after the store and leaves borrowed boxes untouched. Scalar payloads need no owner; strings are persisted exactly once and object payloads are independently retained. Matching boxed-to-boxed storage instead transfers an owned box, or acquires a borrowed source before storing it.
 
+### Pending compound append leases
+
+Parser-generated append cell aliases are ordinary retained Mixed boxes, not persistent PHP
+reference sets. When a child lease replaces an older compiler parent, EIR pops the parent's
+record, publishes the child, then releases the old parent slot. This keeps unwinding safe
+without making dead compiler ancestors look like live PHP owners.
+
+A fresh null parent becomes an attached empty array before its missing-key callback runs.
+After the read, a typed, non-retaining EIR query checks whether another cell owner or an
+independent array/hash payload owner preserves the selected target. If only the pending
+lease remains, a null result bypasses the leaf materialization and operator. Both normal
+and cancellation branches retire the active leases in LIFO order. ARM64 and x86_64 use
+the same uniform ownership headers; non-array offsets keep their ordinary dispatch.
+
 ## Memory limits and trade-offs
 
 | Resource | Size | What happens when full |

@@ -102,6 +102,12 @@ echo json_encode(hashReturn('key', $argc));
         source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
+    let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+    assert!(main.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+        crate::ir::RuntimeCallTarget::MixedArrayCellHasLiveOwner))),
+        "{target}: pending compound appends query their selected cell without another retain");
+    assert!(main.blocks.iter().any(|block| block.name.starts_with("append.update.cancel")),
+        "{target}: detached parents bypass leaf materialization and the operator");
     let returning = module.functions.iter().find(|function| function.name == "hashReturn")
         .expect("missing hash-return fixture");
     assert!(returning.blocks.iter().flat_map(|block| &block.instructions)

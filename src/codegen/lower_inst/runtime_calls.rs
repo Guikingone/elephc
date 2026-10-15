@@ -32,6 +32,7 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::StringWriteOffset => super::string_write_offsets::lower_offset(ctx, inst),
         RuntimeCallTarget::WriteDiagnostic => super::string_write_offsets::lower_diagnostic(ctx, inst),
+        RuntimeCallTarget::MixedArrayCellHasLiveOwner => super::runtime_array_liveness::lower(ctx, inst),
         RuntimeCallTarget::MixedCellPromoteToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, false)
         }

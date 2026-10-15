@@ -46,6 +46,14 @@ leading-numeric offset such as `"1abc"`; invalid nonnumeric offsets throw
 `TypeError`. A `false` element is converted to an array with an `E_DEPRECATED`
 diagnostic. Both paths preserve copy-on-write aliases and caller references.
 
+A compound append such as `$items[]['k'] += 1` stops if its missing-key handler
+detaches the selected array and no PHP owner keeps that array alive. The expression
+then yields null without inserting the leaf or evaluating the operator, including
+division by zero. Appending an unrelated root sibling does not cancel the operation.
+A saved root-array copy can keep the old target live and receive its pending write.
+Separately boxed child copies keep the operator active, but pending writes becoming
+visible in those copies remain a runtime copy-on-write limitation.
+
 ## String arrays
 ```php
 <?php

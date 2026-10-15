@@ -78,6 +78,9 @@ pub enum RuntimeCallTarget {
     ArrayFetchForWrite,
     /// Retains the concrete cell behind PHP wrappers and boxed caller-reference markers.
     MixedCellResolveForWrite,
+    /// Checks for a live array cell or payload owner beyond one pending compiler lease.
+    /// Non-array cells stay active; older compiler ancestor leases must already be retired.
+    MixedArrayCellHasLiveOwner,
     /// Converts a PHP string-write offset, preserving catchable errors and conversion warnings.
     StringWriteOffset,
     /// Sends one complete PHP warning or deprecation line through the shared handler dispatcher.
@@ -150,6 +153,9 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::WriteDiagnostic => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str], result: IrType::Void,
             }),
+            RuntimeCallTarget::MixedArrayCellHasLiveOwner => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)], result: IrType::I64,
+            }),
             RuntimeCallTarget::MixedCellPromoteToHash(_)
             | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
             | RuntimeCallTarget::ArrayUnpackToHash => {
@@ -216,6 +222,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
             RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
+            RuntimeCallTarget::MixedArrayCellHasLiveOwner => "array.mixed_cell_has_live_owner",
             RuntimeCallTarget::WriteDiagnostic => "diagnostic.write",
             RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
