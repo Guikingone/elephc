@@ -816,6 +816,24 @@ runs a linear-scan register allocator (`src/ir_passes/`), described in
 [The IR](the-ir.md). It is a backend pass over EIR rather than an AST-level
 optimization, so it lives outside `src/optimize/`.
 
+During EIR lowering, `src/ir_lower/loop_closures.rs` checks a loop's condition,
+update, and complete body before emitting its closure calls. New direct calls
+in `for` and `while` require an invariant local identity, by-value scalar captures,
+an exact positional scalar argument list, and a scalar-or-Mixed signature without
+references or variadics. Argument storage must be physically scalar, and declared
+parameter types must match without coercion. Arguments must be literals or locals
+that the complete condition, update, and body never write. The scan includes nested
+loops, assignment expressions, increments, and `continue` paths; the type
+seen on the first iteration is insufficient for a later backedge. A changing loop
+counter therefore retains descriptor invocation too. The initial lowered-body proof admits
+one straight-line block of explicitly listed scalar primitives, without global
+reads, opaque or nested calls, unproved casts, or throw/fatal/warn effects. Refined call
+effects do not bypass the opcode allowlist. Other shapes retain descriptor invocation. Fresh bindings
+created in a condition do not bypass these gates in the body. `do/while` keeps
+its existing call eligibility after the same identity and argument-write checks,
+preventing stale targets or argument representations on the backedge. These lowering rules
+apply with EIR optimization enabled or disabled.
+
 IR-level transformations also no longer live here. The EIR backend runs a
 fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting with
 identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole

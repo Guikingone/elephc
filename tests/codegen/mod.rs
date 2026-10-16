@@ -80,6 +80,7 @@ mod arrays;
 mod calendar;
 mod call_counters;
 mod callables;
+mod known_closure_loops;
 mod system;
 mod json;
 mod serialize;

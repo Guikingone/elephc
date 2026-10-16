@@ -96,6 +96,8 @@ pub(crate) enum StaticCallableBinding {
         signature: FunctionSig,
         captures: Vec<ClosureCapture>,
         return_alias: ReturnArgAlias,
+        /// Requires scalar/nonthrowing call gates for newly preserved loop facts.
+        loop_guarded: bool,
     },
     StaticMethod {
         receiver: StaticReceiver,
