@@ -185,20 +185,13 @@ fn known_loop_closure_rejects_unproved_body_shapes() {
     }
 }
 
-/// A current scalar type is insufficient if any loop path writes the argument local.
+/// A proved int|float backedge uses a direct Mixed call. The counter is not specialized to I64.
 #[test]
-fn known_loop_closure_rejects_argument_writes_on_all_targets() {
+fn known_loop_closure_admits_proved_numeric_arguments_on_all_targets() {
     for loop_body in [
         "for($i=0;$i<2;$i++){$out=$f($value);$value=1.5;}",
-        "for($i=0;$i<2;$i++){$out=$f($value);$value=null;}",
         "$i=0;while($i<2){$out=$f($value);$value=1.5;$i++;}",
-        "$i=0;while($i<2){$out=$f($value);$value=null;$i++;}",
-        "$i=0;do{$out=$f($value);$value=1.5;$i++;}while($i<2);",
-        "$i=0;do{$out=$f($value+0);$value=1.5;$i++;}while($i<2);",
-        "$i=0;while($i++<2 && ($value=($i==1?10:1.5))>=0){$out=$f($value);}",
         "for($i=0;$i<2;$value=1.5){$out=$f($value);$i++;}",
-        "for($i=0;$i<2;$i++){$out=$f($value);if($i==0){$value=null;continue;}}",
-        "for($i=0;$i<2;$i++){$out=$f($value);for($j=0;$j<1;$j++){$value=1.5;}}",
         "for($i=0;$i<2;$i++){$out=$f($value);($value=1.5);}",
         "for($i=0;$i<2;$i++){$out=$f($i);}",
         "$i=0;while($i<2){$out=$f($i);$i++;}",
@@ -209,9 +202,51 @@ fn known_loop_closure_rejects_argument_writes_on_all_targets() {
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"),
                 std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+            assert_eq!(calls(&module), (1, 0), "{target}: {source}");
+            assert_mixed_direct_call(&module, &source);
+        }
+    }
+}
+
+/// Unproved writes, complex arguments, and unsupported control flow keep the descriptor invoke.
+#[test]
+fn known_loop_closure_rejects_argument_writes_on_all_targets() {
+    for loop_body in [
+        "for($i=0;$i<2;$i++){$out=$f($value);$value=null;}",
+        "$i=0;while($i<2){$out=$f($value);$value=null;$i++;}",
+        "$i=0;do{$out=$f($value);$value=1.5;$i++;}while($i<2);",
+        "$i=0;do{$out=$f($value+0);$value=1.5;$i++;}while($i<2);",
+        "$i=0;while($i++<2 && ($value=($i==1?10:1.5))>=0){$out=$f($value);}",
+        "for($i=0;$i<2;$i++){$out=$f($value);if($i==0){$value=null;continue;}}",
+        "for($i=0;$i<2;$i++){$out=$f($value);for($j=0;$j<1;$j++){$value=1.5;}}",
+        "for($i=0;$i<2;$i++){$out=$f($value+0);$value=1.5;}",
+    ] {
+        let source = format!("<?php $f=function($x){{return $x+1;}};$value=10;$out=0;{loop_body}echo$out;");
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"),
+                std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
             assert_eq!(calls(&module), (0, 1), "{target}: {source}");
         }
     }
+}
+
+/// An admitted Mixed call passes the boxed local and does not narrow it back to int.
+fn assert_mixed_direct_call(module: &Module, source: &str) {
+    let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+    assert!(main.instructions.iter().all(|inst| inst.op != Op::MixedCastInt), "{source}");
+    // `$argc + 1` is still a checked int add. The admitted argument itself is a Mixed load.
+    let call = main.instructions.iter().find(|inst| inst.op == Op::Call).unwrap();
+    let operand = call.operands.first().copied().unwrap();
+    let defining = main.instructions.iter().find(|inst| inst.result == Some(operand)).unwrap();
+    assert_eq!(defining.op, Op::LoadLocal, "{source}");
+    assert_eq!(defining.result_php_type, crate::types::PhpType::Mixed, "{source}");
+}
+
+/// A Mixed value returned from another call is not a numeric seed, so the closure stays generic.
+#[test]
+fn known_loop_closure_rejects_unproved_mixed_arguments() {
+    let source = "<?php function box($value): mixed { return $value; } $f=function($x){return $x+1;}; $value=box(10); $out=0; for($i=0;$i<2;$i++){$out=$f($value); $value='x';} echo $out;";
+    assert_eq!(calls(&super::lower_source(source)), (1, 1), "{source}");
 }
 
 /// Literal and unwritten scalar argument storage remains eligible for direct calls.

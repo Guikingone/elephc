@@ -216,6 +216,96 @@ fn test_known_closure_loop_argument_writes_on_other_backedges() {
     }
 }
 
+/// A proved numeric closure sums a runtime counter in for and while, including empty and repeated calls.
+#[test]
+fn test_known_closure_loop_mixed_counter_matches_php() {
+    let source = r#"<?php
+function closurePart(int $n): int {
+    if ($n <= 0) { return 0; }
+    $f = function($x) { return $x + 1; };
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) { $sum += $f($i); }
+    return (int) $sum;
+}
+function closurePartWhile(int $n): int {
+    $f = function($x) { return $x + 1; };
+    $sum = 0;
+    $i = 0;
+    while ($i < $n) { $sum += $f($i); $i++; }
+    return (int) $sum;
+}
+echo closurePart(0), '|', closurePart(4), '|', closurePartWhile(4), '|', closurePart(4);
+"#;
+    check_closure_loop(source, "0|10|10|10");
+}
+
+/// By-value numeric captures stay at the value from closure creation after the outer local changes.
+#[test]
+fn test_known_closure_loop_numeric_capture_ignores_later_write() {
+    let source = r#"<?php
+$k = 3;
+$f = function($x) use ($k) { return $x + $k; };
+$k = 100;
+$sum = 0;
+for ($i = 0; $i < 4; $i++) { $sum += $f($i); }
+echo (int) $sum;
+"#;
+    check_closure_loop(source, "18");
+}
+
+/// Integer overflow inside the closure continues as float, including the value observed after the loop.
+#[test]
+fn test_known_closure_loop_overflow_continues_as_float() {
+    for (start, operation) in [("PHP_INT_MAX", "+ 1"), ("PHP_INT_MIN", "- 1")] {
+        let source = format!(r#"<?php
+$f = function($x) {{ return $x {operation}; }};
+$value = {start};
+$result = 0;
+for ($i = 0; $i < 2; $i++) {{ $result = $f($value); $value = $result; }}
+echo gettype($result), '|', gettype($value);
+"#);
+        check_closure_loop(&source, "double|double");
+    }
+    let source = r#"<?php
+$f = function($x) { return $x; };
+$sum = 0;
+for ($i = 0; $i < 2; $i++) { $sum += $f(PHP_INT_MAX); }
+echo gettype($sum);
+"#;
+    check_closure_loop(source, "double");
+}
+
+/// Fractional floats and signed zero survive the Mixed call and the loop-carried store.
+#[test]
+fn test_known_closure_loop_fractional_and_signed_zero() {
+    let source = r#"<?php
+$f = function($x) { return $x + 1.5; };
+$sum = 0.0;
+for ($i = 0; $i < 2; $i++) { $sum += $f($i); }
+echo $sum, '|';
+$g = function($x) { return $x; };
+$value = -0.0;
+$result = 0.0;
+for ($i = 0; $i < 2; $i++) { $result = $g($value); $value = -0.0; }
+echo (string) $result;
+"#;
+    check_closure_loop(source, "4|-0");
+}
+
+/// An unproved Mixed argument stays on the descriptor path and still adds a numeric payload.
+#[test]
+fn test_known_closure_loop_unproved_mixed_stays_numeric() {
+    let source = r#"<?php
+function box($value): mixed { return $value; }
+$f = function($x) { return $x + 1; };
+$value = box(10);
+$out = 0;
+for ($i = 0; $i < 2; $i++) { $out = $f($value); }
+echo $out;
+"#;
+    check_closure_loop(source, "11");
+}
+
 /// Unwritten locals and literal scalars keep correct direct-call argument values.
 #[test]
 fn test_known_closure_loop_unwritten_argument_controls() {
