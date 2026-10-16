@@ -175,3 +175,13 @@ for ($batch = 0; $batch < 3; $batch++) {
     unset($record);
 }
 unset($processed);
+
+// Repeated scalar calls keep the captured value from closure creation.
+$offset = 3;
+$step = function($value) use ($offset) { return $value + $offset; };
+$offset = 100;
+$loopTotal = 0;
+for ($index = 0; $index < 4; $index++) {
+    $loopTotal += $step($index);
+}
+echo "Loop total with captured offset=3: ", $loopTotal, "\n";

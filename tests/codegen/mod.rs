@@ -37,6 +37,7 @@ mod eval_closures;
 mod eval_constructors;
 mod eval_reflection_invocation;
 mod eval_global_scope;
+mod known_closure_loops;
 mod eval_undefined_functions;
 mod operators;
 mod control_flow;

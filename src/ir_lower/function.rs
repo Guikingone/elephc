@@ -1831,6 +1831,7 @@ fn seed_recursive_closure_binding(
             signature: binding.signature,
             captures,
             return_alias: binding.return_alias,
+            loop_guarded: false,
         },
     );
 }

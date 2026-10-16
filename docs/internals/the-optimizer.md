@@ -807,6 +807,19 @@ runs a linear-scan register allocator (`src/ir_passes/`), described in
 [The IR](the-ir.md). It is a backend pass over EIR rather than an AST-level
 optimization, so it lives outside `src/optimize/`.
 
+During EIR lowering, `src/ir_lower/loop_closures.rs` checks a loop's condition,
+update, and complete body before emitting its closure calls. New direct calls
+in `for` and `while` require an invariant local identity, by-value scalar captures,
+an exact positional scalar argument list, and a scalar-or-Mixed signature without
+references or variadics. Argument storage must be physically scalar, and declared
+parameter types must match without coercion. The lowered body must keep closed
+scalar state, avoid global reads and opaque calls, and carry no throw/fatal/warn
+effects or terminators. Other shapes retain descriptor invocation. Fresh bindings
+created in a condition do not bypass these gates in the body. `do/while` keeps
+its existing call eligibility after the same identity check, preventing a stale
+entry target from surviving a reassignment on the backedge. These lowering rules
+apply with EIR optimization enabled or disabled.
+
 IR-level transformations also no longer live here. The EIR backend runs a
 fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting with
 identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
