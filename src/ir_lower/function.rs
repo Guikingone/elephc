@@ -1781,13 +1781,15 @@ fn lower_body_into_function(
         ctx.privatize_container_param(name, php_type, None);
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
-    if let Some(class) = property_initializers {
-        super::property_initializers::lower(&mut ctx, class);
-    } else if !super::throwable_constructors::lower(&mut ctx) {
-        for stmt in body {
-            crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
+    ctx.lower_with_final_string_append_storage(|ctx| {
+        if let Some(class) = property_initializers {
+            super::property_initializers::lower(ctx, class);
+        } else if !super::throwable_constructors::lower(ctx) {
+            for stmt in body {
+                crate::ir_lower::stmt::lower_stmt(ctx, stmt);
+            }
         }
-    }
+    });
     terminate_open_block(&mut ctx);
     // Cleanup-only loads must follow the final frame representation after every
     // source-order store has had a chance to widen its local slot.

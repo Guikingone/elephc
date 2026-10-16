@@ -10,6 +10,8 @@
 //! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
 //! - The `mixed_receiver_property_writes` submodule checks the ownership of a property write whose receiver is statically `mixed`.
 
+#[path = "runtime_gc/string_append.rs"]
+mod string_append;
 #[path = "runtime_gc/basics.rs"]
 mod basics;
 #[path = "runtime_gc/large_unary_string_results.rs"]

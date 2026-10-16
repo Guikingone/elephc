@@ -733,6 +733,7 @@ preserves PHP exponentiation result rules.
 | Op | Operands | Result | Effects |
 |---|---|---|---|
 | `StrConcat` | `Str`, `Str` | `Str` | `alloc_concat` |
+| `StrAppend` | `Str`, borrowed `Str`; destination local slot | owned `Str` | `reads_local`, `writes_local`, `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op`, `may_fatal` |
 | `StrLen` | `Str` | `I64` | pure |
 | `StrPersist` | `Str` | `Str` | `alloc_heap`, `refcount_op` when copy needed |
 | `StrCharAt` | `Str`, `I64` | `Str` | `may_fatal`, `alloc_concat` |
@@ -743,6 +744,46 @@ preserves PHP exponentiation result rules.
 Concat-buffer operations are statement-boundary-sensitive. Lowering must emit
 statement boundaries so EIR passes do not reorder `alloc_concat` operations
 across a reset point.
+
+### Consuming local string append
+
+`StrAppend` carries the destination `LocalSlot` as its immediate. Its left operand
+is the adjacent load of that local's existing string owner. On success the helper
+consumes that owner and returns exactly one replacement owner; the next instruction
+must store the result into the same slot, without another acquire or old-value
+release. The validator checks this adjacency, owned result, plain string storage,
+and exclusive SSA uses, including terminator uses. Allocation failure keeps the
+old local owner valid until the native boundary unwinds.
+
+Lowering admits `$s .= $rhs` and `$s = $s . $rhs` only for initialized plain local
+strings. Parameters, captures, references, globals, extern storage, eval-visible
+state and mixed/retyped storage retain ordinary assignment. RHS must be a string
+literal or an initialized plain string local, which may be a borrowed parameter.
+RHS evaluation finishes before the transaction and cannot call or mutate a PHP
+value. Other RHS expressions retain ordinary evaluation and exception handling.
+Generic `StrConcat` continues to preserve both source values and use concat scratch.
+
+The owner proof also checks the final frame storage after the body is lowered.
+If a later writable capture or other operation widens an admitted destination,
+lowering restores the body-entry checkpoint and lowers that body again with
+consuming append disabled. Ordinary concat and assignment then emit their existing
+acquires and releases for the widened slot. The validator remains strict; no
+consuming transaction can target boxed `Mixed` storage. Nested closures and interned
+data from the discarded lowering are restored with the same checkpoint.
+
+The append helper uses the allocator's payload size as capacity and the returned
+string pair as logical length. A unique owned buffer reuses spare capacity when
+RHS does not overlap it. Otherwise the helper copies into independent storage,
+using doubled capacity for unique growth. A required copy instead uses the old
+logical length as its growth basis, so retained snapshots cannot repeatedly double
+unused capacity. Both paths reserve at least the required length and 16 bytes.
+Near the size limit it uses the checked required size. Length and header-size
+checks precede payload access. Shared, borrowed, literal and overlapping inputs
+remain unchanged; the consumed old reference is retired only after copying.
+Fresh mbstring/INI origin metadata is installed before any changed byte is stored;
+an empty append preserves the existing origin. These operations do not allocate
+concat scratch. Spare capacity trades additional reserved memory for linear copy
+volume across repeated appends.
 
 ### Arrays and Hashes
 
