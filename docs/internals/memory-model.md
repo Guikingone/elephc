@@ -1184,7 +1184,7 @@ chooses between in-place reuse and a copy:
   reservation is the required length, or 16 bytes when that is larger, and this
   helper leaves that input for its existing owner to release.
 - Spare capacity is the trade-off. In the doubling case the new length still
-  fits in twice the old capacity, so the live block keeps unused bytes — up to
+  fits in twice the old capacity, so the live block keeps total capacity up to
   almost twice the logical length — and the existing prefix is copied only when
   the buffer grows. The copy volume of that loop stays linear in the final length.
   An append whose new length exceeds twice the old capacity reserves that exact
