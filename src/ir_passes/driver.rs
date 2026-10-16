@@ -193,7 +193,7 @@ pub fn optimize_module(module: &mut Module) {
         }
 
         if !changed {
-            return; // module-level fixed point reached
+            break; // module-level fixed point reached
         }
     }
     // Module-level non-convergence: keep the current (valid, more-optimized) IR.

@@ -39,7 +39,7 @@ Integer-form numeric literals keep the `int` type only while they fit in PHP's s
 
 ### Literal pseudo-types in unions
 
-PHP lets `null`, `false`, and `true` appear as type members. elephc accepts them in parameter, return, and property positions, matched case-insensitively like the other built-in type names.
+PHP lets `null`, `false`, and `true` appear as type members. elephc accepts them in parameter and return positions, and accepts `null` and `false` as property types, matched case-insensitively like the other built-in type names; a property type containing `true` is rejected (see [Literal property types](#literal-property-types)).
 
 ```php
 <?php
@@ -530,3 +530,20 @@ The compiler also emits non-fatal warnings (unused variables, unreachable code).
 ### Runtime diagnostics
 
 Runtime warnings flow through a suppressible diagnostics channel. The `@` operator hides those warnings for its operand only, while fatal runtime errors and compile-time diagnostics remain visible. Current suppressible warnings include `fopen()` / `file_get_contents()` open failures and duplicate `define()` calls.
+
+## Literal property types
+
+Standalone `false` properties and `false` parameters accept the exact boolean
+`false`; values such as integer zero, null, and empty strings are rejected before
+boolean coercion. Known instance, static, and parent calls retain this check.
+Object refusals name the runtime class in their `TypeError`.
+Initialize literal `false` properties in a constructor: declaration defaults
+such as `public false $ready = false` are currently unsupported.
+
+Ordinary standalone `null` properties accept only null and retain typed-property
+initialization checks. The `null` declaration is distinct from a forbidden
+`void` property.
+
+Literal `true` property types are currently unsupported. Ordinary and promoted
+properties, including nullable and union forms containing `true`, produce an
+explicit compile diagnostic instead of silently widening to `bool`.
