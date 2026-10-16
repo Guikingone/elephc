@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::TAGGED_SCALAR_PROPERTY_TAG;
+use crate::codegen_support::sentinels::{SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -690,6 +690,20 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // _class_serpdiag_ptrs: dense class_id-indexed table of serialize-property
+    // diagnostic rows. __rt_obj_store_prop indexes this by class_id to find the
+    // declared-type suffix and accepted value tags for a hydrated slot.
+    out.push_str(".globl _class_serpdiag_ptrs\n_class_serpdiag_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_serpdiag_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_serpdiag_missing\n");
+            }
+        }
+    }
+
     out.push_str(".globl _class_static_vtable_ptrs\n_class_static_vtable_ptrs:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
@@ -766,6 +780,14 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n"); // property count = 0
     out.push_str(".globl _class_serprop_declaring_missing\n_class_serprop_declaring_missing:\n");
     out.push_str("    .quad -1\n"); // no declaring class for a missing descriptor
+    // _class_serpdiag_missing: a defensive accept-all row (no suffix, mask -1, no widen), never
+    // indexed because a missing class has no serialize properties and so never reaches the lookup.
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_serpdiag_missing\n_class_serpdiag_missing:\n");
+    out.push_str("    .quad 0\n"); // no message suffix
+    out.push_str("    .quad 0\n"); // zero suffix length
+    out.push_str("    .quad -1\n"); // accept every boxed value tag
+    out.push_str("    .quad 0\n"); // never widen an int into a float
     // _class_json_desc_missing: zero flags, zero properties, no jsonSerialize.
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_json_desc_missing\n_class_json_desc_missing:\n");
@@ -1171,7 +1193,10 @@ pub(crate) fn emit_runtime_data_user(
         // property's byte offset within the object, and its runtime value tag.
         // __rt_serialize_object / __rt_unserialize_object walk this by class id.
         for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
-            let mangled = mangled_property_name(class_info, class_name, prop_name);
+            let (metadata, owner_name) = physical_property_slot_metadata(
+                classes, class_info, class_name, prop_index, prop_name,
+            );
+            let mangled = mangled_property_name(metadata, owner_name, prop_name);
             out.push_str(&format!(
                 ".globl _class_serpname_{}_{}\n_class_serpname_{}_{}:\n",
                 class_info.class_id, prop_index, class_info.class_id, prop_index,
@@ -1192,13 +1217,16 @@ pub(crate) fn emit_runtime_data_user(
         ));
         out.push_str(&format!("    .quad {}\n", class_info.properties.len()));
         for (prop_index, (prop_name, prop_ty)) in class_info.properties.iter().enumerate() {
-            let mangled_len = mangled_property_name(class_info, class_name, prop_name).len();
-            let offset = class_info
+            let (metadata, owner_name) = physical_property_slot_metadata(
+                classes, class_info, class_name, prop_index, prop_name,
+            );
+            let mangled_len = mangled_property_name(metadata, owner_name, prop_name).len();
+            let offset = metadata
                 .property_offsets
                 .get(prop_name)
                 .copied()
                 .unwrap_or(8 + prop_index * 16);
-            let tag = prop_value_tag(class_info, prop_name, prop_ty);
+            let tag = prop_value_tag(metadata, prop_name, prop_ty);
             out.push_str(&format!(
                 "    .quad _class_serpname_{}_{}\n",
                 class_info.class_id, prop_index
@@ -1212,17 +1240,86 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_declaring_{}\n_class_serprop_declaring_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        for (prop_name, _) in &class_info.properties {
-            let declaring_class = class_info
+        for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
+            let (metadata, owner_name) = physical_property_slot_metadata(
+                classes, class_info, class_name, prop_index, prop_name,
+            );
+            let declaring_class = metadata
                 .property_declaring_classes
                 .get(prop_name)
                 .map(String::as_str)
-                .unwrap_or(class_name);
+                .unwrap_or(owner_name);
             let declaring_class_id = all_class_id_by_name
                 .get(declaring_class)
                 .copied()
                 .unwrap_or(class_info.class_id);
             out.push_str(&format!("    .quad {}\n", declaring_class_id));
+        }
+
+        // Serialize-property diagnostic table: one row per declared property carrying the
+        // static message suffix `__rt_obj_store_prop` appends when a hydrated value does not
+        // match the declared property type (" to property C::$p of type T"), and the set of
+        // boxed value tags the slot accepts. The runtime store raises PHP's TypeError from
+        // this row instead of silently writing the value (#1629). Kept parallel to
+        // `_class_serprop_*` so its row index is the same property index.
+        let serprop_diag: Vec<(String, u64, u64)> = class_info
+            .properties
+            .iter()
+            .enumerate()
+            .map(|(prop_index, (prop_name, prop_ty))| {
+                let (metadata, owner_name) = physical_property_slot_metadata(
+                    classes, class_info, class_name, prop_index, prop_name,
+                );
+                // An undeclared (untyped) slot has no PHP declaration to enforce: elephc
+                // infers a storage type from the default, but PHP accepts any value there,
+                // so leave the pre-existing accept behavior untouched.
+                let declared = metadata.property_slot_is_declared(prop_index, prop_name);
+                let declaring_class = metadata
+                    .property_declaring_classes
+                    .get(prop_name)
+                    .map(String::as_str)
+                    .unwrap_or(owner_name);
+                let type_name = if declared {
+                    serprop_type_name(prop_ty)
+                } else {
+                    "mixed".to_string()
+                };
+                let suffix = format!(
+                    " to property {}::${} of type {}",
+                    declaring_class, prop_name, type_name,
+                );
+                let mask = if declared {
+                    serprop_accepted_mask(prop_ty)
+                } else {
+                    u64::MAX
+                };
+                let widen = u64::from(declared && serprop_widens_int_to_float(prop_ty));
+                (suffix, mask, widen)
+            })
+            .collect();
+        for (prop_index, (suffix, _, _)) in serprop_diag.iter().enumerate() {
+            out.push_str(&format!(
+                ".globl _class_serpsuffix_{}_{}\n_class_serpsuffix_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id,
+                prop_index,
+                class_info.class_id,
+                prop_index,
+                escaped_ascii(suffix),
+            ));
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_serpdiag_{}\n_class_serpdiag_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        for (prop_index, (suffix, mask, widen)) in serprop_diag.iter().enumerate() {
+            out.push_str(&format!(
+                "    .quad _class_serpsuffix_{}_{}\n",
+                class_info.class_id, prop_index
+            ));
+            out.push_str(&format!("    .quad {}\n", suffix.len())); // message-suffix byte length
+            out.push_str(&format!("    .quad {}\n", mask)); // accepted boxed value tags
+            out.push_str(&format!("    .quad {}\n", widen)); // widen an accepted int into a float
         }
 
         // var_dump property-info table: one row per RENDERED property, carrying the
@@ -3291,7 +3388,7 @@ fn var_dump_descriptor_rows(
             .filter_map(|(key, prop_name)| {
                 let layout_index = class_info.visible_property_index(&prop_name)?;
                 let (_, prop_ty) = class_info.properties.get(layout_index)?;
-                let (metadata, owner_name) = renderer_property_slot_metadata(
+                let (metadata, owner_name) = physical_property_slot_metadata(
                     classes, class_info, class_name, layout_index, &prop_name,
                 );
                 // Resolve the physical slot before filtering: a user property can shadow an
@@ -3320,7 +3417,7 @@ fn var_dump_descriptor_rows(
         .iter()
         .enumerate()
         .filter_map(|(layout_index, (prop_name, prop_ty))| {
-            let (metadata, owner_name) = renderer_property_slot_metadata(
+            let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
             );
             if is_reflection_backing_slot(metadata, owner_name, prop_name) {
@@ -3378,9 +3475,10 @@ fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_nam
 
 /// Resolves by-name metadata on the nearest ancestor where this physical slot is visible.
 ///
-/// A child's private declaration appends a slot but replaces the name-keyed maps. Walking the
-/// ancestry for a hidden index recovers its original owner, visibility and byte offset.
-fn renderer_property_slot_metadata<'a>(
+/// Shadowing a private property appends a slot but replaces the name-keyed maps. Walking the
+/// ancestry for a hidden index recovers its original owner, visibility and byte offset for
+/// renderers and serialization alike, without applying a `__debugInfo()` projection.
+fn physical_property_slot_metadata<'a>(
     classes: &'a HashMap<String, ClassInfo>,
     class_info: &'a ClassInfo,
     class_name: &'a str,
@@ -3593,6 +3691,150 @@ fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
         PhpType::Object(_) => "object".to_string(),
         _ => "mixed".to_string(),
     }
+}
+
+/// Renders the declared property type text PHP prints in a hydration `TypeError`
+/// (`Cannot assign <value> to property C::$p of type <T>`).
+///
+/// Unlike `var_dump_property_type_name`, which collapses unions to `mixed`, this keeps
+/// the nullable scalar spelling PHP uses (`?int`) and joins wider unions with `|`, so the
+/// message matches reference PHP for the shapes a typed property can declare.
+fn serprop_type_name(prop_ty: &PhpType) -> String {
+    match prop_ty {
+        PhpType::Union(members) => {
+            let mut ranked: Vec<(u8, String)> = Vec::new();
+            let mut nullable = false;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never => nullable = true,
+                    // PHP renders `iterable` as its constituent types.
+                    PhpType::Iterable => {
+                        ranked.push((0, "Traversable".to_string()));
+                        ranked.push((2, "array".to_string()));
+                    }
+                    other => ranked.push((serprop_type_rank(other), serprop_type_name(other))),
+                }
+            }
+            // Deduplicate by rendered name, keeping the first occurrence.
+            let mut seen = std::collections::HashSet::new();
+            ranked.retain(|(_, name)| seen.insert(name.clone()));
+            // PHP canonicalizes union member order regardless of declaration order.
+            ranked.sort_by_key(|(rank, _)| *rank);
+            if nullable && ranked.len() == 1 {
+                return format!("?{}", ranked[0].1);
+            }
+            let mut parts: Vec<String> = ranked.into_iter().map(|(_, name)| name).collect();
+            if nullable {
+                parts.push("null".to_string());
+            }
+            parts.join("|")
+        }
+        PhpType::Int => "int".to_string(),
+        PhpType::Float => "float".to_string(),
+        PhpType::Str => "string".to_string(),
+        PhpType::Bool => "bool".to_string(),
+        PhpType::False => "false".to_string(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
+        PhpType::Iterable => "Traversable|array".to_string(),
+        PhpType::Callable => "callable".to_string(),
+        PhpType::Object(class_name) if !class_name.is_empty() => class_name.clone(),
+        PhpType::Object(_) => "object".to_string(),
+        PhpType::TaggedScalar => "?int".to_string(),
+        _ => "mixed".to_string(),
+    }
+}
+
+/// Returns PHP's canonical union-member rank for a declared type.
+///
+/// php-src prints union members in a fixed order (classes in declaration order, then array,
+/// string, int, float, bool, false) rather than the source order, so the message text matches
+/// reference PHP. `null` is appended last by the caller.
+fn serprop_type_rank(prop_ty: &PhpType) -> u8 {
+    match prop_ty {
+        // Named classes keep declaration order and print before the generic `object` type.
+        PhpType::Object(class_name) if !class_name.is_empty() => 0,
+        PhpType::Object(_) => 1,
+        PhpType::Array(_) | PhpType::AssocArray { .. } => 2,
+        PhpType::Str => 3,
+        PhpType::Int => 4,
+        PhpType::Float => 5,
+        PhpType::Bool => 6,
+        PhpType::False => 7,
+        _ => 8,
+    }
+}
+
+/// Returns the set of decoder boxed-value tags a hydrated property slot accepts.
+///
+/// The bits use the runtime value tags (`0` int, `1` string, `2` float, `3` bool,
+/// `4` indexed array, `5` hash, `6` object, `8` null). `int` also satisfies a `float`
+/// slot (PHP's only widening on hydration), an array slot accepts both array shapes,
+/// and a nullable member admits tag `8`. An untyped property is declared `Void` but
+/// stored boxed, so it (like `mixed`) accepts every tag; a `Void` that is a UNION member
+/// is the null type and admits only tag `8`.
+fn serprop_accepted_mask(prop_ty: &PhpType) -> u64 {
+    // An untyped property is declared `Void` but stored boxed and accepts any value,
+    // exactly like `mixed`. A `Void` inside a union is the null member instead, so only
+    // the standalone forms short-circuit here.
+    if matches!(prop_ty, PhpType::Void | PhpType::Mixed) {
+        return u64::MAX;
+    }
+    let mut mask: u64 = 0;
+    let members: Vec<&PhpType> = match prop_ty {
+        PhpType::Union(members) => members.iter().collect(),
+        other => vec![other],
+    };
+    for member in members {
+        match member {
+            PhpType::Int => mask |= 1 << 0,
+            PhpType::Float => mask |= (1 << 2) | (1 << 0),
+            PhpType::Str => mask |= 1 << 1,
+            PhpType::Bool => mask |= 1 << 3,
+            // A `false` member is a distinct declared type whenever `Bool` is absent
+            // (`int|false`, `false`, `?false`). `true` and `false` share boxed tag 3, so
+            // `False` sets the false-only bit instead of tag bit 3; the runtime then requires a
+            // zero payload, so `b:1;` is rejected while `b:0;` is stored.
+            PhpType::False => mask |= SERPROP_FALSE_ONLY_BIT,
+            PhpType::Array(_) | PhpType::AssocArray { .. } => mask |= (1 << 4) | (1 << 5),
+            PhpType::Object(_) => mask |= 1 << 6,
+            PhpType::Void | PhpType::Never => mask |= 1 << 8,
+            PhpType::TaggedScalar => mask |= (1 << 0) | (1 << 8),
+            PhpType::Iterable => mask |= (1 << 4) | (1 << 5) | (1 << 6),
+            PhpType::Callable => mask |= 1 << 10,
+            // `mixed`, an untyped property's standalone `Void`, and every
+            // internal/unsupported shape accept any decoded value: the slot's runtime
+            // representation is boxed, so no payload can be misread.
+            _ => return u64::MAX,
+        }
+    }
+    if mask == 0 {
+        u64::MAX
+    } else {
+        mask
+    }
+}
+
+/// Returns whether a hydrated `int` for this declared type must become a PHP `float`.
+///
+/// PHP coerces an `int` into a `float` member on hydration whenever the type has a `float`
+/// member and no `int` member (`float`, `?float`, `float|string`, `bool|float`), but keeps the
+/// `int` when the type also declares `int` (`int|float`), so the accepted-tag mask alone cannot
+/// distinguish the two shapes.
+fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
+    let members: Vec<&PhpType> = match prop_ty {
+        PhpType::Union(members) => members.iter().collect(),
+        other => vec![other],
+    };
+    let mut has_float = false;
+    let mut has_int = false;
+    for member in members {
+        match member {
+            PhpType::Float => has_float = true,
+            PhpType::Int => has_int = true,
+            _ => {}
+        }
+    }
+    has_float && !has_int
 }
 
 /// Maps a declared property's static type to the runtime value tag consumed by
