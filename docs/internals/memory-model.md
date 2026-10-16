@@ -1113,6 +1113,28 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 10. **Resource scope-cleanup** — Mixed-boxed resources (tag 9) carry a resource-kind subtype in the high payload word, and `__rt_mixed_free_deep` runs the matching destructor when the box is released: kind 1 = native stream fd (`close()`), kind 2 = HashContext handle (`elephc_crypto_free` through `__rt_hash_ctx_free`), kind 3 = `popen` pipe (`__rt_pclose`, which closes the `FILE*` and reaps the child), kind 4 = `opendir` stream (`__rt_closedir`). Kind 0 resources (generic resources) are skipped, and every fd-backed kind also skips handles `>= 0x40000000` — synthetic wrapper handles and the `-1` sentinel that an explicit `fclose`/`pclose`/`closedir` stamps into the box so the descriptor is never released twice (even if its fd number was reused). Alias safety comes from the Mixed box refcount — `$b = $a` increfs the box, so only the last release triggers the destructor
 11. **Process exit** — all memory reclaimed by the OS
 
+### JSON decoder construction owners
+
+The native JSON parser builds an acyclic graph of fresh Mixed cells and
+containers. Array insertion retains a borrowed child, so the parser releases
+its original child reference immediately after insertion. Hash insertion
+adopts the fresh value cell and persists the key bytes; the temporary decoded
+key cell is released after insertion. Boxing a fresh array, hash, or stdClass
+retires the builder's original container reference after Mixed acquires its own.
+
+Recursive parse failures return normally while each parser frame releases its
+partial container and any pending key. The outer `__rt_json_decode_mixed`
+boundary temporarily masks only `JSON_THROW_ON_ERROR`, restores the caller's
+flags after recursion, and then publishes the recorded exception. Parsing
+invokes no PHP callbacks, so the temporary flag mask cannot be observed by user
+code. Diagnostics retain the original parse error while cleanup completes.
+
+Positional source strings are persisted into owned evaluation roots before
+later arguments run. Those roots retire on success, parser exceptions, and
+exceptions raised while evaluating a later argument. A decoded alias remains
+alive through its own reference; releasing the parser's construction references
+does not bypass normal copy-on-write or final-owner destruction.
+
 ### Unboxing a Mixed hands back a reference
 
 `Op::MixedUnbox` is the coercion behind a typed target initialized from a Mixed source — several lowering surfaces emit it for an `object` or `callable` target: the typed-assign coercer `coerce_typed_assign_value` (reached from a typed local and a typed property write), call-argument and closure coercion, static method-call receivers, typed foreach slot coercion, and the merge-temp coercion that hands a `??`-kept `?C` cell over to an object or callable temp (#1628). Each unbox's lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload it produces carries a reference of its OWN rather than borrowing the box's.
