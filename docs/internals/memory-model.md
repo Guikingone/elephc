@@ -625,11 +625,11 @@ call, even when the return-alias summary is conservative. Returning a raw
 The runtime routine `__rt_heap_alloc`:
 
 1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.
-2. **Walk the general free list** — if no cached small block fits, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it so the remainder stays on the free list, then reset the allocated block's refcount to 1 and return it.
+2. **Walk the general free list** — if no cached small block fits, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it. A split remainder with payload up to 64 bytes enters the same small-bin class as an ordinary freed block; a larger remainder stays in address order on the general free list. Then reset the allocated block's refcount to 1 and return it.
 3. **Bump allocate** — if neither free path fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
 4. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
 
-Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed).
+Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed). A split requires room for a new 16-byte header and at least eight payload bytes. Its free header has reference count and kind zero and belongs to exactly one chain. Moving that already-free remainder into a bin does not count as an allocation or free and does not change live bytes. `gc_mem_caches()` drains these entries through the existing coalescing path, including tail trimming, without adding free events.
 
 ### How heap freeing works
 
