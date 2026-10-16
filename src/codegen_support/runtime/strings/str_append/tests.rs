@@ -115,7 +115,6 @@ fn str_append_native_abi_ownership_and_copy_volume() {
     let mut body = emitter.output();
     let (store, counter) = match target.arch {
         Arch::X86_64 => ("mov BYTE PTR [r8], r10b", "\n    add QWORD PTR append_test_copy_bytes[rip], 1\n".to_string()),
-        // -- preserve the ARM64 caller while mapping the string ABI --
         Arch::AArch64 => {
             // -- count copied bytes without changing the runtime control flow --
             let mut counter = Emitter::new(target);
