@@ -814,7 +814,7 @@ an exact positional scalar argument list, and a scalar-or-Mixed signature withou
 references or variadics. Argument storage must be physically scalar, and declared
 parameter types must match without coercion. The initial lowered-body proof admits
 one straight-line block of explicitly listed scalar primitives, without global
-reads, opaque or nested calls, casts, or throw/fatal/warn effects. Refined call
+reads, opaque or nested calls, unproved casts, or throw/fatal/warn effects. Refined call
 effects do not bypass the opcode allowlist. Other shapes retain descriptor invocation. Fresh bindings
 created in a condition do not bypass these gates in the body. `do/while` keeps
 its existing call eligibility after the same identity check, preventing a stale

@@ -149,10 +149,11 @@ fn known_loop_closure_rejects_indirect_identity_hazards() {
 /// Typed scalar identity arguments and returns use the existing direct ABI on every target.
 #[test]
 fn known_loop_closure_exact_scalar_signatures_on_all_targets() {
-    for (signature, argument) in [("int", "1"), ("float", "1.5"), ("bool", "true"),
-        ("false", "false")]
+    for (signature, result_type, argument) in [("int", "int", "1"), ("float", "float", "1.5"),
+        ("bool", "bool", "true"), ("false", "false", "false"),
+        ("int", "float", "1")]
     {
-        let source = fixture(&format!("function({signature} $x):{signature}{{return $x;}}"),
+        let source = fixture(&format!("function({signature} $x):{result_type}{{return $x;}}"),
             &format!("$result=$f({argument});"), "$i++");
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"),

@@ -160,3 +160,14 @@ fn test_known_closure_loop_nested_static_call_stays_generic() {
     let source = "<?php class Step{public static function inc($x){return$x+1;}}$f=function($x){return Step::inc($x);};$sum=0;for($i=0;$i<$argc+2;$i++){$sum+=$f($i);}echo$sum;";
     check_closure_loop(source, "6");
 }
+
+/// Native floating-point inputs and result registers preserve PHP values.
+#[test]
+fn test_known_closure_loop_floating_abis() {
+    for (source, expected) in [
+        ("<?php $f=function(float $x):float{return$x+1.0;};$value=(float)$argc;$result=0.0;for($i=0;$i<2;$i++){$result=$f($value);}var_dump($result);", "float(2)\n"),
+        ("<?php $f=function(int $x):float{return(float)$x;};$value=(int)($argc+13);$result=0.0;for($i=0;$i<2;$i++){$result=$f($value);}var_dump($result);", "float(14)\n"),
+    ] {
+        check_closure_loop(source, expected);
+    }
+}
