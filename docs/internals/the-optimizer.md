@@ -816,23 +816,42 @@ runs a linear-scan register allocator (`src/ir_passes/`), described in
 [The IR](the-ir.md). It is a backend pass over EIR rather than an AST-level
 optimization, so it lives outside `src/optimize/`.
 
-During EIR lowering, `src/ir_lower/loop_closures.rs` checks a loop's condition,
-update, and complete body before emitting its closure calls. New direct calls
-in `for` and `while` require an invariant local identity, by-value scalar captures,
-an exact positional scalar argument list, and a scalar-or-Mixed signature without
-references or variadics. Argument storage must be physically scalar, and declared
-parameter types must match without coercion. Arguments must be literals or locals
-that the complete condition, update, and body never write. The scan includes nested
-loops, assignment expressions, increments, and `continue` paths; the type
-seen on the first iteration is insufficient for a later backedge. A changing loop
-counter therefore retains descriptor invocation too. The initial lowered-body proof admits
-one straight-line block of explicitly listed scalar primitives, without global
-reads, opaque or nested calls, unproved casts, or throw/fatal/warn effects. Refined call
-effects do not bypass the opcode allowlist. Other shapes retain descriptor invocation. Fresh bindings
-created in a condition do not bypass these gates in the body. `do/while` keeps
-its existing call eligibility after the same identity and argument-write checks,
-preventing stale targets or argument representations on the backedge. These lowering rules
-apply with EIR optimization enabled or disabled.
+During EIR lowering, `src/ir_lower/loop_closures/` checks a loop's condition,
+update, and complete body before emitting its closure calls. Identity and the
+numeric domain are separate proofs. Both apply with EIR optimization enabled or disabled.
+
+The existing direct path in `for` and `while` still requires an invariant local
+identity, by-value scalar captures, an exact positional argument list, and a
+scalar-or-Mixed signature without references or variadics. Its arguments are
+literals or locals that the condition, update, and body never write, and those
+locals must already have physical `I64` or `F64` storage. Declared parameter
+types must match without coercion. Nested loops, assignment expressions,
+increments, and `continue` paths are part of that identity scan. A type seen on
+the first iteration is not proof of a later representation.
+
+A second path can direct-call a known local closure when an argument local is
+written. A fixed point over the straight-line condition, body, and update must
+show that every argument and the closure result stay in PHP `int|float`. The
+seed is the entry slot: logical `int` with `I64` storage, or logical `float`
+with `F64` storage. A `Mixed` label is unknown and blocks this path. Checked
+integer arithmetic widens the domain to `int|float`; that domain is not an `I64`
+proof and does not emit a truncating conversion. The call uses the ordinary
+Mixed operand ABI of `Op::Call`, including by-value captures and the usual
+owner cleanup. Locals in the proof whose final slot is Mixed are stored and
+loaded as Mixed from the first store, so a later float, null sentinel, or
+signed zero is not read back through an integer cast. The admission is recorded
+per call span. One admitted call does not admit a different call of the same
+local.
+
+The numeric path requires an untyped Mixed signature, no references, variadics,
+generators, named arguments, spreads, or omitted defaults, and captures that are
+absent or by-value int or float. The lowered body must be one block whose
+opcodes are in the closed primitive allowlist and have no throw, fatal, or
+warning effects. A branch, nested loop, `break`, `continue`, unmodeled
+assignment, or expression argument such as `$value + 0` keeps descriptor
+invocation. `do/while` does not use this path. Fresh bindings created in a
+condition do not bypass the identity gate. Refined call effects do not bypass
+the opcode allowlist.
 
 IR-level transformations also no longer live here. The EIR backend runs a
 fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting with
