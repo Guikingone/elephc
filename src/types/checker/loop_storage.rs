@@ -309,6 +309,9 @@ fn infer_array_literal_element_storage(
 /// Variables prefer the fixed-point environment, which is the storage the next iteration
 /// will load. The literal `null` is `Void` so the cast is an empty array; the element
 /// storage of a null literal is `Mixed` and would take the runtime-dispatch arm instead.
+/// Every cast, including nested `(object)` and `(array)`, uses the same result type as
+/// EIR lowering. A source the checker cannot type is `Mixed` rather than the syntactic
+/// `int` guess.
 fn array_cast_source_type_for_storage(
     expr: &Expr,
     env: &TypeEnv,
@@ -321,14 +324,11 @@ fn array_cast_source_type_for_storage(
             .cloned()
             .or_else(|| infer_value(expr, env))
             .unwrap_or(PhpType::Mixed),
-        ExprKind::Cast {
-            target: CastType::Array,
-            expr: inner,
-        } => crate::types::array_cast_result_type(&array_cast_source_type_for_storage(
-            inner, env, infer_value,
-        )),
-        _ => infer_value(expr, env)
-            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(expr)),
+        ExprKind::Cast { target, expr: inner } => crate::types::php_cast_result_type(
+            target,
+            &array_cast_source_type_for_storage(inner, env, infer_value),
+        ),
+        _ => infer_value(expr, env).unwrap_or(PhpType::Mixed),
     }
 }
 
@@ -1212,6 +1212,23 @@ mod tests {
                 &env,
             ),
             PhpType::Array(Box::new(PhpType::Mixed))
+        );
+        let object_cast = array_cast(Expr::new(
+            ExprKind::Cast {
+                target: CastType::Object,
+                expr: Box::new(Expr::var("obj")),
+            },
+            Span::dummy(),
+        ));
+        assert_eq!(
+            storage_type(
+                &Expr::new(ExprKind::ArrayLiteral(vec![object_cast]), Span::dummy()),
+                &env,
+            ),
+            PhpType::Array(Box::new(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }))
         );
     }
 

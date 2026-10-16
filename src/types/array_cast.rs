@@ -5,7 +5,7 @@
 //! Called from:
 //! - `crate::types::checker::inference::expr::basic` (the cast's static type)
 //! - `crate::types::checker::inference::syntactic` (syntactic type of the cast)
-//! - `crate::ir_lower::expr::ternary_cast` (the conversion to emit)
+//! - `crate::ir_lower::expr::ternary_cast` (`cast_php_type`, via `php_cast_result_type`)
 //! - indexed and associative array-literal element typing, and loop-storage element inference
 //!
 //! Key details:
@@ -14,6 +14,8 @@
 //!   both from one classification is what keeps them in step.
 //! - PHP returns an array unchanged, turns `null` into `[]`, wraps a scalar as `[0 => value]`,
 //!   and projects an object to its property map. A runtime-typed source is dispatched by tag.
+
+use crate::parser::ast::CastType;
 
 use super::PhpType;
 
@@ -73,4 +75,26 @@ impl ArrayCast {
 /// Returns the static PHP type of `(array)` applied to a value of type `source`.
 pub(crate) fn array_cast_result_type(source: &PhpType) -> PhpType {
     ArrayCast::for_source(source).result_type(source)
+}
+
+/// Returns the PHP type a cast produces for a source of type `source`.
+///
+/// This is the type `lower_cast` attaches to the lowered value. `(object)` keeps an object,
+/// stays `mixed` for a runtime-typed source, and becomes `stdClass` for every other source.
+/// `(array)` goes through [`array_cast_result_type`]. Scalar casts do not depend on `source`.
+pub(crate) fn php_cast_result_type(target: &CastType, source: &PhpType) -> PhpType {
+    match target {
+        CastType::Int => PhpType::Int,
+        CastType::Float => PhpType::Float,
+        CastType::String => PhpType::Str,
+        CastType::Bool => PhpType::Bool,
+        CastType::Array => array_cast_result_type(source),
+        CastType::Object if matches!(source.codegen_repr(), PhpType::Object(_)) => source.clone(),
+        CastType::Object
+            if matches!(source.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            PhpType::Mixed
+        }
+        CastType::Object => PhpType::Object("stdClass".to_string()),
+    }
 }

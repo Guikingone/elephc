@@ -13,6 +13,8 @@
 //!   decide the cast before lowering sees it.
 //! - `test_array_cast_as_a_literal_element_follows_php` places the cast inside indexed and
 //!   associative literals, including with the EIR optimizer off and under `--heap-debug`.
+//! - `test_array_cast_of_unpredictable_sources_inside_literals_follows_php` covers sources
+//!   whose syntactic type is `int` but whose lowered type is not, in both literal shapes.
 
 use super::*;
 
@@ -379,4 +381,398 @@ fn test_array_cast_as_a_literal_element_leaves_a_clean_heap() {
 fn test_array_cast_as_a_literal_element_leaves_a_clean_heap_without_ir_opt() {
     let out = without_ir_opt(|| compile_and_run_with_heap_debug(ARRAY_CAST_LITERAL_ELEMENTS));
     assert_clean_literal_elements(out);
+}
+
+/// `(array)` of sources whose syntactic type is `int` but whose lowered type is not.
+///
+/// Indexed and associative literals both store the cast. `foreach`, `json_encode`, `count`,
+/// and a key read must match PHP 8.5. The sources are runtime values so folding cannot
+/// replace the cast before lowering classifies it.
+const ARRAY_CAST_UNPREDICTABLE_SOURCES: &str = r#"<?php
+class Box { public string $s = "hello"; public int $n = 7; }
+function show($label, $row, $key) {
+    echo $label, " json=", json_encode($row), "\n";
+    echo $label, " count=", count($row), "\n";
+    echo $label, " key=", json_encode($row[$key]), "\n";
+    echo $label, " foreach=";
+    foreach ($row as $k => $v) {
+        echo json_encode($k), ":", json_encode($v), ";";
+    }
+    echo "\n";
+}
+$obj = new Box();
+if ($argc > 5) { $obj = new Box(); }
+$other = new Box();
+$arr = ["s" => "from-array"];
+if ($argc > 5) { $arr = ["s" => "other"]; }
+$n = $argc > 5 ? 4 : 5;
+$text = $argc > 5 ? "no" : "hi";
+$f = $argc > 5 ? 2.5 : 1.5;
+$b = $argc > 5 ? true : false;
+$num = $argc > 5 ? "8" : "9";
+$cls = $argc > 5 ? "Nope" : "Box";
+$prop = $argc > 5 ? "n" : "s";
+$fn = function (): string { return "zz"; };
+class Holder { public static string $label = "L"; }
+
+$idx = [(array)(object)$obj];
+show("obj-i", $idx[0], "s");
+$map = ["k" => (array)(object)$obj];
+show("obj-a", $map["k"], "s");
+$idx = [(array)(object)$arr];
+show("arr-i", $idx[0], "s");
+$map = ["k" => (array)(object)$arr];
+show("arr-a", $map["k"], "s");
+$idx = [(array)(object)$n];
+show("int-i", $idx[0], "scalar");
+$map = ["k" => (array)(object)$n];
+show("int-a", $map["k"], "scalar");
+$idx = [(array)(object)$text];
+show("str-i", $idx[0], "scalar");
+$map = ["k" => (array)(object)$text];
+show("str-a", $map["k"], "scalar");
+$idx = [(array)(array)(object)$obj];
+show("nest-i", $idx[0], "s");
+$map = ["k" => (array)(array)(object)$obj];
+show("nest-a", $map["k"], "s");
+$idx = [(array)(clone $obj)];
+show("clone-i", $idx[0], "s");
+$map = ["k" => (array)(clone $obj)];
+show("clone-a", $map["k"], "s");
+$idx = [(array)($tmp = $obj)];
+show("assign-i", $idx[0], "s");
+$map = ["k" => (array)($tmp = $obj)];
+show("assign-a", $map["k"], "s");
+$idx = [(array)(@$obj)];
+show("suppress-i", $idx[0], "s");
+$map = ["k" => (array)(@$obj)];
+show("suppress-a", $map["k"], "s");
+$idx = [(array)(-$f)];
+show("neg-i", $idx[0], 0);
+$map = ["k" => (array)(-$f)];
+show("neg-a", $map["k"], 0);
+$idx = [(array)(!$b)];
+show("not-i", $idx[0], 0);
+$map = ["k" => (array)(!$b)];
+show("not-a", $map["k"], 0);
+$idx = [(array)($f + 0)];
+show("add0-i", $idx[0], 0);
+$map = ["k" => (array)($f + 0)];
+show("add0-a", $map["k"], 0);
+$idx = [(array)($obj ?? $other)];
+show("coalesce-i", $idx[0], "s");
+$map = ["k" => (array)($obj ?? $other)];
+show("coalesce-a", $map["k"], "s");
+$idx = [(array)($text ?: "fallback")];
+show("short-i", $idx[0], 0);
+$map = ["k" => (array)($text ?: "fallback")];
+show("short-a", $map["k"], 0);
+$pick = $argc > 5 ? 0 : 1;
+$idx = [(array)(match ($pick) { 1 => $obj, default => $other })];
+show("match-i", $idx[0], "s");
+$map = ["k" => (array)(match ($pick) { 1 => $obj, default => $other })];
+show("match-a", $map["k"], "s");
+$upf1 = $f; $upf2 = $f; $downf1 = $f; $downf2 = $f;
+$idx = [(array)(++$upf1)];
+show("fpreinc-i", $idx[0], 0);
+$map = ["k" => (array)(++$upf2)];
+show("fpreinc-a", $map["k"], 0);
+$idx = [(array)(--$downf1)];
+show("fpredec-i", $idx[0], 0);
+$map = ["k" => (array)(--$downf2)];
+show("fpredec-a", $map["k"], 0);
+$ups1 = $num; $ups2 = $num; $downs1 = $num; $downs2 = $num;
+$idx = [(array)(++$ups1)];
+show("spreinc-i", $idx[0], 0);
+$map = ["k" => (array)(++$ups2)];
+show("spreinc-a", $map["k"], 0);
+$idx = [(array)(--$downs1)];
+show("spredec-i", $idx[0], 0);
+$map = ["k" => (array)(--$downs2)];
+show("spredec-a", $map["k"], 0);
+$idx = [(array)(new $cls())];
+show("dynnew-i", $idx[0], "s");
+$map = ["k" => (array)(new $cls())];
+show("dynnew-a", $map["k"], "s");
+$idx = [(array)(Holder::$label)];
+show("static-i", $idx[0], 0);
+$map = ["k" => (array)(Holder::$label)];
+show("static-a", $map["k"], 0);
+$idx = [(array)($obj->$prop)];
+show("dynprop-i", $idx[0], 0);
+$map = ["k" => (array)($obj->$prop)];
+show("dynprop-a", $map["k"], 0);
+$idx = [(array)$fn()];
+show("closure-i", $idx[0], 0);
+$map = ["k" => (array)$fn()];
+show("closure-a", $map["k"], 0);
+$idx = [(array)((int)$num)];
+show("castint-i", $idx[0], 0);
+$map = ["k" => (array)((int)$num)];
+show("castint-a", $map["k"], 0);
+$idx = [(array)((float)$n)];
+show("castfloat-i", $idx[0], 0);
+$map = ["k" => (array)((float)$n)];
+show("castfloat-a", $map["k"], 0);
+$idx = [(array)((string)$n)];
+show("caststr-i", $idx[0], 0);
+$map = ["k" => (array)((string)$n)];
+show("caststr-a", $map["k"], 0);
+$idx = [(array)((bool)$n)];
+show("castbool-i", $idx[0], 0);
+$map = ["k" => (array)((bool)$n)];
+show("castbool-a", $map["k"], 0);
+"#;
+
+/// Reference output for [`ARRAY_CAST_UNPREDICTABLE_SOURCES`].
+const ARRAY_CAST_UNPREDICTABLE_SOURCES_OUT: &str = r#"obj-i json={"s":"hello","n":7}
+obj-i count=2
+obj-i key="hello"
+obj-i foreach="s":"hello";"n":7;
+obj-a json={"s":"hello","n":7}
+obj-a count=2
+obj-a key="hello"
+obj-a foreach="s":"hello";"n":7;
+arr-i json={"s":"from-array"}
+arr-i count=1
+arr-i key="from-array"
+arr-i foreach="s":"from-array";
+arr-a json={"s":"from-array"}
+arr-a count=1
+arr-a key="from-array"
+arr-a foreach="s":"from-array";
+int-i json={"scalar":5}
+int-i count=1
+int-i key=5
+int-i foreach="scalar":5;
+int-a json={"scalar":5}
+int-a count=1
+int-a key=5
+int-a foreach="scalar":5;
+str-i json={"scalar":"hi"}
+str-i count=1
+str-i key="hi"
+str-i foreach="scalar":"hi";
+str-a json={"scalar":"hi"}
+str-a count=1
+str-a key="hi"
+str-a foreach="scalar":"hi";
+nest-i json={"s":"hello","n":7}
+nest-i count=2
+nest-i key="hello"
+nest-i foreach="s":"hello";"n":7;
+nest-a json={"s":"hello","n":7}
+nest-a count=2
+nest-a key="hello"
+nest-a foreach="s":"hello";"n":7;
+clone-i json={"s":"hello","n":7}
+clone-i count=2
+clone-i key="hello"
+clone-i foreach="s":"hello";"n":7;
+clone-a json={"s":"hello","n":7}
+clone-a count=2
+clone-a key="hello"
+clone-a foreach="s":"hello";"n":7;
+assign-i json={"s":"hello","n":7}
+assign-i count=2
+assign-i key="hello"
+assign-i foreach="s":"hello";"n":7;
+assign-a json={"s":"hello","n":7}
+assign-a count=2
+assign-a key="hello"
+assign-a foreach="s":"hello";"n":7;
+suppress-i json={"s":"hello","n":7}
+suppress-i count=2
+suppress-i key="hello"
+suppress-i foreach="s":"hello";"n":7;
+suppress-a json={"s":"hello","n":7}
+suppress-a count=2
+suppress-a key="hello"
+suppress-a foreach="s":"hello";"n":7;
+neg-i json=[-1.5]
+neg-i count=1
+neg-i key=-1.5
+neg-i foreach=0:-1.5;
+neg-a json=[-1.5]
+neg-a count=1
+neg-a key=-1.5
+neg-a foreach=0:-1.5;
+not-i json=[true]
+not-i count=1
+not-i key=true
+not-i foreach=0:true;
+not-a json=[true]
+not-a count=1
+not-a key=true
+not-a foreach=0:true;
+add0-i json=[1.5]
+add0-i count=1
+add0-i key=1.5
+add0-i foreach=0:1.5;
+add0-a json=[1.5]
+add0-a count=1
+add0-a key=1.5
+add0-a foreach=0:1.5;
+coalesce-i json={"s":"hello","n":7}
+coalesce-i count=2
+coalesce-i key="hello"
+coalesce-i foreach="s":"hello";"n":7;
+coalesce-a json={"s":"hello","n":7}
+coalesce-a count=2
+coalesce-a key="hello"
+coalesce-a foreach="s":"hello";"n":7;
+short-i json=["hi"]
+short-i count=1
+short-i key="hi"
+short-i foreach=0:"hi";
+short-a json=["hi"]
+short-a count=1
+short-a key="hi"
+short-a foreach=0:"hi";
+match-i json={"s":"hello","n":7}
+match-i count=2
+match-i key="hello"
+match-i foreach="s":"hello";"n":7;
+match-a json={"s":"hello","n":7}
+match-a count=2
+match-a key="hello"
+match-a foreach="s":"hello";"n":7;
+fpreinc-i json=[2.5]
+fpreinc-i count=1
+fpreinc-i key=2.5
+fpreinc-i foreach=0:2.5;
+fpreinc-a json=[2.5]
+fpreinc-a count=1
+fpreinc-a key=2.5
+fpreinc-a foreach=0:2.5;
+fpredec-i json=[0.5]
+fpredec-i count=1
+fpredec-i key=0.5
+fpredec-i foreach=0:0.5;
+fpredec-a json=[0.5]
+fpredec-a count=1
+fpredec-a key=0.5
+fpredec-a foreach=0:0.5;
+spreinc-i json=[10]
+spreinc-i count=1
+spreinc-i key=10
+spreinc-i foreach=0:10;
+spreinc-a json=[10]
+spreinc-a count=1
+spreinc-a key=10
+spreinc-a foreach=0:10;
+spredec-i json=[8]
+spredec-i count=1
+spredec-i key=8
+spredec-i foreach=0:8;
+spredec-a json=[8]
+spredec-a count=1
+spredec-a key=8
+spredec-a foreach=0:8;
+dynnew-i json={"s":"hello","n":7}
+dynnew-i count=2
+dynnew-i key="hello"
+dynnew-i foreach="s":"hello";"n":7;
+dynnew-a json={"s":"hello","n":7}
+dynnew-a count=2
+dynnew-a key="hello"
+dynnew-a foreach="s":"hello";"n":7;
+static-i json=["L"]
+static-i count=1
+static-i key="L"
+static-i foreach=0:"L";
+static-a json=["L"]
+static-a count=1
+static-a key="L"
+static-a foreach=0:"L";
+dynprop-i json=["hello"]
+dynprop-i count=1
+dynprop-i key="hello"
+dynprop-i foreach=0:"hello";
+dynprop-a json=["hello"]
+dynprop-a count=1
+dynprop-a key="hello"
+dynprop-a foreach=0:"hello";
+closure-i json=["zz"]
+closure-i count=1
+closure-i key="zz"
+closure-i foreach=0:"zz";
+closure-a json=["zz"]
+closure-a count=1
+closure-a key="zz"
+closure-a foreach=0:"zz";
+castint-i json=[9]
+castint-i count=1
+castint-i key=9
+castint-i foreach=0:9;
+castint-a json=[9]
+castint-a count=1
+castint-a key=9
+castint-a foreach=0:9;
+castfloat-i json=[5]
+castfloat-i count=1
+castfloat-i key=5
+castfloat-i foreach=0:5;
+castfloat-a json=[5]
+castfloat-a count=1
+castfloat-a key=5
+castfloat-a foreach=0:5;
+caststr-i json=["5"]
+caststr-i count=1
+caststr-i key="5"
+caststr-i foreach=0:"5";
+caststr-a json=["5"]
+caststr-a count=1
+caststr-a key="5"
+caststr-a foreach=0:"5";
+castbool-i json=[true]
+castbool-i count=1
+castbool-i key=true
+castbool-i foreach=0:true;
+castbool-a json=[true]
+castbool-a count=1
+castbool-a key=true
+castbool-a foreach=0:true;
+"#;
+
+/// Asserts stdout and a clean `--heap-debug` summary for the unpredictable-source fixture.
+fn assert_clean_unpredictable_sources(out: ProgramOutput) {
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, ARRAY_CAST_UNPREDICTABLE_SOURCES_OUT, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies `(array)` of object casts, clones, calls, and arithmetic inside literals.
+#[test]
+fn test_array_cast_of_unpredictable_sources_inside_literals_follows_php() {
+    assert_eq!(
+        compile_and_run(ARRAY_CAST_UNPREDICTABLE_SOURCES),
+        ARRAY_CAST_UNPREDICTABLE_SOURCES_OUT
+    );
+}
+
+/// Verifies the same sources with the EIR optimizer off.
+#[test]
+fn test_array_cast_of_unpredictable_sources_inside_literals_follows_php_without_ir_opt() {
+    let out = without_ir_opt(|| compile_and_run(ARRAY_CAST_UNPREDICTABLE_SOURCES));
+    assert_eq!(out, ARRAY_CAST_UNPREDICTABLE_SOURCES_OUT);
+}
+
+/// Verifies the unpredictable-source fixture releases every array under `--heap-debug`.
+#[test]
+fn test_array_cast_of_unpredictable_sources_inside_literals_leaves_a_clean_heap() {
+    assert_clean_unpredictable_sources(compile_and_run_with_heap_debug(
+        ARRAY_CAST_UNPREDICTABLE_SOURCES,
+    ));
+}
+
+/// Verifies the heap-debug run of the unpredictable-source fixture with the optimizer off.
+#[test]
+fn test_array_cast_of_unpredictable_sources_inside_literals_leaves_a_clean_heap_without_ir_opt() {
+    let out = without_ir_opt(|| compile_and_run_with_heap_debug(ARRAY_CAST_UNPREDICTABLE_SOURCES));
+    assert_clean_unpredictable_sources(out);
 }

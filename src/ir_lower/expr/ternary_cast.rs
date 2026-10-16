@@ -240,27 +240,9 @@ pub(super) fn coerced_source_repr_is_releasable(php_type: &PhpType) -> bool {
 }
 
 /// Returns the PHP type produced by a cast.
+///
+/// Shared with array-literal source typing so an `(array)` element is classified from the
+/// same type this lowering attaches to the value.
 pub(super) fn cast_php_type(target: &CastType, source_type: &PhpType) -> PhpType {
-    match target {
-        CastType::Int => PhpType::Int,
-        CastType::Float => PhpType::Float,
-        CastType::String => PhpType::Str,
-        CastType::Bool => PhpType::Bool,
-        CastType::Array => crate::types::array_cast_result_type(source_type),
-        // Mirrors the checker's `(object)` arms in
-        // `types::checker::inference::expr::basic`: identity on an object, `mixed` for a
-        // runtime-typed source that may already hold an unrelated class, stdClass otherwise.
-        CastType::Object if matches!(source_type.codegen_repr(), PhpType::Object(_)) => {
-            source_type.clone()
-        }
-        CastType::Object
-            if matches!(
-                source_type.codegen_repr(),
-                PhpType::Mixed | PhpType::Union(_)
-            ) =>
-        {
-            PhpType::Mixed
-        }
-        CastType::Object => PhpType::Object("stdClass".to_string()),
-    }
+    crate::types::php_cast_result_type(target, source_type)
 }

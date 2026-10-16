@@ -6,8 +6,8 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
-//! - An `(array)` cast used as an element is typed by the shared `ArrayCast` classification,
-//!   so the literal stores the cast array rather than coercing it to `int`.
+//! - An `(array)` cast used as an element is typed by the shared `ArrayCast` classification
+//!   from the type lowering attaches to the source, so the literal stores that array.
 
 use super::*;
 use crate::parser::ast::ArrayEntry;
@@ -585,36 +585,16 @@ pub(crate) fn array_literal_type_for_ir(
 
 /// Returns the EIR storage type of an `(array)` cast used as a literal element.
 ///
-/// Classification goes through `ArrayCast`, using the source type lowering will see.
-/// The syntactic `Int` fallback would stamp the literal `array<int>`, and
-/// `coerce_array_literal_element_to_storage_type` would then cast the array to its
-/// truthiness (`[(array) "x"]` became `[1]`, `[(array) null]` became `[0]`).
+/// Classification goes through `ArrayCast`, using the source type `lower_array_cast` reads
+/// off the lowered inner value. A syntactic `Int` guess stamps the literal `array<int>` and
+/// either stores a property hash in that slot or refuses to compile the associative form.
 pub(super) fn array_cast_literal_element_type(
     ctx: &LoweringContext<'_, '_>,
     inner: &Expr,
 ) -> PhpType {
     ir_array_storage_type(crate::types::array_cast_result_type(
-        &array_cast_source_type_for_ir(ctx, inner),
+        &super::array_cast_source::array_cast_source_type_for_ir(ctx, inner),
     ))
-}
-
-/// Returns the PHP type `ArrayCast` should classify for `expr`.
-///
-/// This is the type `lower_array_cast` reads off the lowered inner value, not the
-/// storage type an array element of that value would use. The literal `null` is the
-/// split: as an element it is stored as `Mixed`, but `(array) null` is an empty array.
-/// A variable uses `local_type`, which is what the load carries, so an array stays an
-/// identity cast and an object or `mixed` value takes the runtime cast.
-fn array_cast_source_type_for_ir(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
-    match &expr.kind {
-        ExprKind::Null => PhpType::Void,
-        ExprKind::Variable(name) => ctx.local_type(name),
-        ExprKind::Cast {
-            target: CastType::Array,
-            expr: inner,
-        } => crate::types::array_cast_result_type(&array_cast_source_type_for_ir(ctx, inner)),
-        _ => array_literal_element_type_for_ir(ctx, expr),
-    }
 }
 
 /// Returns the best EIR storage element type for one indexed-array literal item.
