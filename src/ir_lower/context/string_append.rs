@@ -7,12 +7,35 @@
 //! Key details:
 //! - Parameters, captures, globals, reference cells and eval-visible slots cannot be consumed.
 //! - Publication moves the runtime result directly, without another acquire or old-owner release.
+//! - Final slot widening retries the body with ordinary concat and assignment ownership.
 
 use super::*;
 
 impl LoweringContext<'_, '_> {
+    /// Retries ordinary assignment lowering if later statements invalidate an append's owner slot.
+    pub(crate) fn lower_with_final_string_append_storage(&mut self, lower: impl Fn(&mut Self)) {
+        let checkpoint = self.snapshot();
+        lower(self);
+        let invalidated = self.builder.function().instructions.iter().any(|inst| {
+            if inst.op != Op::StrAppend { return false; }
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return true; };
+            !self.builder.function().locals.get(slot.as_raw() as usize).is_some_and(|local| {
+                local.kind == LocalKind::PhpLocal && local.ir_type == IrType::Str
+                    && local.php_type == PhpType::Str
+            })
+        });
+        if invalidated {
+            // Replay the existing ownership path instead of repairing a consuming
+            // store piecemeal: widened loads, acquires and old-owner releases must agree.
+            self.restore(checkpoint);
+            self.consuming_string_append_enabled = false;
+            lower(self);
+        }
+    }
+
     /// Proves an initialized local can hand its string owner to a consuming append.
     pub(crate) fn consuming_string_slot(&self, name: &str, span: Span) -> Option<LocalSlotId> {
+        if !self.consuming_string_append_enabled { return None; }
         let slot = *self.local_slots.get(name)?;
         let local = self.builder.function().locals.get(slot.as_raw() as usize)?;
         (local.kind == LocalKind::PhpLocal && local.ir_type == IrType::Str

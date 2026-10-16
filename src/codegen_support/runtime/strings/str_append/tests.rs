@@ -36,6 +36,7 @@ impl Drop for Scratch {
 fn bridges(emitter: &mut Emitter) {
     emitter.label_global("append_under_test");
     match emitter.target.arch {
+        // -- map the C caller into the x86_64 string ABI --
         Arch::X86_64 => {
             emitter.instruction("mov rax, rdi");                                // map the C left pointer into the runtime string ABI
             emitter.instruction("mov r8, rdx");                                 // preserve the C RHS pointer while moving the left length
@@ -44,6 +45,7 @@ fn bridges(emitter: &mut Emitter) {
             emitter.instruction("mov rdi, r8");                                 // install the runtime RHS pointer
             emitter.instruction("mov rsi, r9");                                 // install the runtime RHS length
             emitter.instruction("jmp __rt_str_append");                         // tail-call with a C-compatible two-word result pair
+            // -- bridge ownership and allocation helpers to the C model --
             for (label, callee) in [("__rt_heap_kind", "append_test_kind"),
                 ("__rt_heap_alloc", "append_test_alloc"), ("__rt_decref_any", "append_test_decref")]
             {
@@ -54,6 +56,7 @@ fn bridges(emitter: &mut Emitter) {
                 emitter.instruction("add rsp, 8");                              // restore runtime entry stack alignment
                 emitter.instruction("ret");                                     // return the C model result in rax
             }
+            // -- bridge origin metadata invalidation to the C model --
             emitter.label_global("__rt_mbstring_ini_fresh");
             emitter.instruction("mov rdi, rax");                                // pass the changed runtime string pointer to C
             emitter.instruction("mov rsi, rdx");                                // pass its complete logical length to C
@@ -61,10 +64,12 @@ fn bridges(emitter: &mut Emitter) {
             abi::emit_call_label(emitter, "append_test_fresh");
             emitter.instruction("add rsp, 8");                                  // restore the runtime helper stack
             emitter.instruction("ret");                                         // return with caller-saved registers deliberately unconstrained
+            // -- forward allocation failure without returning --
             emitter.label_global("__rt_alloc_overflow");
             abi::emit_call_label(emitter, "append_test_overflow");
             emitter.instruction("ud2");                                         // the model's overflow boundary never returns
         }
+        // -- preserve the ARM64 caller while mapping the string ABI --
         Arch::AArch64 => {
             emitter.instruction("stp x29, x30, [sp, #-16]!");                   // preserve the C caller's frame and return link
             emitter.instruction("mov x4, x3");                                  // install the runtime RHS length before overwriting x3
@@ -76,6 +81,7 @@ fn bridges(emitter: &mut Emitter) {
             emitter.instruction("mov x1, x2");                                  // map the runtime length to C result word one
             emitter.instruction("ldp x29, x30, [sp], #16");                     // restore the caller frame and link
             emitter.instruction("ret");                                         // return the C-compatible pair
+            // -- bridge origin metadata invalidation to the C model --
             emitter.label_global("__rt_mbstring_ini_fresh");
             emitter.instruction("stp x29, x30, [sp, #-16]!");                   // preserve the runtime return link across the C model call
             emitter.instruction("mov x0, x1");                                  // pass the changed string pointer in C argument zero
@@ -83,6 +89,7 @@ fn bridges(emitter: &mut Emitter) {
             abi::emit_call_label(emitter, "append_test_fresh");
             emitter.instruction("ldp x29, x30, [sp], #16");                     // restore the caller frame and link
             emitter.instruction("ret");                                         // return with caller-saved registers deliberately unconstrained
+            // -- forward allocation failure without returning --
             emitter.label_global("__rt_alloc_overflow");
             abi::emit_call_label(emitter, "append_test_overflow");
             emitter.instruction("brk #0");                                      // the model's overflow boundary never returns
@@ -108,7 +115,9 @@ fn str_append_native_abi_ownership_and_copy_volume() {
     let mut body = emitter.output();
     let (store, counter) = match target.arch {
         Arch::X86_64 => ("mov BYTE PTR [r8], r10b", "\n    add QWORD PTR append_test_copy_bytes[rip], 1\n".to_string()),
+        // -- preserve the ARM64 caller while mapping the string ABI --
         Arch::AArch64 => {
+            // -- count copied bytes without changing the runtime control flow --
             let mut counter = Emitter::new(target);
             abi::emit_symbol_address(&mut counter, "x12", "append_test_copy_bytes");
             counter.instruction("ldr x13, [x12]");                              // read the test-only copied-byte counter

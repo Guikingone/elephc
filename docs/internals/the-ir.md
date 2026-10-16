@@ -748,6 +748,14 @@ RHS evaluation finishes before the transaction and cannot call or mutate a PHP
 value. Other RHS expressions retain ordinary evaluation and exception handling.
 Generic `StrConcat` continues to preserve both source values and use concat scratch.
 
+The owner proof also checks the final frame storage after the body is lowered.
+If a later writable capture or other operation widens an admitted destination,
+lowering restores the body-entry checkpoint and lowers that body again with
+consuming append disabled. Ordinary concat and assignment then emit their existing
+acquires and releases for the widened slot. The validator remains strict; no
+consuming transaction can target boxed `Mixed` storage. Nested closures and interned
+data from the discarded lowering are restored with the same checkpoint.
+
 The append helper uses the allocator's payload size as capacity and the returned
 string pair as logical length. A unique owned buffer reuses spare capacity when
 RHS does not overlap it. Otherwise the helper copies into independent storage,

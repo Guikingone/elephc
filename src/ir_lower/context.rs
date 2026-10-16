@@ -199,6 +199,7 @@ pub(crate) struct LoweringSnapshot {
     argument_guard_scopes: Vec<Vec<(usize, ValueId)>>,
     eval_barrier_active: bool,
     eval_executed: bool,
+    consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
@@ -408,6 +409,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     write_operand_is_borrowed: bool,
     eval_barrier_active: bool,
     eval_executed: bool,
+    consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
@@ -554,6 +556,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             write_operand_is_borrowed: false,
             eval_barrier_active: false,
             eval_executed: false,
+            consuming_string_append_enabled: true,
             eval_scope_read_param: None,
             eval_scope_read_names: HashSet::new(),
             eval_scope_write_names: HashSet::new(),
@@ -604,6 +607,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
             eval_executed: self.eval_executed,
+            consuming_string_append_enabled: self.consuming_string_append_enabled,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
             eval_scope_read_names: self.eval_scope_read_names.clone(),
             eval_scope_write_names: self.eval_scope_write_names.clone(),
@@ -674,6 +678,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
         self.eval_executed = snapshot.eval_executed;
+        self.consuming_string_append_enabled = snapshot.consuming_string_append_enabled;
         self.eval_scope_read_param = snapshot.eval_scope_read_param;
         self.eval_scope_read_names = snapshot.eval_scope_read_names;
         self.eval_scope_write_names = snapshot.eval_scope_write_names;

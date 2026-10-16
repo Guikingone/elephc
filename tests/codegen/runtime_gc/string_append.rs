@@ -45,6 +45,18 @@ fn test_consuming_string_append_large_growth() {
         "70001:xx:xx");
 }
 
+/// A writable capture discovered after append keeps the ordinary concat owner protocol.
+#[test]
+fn test_consuming_string_append_before_writable_reference_capture() {
+    for source in [
+        "<?php $s=(string)$argc;$s.='x';$f=function()use(&$s){$s='z';};$f();echo$s;",
+        "<?php function build(int $n):void{$s=(string)$n;$s.='x';$f=function()use(&$s){$s='z';};$f();echo$s;}build($argc);",
+        "<?php $s=(string)$argc;for($i=0;$i<$argc;$i++){$s.='x';}$f=function()use(&$s){$s='z';};$f();echo$s;",
+    ] {
+        check_append(source, "z");
+    }
+}
+
 /// Ordinary concat snapshots and by-value assignments survive later source mutation.
 #[test]
 fn test_consuming_string_append_preserves_snapshots_and_aliases() {

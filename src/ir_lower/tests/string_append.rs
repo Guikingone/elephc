@@ -49,6 +49,24 @@ fn consuming_string_append_rejects_unproved_ownership_or_rhs() {
     }
 }
 
+/// Later writable captures must invalidate earlier consuming transactions on every target.
+#[test]
+fn consuming_string_append_falls_back_after_final_slot_widening() {
+    for source in [
+        "<?php $s=(string)$argc;$s.='x';$f=function()use(&$s){$s='z';};$f();echo$s;",
+        "<?php function build(int $n):void{$s=(string)$n;$s.='x';$f=function()use(&$s){$s='z';};$f();echo$s;}build($argc);",
+        "<?php $s=(string)$argc;for($i=0;$i<$argc;$i++){$s.='x';}$f=function()use(&$s){$s='z';};$f();echo$s;",
+    ] {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+                std::path::Path::new("."), crate::codegen::platform::Target::parse(name).unwrap());
+            assert_eq!(appends(&module), 0, "{name}: {source}");
+            crate::ir_passes::optimize_module(&mut module);
+            crate::ir::validate_module(&module).unwrap();
+        }
+    }
+}
+
 /// The validator rejects borrowed results, borrowed destinations and incorrect consumed operands.
 #[test]
 fn consuming_string_append_validator_rejects_invalid_transfers() {
