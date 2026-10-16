@@ -2,7 +2,7 @@
 title: "_imagick_norm_color() - internals"
 description: "Compiler internals for _imagick_norm_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1221
+  order: 1225
 ---
 
 ## `_imagick_norm_color()` - internals
