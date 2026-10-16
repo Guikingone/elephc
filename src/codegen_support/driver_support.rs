@@ -94,6 +94,17 @@ pub fn generate_runtime_with_features_mode(
     pic: bool,
     library_boundary: bool,
 ) -> String {
+    generate_runtime_profile(heap_size, target, features, pic, library_boundary, false)
+}
+
+/// Generates producer runtime code with recoverable boundaries and deferred PHP output.
+pub(crate) fn generate_phpext_runtime(heap_size: usize, target: Target, features: RuntimeFeatures) -> String {
+    generate_runtime_profile(heap_size, target, features, true, true, true)
+}
+
+/// Shares runtime generation while keeping producer-specific output out of ordinary cache entries.
+fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeFeatures,
+    pic: bool, library_boundary: bool, phpext: bool) -> String {
     // macOS executables strip unreachable runtime helpers per-symbol: internal
     // labels are renamed to assembler-local (`L`-prefixed) labels and a
     // `.subsections_via_symbols` footer lets the linker's `-dead_strip` drop
@@ -113,6 +124,7 @@ pub fn generate_runtime_with_features_mode(
     // Capped at 1 GiB so x86_64 can compare against it as a signed 32-bit immediate; a
     // writer that outgrows the arena moves to the heap (or fails closed) either way.
     emitter.concat_capacity = heap_size.clamp(65_536, 1 << 30);
+    emitter.phpext_output = phpext;
     emitter.emit_text_prelude();
     runtime::emit_runtime(&mut emitter, features);
     // Rename internal labels to `L`-locals in the runtime text only; the `.data`

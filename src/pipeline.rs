@@ -868,7 +868,8 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("exports-scan");
     let phase_started = Instant::now();
-    let exported_functions = match exports::collect(&ast, &check_result.functions) {
+    let collect_exports = if emit == Emit::Phpext { exports::collect_for_php } else { exports::collect };
+    let exported_functions = match collect_exports(&ast, &check_result.functions) {
         Ok(exports) => exports,
         Err(e) => {
             crate::progress::clear();
@@ -1024,7 +1025,8 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     timings.record_since("ir-lower", phase_started);
 
     if emit.is_library() || (check_only && !exported_functions.is_empty()) {
-        if let Err(error) = exports::validate_cdylib_call_graph(&ir_module, &exported_functions) {
+        let validate = if emit == Emit::Phpext { exports::validate_phpext_call_graph } else { exports::validate_cdylib_call_graph };
+        if let Err(error) = validate(&ir_module, &exported_functions) {
             crate::progress::clear();
             errors::report(&error.with_file(filename.to_string()));
             process::exit(1);
