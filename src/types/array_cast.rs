@@ -4,7 +4,9 @@
 //!
 //! Called from:
 //! - `crate::types::checker::inference::expr::basic` (the cast's static type)
+//! - `crate::types::checker::inference::syntactic` (syntactic type of the cast)
 //! - `crate::ir_lower::expr::ternary_cast` (the conversion to emit)
+//! - indexed and associative array-literal element typing, and loop-storage element inference
 //!
 //! Key details:
 //! - The checker's type and the lowered value's storage MUST agree: a cast typed as a packed

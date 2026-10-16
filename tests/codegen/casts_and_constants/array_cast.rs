@@ -11,6 +11,8 @@
 //! - Expected output is verbatim reference PHP 8.5 output for the same programs (issue #707).
 //! - Runtime values come from `$argc` or from function parameters so constant folding cannot
 //!   decide the cast before lowering sees it.
+//! - `test_array_cast_as_a_literal_element_follows_php` places the cast inside indexed and
+//!   associative literals, including with the EIR optimizer off and under `--heap-debug`.
 
 use super::*;
 
@@ -245,4 +247,136 @@ fclose($h);
 "#,
     );
     assert_eq!(out, "int(1)\nbool(true)\nstring(6) \"stream\"\nhi\nint(1)\nbool(true)\n");
+}
+
+/// `(array)` used as an element of an indexed or associative literal.
+///
+/// The element type used to come from `infer_expr_type_syntactic`, which answered `int` for an
+/// `(array)` cast. Lowering then cast the array to its truthiness, so `[(array) "x"]` ran as
+/// `[1]` and `[(array) null]` as `[0]`.
+const ARRAY_CAST_LITERAL_ELEMENTS: &str = r#"<?php
+class Box { public int $n = 4; public string $s = "z"; }
+function as_mixed(int $i): mixed {
+    return $i % 2 === 0 ? "m" : [$i, $i + 1];
+}
+$s = $argc > 5 ? "long" : "x";
+$n = $argc > 5 ? 9 : 5;
+$nothing = null;
+$arr = [1, 2];
+$obj = new Box();
+
+$str = [(array) "x", (array) $s];
+echo count($str), ":", count($str[0]), ":", $str[0][0], ":", count($str[1]), ":", $str[1][0], "\n";
+$none = [(array) null, (array) $nothing];
+echo count($none), ":", count($none[0]), ":", count($none[1]), "\n";
+$num = [(array) 5, (array) $n];
+echo count($num), ":", $num[0][0], ":", $num[1][0], "\n";
+$id = [(array) $arr];
+echo count($id), ":", count($id[0]), ":", $id[0][0], ",", $id[0][1], "\n";
+$boxed = [(array) $obj];
+echo count($boxed), ":", count($boxed[0]), ":", $boxed[0]["n"], ",", $boxed[0]["s"], "\n";
+$mix = [(array) as_mixed(0), (array) as_mixed(1)];
+echo json_encode($mix), "\n";
+$nest = [(array) "x", (array) null];
+echo json_encode($nest), "\n";
+
+$smap = ["k" => (array) "x"];
+echo count($smap), ":", count($smap["k"]), ":", $smap["k"][0], "\n";
+$nmap = ["k" => (array) null];
+echo count($nmap), ":", count($nmap["k"]), "\n";
+$imap = ["k" => (array) 1];
+echo count($imap), ":", $imap["k"][0], "\n";
+$amap = ["k" => (array) $arr];
+echo count($amap["k"]), ":", $amap["k"][0], ",", $amap["k"][1], "\n";
+$omap = ["k" => (array) $obj];
+echo $omap["k"]["n"], ",", $omap["k"]["s"], "\n";
+$mmap = ["k" => (array) as_mixed(1)];
+echo json_encode($mmap), "\n";
+
+$rows = [];
+$maps = [];
+for ($i = 0; $i < 3; $i++) {
+    $rows[] = [(array) "x", (array) null];
+    $maps[] = ["k" => (array) ($i + 1)];
+}
+echo json_encode($rows), "\n";
+echo json_encode($maps), "\n";
+
+$sum = 0;
+for ($i = 0; $i < 40; $i++) {
+    $row = [(array) "v", (array) null, (array) $i, (array) [$i]];
+    $map = [
+        "s" => (array) "v",
+        "n" => (array) null,
+        "i" => (array) $i,
+        "a" => (array) [$i],
+        "o" => (array) $obj,
+        "m" => (array) as_mixed($i),
+    ];
+    $sum += count($row) + count($row[0]) + count($row[1]) + count($row[2]) + $row[2][0];
+    $sum += count($row[3]) + $row[3][0];
+    $sum += strlen($map["s"][0]) + count($map["n"]) + $map["i"][0] + count($map["a"]) + $map["a"][0];
+    $sum += $map["o"]["n"] + count($map["m"]);
+}
+echo $sum, "\n";
+"#;
+
+/// Reference output for [`ARRAY_CAST_LITERAL_ELEMENTS`].
+const ARRAY_CAST_LITERAL_ELEMENTS_OUT: &str = "\
+2:1:x:1:x
+2:0:0
+2:5:5
+1:2:1,2
+1:2:4,z
+[[\"m\"],[1,2]]
+[[\"x\"],[]]
+1:1:x
+1:0
+1:1
+2:1,2
+4,z
+{\"k\":[1,2]}
+[[[\"x\"],[]],[[\"x\"],[]],[[\"x\"],[]]]
+[{\"k\":[1]},{\"k\":[2]},{\"k\":[3]}]
+3700
+";
+
+/// Asserts stdout and a clean `--heap-debug` summary for the literal-element fixture.
+fn assert_clean_literal_elements(out: ProgramOutput) {
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, ARRAY_CAST_LITERAL_ELEMENTS_OUT, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies an `(array)` cast stored in an indexed or associative literal keeps the array.
+#[test]
+fn test_array_cast_as_a_literal_element_follows_php() {
+    assert_eq!(
+        compile_and_run(ARRAY_CAST_LITERAL_ELEMENTS),
+        ARRAY_CAST_LITERAL_ELEMENTS_OUT
+    );
+}
+
+/// Verifies the literal-element cast still lowers to an array with the EIR optimizer off.
+#[test]
+fn test_array_cast_as_a_literal_element_follows_php_without_ir_opt() {
+    let out = without_ir_opt(|| compile_and_run(ARRAY_CAST_LITERAL_ELEMENTS));
+    assert_eq!(out, ARRAY_CAST_LITERAL_ELEMENTS_OUT);
+}
+
+/// Verifies repeated literal-element casts release their arrays under `--heap-debug`.
+#[test]
+fn test_array_cast_as_a_literal_element_leaves_a_clean_heap() {
+    assert_clean_literal_elements(compile_and_run_with_heap_debug(ARRAY_CAST_LITERAL_ELEMENTS));
+}
+
+/// Verifies the heap-debug literal-element run with the EIR optimizer off.
+#[test]
+fn test_array_cast_as_a_literal_element_leaves_a_clean_heap_without_ir_opt() {
+    let out = without_ir_opt(|| compile_and_run_with_heap_debug(ARRAY_CAST_LITERAL_ELEMENTS));
+    assert_clean_literal_elements(out);
 }
