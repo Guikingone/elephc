@@ -6,16 +6,24 @@
 //! - `stmt::loops` at loop entry and `expr::callable_resolution` before direct calls.
 //!
 //! Key details:
-//! - New for/while facts require raw scalar inputs and one closed primitive body block.
+//! - New for/while facts require unwritten raw scalar inputs and one closed primitive body block.
 //! - Opaque syntax and indirect mutation fail closed; ordinary descriptor calls remain available.
-//! - Existing do/while direct calls retain their eligibility after identity filtering.
+//! - Do/while retains existing call eligibility only after identity and argument-write filtering.
 
 use crate::ir::{Effects, Immediate, IrType, Op, Terminator};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{FunctionSig, PhpType};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::context::{LoweringContext, StaticCallableBinding};
+
+/// Tracks direct argument reads and every syntactic local write in an admitted loop.
+#[derive(Default)]
+struct LoopArguments {
+    passed: HashSet<String>,
+    written: HashSet<String>,
+    reading_argument: bool,
+}
 
 /// Installs only entry closure facts proved invariant over every loop path.
 pub(crate) fn begin_loop_closure_facts(
@@ -37,9 +45,11 @@ pub(crate) fn begin_loop_closure_facts(
         {
             return false;
         }
-        let stable = condition.is_none_or(|expr| stable_expr(ctx, local, expr))
-            && update.is_none_or(|stmt| stable_stmt(ctx, local, stmt))
-            && stable_body(ctx, local, body);
+        let mut arguments = LoopArguments::default();
+        let stable = condition.is_none_or(|expr| stable_expr(ctx, local, &mut arguments, expr))
+            && update.is_none_or(|stmt| stable_stmt(ctx, local, &mut arguments, stmt))
+            && stable_body(ctx, local, &mut arguments, body)
+            && arguments.passed.is_disjoint(&arguments.written);
         if stable {
             if let StaticCallableBinding::Closure { loop_guarded, .. } = binding {
                 *loop_guarded |= new_direct_path;
@@ -145,7 +155,8 @@ fn scalar_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Void)
 }
 
-/// Requires a literal or a physically scalar local, rather than a checker-only boxed refinement.
+/// Requires scalar storage after loop entry has excluded writes to argument locals.
+/// A first-iteration type is not proof of the representation on later backedges.
 fn scalar_argument_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
     match &expr.kind {
         ExprKind::IntLiteral(_) => Some(PhpType::Int),
@@ -170,35 +181,46 @@ fn scalar_argument_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<Ph
 }
 
 /// Checks every statement, including dead-looking backedge writers, before lowering.
-fn stable_body(ctx: &LoweringContext<'_, '_>, local: &str, body: &[Stmt]) -> bool {
-    body.iter().all(|stmt| stable_stmt(ctx, local, stmt))
+fn stable_body(
+    ctx: &LoweringContext<'_, '_>,
+    local: &str,
+    arguments: &mut LoopArguments,
+    body: &[Stmt],
+) -> bool {
+    body.iter().all(|stmt| stable_stmt(ctx, local, arguments, stmt))
 }
 
 /// Admits a closed scalar statement subset; new syntax defaults to descriptor fallback.
-fn stable_stmt(ctx: &LoweringContext<'_, '_>, local: &str, stmt: &Stmt) -> bool {
+fn stable_stmt(
+    ctx: &LoweringContext<'_, '_>,
+    local: &str,
+    arguments: &mut LoopArguments,
+    stmt: &Stmt,
+) -> bool {
     match &stmt.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
+            arguments.written.insert(name.clone());
             name != local && (!ctx.local_slots.contains_key(name)
-                || harmless_local(ctx, name)) && stable_expr(ctx, local, value)
+                || harmless_local(ctx, name)) && stable_expr(ctx, local, arguments, value)
         }
-        StmtKind::Echo(value) | StmtKind::ExprStmt(value) => stable_expr(ctx, local, value),
+        StmtKind::Echo(value) | StmtKind::ExprStmt(value) => stable_expr(ctx, local, arguments, value),
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
-            stable_expr(ctx, local, condition) && stable_body(ctx, local, then_body)
+            stable_expr(ctx, local, arguments, condition) && stable_body(ctx, local, arguments, then_body)
                 && elseif_clauses.iter().all(|(condition, body)| {
-                    stable_expr(ctx, local, condition) && stable_body(ctx, local, body)
-                }) && else_body.as_ref().is_none_or(|body| stable_body(ctx, local, body))
+                    stable_expr(ctx, local, arguments, condition) && stable_body(ctx, local, arguments, body)
+                }) && else_body.as_ref().is_none_or(|body| stable_body(ctx, local, arguments, body))
         }
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
-            stable_expr(ctx, local, condition) && stable_body(ctx, local, body)
+            stable_expr(ctx, local, arguments, condition) && stable_body(ctx, local, arguments, body)
         }
         StmtKind::For { init, condition, update, body } => {
-            init.as_ref().is_none_or(|stmt| stable_stmt(ctx, local, stmt))
-                && condition.as_ref().is_none_or(|expr| stable_expr(ctx, local, expr))
-                && update.as_ref().is_none_or(|stmt| stable_stmt(ctx, local, stmt))
-                && stable_body(ctx, local, body)
+            init.as_ref().is_none_or(|stmt| stable_stmt(ctx, local, arguments, stmt))
+                && condition.as_ref().is_none_or(|expr| stable_expr(ctx, local, arguments, expr))
+                && update.as_ref().is_none_or(|stmt| stable_stmt(ctx, local, arguments, stmt))
+                && stable_body(ctx, local, arguments, body)
         }
-        StmtKind::Synthetic(body) => stable_body(ctx, local, body),
-        StmtKind::Return(value) => value.as_ref().is_none_or(|value| stable_expr(ctx, local, value)),
+        StmtKind::Synthetic(body) => stable_body(ctx, local, arguments, body),
+        StmtKind::Return(value) => value.as_ref().is_none_or(|value| stable_expr(ctx, local, arguments, value)),
         StmtKind::Break(_) | StmtKind::Continue(_) => true,
         _ => false,
     }
@@ -211,32 +233,51 @@ fn harmless_local(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
 }
 
 /// Rejects opaque calls, aliases, declarations, and indirect writes anywhere in the loop.
-fn stable_expr(ctx: &LoweringContext<'_, '_>, local: &str, expr: &Expr) -> bool {
+fn stable_expr(
+    ctx: &LoweringContext<'_, '_>,
+    local: &str,
+    arguments: &mut LoopArguments,
+    expr: &Expr,
+) -> bool {
     match &expr.kind {
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_)
         | ExprKind::Null | ExprKind::StringLiteral(_) | ExprKind::ConstRef(_) => true,
-        ExprKind::Variable(name) => name != local && harmless_local(ctx, name),
+        ExprKind::Variable(name) => {
+            if arguments.reading_argument {
+                arguments.passed.insert(name.clone());
+            }
+            name != local && harmless_local(ctx, name)
+        },
         ExprKind::BinaryOp { left, right, .. } => {
-            stable_expr(ctx, local, left) && stable_expr(ctx, local, right)
+            stable_expr(ctx, local, arguments, left) && stable_expr(ctx, local, arguments, right)
         }
         ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
-        | ExprKind::Cast { expr: value, .. } => stable_expr(ctx, local, value),
+        | ExprKind::Cast { expr: value, .. } => stable_expr(ctx, local, arguments, value),
         ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name) => {
+            arguments.written.insert(name.clone());
             name != local && harmless_local(ctx, name)
         }
         ExprKind::ClosureCall { var, args } => {
-            var == local && args.iter().all(|arg| stable_expr(ctx, local, arg))
+            if var != local { return false; }
+            let reading_argument = arguments.reading_argument;
+            arguments.reading_argument = true;
+            let stable = args.iter().all(|arg| stable_expr(ctx, local, arguments, arg));
+            arguments.reading_argument = reading_argument;
+            stable
         }
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
+            if let ExprKind::Variable(name) = &target.kind {
+                arguments.written.insert(name.clone());
+            }
             matches!(&target.kind, ExprKind::Variable(name) if name != local
                 && (!ctx.local_slots.contains_key(name) || harmless_local(ctx, name)))
-                && stable_body(ctx, local, prelude) && stable_expr(ctx, local, value)
-                && result_target.as_ref().is_none_or(|target| stable_expr(ctx, local, target))
+                && stable_body(ctx, local, arguments, prelude) && stable_expr(ctx, local, arguments, value)
+                && result_target.as_ref().is_none_or(|target| stable_expr(ctx, local, arguments, target))
         }
         ExprKind::Ternary { condition, then_expr, else_expr } => {
-            stable_expr(ctx, local, condition) && stable_expr(ctx, local, then_expr)
-                && stable_expr(ctx, local, else_expr)
+            stable_expr(ctx, local, arguments, condition) && stable_expr(ctx, local, arguments, then_expr)
+                && stable_expr(ctx, local, arguments, else_expr)
         }
         _ => false,
     }

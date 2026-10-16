@@ -171,3 +171,43 @@ fn test_known_closure_loop_floating_abis() {
         check_closure_loop(source, expected);
     }
 }
+
+/// Arguments retyped on a backedge keep descriptor decoding on every iteration.
+#[test]
+fn test_known_closure_loop_retyped_argument_backedges() {
+    for replacement in ["1.5", "null"] {
+        let expected = if replacement == "1.5" { "2.5" } else { "1" };
+        for loop_body in [
+            format!("for($i=0;$i<2;$i++){{$out=$f($value);$value={replacement};}}"),
+            format!("$i=0;while($i<2){{$out=$f($value);$value={replacement};$i++;}}"),
+            format!("$i=0;do{{$out=$f($value);$value={replacement};$i++;}}while($i<2);"),
+        ] {
+            let source = format!("<?php $f=function($x){{return $x+1;}};$value=10;$out=0;{loop_body}echo$out;");
+            check_closure_loop(&source, expected);
+        }
+    }
+}
+
+/// Update clauses, nested writes, and continue paths cannot reuse the first argument type.
+#[test]
+fn test_known_closure_loop_argument_writes_on_other_backedges() {
+    for (loop_body, expected) in [
+        ("for($i=0;$i<2;$value=1.5){$out=$f($value);$i++;}", "2.5"),
+        ("$i=0;while($i++<2 && ($value=($i==1?10:1.5))>=0){$out=$f($value);}", "2.5"),
+        ("for($i=0;$i<2;$i++){$out=$f($value);if($i==0){$value=null;continue;}}", "1"),
+        ("for($i=0;$i<2;$i++){$out=$f($value);for($j=0;$j<1;$j++){$value=1.5;}}", "2.5"),
+        ("for($i=0;$i<2;$i++){$out=$f($value);($value=1.5);}", "2.5"),
+    ] {
+        let source = format!("<?php $f=function($x){{return$x+1;}};$value=10;$out=0;{loop_body}echo$out;");
+        check_closure_loop(&source, expected);
+    }
+}
+
+/// Unwritten locals and literal scalars keep correct direct-call argument values.
+#[test]
+fn test_known_closure_loop_unwritten_argument_controls() {
+    for argument in ["$value", "11"] {
+        let source = format!("<?php $value=$argc+10;$f=function($x){{return$x+1;}};$out=0;for($i=0;$i<2;$i++){{$out=$f({argument});}}echo$out;");
+        check_closure_loop(&source, "12");
+    }
+}
