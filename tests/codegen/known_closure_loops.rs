@@ -153,3 +153,10 @@ fn test_known_closure_loop_scalar_arguments_and_arithmetic_overflow() {
         check_closure_loop(&source, "double");
     }
 }
+
+/// A refined nonthrowing static call still uses the descriptor path and balances its owners.
+#[test]
+fn test_known_closure_loop_nested_static_call_stays_generic() {
+    let source = "<?php class Step{public static function inc($x){return$x+1;}}$f=function($x){return Step::inc($x);};$sum=0;for($i=0;$i<$argc+2;$i++){$sum+=$f($i);}echo$sum;";
+    check_closure_loop(source, "6");
+}

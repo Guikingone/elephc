@@ -161,3 +161,25 @@ fn known_loop_closure_exact_scalar_signatures_on_all_targets() {
         }
     }
 }
+
+/// A pure nested static call must stay generic even after its effect summary is refined.
+#[test]
+fn known_loop_closure_rejects_refined_static_calls_on_all_targets() {
+    let source = "<?php class Step{public static function inc($x){return$x+1;}}$f=function($x){return Step::inc($x);};$s=0;for($i=0;$i<$argc;$i++){$s+=$f($i);}echo$s;";
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        assert_eq!(calls(&module), (0, 1), "{target}");
+    }
+}
+
+/// Branching bodies and explicit casts remain outside the initial primitive-body proof.
+#[test]
+fn known_loop_closure_rejects_unproved_body_shapes() {
+    for source in [
+        fixture("function($x){if($x>0){return$x;}return 0;}", "$sum+=$f($i);", "$i++"),
+        fixture("function($x):int{return (int)($x+1);}", "$sum+=$f($i);", "$i++"),
+    ] {
+        assert_eq!(calls(&super::lower_source(&source)), (0, 1), "{source}");
+    }
+}

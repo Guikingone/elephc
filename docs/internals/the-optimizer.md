@@ -812,9 +812,10 @@ update, and complete body before emitting its closure calls. New direct calls
 in `for` and `while` require an invariant local identity, by-value scalar captures,
 an exact positional scalar argument list, and a scalar-or-Mixed signature without
 references or variadics. Argument storage must be physically scalar, and declared
-parameter types must match without coercion. The lowered body must keep closed
-scalar state, avoid global reads and opaque calls, and carry no throw/fatal/warn
-effects or terminators. Other shapes retain descriptor invocation. Fresh bindings
+parameter types must match without coercion. The initial lowered-body proof admits
+one straight-line block of explicitly listed scalar primitives, without global
+reads, opaque or nested calls, casts, or throw/fatal/warn effects. Refined call
+effects do not bypass the opcode allowlist. Other shapes retain descriptor invocation. Fresh bindings
 created in a condition do not bypass these gates in the body. `do/while` keeps
 its existing call eligibility after the same identity check, preventing a stale
 entry target from surviving a reassignment on the backedge. These lowering rules

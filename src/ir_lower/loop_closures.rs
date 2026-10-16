@@ -6,7 +6,7 @@
 //! - `stmt::loops` at loop entry and `expr::callable_resolution` before direct calls.
 //!
 //! Key details:
-//! - New for/while facts require scalar arguments/captures and a nonthrowing body.
+//! - New for/while facts require raw scalar inputs and one closed primitive body block.
 //! - Opaque syntax and indirect mutation fail closed; ordinary descriptor calls remain available.
 //! - Existing do/while direct calls retain their eligibility after identity filtering.
 
@@ -92,12 +92,17 @@ fn scalar_nothrow_target(ctx: &LoweringContext<'_, '_>, binding: &StaticCallable
     if !scalar_signature(signature) || captures.iter().any(|capture| {
         capture.by_ref_local.is_some()
             || !scalar_type(&ctx.builder.value_php_type(capture.value))
+            || !ctx.builder.function().value(capture.value).is_some_and(|value| {
+                value.ir_type == if value.php_type == PhpType::Float { IrType::F64 } else { IrType::I64 }
+            })
             || ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
     }) {
         return false;
     }
     let Some(function) = ctx.closure_function(name) else { return false };
-    if function.flags.is_generator || function.flags.by_ref_return {
+    if function.flags.is_generator || function.flags.by_ref_return || function.blocks.len() != 1
+        || function.return_type == IrType::Void
+    {
         return false;
     }
     let fallible = Effects::MAY_THROW | Effects::MAY_FATAL | Effects::MAY_WARN;
@@ -106,15 +111,25 @@ fn scalar_nothrow_target(ctx: &LoweringContext<'_, '_>, binding: &StaticCallable
             && (scalar_type(&inst.result_php_type) || inst.result_php_type == PhpType::Mixed)
             && (inst.op == Op::ConcatReset
                 || !inst.effects.intersects(Effects::READS_GLOBAL | Effects::WRITES_GLOBAL))
-            && !matches!(inst.op, Op::Call | Op::ExternCall | Op::ClosureCall | Op::MethodCall
-                | Op::CallableDescriptorInvoke | Op::RuntimeCall | Op::LanguageConstructCall
-                | Op::EvalLiteralCall | Op::LoadRefCell)
+            && scalar_body_primitive(inst.op)
             && (inst.op != Op::MixedNumericBinop || matches!(inst.immediate,
                 Some(Immediate::MixedNumericOp(crate::ir::MixedNumericOp::Add
                     | crate::ir::MixedNumericOp::Sub | crate::ir::MixedNumericOp::Mul))))
     }) && function.blocks.iter().all(|block| {
         !matches!(block.terminator, Some(Terminator::Throw { .. } | Terminator::Fatal { .. }))
     })
+}
+
+/// Fails closed for every call surface and future opcode, even after effect refinement.
+fn scalar_body_primitive(op: Op) -> bool {
+    use Op::*;
+    matches!(op, ConstI64 | ConstF64 | ConstBool | ConstNull | LoadLocal | StoreLocal
+        | ZeroLocalSlot | UnsetLocal | ReleaseLocalSlot | ICheckedAdd | ICheckedSub | ICheckedMul
+        | FAdd | FSub | FMul | FNeg | IBitAnd | IBitOr | IBitXor | IBitNot
+        | ICmp | FCmp | PhpRelCmp | StrictEq | StrictNotEq | LooseEq | LooseNotEq | Spaceship
+        | IsNull | IsTruthy | IsEmpty | TypePredicate | IToF | MixedBox | MixedClone | MixedUnbox
+        | MixedTagOf | MixedNumericBinop | Acquire | Release | ReleaseUnlessAliases
+        | Move | Borrow | EnsureOwned | ConcatReset | Nop)
 }
 
 /// Allows exact positional scalar calls without coercion, defaults, references, or generators.
