@@ -188,6 +188,19 @@ fn test_known_closure_loop_retyped_argument_backedges() {
     }
 }
 
+/// An incremented argument preserves PHP's promoted float tag on later iterations.
+#[test]
+fn test_known_closure_loop_argument_increment_overflow() {
+    for loop_body in [
+        "for($i=0;$i<$argc+1;$i++){$result=$f($value);$value++;}",
+        "$i=0;while($i<$argc+1){$result=$f($value);$value++;$i++;}",
+        "$i=0;do{$result=$f($value);$value++;$i++;}while($i<$argc+1);",
+    ] {
+        let source = format!("<?php $f=function($x){{return$x;}};$value=PHP_INT_MAX;{loop_body}echo gettype($result);");
+        check_closure_loop(&source, "double");
+    }
+}
+
 /// Update clauses, nested writes, and continue paths cannot reuse the first argument type.
 #[test]
 fn test_known_closure_loop_argument_writes_on_other_backedges() {

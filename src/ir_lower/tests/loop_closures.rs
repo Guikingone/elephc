@@ -202,6 +202,8 @@ fn known_loop_closure_rejects_argument_writes_on_all_targets() {
         "for($i=0;$i<2;$i++){$out=$f($value);($value=1.5);}",
         "for($i=0;$i<2;$i++){$out=$f($i);}",
         "$i=0;while($i<2){$out=$f($i);$i++;}",
+        "for($i=0;$i<$argc+1;$i++){$out=$f($value);$value++;}",
+        "$i=0;while($i<$argc+1){$out=$f($value);$value++;$i++;}",
     ] {
         let source = format!("<?php $f=function($x){{return $x+1;}};$value=10;$out=0;{loop_body}echo$out;");
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
