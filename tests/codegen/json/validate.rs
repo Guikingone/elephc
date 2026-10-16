@@ -583,3 +583,28 @@ fn test_json_validate_valid_surrogate_pair_returns_true() {
     );
     assert_eq!(out, "ok");
 }
+
+/// Verifies json_validate reports the syntax code without a json_decode location suffix.
+#[test]
+fn test_json_validate_syntax_message_has_no_location() {
+    let out = compile_and_run(
+        r#"<?php
+            json_validate("{");
+            echo json_last_error(), "|", json_last_error_msg();
+        "#,
+    );
+    assert_eq!(out, "4|Syntax error");
+}
+
+/// Verifies a successful validate clears a previous decode location message.
+#[test]
+fn test_json_validate_success_clears_decode_location_message() {
+    let out = compile_and_run(
+        r#"<?php
+            json_decode("[1,]");
+            json_validate("[1]");
+            echo json_last_error(), "|", json_last_error_msg();
+        "#,
+    );
+    assert_eq!(out, "0|No error");
+}
