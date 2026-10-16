@@ -157,6 +157,15 @@ When interpreter fallback is required, generated code performs these steps:
 7. Reload dirty, created, or unset scope entries and propagate return/fatal/
    throwable state through the normal generated runtime paths.
 
+Before native writeback, Magician validates returned values and visible scope
+graphs for restricted foreign PCNTL callables. Each context has a sticky
+capability set when a foreign callable is retained or copied, or a foreign-context
+closure target is registered. Contexts that have never acquired that metadata
+skip the graph walk and scope-cell collection. Once set, the capability stays
+active through handler replacement and pin cleanup. Full validation then covers
+cyclic containers, globals, detached handlers, and scope writes before a throw.
+Ordinary scope synchronization and throwable propagation use the same paths.
+
 Magician has no direct PCRE2 symbols in its base static library. If the final
 EIR module requires the regex runtime, generated eval setup registers the
 managed `elephc_pcre2_v1_*` shim callbacks before creating the context.
