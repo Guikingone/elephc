@@ -1183,17 +1183,19 @@ chooses between in-place reuse and a copy:
   unused spare capacity. A non-kind-1 input has no capacity to double; its
   reservation is the required length, or 16 bytes when that is larger, and this
   helper leaves that input for its existing owner to release.
-- Spare capacity is the trade-off. Doubling leaves the live block with unused
-  bytes — up to almost twice the logical length — and each byte of a unique
-  append loop is copied only when the buffer grows, so the copy volume across
-  the loop stays linear in the final length. Shared and overlap copies still
-  double, from the logical length rather than from leftover capacity, so their
-  spare bytes stay proportional to the bytes the snapshot holds.
+- Spare capacity is the trade-off. In the doubling case the new length still
+  fits in twice the old capacity, so the live block keeps unused bytes — up to
+  almost twice the logical length — and the existing prefix is copied only when
+  the buffer grows. The copy volume of that loop stays linear in the final length.
+  An append whose new length exceeds twice the old capacity reserves that exact
+  length and copies the existing prefix into the new block.
+  Shared and overlap copies seed that doubling from the logical length rather
+  than from leftover capacity, and the same exact-length reservation applies
+  when the new length exceeds twice that seed.
 - An empty append returns the original owner and leaves its mbstring origin
   unchanged. A wrapping length, or a replacement the header cannot represent,
   reaches `__rt_alloc_overflow` before any payload byte is written.
 
 The retained result is one block whose capacity follows the final length. Blocks
 released by a growth copy return to the free list; the bump allocator supplies
-a block when the free list cannot. The default 8MB heap is sized for that one
-live string, not for one block per iteration.
+a block when the free list cannot.
