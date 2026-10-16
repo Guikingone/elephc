@@ -63,6 +63,8 @@ mod peephole;
 mod property_receiver_ownership;
 #[path = "optimizer/read_result_cleanup.rs"]
 mod read_result_cleanup;
+#[path = "optimizer/fresh_mixed_transfer.rs"]
+mod fresh_mixed_transfer;
 #[path = "optimizer/release_local_slot.rs"]
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
