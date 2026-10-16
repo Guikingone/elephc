@@ -9,6 +9,7 @@
 //! - One recorded decode error performs one source scan, bounded by the original source length.
 //! - PHP 8.5 messages have no `near location` suffix; comparisons strip that elephc suffix
 //!   and check the error code, exception class, and base message separately.
+//! - Native expectations always run; the live PHP oracle requires `ELEPHC_PHP_CHECK`.
 
 use super::*;
 
@@ -131,16 +132,10 @@ fn assert_scan_counts(source: &str, scans: u64, max_bytes: u64) {
     }
 }
 
-/// Runs the same PHP body under elephc and the host `php` CLI.
-fn elephc_and_php(body: &str) -> (String, String) {
-    let elephc_out = compile_and_run(&format!("<?php\n{body}"));
-    let php_out = php_cli(body);
-    (elephc_out, php_out)
-}
-
-/// Executes `body` with `php -r` and returns stdout.
+/// Executes the explicitly requested PHP oracle with `php -n -r` and returns stdout.
 fn php_cli(body: &str) -> String {
     let output = std::process::Command::new("php")
+        .arg("-n")
         .arg("-r")
         .arg(body)
         .output()
@@ -462,7 +457,7 @@ fn test_json_decode_location_change_still_reports_gc_stats() {
     }
 }
 
-/// Codes, exception class, and base messages match PHP 8.5; the location suffix is elephc-only.
+/// Checks PHP-equivalent errors in both optimizer modes, with an opt-in live PHP oracle.
 #[test]
 fn test_json_decode_error_base_messages_match_php() {
     let body = r#"
@@ -480,18 +475,36 @@ try {
 json_validate("{");
 echo json_last_error(), "|", json_last_error_msg(), "\n";
 "#;
-    let (elephc_out, php_out) = elephc_and_php(body);
-    let elephc_lines: Vec<&str> = elephc_out.lines().collect();
-    let php_lines: Vec<&str> = php_out.lines().collect();
-    assert_eq!(elephc_lines.len(), php_lines.len(), "{elephc_out}\n---\n{php_out}");
-    for (elephc_line, php_line) in elephc_lines.iter().zip(php_lines.iter()) {
-        let elephc_base = strip_location_suffix(elephc_line);
-        assert_eq!(&elephc_base, *php_line, "elephc={elephc_line} php={php_line}");
-        if elephc_line.contains(" near location ") {
-            assert!(
-                !php_line.contains(" near location "),
-                "PHP 8.5 unexpectedly grew a location suffix: {php_line}"
-            );
+    let expected = "\
+4|Syntax error
+4|Syntax error
+1|Maximum stack depth exceeded
+1|Maximum stack depth exceeded
+1|Maximum stack depth exceeded
+1|Maximum stack depth exceeded
+10|Single unpaired UTF-16 surrogate in unicode escape
+1|Maximum stack depth exceeded
+1|Maximum stack depth exceeded
+JsonException|4|Syntax error
+4|Syntax error
+";
+    let php_out = std::env::var_os("ELEPHC_PHP_CHECK").map(|_| php_cli(body));
+    if let Some(oracle) = &php_out {
+        assert_eq!(oracle, expected, "PHP error reference changed");
+    }
+    let expected_lines: Vec<&str> = expected.lines().collect();
+    let source = format!("<?php\n{body}");
+    for ir_opt_off in [false, true] {
+        let elephc_out = if ir_opt_off {
+            without_ir_opt(|| compile_and_run(&source))
+        } else {
+            compile_and_run(&source)
+        };
+        let elephc_base: Vec<String> = elephc_out.lines().map(strip_location_suffix).collect();
+        assert_eq!(elephc_base, expected_lines, "ir-opt off={ir_opt_off}: {elephc_out}");
+        if let Some(oracle) = &php_out {
+            let php_lines: Vec<&str> = oracle.lines().collect();
+            assert_eq!(elephc_base, php_lines, "PHP mismatch with ir-opt off={ir_opt_off}");
         }
     }
 }
