@@ -11,6 +11,8 @@
 //! - Control-flow joins can reload locals from slots, so Phase 03 does not need
 //!   to synthesize block-parameter phis for every PHP variable yet.
 
+mod string_append;
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::{
@@ -3345,6 +3347,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedPow
                     | Op::MixedCastString
                     | Op::StrConcat
+                    | Op::StrAppend
                     | Op::StrPersist
                     | Op::StrCharAt
                     | Op::StrInterpolate

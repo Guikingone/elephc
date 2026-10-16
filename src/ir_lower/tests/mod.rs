@@ -32,6 +32,7 @@ mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
 mod dynamic_spreads;
 mod effects;
+mod string_append;
 mod eval_ownership;
 mod eval_default_helpers;
 mod exhaustive;
