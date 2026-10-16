@@ -147,8 +147,10 @@ When interpreter fallback is required, generated code performs these steps:
 1. Coerce the code argument to a PHP string.
 2. Lazily allocate the `EvalContext`, activation `EvalScope`, and, when needed,
    `EvalGlobalScope`.
-3. Register bridge-compatible AOT functions, methods, constructors, class
-   metadata, parameter names, defaults, and visibility information.
+3. Attach the module's immutable native catalog on a cache hit. On a miss,
+   register bridge-compatible AOT functions, methods, constructors, class
+   metadata, parameter names, defaults, and visibility information, then publish
+   the complete catalog before executing PHP.
 4. Flush visible locals, by-reference cells, closure captures, and eligible
    globals into boxed scope cells.
 5. Set call-site file, directory, namespace, class, trait, function, and method
@@ -156,6 +158,24 @@ When interpreter fallback is required, generated code performs these steps:
 6. Call `__elephc_eval_execute` through the target-aware ABI.
 7. Reload dirty, created, or unset scope entries and propagate return/fatal/
    throwable state through the normal generated runtime paths.
+
+Generated modules own a private, aligned, zero-initialized catalog token. The
+bridge assigns it a process-unique generation and retains up to eight catalogs
+per thread, ordered by last use. Reloading an image initializes a new token and
+cannot select callbacks from an older generation. Eviction removes the cache's
+ownership; already attached contexts keep their metadata alive. Registration
+failures disable publication for that context. Valid metadata replacements keep
+the registration ABI's legacy zero result and are distinguished internally from
+rejected inputs. Legacy bridge consumers using
+`__elephc_eval_context_new` continue to register independently.
+
+A cache hit shares Rust-owned descriptions and module-lifetime callback
+addresses without cloning signature maps. The cache contains no runtime cells,
+scopes, dynamic declarations, reference targets, handlers or materialized
+parameter defaults. Those remain activation-local. Native metadata writes and
+appending dynamic declared names use copy-on-write for the affected collection.
+Opaque descriptors never cross threads through this cache. Module callbacks
+and default factories must remain loaded while a context using them is live.
 
 Before native writeback, Magician validates returned values and visible scope
 graphs for restricted foreign PCNTL callables. Each context has a sticky
