@@ -81,7 +81,16 @@ pub(crate) fn build_class_info_recursive(
     interfaces::ensure_concrete_class_implements_abstracts(&state, &class)?;
 
     let constructor_param_to_prop = constructor_param_to_prop_for(&class, parent_info.as_ref());
-    let class_info = state.into_class_info(*next_class_id, &class, constructor_param_to_prop)?;
+    // Builtins registered without source carry no source span; a prelude's classes do, but come
+    // from compiler-generated statements.
+    let is_internal =
+        !class.span.is_from_source() || checker.internal_class_decls.contains(&class.name);
+    let class_info = state.into_class_info(
+        *next_class_id,
+        &class,
+        constructor_param_to_prop,
+        is_internal,
+    )?;
     checker.classes.insert(class.name.clone(), class_info);
     *next_class_id += 1;
     building.remove(class_name);

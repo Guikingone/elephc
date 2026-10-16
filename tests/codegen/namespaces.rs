@@ -11,6 +11,33 @@ use crate::support::*;
 
 mod polyfills;
 
+/// Namespaced constants ending in dedicated lexer tokens resolve by their qualified names.
+#[test]
+fn test_qualified_predefined_constant_names_read_local_values() {
+    let out = compile_and_run(r#"<?php
+namespace Demo\Math { const NAN = 'demo-nan'; const PHP_EOL = '<eol>'; }
+namespace Other {
+    use Demo\Math;
+    echo \Demo\Math\NAN, "\n";
+    echo Math\PHP_EOL, "\n";
+    echo is_nan(\NAN) ? 'global-nan' : 'wrong', "\n";
+}
+"#);
+    assert_eq!(out, "demo-nan\n<eol>\nglobal-nan\n");
+}
+
+/// Predefined lexer tokens can also name classes when PHP syntax selects a class context.
+#[test]
+fn test_qualified_predefined_class_names_use_class_metadata() {
+    let out = compile_and_run(r#"<?php
+class INF { public static function method(): string { return 'method'; } }
+$value = new \INF;
+echo \INF::class, "\n", \INF::method(), "\n";
+echo $value instanceof \INF ? 'instance' : 'wrong';
+"#);
+    assert_eq!(out, "INF\nmethod\ninstance");
+}
+
 /// Verifies `use function` aliasing and global builtin resolution inside a namespaced file.
 /// Uses a two-namespace fixture: `Demo\Util\render` aliased as `paint` and global `strlen`.
 /// Checks that the alias resolves correctly and global builtins are accessible without prefix.

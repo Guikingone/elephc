@@ -11,6 +11,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 
 /// __rt_json_encode_object: encode a PHP object instance as JSON.
 ///
@@ -274,6 +275,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     // Dispatch on the property type tag. Each branch leaves the encoded
     // result in x1=ptr, x2=len so the shared copy code can append it.
     emitter.instruction("ldr x17, [sp, #56]");                                  // reload the saved property type tag
+    emit_resolve_tagged_scalar_property_tag(emitter, "x17", "x15");
     emitter.instruction("cmp x17, #0");                                         // tag 0 = integer
     emitter.instruction("b.eq __rt_json_obj_val_int");                          // branch on the current JSON object encoder condition
     emitter.instruction("cmp x17, #1");                                         // tag 1 = string
@@ -635,6 +637,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
 
     // Dispatch on the property type tag.
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the saved property type tag
+    emit_resolve_tagged_scalar_property_tag(emitter, "r9", "rsi");
     emitter.instruction("cmp r9, 0");                                           // tag 0 = integer
     emitter.instruction("je __rt_json_obj_val_int_x");                          // branch on the current JSON object encoder condition
     emitter.instruction("cmp r9, 1");                                           // tag 1 = string

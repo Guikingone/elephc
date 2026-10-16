@@ -107,6 +107,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Intval,
     /// Dispatches `is_bool(...)`.
     IsBool,
+    /// Dispatches `is_countable(...)`.
+    IsCountable,
     /// Dispatches `is_double(...)`.
     IsDouble,
     /// Dispatches `is_finite(...)`.
@@ -376,6 +378,7 @@ impl EvalDirectHook {
             Self::Hypot => eval_builtin_hypot(args, context, scope, values),
             Self::Intval => eval_builtin_intval(args, context, scope, values),
             Self::IsBool => eval_builtin_is_bool(args, context, scope, values),
+            Self::IsCountable => eval_builtin_is_countable(args, context, scope, values),
             Self::IsDouble => eval_builtin_is_double(args, context, scope, values),
             Self::IsFinite => eval_builtin_is_finite(args, context, scope, values),
             Self::IsFloat => eval_builtin_is_float(args, context, scope, values),

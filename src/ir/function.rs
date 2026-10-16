@@ -80,6 +80,24 @@ pub struct Function {
 }
 
 impl Function {
+    /// Counts instruction and terminator value uses without counting definitions.
+    pub(crate) fn value_use_counts(&self) -> std::collections::HashMap<ValueId, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for inst in &self.instructions {
+            for &operand in &inst.operands {
+                *counts.entry(operand).or_insert(0) += 1;
+            }
+        }
+        for block in &self.blocks {
+            if let Some(terminator) = &block.terminator {
+                for operand in terminator.used_values() {
+                    *counts.entry(operand).or_insert(0) += 1;
+                }
+            }
+        }
+        counts
+    }
+
     /// Creates an empty function with no blocks or locals.
     pub fn new(name: String, return_type: IrType, return_php_type: PhpType) -> Self {
         Self {
@@ -199,6 +217,8 @@ pub enum LocalKind {
 /// Function-level shape flags used by lowering and later codegen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FunctionFlags {
+    /// Whether compiler-internal source declared this function rather than the user's program.
+    pub is_internal: bool,
     pub is_main: bool,
     pub is_method: bool,
     pub is_closure: bool,

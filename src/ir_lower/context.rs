@@ -11,6 +11,8 @@
 //! - Control-flow joins can reload locals from slots, so Phase 03 does not need
 //!   to synthesize block-parameter phis for every PHP variable yet.
 
+mod string_append;
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::{
@@ -75,6 +77,12 @@ pub(crate) struct FinallyFrame {
     pub body: Vec<Stmt>,
     pub run_on_throw: bool,
     pub handler_cleanup: Option<(i64, Span)>,
+    /// Loop-stack length when the frame was pushed, so the loops enclosing the protected region
+    /// have indices `0..loop_depth` and the ones opened inside it start at `loop_depth`. A
+    /// `break`/`continue` whose target loop INDEX is strictly below `loop_depth` leaves the
+    /// region and must run the frame; one whose target index is `loop_depth` or more stays
+    /// inside and must not (`run_innermost_finally` skips when `loop_depth <= target`).
+    pub loop_depth: usize,
 }
 
 /// Compile-time callable target tracked for straight-line local FCC calls.
@@ -88,6 +96,8 @@ pub(crate) enum StaticCallableBinding {
         signature: FunctionSig,
         captures: Vec<ClosureCapture>,
         return_alias: ReturnArgAlias,
+        /// Requires scalar/nonthrowing call gates for newly preserved loop facts.
+        loop_guarded: bool,
     },
     StaticMethod {
         receiver: StaticReceiver,
@@ -191,6 +201,7 @@ pub(crate) struct LoweringSnapshot {
     argument_guard_scopes: Vec<Vec<(usize, ValueId)>>,
     eval_barrier_active: bool,
     eval_executed: bool,
+    consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
@@ -282,6 +293,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
+    /// Which monomorphic instantiation each generic call site resolved to, keyed by the
+    /// enclosing body's loop-storage scope and the call position.
+    ///
+    /// Carried from the checker rather than re-derived: choosing the instantiation needs the
+    /// argument TYPES, and `lower_args_with_signature` needs the callee signature before it
+    /// lowers the arguments, so lowering cannot ask the question itself.
+    pub generic_call_sites: &'m HashMap<(String, Span), String>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
     /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
@@ -320,6 +338,16 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Loop-stack depth at each active `try` handler push; see
     /// `LoweringContext::loops_a_throw_would_leave`.
     pub try_loop_depths: Vec<usize>,
+    /// Exceptions a finalizer took from the in-flight cell and has not rethrown yet: the hidden
+    /// temp holding each, and the loop-stack and finally-stack depths its `finally` copy began
+    /// at. A jump that leaves the copy DISCARDS the exception, so `control_exit` releases it
+    /// there — see `stmt::exceptions::lower_catch_dispatch_with_finally`.
+    pub taken_finally_exceptions: Vec<(String, usize, usize)>,
+    /// Loop-stack indices whose cleanup the CURRENT exit path already emitted, so no later step
+    /// of the same path — an enclosing `finally` lowered inline, with its own exit — emits it
+    /// again. Loops inside a `finally` copy are cleaned before its exception is discarded; see
+    /// `stmt::control_exit::release_taken_exceptions`, the only writer.
+    pub exit_cleaned_loops: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     /// Per-local mutation generations used to distinguish a control-flow fact clear from an
     /// actual reassignment while lowering a try/catch region.
@@ -383,6 +411,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     write_operand_is_borrowed: bool,
     eval_barrier_active: bool,
     eval_executed: bool,
+    consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
@@ -413,6 +442,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         builtin_call_types: &'m HashMap<Span, PhpType>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
+        generic_call_sites: &'m HashMap<(String, Span), String>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
@@ -477,6 +507,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             builtin_call_types,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
+            generic_call_sites,
             loop_storage_types,
             string_incdec_locals,
             bind_kill_sites,
@@ -490,6 +521,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             loop_stack: Vec::new(),
             finally_stack: Vec::new(),
             try_loop_depths: Vec::new(),
+            taken_finally_exceptions: Vec::new(),
+            exit_cleaned_loops: Vec::new(),
             static_callable_locals: HashMap::new(),
             static_callable_local_epochs: HashMap::new(),
             function_global_names: HashMap::new(),
@@ -525,6 +558,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             write_operand_is_borrowed: false,
             eval_barrier_active: false,
             eval_executed: false,
+            consuming_string_append_enabled: true,
             eval_scope_read_param: None,
             eval_scope_read_names: HashSet::new(),
             eval_scope_write_names: HashSet::new(),
@@ -575,6 +609,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
             eval_executed: self.eval_executed,
+            consuming_string_append_enabled: self.consuming_string_append_enabled,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
             eval_scope_read_names: self.eval_scope_read_names.clone(),
             eval_scope_write_names: self.eval_scope_write_names.clone(),
@@ -645,6 +680,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
         self.eval_executed = snapshot.eval_executed;
+        self.consuming_string_append_enabled = snapshot.consuming_string_append_enabled;
         self.eval_scope_read_param = snapshot.eval_scope_read_param;
         self.eval_scope_read_names = snapshot.eval_scope_read_names;
         self.eval_scope_write_names = snapshot.eval_scope_write_names;
@@ -887,16 +923,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
     }
 
-    /// Returns the frame storage type a local must use, boxing `string` locals that PHP's
-    /// `++`/`--` can retype.
+    /// Returns the frame storage type a local must use, boxing the locals PHP's `++`/`--`
+    /// can retype.
     ///
-    /// `"9"++` is `int(10)`, so a local the checker recorded as a string increment/decrement
-    /// target cannot keep concrete `Str` storage. Widening the slot lazily at the increment
-    /// is not enough: the slot type is a whole-frame property, so every OTHER `Str`-typed
-    /// read of the same slot would then have to detach an owned copy out of the boxed cell
-    /// (`__rt_mixed_cast_string`), leaking one heap block per executed read. Boxing from the
-    /// first store — including the incoming-parameter store — keeps every access on the
-    /// ordinary boxed-Mixed path instead.
+    /// Two types qualify, for the same reason. `"9"++` is `int(10)`, so a string target
+    /// cannot keep concrete `Str` storage; and `PHP_INT_MAX++` is a float, so an int target
+    /// cannot keep a raw `I64` one. Widening the slot lazily at the increment is not enough:
+    /// the slot type is a whole-frame property, so every OTHER concretely typed access to it
+    /// reads the wrong representation. The string case leaked one heap block per read
+    /// (`__rt_mixed_cast_string` detaching an owned copy); the int case silently TRUNCATED —
+    /// the promoting `ichecked_add` produced a boxed float and the raw slot kept its low
+    /// word, so `for ($i = PHP_INT_MAX - 1; …; $i++)` wrapped to the negative minimum where
+    /// php prints the float.
+    ///
+    /// Boxing from the first store — including the incoming-parameter store — keeps every
+    /// access on the ordinary boxed-Mixed path instead, and `checked_int_sink` narrows the
+    /// slot back to `I64` wherever no access can observe the float, which is what keeps an
+    /// ordinary counter loop as fast as it was.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
         if !matches!(php_type.codegen_repr(), PhpType::Str) {
             return php_type;
@@ -2908,6 +2951,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         true
     }
 
+    /// Releases an owned hidden temp's value and clears the slot, so the frame's own cleanup
+    /// finds nothing left to release.
+    pub(crate) fn release_owned_hidden_temp(&mut self, name: &str, span: Option<Span>) {
+        let Some(slot) = self.local_slots.get(name).copied() else {
+            return;
+        };
+        if self.builder.local_kind(slot) != LocalKind::OwnedTemp {
+            return;
+        }
+        self.emit_void(
+            Op::ReleaseLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(),
+            span,
+        );
+        self.clear_owned_hidden_temp(name, span);
+    }
+
     /// Clears an owned hidden temp after its value has been loaded into SSA.
     pub(crate) fn clear_owned_hidden_temp(&mut self, name: &str, span: Option<Span>) {
         let Some(slot) = self.local_slots.get(name).copied() else {
@@ -3292,6 +3354,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedPow
                     | Op::MixedCastString
                     | Op::StrConcat
+                    | Op::StrAppend
                     | Op::StrPersist
                     | Op::StrCharAt
                     | Op::StrInterpolate
@@ -3429,8 +3492,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 // is the wrong answer. Taking it made the caller release a class-typed value the
                 // callee handed back at `+0` (issue #1203). A freshly built operand is not a
                 // local load and still refuses, which is what #486 needs.
+                // A concrete string projected from final Mixed storage is the exception:
+                // its cast detached an owned string, whose lease flows through a passthrough.
                 let argument_is_a_caller_temporary = self.value_is_owning_temporary(lowered)
-                    && !self.value_is_owned_unboxed_local_load(*argument);
+                    && (!self.value_is_owned_unboxed_local_load(*argument)
+                        || self.builder.value_php_type(*argument).codegen_repr() == PhpType::Str);
                 !argument_is_a_caller_temporary
             })
     }
@@ -5043,6 +5109,8 @@ pub(crate) fn value_ir_type(php_type: &PhpType) -> IrType {
 /// Converts parsed type syntax into a conservative PHP type for fallback metadata.
 pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
     match type_expr {
+        // Storage is a callable descriptor either way; the declared signature is checker-side.
+        TypeExpr::CallableSig { .. } => PhpType::Callable,
         TypeExpr::Int => PhpType::Int,
         TypeExpr::Float => PhpType::Float,
         TypeExpr::Bool => PhpType::Bool,
@@ -5052,11 +5120,19 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Never => PhpType::Never,
         TypeExpr::Iterable => PhpType::Iterable,
         TypeExpr::Array(inner) => PhpType::Array(Box::new(type_expr_to_php_type(inner))),
+        TypeExpr::AssocArray { key, value } => PhpType::AssocArray {
+            key: Box::new(type_expr_to_php_type(key)),
+            value: Box::new(type_expr_to_php_type(value)),
+        },
         TypeExpr::Ptr(name) => {
             PhpType::Pointer(name.as_ref().map(|name| name.as_str().to_string()))
         }
         TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(type_expr_to_php_type(inner))),
         TypeExpr::Named(name) => named_type_expr_to_php_type(name.as_str()),
+        // Lowering only ever sees instantiated classes, which are `Named`. Should one
+        // arrive uninstantiated, its head is the class it denotes — conservative metadata,
+        // which is all this fallback promises.
+        TypeExpr::GenericClass { name, .. } => named_type_expr_to_php_type(name.as_str()),
         TypeExpr::Nullable(inner) => {
             PhpType::Union(vec![PhpType::Void, type_expr_to_php_type(inner)])
         }

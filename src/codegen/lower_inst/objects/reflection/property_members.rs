@@ -126,6 +126,15 @@ pub(super) fn reflection_property_hook_members(
             .and_then(|contract| contract.get_type.as_ref())
             .and_then(|ty| reflection_parameter_type_metadata(None, ty))
             .or_else(|| property_type_metadata.cloned());
+        // `&get` is the only hook PHP lets return by reference, declared on a concrete body
+        // or on an abstract contract.
+        let get_by_ref = if has_concrete_get {
+            info.property_hooks
+                .get(property_name)
+                .is_some_and(|hooks| hooks.get_by_ref)
+        } else {
+            contract.is_some_and(|contract| contract.get_by_ref)
+        };
         members.push((
             String::from("get"),
             reflection_property_hook_method_member(
@@ -134,6 +143,7 @@ pub(super) fn reflection_property_hook_members(
                 declaring_class_name.clone(),
                 property_flags,
                 !has_concrete_get,
+                get_by_ref,
                 return_type,
                 None,
             ),
@@ -152,6 +162,7 @@ pub(super) fn reflection_property_hook_members(
                 declaring_class_name,
                 property_flags,
                 !has_concrete_set,
+                false,
                 Some(ReflectionParameterTypeMetadata::Named(
                     reflection_builtin_named_type("void", false),
                 )),
@@ -162,13 +173,16 @@ pub(super) fn reflection_property_hook_members(
     members
 }
 
-/// Builds one ReflectionMethod metadata record for a property hook.
+/// Builds one ReflectionMethod metadata record for a property hook. `returns_reference` is the
+/// hook's `&get` declaration, which `ReflectionMethod::returnsReference()` reports.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn reflection_property_hook_method_member(
     property_name: &str,
     hook_name: &str,
     declaring_class_name: Option<String>,
     property_flags: ReflectionMemberFlags,
     is_abstract: bool,
+    returns_reference: bool,
     return_type: Option<ReflectionParameterTypeMetadata>,
     parameter_type: Option<ReflectionParameterTypeMetadata>,
 ) -> ReflectionListedMember {
@@ -186,7 +200,7 @@ pub(super) fn reflection_property_hook_method_member(
         type_metadata: return_type.clone(),
         is_deprecated: false,
         is_generator: false,
-        returns_reference: false,
+        returns_reference,
     };
     let parameters = if hook_name == "set" {
         vec![reflection_property_hook_parameter_member(
@@ -213,7 +227,7 @@ pub(super) fn reflection_property_hook_method_member(
         required_parameter_count,
         is_deprecated: false,
         is_generator: false,
-        returns_reference: false,
+        returns_reference,
         prototype_member: None,
         parameters,
     }

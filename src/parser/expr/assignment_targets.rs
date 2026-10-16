@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::{
     can_replay_assignment_target, lower_postfix_incdec_assignment,
-    update_index_needs_snapshot,
+    update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 use crate::span::Span;
 
@@ -55,8 +55,16 @@ pub(super) fn desugar_lvalue_incdec(
         return None;
     }
     let mut prelude = lowerer.finish();
+    // One dimension of a local, property, or static-property array is read once into `old`,
+    // and the write stores `old ± 1`, so the element is fetched and its key converted a single
+    // time, as in PHP. Deeper places keep the statement write below.
     if let ExprKind::ArrayAccess { array, .. } = &target.kind {
-        if matches!(&array.kind, ExprKind::Variable(_)) {
+        if matches!(
+            &array.kind,
+            ExprKind::Variable(_)
+                | ExprKind::PropertyAccess { .. }
+                | ExprKind::StaticPropertyAccess { .. }
+        ) {
             let old_name = crate::names::generated_local_name(&format!(
                 "__elephc_incdec_old_{}_{}", span.line, span.col
             ));
@@ -194,12 +202,15 @@ impl AssignmentExpressionLowerer {
         self.stabilize_assignment_target(target, rhs)
     }
 
-    /// Captures a variable-rooted array index for both halves of an update.
+    /// Captures a mutable index for both halves of an update.
+    ///
+    /// Covers one dimension of a local, property, or static-property array, so the write lands
+    /// on the key its read converted even when a diagnostic handler reassigns the index variable.
     pub(super) fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
         let span = target.span;
         match target.kind {
             ExprKind::ArrayAccess { array, index }
-                if matches!(&array.kind, ExprKind::Variable(_)) =>
+                if update_dimension_base_is_snapshotted(&array) =>
             {
                 let index = if update_index_needs_snapshot(&index) {
                     self.bind_temp(*index)
@@ -557,6 +568,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
         | ExprKind::NewObject { .. }
+        | ExprKind::NewGeneric { .. }
         | ExprKind::NewDynamic { .. }
         | ExprKind::NewDynamicObject { .. }
         | ExprKind::StaticPropertyAccess { .. }
@@ -705,7 +717,9 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
                         || expr_may_write_dependency(arg, dependencies)
                 })
         }
-        ExprKind::NewObject { args, .. } | ExprKind::NewScopedObject { args, .. } => {
+        ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| {
                 expr_contains_dependency(arg, dependencies)
                     || expr_may_write_dependency(arg, dependencies)
@@ -800,6 +814,7 @@ fn instanceof_target_may_write_dependency(
 ) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_may_write_dependency(expr, dependencies),
     }
 }
@@ -876,6 +891,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| expr_contains_equivalent(arg, needle))
         }
@@ -979,6 +995,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
 fn instanceof_target_contains_equivalent(target: &InstanceOfTarget, needle: &Expr) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_contains_equivalent(expr, needle),
     }
 }

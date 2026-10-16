@@ -1,6 +1,15 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 1 }
 
+# REPL integration probes compile real dynamic-eval hosts, including multiple cache variants.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::repl)'
+slow-timeout = { period = "60s", terminate-after = 4 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::repl)'
+slow-timeout = { period = "60s", terminate-after = 4 }
+
 [profile.ci]
 failure-output = "immediate-final"
 final-status-level = "slow"
@@ -90,6 +99,16 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'test(mbstring_regex) or test(mb_ereg_) or test(mbstring_catalog_forced_runtime_callable)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# These native-named nested-default probes actually run two opaque eval programs
+# through the core collection cleanup helper. Use that eval family's bounded budget.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
 # It legitimately runs ~65-70s, just over the global 60s cap, so it needs a
@@ -134,6 +153,27 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'binary(extension_loaded_tests) and test(=get_loaded_extensions_dynamic_flag_tracks_linked_bridges)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# This auto-detection fixture compiles the full PDO surface in an isolated cold cache.
+# Both macOS CI attempts reached 60s; keep its assertions and use the existing PDO budget.
+[[profile.default.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=pdo_usage_still_reports_pdo_without_mysqli)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=pdo_usage_still_reports_pdo_without_mysqli)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# This single compilation injects both PDO and mysqli preludes and links their shared
+# archive in an isolated cold cache. Both macOS attempts reached the 60s cap, so give
+# this exact combined-surface probe the existing PDO budget without changing its checks.
+[[profile.default.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=pdo_and_mysqli_usage_reports_both)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=pdo_and_mysqli_usage_reports_both)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # The `codegen::eval` fixtures compile, link (against the Magician staticlib), and
 # run several programs per test — five in the largest — at ~7-8s per program on
 # a fast Linux box and appreciably more on the shared macOS runners, where the
@@ -172,6 +212,61 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
 filter = 'binary(/^eval_/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# The `opcache_*` integration binaries are in the same position: most of their programs call
+# `eval()` or `include` a path known only at run time — the only ways to reach the runtime
+# script cache they test — so every such program links Magician, like the `eval_*` binaries,
+# and they run in the non-codegen shards under the plain 60s cap. On the macOS runners
+# `a_non_forced_invalidate_follows_the_timestamp_directive` and
+# `a_runtime_eval_source_is_refused_as_native_calls_are` were terminated at 60s on both
+# attempts, and others of the family measured 57.4s, 51.2s and 46.3s in the same run. Give
+# the whole family the eval budget rather than chasing them one test at a time.
+[[profile.default.overrides]]
+filter = 'binary(/^opcache_/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(/^opcache_/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# The mbstring codegen tests compile each program twice, natively and inside `eval()`, and the
+# eval one links Magician: ~30s of CPU per eval program in a debug build (MEASURED: 29.6s on
+# main, 30.7s with this branch, whose eval-reachable OPcache bridges add 0.9% of assembly). A
+# test that does it for two programs has no room under the 60s cap, and the linux-aarch64
+# shards terminated two of them on both attempts: `test_mbstring_mime_decode_runtime_errors`
+# in two runs, then `runtime_gc::mbstring::test_mbstring_ascii_case_origin_ownership`. Every `strings::mbstring_*` file and
+# `runtime_gc::mbstring` follow that pattern, so give the whole family the eval budget rather
+# than chasing it one test at a time.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/))'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/))'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# macOS already gives every codegen test three 60s periods (the override above, platform-
+# scoped) because the shared macOS runners routinely stretch link-heavy tests past one period
+# while staying green. On Linux the same tolerance covers the remaining edge-of-budget families
+# on loaded runners: the Magician-linked eval tests (~30s of CPU idle) and the multi-target
+# lib tests, which emit one program per supported target (measured 83-96s in the CI-exact
+# container) — both spellings, `_on_all_targets` and `_on_every_target`. A separate quadratic
+# string-dedup pass made every eval-using program take ~120s to compile, which is what pushed
+# hundreds of tests past the cap at once; that pass is fixed in the compiler itself, and this
+# tolerance is the residual guard for genuinely slow tests. A real hang still terminates at
+# 180s, and the compiled-program watchdog keeps its own 60s guard.
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "linux")'
+filter = 'binary(codegen_tests)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(/_on_(all_targets|every_target)$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(/_on_(all_targets|every_target)$/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # These eval fixtures live outside the Core eval GC naming family. Boxed method
@@ -222,6 +317,28 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# The two `web_session_tests` cases that compile a `--web` program WITH `eval()` — the only way
+# to reach the runtime script cache, which is what they test. Measured with `--timings`: that
+# program is ~3.1M lines of assembly and takes ~34s to compile on a fast unloaded Mac, 61% of it
+# assembling the object file. The volume is the eval bridge, not OPcache: the same `--web`
+# program with `eval()` and no OPcache call is already 3.08M lines. Both terminated at the 60s
+# guard on the macOS runners, on both attempts, in two consecutive runs.
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
@@ -373,6 +490,16 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(test_eval_reflection_class_new_instance_without_constructor_rejects_aot_non_classes)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# This eval reflection fixture links Magician and PDO. It takes 44s with warm artifacts on local
+# x86_64 and hit the global 60s cap twice on Linux ARM64, so use the existing eval test budget.
+[[profile.default.overrides]]
+filter = 'test(test_eval_reflection_keeps_pdo_exception_get_code_declaring_class)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_reflection_keeps_pdo_exception_get_code_declaring_class)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 [[profile.default.overrides]]
 filter = 'test(test_eval_declared_method_return_type_values)'
 slow-timeout = { period = "180s", terminate-after = 1 }
@@ -404,13 +531,12 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
-# The shared macOS runners are the only place the codegen fixtures reach the 60s guard without
-# being hung: eval-linked programs (the 65MB Magician archive per link) measured 60-66s there in
-# runs that were otherwise green, and a different fixture crossed the line on each run —
+# On shared macOS runners, eval-linked programs (the 65MB Magician archive per link)
+# measured 60-66s in otherwise green runs, with a different fixture crossing the guard:
 # `xml::clone`, `xml::eval`, `nested_property_defaults`, `instanceof_operand_owners`. The per-test
 # entries below and above are the ones that crossed it first; on macOS the whole binary gets the
-# eval family's budget instead of a new exact-name entry per run. Linux keeps the strict guard,
-# and a real hang still terminates at 180s there too.
+# eval family's budget instead of a new exact-name entry per run. Linux keeps scoped
+# exceptions below, and a real hang still terminates at 180s on macOS.
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "macos")'
 filter = 'binary(codegen_tests)'
@@ -419,6 +545,22 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "macos")'
 filter = 'binary(codegen_tests)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# These multi-compile mbstring, eval, and ownership families reached 60s on both
+# attempts in Linux AArch64 shards and later in x86_64 shards. Constructor, argument
+# staging, and Mixed-throw ownership comparisons each compile two eval programs;
+# the output-handler fixture compiles native, native-callback eval, and eval-declared
+# controls. Give these same families the existing eval budget on both Linux targets.
+# Unrelated codegen tests and the compiled-program watchdog retain their 60s guards.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "linux")'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "linux")'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # Two more Core eval GC fixtures outside the `test_core_eval_` naming family. Each compiles,
@@ -440,3 +582,13 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [[profile.ci.overrides]]
 filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# This native-default ownership probe lowers/emits a deep program for all five targets.
+# Both macOS attempts hit 60s without a panic; use the existing all-target budget.
+[[profile.default.overrides]]
+filter = 'binary(elephc) and test(=ir_lower::tests::eval_default_helpers::deep_native_defaults_get_compiled_helpers_on_every_target)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(elephc) and test(=ir_lower::tests::eval_default_helpers::deep_native_defaults_get_compiled_helpers_on_every_target)'
+slow-timeout = { period = "180s", terminate-after = 1 }

@@ -49,6 +49,9 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method(
 
 /// Registers one generated native PHP interface property contract in an eval context.
 ///
+/// `flags` carries `NATIVE_PROPERTY_REQUIRES_GET`, `NATIVE_PROPERTY_REQUIRES_SET` and
+/// `NATIVE_PROPERTY_GET_BY_REF` (the `get` contract is declared `&get`).
+///
 /// # Safety
 /// `ctx` must be a valid eval context handle. `property_key_ptr` must point to a
 /// readable `InterfaceName::DeclaringInterface::propertyName` byte string, and
@@ -76,6 +79,9 @@ pub unsafe extern "C" fn __elephc_eval_register_native_interface_property(
 }
 
 /// Registers one generated native PHP abstract class property contract in an eval context.
+///
+/// `flags` carries `NATIVE_PROPERTY_REQUIRES_GET`, `NATIVE_PROPERTY_REQUIRES_SET` and
+/// `NATIVE_PROPERTY_GET_BY_REF` (the `get` contract is declared `&get`).
 ///
 /// # Safety
 /// `ctx` must be a valid eval context handle. `property_key_ptr` must point to a

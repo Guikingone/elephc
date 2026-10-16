@@ -2,7 +2,7 @@
 title: "mb_encoding_aliases()"
 description: "Lists the public aliases of an encoding in PHP order."
 sidebar:
-  order: 840
+  order: 841
 ---
 
 ## mb_encoding_aliases()

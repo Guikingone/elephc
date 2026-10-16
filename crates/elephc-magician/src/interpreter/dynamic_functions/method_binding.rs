@@ -20,7 +20,11 @@ pub(in crate::interpreter) struct BoundEvalFunctionArgs {
 }
 
 /// Binds one eval-declared callable while retaining PHP's actual-argument frame.
+///
+/// `callee` is the PHP-visible name (`f`, `A::m`, a closure name) that a missing-argument
+/// `ArgumentCountError` reports.
 pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
+    callee: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_defaults: &[Option<EvalExpr>],
@@ -55,6 +59,7 @@ pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
         }
     }
     let args = match bind_evaluated_method_args_with_ref_mode(
+        callee,
         params,
         parameter_types,
         parameter_defaults,
@@ -150,6 +155,7 @@ fn eval_actual_argument_shape(
 
 /// Binds evaluated method arguments using a selected by-reference target policy.
 pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
+    callee: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_defaults: &[Option<EvalExpr>],
@@ -169,6 +175,8 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
     let mut next_positional = 0;
     let mut next_variadic_index = 0_i64;
     let mut variadic_named_args = std::collections::HashSet::new();
+    let passed = evaluated_args.len();
+    let named_call = evaluated_args.iter().any(|arg| arg.name.is_some());
 
     if let Some(index) = variadic_index {
         let array = if evaluated_args_contain_named_variadic_values(
@@ -227,11 +235,14 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         }
         if value.is_none() {
             if position < required_count {
-                return eval_throw_argument_count_error(
-                    "Too few arguments",
-                    context,
-                    values,
+                let message = missing_argument_message(
+                    callee,
+                    named_call.then(|| (position, params[position].as_str())),
+                    passed,
+                    required_count,
+                    variadic_index.unwrap_or(params.len()),
                 );
+                return eval_throw_argument_count_error(&message, context, values);
             }
             let Some(Some(default)) = parameter_defaults.get(position) else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -252,6 +263,27 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Words PHP's `ArgumentCountError` for a user callable missing a required argument.
+///
+/// A named call names the first unbound slot (`f(): Argument #1 ($a) not passed`); a positional
+/// call reports the counts. PHP's positional message also says where the call was made
+/// (`0 passed in <file> on line <n> and exactly 1 expected`), but eval tracks no line for a
+/// running statement, so this uses the form PHP itself prints when no userland caller frame
+/// exists (`0 passed and exactly 1 expected`, as for an `array_map` callback).
+pub(super) fn missing_argument_message(
+    callee: &str,
+    named_hole: Option<(usize, &str)>,
+    passed: usize,
+    required: usize,
+    regular: usize,
+) -> String {
+    if let Some((position, param)) = named_hole {
+        return format!("{callee}(): Argument #{} (${param}) not passed", position + 1);
+    }
+    let kind = if required == regular { "exactly" } else { "at least" };
+    format!("Too few arguments to function {callee}(), {passed} passed and {kind} {required} expected")
 }
 
 /// Returns the minimum argument count for a PHP method signature.
@@ -544,6 +576,9 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         return Ok(value);
     }
     if param_type.is_intersection() {
+        if context.current_function().is_some_and(|name| name.contains('<')) {
+            return eval_throw_type_error("Value does not satisfy the specialized intersection type", context, values);
+        }
         return Err(EvalStatus::RuntimeFatal);
     }
     for variant in param_type.variants() {
@@ -553,11 +588,15 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
             return Ok(coerced);
         }
     }
+    if param_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))
+        || context.current_function().is_some_and(|name| name.contains('<')) {
+        return eval_throw_type_error(&format!("Value does not satisfy {}", crate::eval_ir::generic_type(param_type)), context, values);
+    }
     Err(EvalStatus::RuntimeFatal)
 }
 
 /// Returns whether a value satisfies one eval parameter type without scalar coercion.
-fn eval_method_parameter_type_accepts_exact(
+pub(in crate::interpreter) fn eval_method_parameter_type_accepts_exact(
     param_type: &EvalParameterType,
     value: RuntimeCellHandle,
     context: &ElephcEvalContext,
@@ -592,6 +631,7 @@ fn eval_method_parameter_variant_accepts_exact(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match variant {
+        EvalParameterTypeVariant::Generic(ty) => generic_value_accepts(ty, value, context, values),
         EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
         EvalParameterTypeVariant::Callable => Ok(matches!(
@@ -627,6 +667,9 @@ fn eval_method_parameter_class_accepts(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if let Some(template) = context.generic_template(class_name).filter(|template| !matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. })) {
+        return generic_value_accepts(&erased_generic_type(template), value, context, values);
+    }
     let target = eval_method_parameter_runtime_class_name(class_name, context)?;
     if tag == EVAL_TAG_CALLABLE {
         return Ok(target.eq_ignore_ascii_case("Closure"));

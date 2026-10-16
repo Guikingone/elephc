@@ -10,8 +10,16 @@
 //! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
 //! - The `mixed_receiver_property_writes` submodule checks the ownership of a property write whose receiver is statically `mixed`.
 
+#[path = "runtime_gc/string_append.rs"]
+mod string_append;
 #[path = "runtime_gc/basics.rs"]
 mod basics;
+#[path = "runtime_gc/large_unary_string_results.rs"]
+mod large_unary_string_results;
+#[path = "runtime_gc/static_local_initializers.rs"]
+mod static_local_initializers;
+#[path = "runtime_gc/ini_lookup_arguments.rs"]
+mod ini_lookup_arguments;
 #[path = "runtime_gc/mixed_string_cast_return.rs"]
 mod mixed_string_cast_return;
 #[path = "runtime_gc/object_cast.rs"]
@@ -60,6 +68,8 @@ mod assoc_chunk;
 mod literal_builtin_elements;
 #[path = "runtime_gc/mixed_receiver_property_writes.rs"]
 mod mixed_receiver_property_writes;
+#[path = "runtime_gc/assoc_literal_spreads.rs"]
+mod assoc_literal_spreads;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
 #[path = "runtime_gc/boxed_property_defaults.rs"]
@@ -147,6 +157,9 @@ mod serialize_magic_results;
 mod growth;
 #[path = "runtime_gc/heap.rs"]
 mod heap;
+mod split_remainders;
+#[path = "runtime_gc/implode_boxed_operand.rs"]
+mod implode_boxed_operand;
 #[path = "runtime_gc/heap_codegen.rs"]
 mod heap_codegen;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]

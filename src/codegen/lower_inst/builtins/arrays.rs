@@ -702,10 +702,12 @@ fn slice_like_length_operand(inst: &Instruction) -> Result<Option<ValueId>> {
     Ok(None)
 }
 
-/// Reads the literal `$preserve_keys` flag of a slice-like call.
+/// Reads the literal `$preserve_keys` flag of a slice-like call over concrete array storage.
 ///
-/// The checker rejects a non-literal flag because it decides the result's static shape, so a
-/// non-literal operand here can only mean the checker and the backend disagree about this call.
+/// The checker rejects a non-literal flag there because it decides the result's static shape, so
+/// a non-literal operand here can only mean the checker and the backend disagree about this call.
+/// A boxed `array_slice()` source reads its flag at runtime instead (see
+/// [`stage_slice_preserve_keys_flag`]).
 fn slice_like_preserve_keys(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
@@ -720,6 +722,51 @@ fn slice_like_preserve_keys(
             ))
         }),
     }
+}
+
+/// Reports whether a boxed-source `array_slice()` may keep its keys: an omitted flag or a literal
+/// `false` never does, while a literal `true` or a runtime operand may.
+fn slice_preserve_keys_may_be_set(
+    ctx: &FunctionContext<'_>,
+    flag: Option<ValueId>,
+) -> Result<bool> {
+    match flag {
+        None => Ok(false),
+        Some(flag) => Ok(const_bool_operand(ctx, flag)?.unwrap_or(true)),
+    }
+}
+
+/// Resolves the `$preserve_keys` flag of a boxed-source `array_slice()` and pushes it onto the
+/// temporary stack, where the payload dispatch reads it.
+///
+/// An omitted flag and a literal push an immediate `0` or `1`. A runtime flag only comes from the
+/// callable wrapper's `bool` parameter, which the invoker has already converted with PHP
+/// truthiness, and the consumers test the word against zero. Any other operand type is refused
+/// rather than guessed at.
+fn stage_slice_preserve_keys_flag(
+    ctx: &mut FunctionContext<'_>,
+    flag: Option<ValueId>,
+) -> Result<()> {
+    let reg = abi::int_result_reg(ctx.emitter);
+    match flag {
+        None => abi::emit_load_int_immediate(ctx.emitter, reg, 0),
+        Some(flag) => match const_bool_operand(ctx, flag)? {
+            Some(value) => abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(value)),
+            None => match ctx.value_php_type(flag)?.codegen_repr() {
+                PhpType::Bool | PhpType::False | PhpType::Int => {
+                    ctx.load_value_to_result(flag)?;
+                }
+                other => {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "array_slice preserve_keys operand of PHP type {:?}",
+                        other
+                    )))
+                }
+            },
+        },
+    }
+    abi::emit_push_reg(ctx.emitter, reg);
+    Ok(())
 }
 
 /// Reports whether a mutating array builtin's first operand is a hash-backed array.

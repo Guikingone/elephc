@@ -127,8 +127,8 @@ ABI. AOT literals without writes skip scope materialization when they need no
 caller values or can receive read-only values as direct EIR parameters. Known
 writes use the same core scope cells from an internal EIR function.
 
-Because a scope cell is always boxed `Mixed`, a local read or written inside
-`eval()` may change type freely — `eval('$a = 1; $a = "ciao"; echo $a;')`
+Because a scope cell is always boxed `Mixed`, an untyped local read or written inside
+`eval()` may change type freely: `eval('$a = 1; $a = "ciao"; echo $a;')`
 compiles and runs the same in every mode. This is unrelated to
 [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode), which
 only tightens the AOT checker's monomorphic-local rule for ordinary compiled
@@ -142,6 +142,24 @@ Top-level eval fragments can see CLI `$argc` and `$argv`. `global $name` can
 alias compiler-known program-global storage, and `global $argc` / `global
 $argv` inside function eval fragments alias the CLI argument globals. Unsetting
 such a local alias removes the alias without unsetting the global value.
+
+Superglobals (`$_SERVER`, `$_ENV`, `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
+`$_REQUEST`, `$_SESSION`) resolve through the global scope from every fragment,
+with no `global` statement, so a fragment running inside a function reads and
+writes the values the compiled program holds, and `unset()` removes the global
+one: it stays undefined for every later read, and eval never creates it again. When a fragment names a CLI
+superglobal that the compiled program never created, eval creates it as the
+fragment starts, the way PHP's `auto_globals_jit` does, with the contents a
+compiled CLI program gives it (see
+[System & I/O](system-and-io.md)): the environment in `$_ENV`, the environment
+plus the CLI keys in `$_SERVER`, and empty request arrays; `$_SESSION` is never
+created. Two differences remain for such an eval-created superglobal. It is
+created when first named rather than at startup, so it includes variables that
+`putenv()` set before that point. And it belongs to the eval global scope of
+the call that created it: top-level fragments share one, but a fragment inside
+a later function call starts from a fresh copy and does not see writes made
+through another call. Naming the superglobal anywhere in the compiled program
+makes it one shared value everywhere.
 
 ## Supported statements
 
@@ -166,10 +184,20 @@ order for iteration.
 
 Includes follow PHP's cwd-first lookup and then fall back to the eval call-site
 directory. Included PHP files may contain normal `<?php ... ?>` blocks, raw text
-outside PHP tags is echoed, a `return` inside the included file becomes the
+outside PHP tags is echoed byte for byte, a `return` inside the included file becomes the
 include expression value, successful includes without `return` evaluate to `1`,
 repeated `*_once` includes evaluate to `true`, missing `include` returns
 `false` with warnings, and missing `require` aborts the eval fragment.
+
+An included file is parsed as one script, as PHP compiles it, so a template's
+blocks may span the tags: `<?php foreach ($rows as $r) { ?><li><?= $r ?></li><?php } ?>`,
+the alternative syntax (`<?php if ($x): ?>…<?php endif; ?>`) and a function whose
+body spans blocks all run. `<?=` echoes, `?>` swallows the one newline after it,
+`__LINE__` counts from the top of the file, and `<?php` opens code only before
+whitespace or the end of the file (the short `<?` stays text). A parse error
+anywhere in the file stops the include before any of it runs. The file's PHP
+blocks must be UTF-8; the text outside them may hold any bytes. Heredoc and
+nowdoc are not parsed in eval code, in an included file either.
 
 In eval, `get_included_files()` preserves first-inclusion order, with the first
 nonempty native call-site path retained as the main entry. A query inside a
@@ -309,6 +337,24 @@ Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier
 `call_user_func_array()` callbacks can pass indexed or string-keyed argument
 containers to eval-declared functions.
+
+## Generics
+
+Magician supports native generic declarations and the supported PHPStan/Psalm annotations from
+[Generics](../beyond-php/generics.md#generics-in-magician). Functions, classes, interfaces, traits,
+methods, and constructors specialize lazily from written type arguments or evaluated argument
+types. Templates and concrete specializations persist across eval calls and runtime includes.
+
+Bounds, defaults, variance, structural array contracts, typed callable signatures, and substituted
+typed locals are checked at runtime. Binding and specialized contract failures throw catchable
+`TypeError` values. Generic classes have distinct names and static state per specialization.
+Class and constructor arguments may be written together, such as `Pair<int, string>`, before
+any inferred instantiation, including in parent references. Typed arrays validate float and bool
+keys as their stored integer type, following PHP array-key normalization.
+Native syntax requires ordinary mode; PHPDoc templates also work under `--strict-php`.
+
+Specialization reuses the existing call binder and boxed value ABI. It does not change the
+supported expression subset or give interpreted calls AOT's native storage representation.
 
 ## Classes and objects
 
@@ -472,9 +518,15 @@ name. `ReflectionMethod::getShortName()` reports the reflected method name,
 while `ReflectionMethod::getNamespaceName()` reports an empty string and
 `inNamespace()` reports `false`, matching PHP's method reflection behavior.
 `ReflectionFunction` and `ReflectionMethod` report eval user-symbol defaults
-through `isInternal()`, `isUserDefined()`, `isClosure()`, `returnsReference()`,
+through `isInternal()`, `isUserDefined()`, `isClosure()`,
 `isGenerator()`, `isVariadic()`, `isStatic()`,
-`hasTentativeReturnType()`, and `getTentativeReturnType()`. `hasReturnType()`
+`hasTentativeReturnType()`, and `getTentativeReturnType()`.
+`returnsReference()` reports the reflected declaration: `true` for a compiled
+`function &f()` or `function &m()`, for an eval-declared `&get` property
+hook, and for an abstract or interface `&get` hook contract, whether eval or
+compiled code declares it. Eval code itself cannot declare a by-reference
+function, method, or closure (the fragment is rejected), so those report
+`false`. `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.
@@ -846,6 +898,23 @@ generated AOT class/interface metadata and eval-created object metadata.
 `interface_exists()`, `trait_exists()`, and `enum_exists()` can probe generated
 AOT metadata. `class_implements()` and `class_parents()` materialize
 generated/AOT interface and parent metadata when the bridge exposes it.
+For an enum declared in the compiled program, the generated interface metadata
+contains only its directly declared interfaces: `class_implements()` called
+from `eval()` still omits their transitive parents and the implicit `UnitEnum`
+and `BackedEnum` interfaces. Relation probes such as `is_a()` and
+`is_subclass_of()` use the same incomplete metadata for those compiled enums.
+Enums declared inside `eval()` do report transitive interface parents and
+`UnitEnum`, plus `BackedEnum` for backed enums, to probes executed inside `eval()`, like PHP.
+Compiled `class_implements()` also reports these interfaces for eval-declared enums.
+Compiled `is_a()` and `is_subclass_of()` calls with a class-name string still return
+`false` for an enum declared only inside `eval()`, because those calls consult the
+AOT class table. A case of an enum declared inside `eval()` uses the dynamic
+object bridge instead: compiled `is_a($case, "UnitEnum")` and
+`is_subclass_of($case, "UnitEnum")` report the implicit enum interface, including
+`BackedEnum` for a backed case. Returning a compiled enum case through `eval()`
+does not add those interfaces: it retains the incomplete AOT metadata, so these
+object probes still return `false` for its implicit `UnitEnum`/`BackedEnum`
+interfaces. Its explicitly declared interfaces remain visible.
 `class_uses()` reports direct trait uses for eval-declared and generated/AOT
 classes, traits, and enums. `class_alias()` can
 alias eval-declared and generated/AOT
@@ -975,7 +1044,7 @@ where listed below unless a note says otherwise.
 > elephc-extension builtins below — the whole "Raw memory and buffers" row plus
 > `class_attribute_names()`, `class_attribute_args()`, and
 > `class_get_attributes()` — do not exist inside eval'd code either: calling one
-> is a runtime fatal like any unknown function, and
+> is a runtime fatal for the unavailable extension, and
 > `function_exists()`/`is_callable()` report them as missing, matching the PHP
 > interpreter.
 
@@ -1000,6 +1069,26 @@ where listed below unless a note says otherwise.
 | Constants | `define()`, `defined()` |
 
 ## Builtin notes
+
+An undefined direct function call throws a catchable `Error` with
+`Call to undefined function name()`. Function lookup fails before its arguments
+are evaluated. Namespace fallback and imported function aliases report the resolved
+missing name. Known builtins whose required capability or prelude is unavailable
+retain their existing runtime diagnostics.
+
+A builtin called with an argument count PHP refuses throws a catchable
+`ArgumentCountError` with PHP's message (`strlen() expects exactly 1 argument,
+0 given`) on every spelling: direct calls, `call_user_func()`,
+`call_user_func_array()`, variable calls, spreads, and callbacks. The arguments
+are evaluated first, as PHP sends them before the callee checks the count. A
+count PHP accepts but an eval handler does not implement yet, such as
+`array_keys()` with a filter value, is still an eval runtime fatal. Eval-declared
+functions, methods, and closures, and compiled functions called from eval, throw
+`ArgumentCountError` when a required argument is missing (`Too few arguments to
+function f(), 0 passed and exactly 1 expected`). PHP's positional message also
+names the calling file and line (`0 passed in ... on line 1 and ...`); eval does
+not track the line of a running statement, so that clause is omitted. A compiled
+function is named by its lowercase registered name.
 
 Eval `settype()` mutates direct variables, array elements, object properties
 including dynamic property names, and static properties including dynamic

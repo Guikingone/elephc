@@ -522,7 +522,10 @@ pub(super) fn function_signature_from_eir_with_param_count(
             .collect(),
         return_type: function.return_php_type.clone(),
         declared_return: !matches!(function.return_php_type, PhpType::Mixed),
-        by_ref_return: false,
+        by_ref_return: function
+            .signature
+            .as_ref()
+            .map_or(function.flags.by_ref_return, |signature| signature.by_ref_return),
         ref_params: function
             .params
             .iter()
@@ -583,6 +586,41 @@ pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// EIR-only callable metadata retains the declaration's reference-return flag.
+    #[test]
+    fn callable_signature_fallback_preserves_eir_reference_return() {
+        for by_ref_return in [false, true] {
+            let mut function = crate::ir::Function::new("ref_result".into(), IrType::I64, PhpType::Int);
+            function.flags.by_ref_return = by_ref_return;
+
+            assert_eq!(function_signature_from_eir(&function).by_ref_return, by_ref_return);
+        }
+    }
+
+    /// A parameter-count mismatch must not discard stored declaration metadata.
+    #[test]
+    fn callable_signature_fallback_preserves_stored_reference_return() {
+        for by_ref_return in [false, true] {
+            let mut function = crate::ir::Function::new("ref_result".into(), IrType::I64, PhpType::Int);
+            let mut signature = function_signature_from_eir(&function);
+            signature.by_ref_return = by_ref_return;
+            function.signature = Some(signature);
+            function.params.push(crate::ir::FunctionParam {
+                name: "capture".into(),
+                ir_type: IrType::I64,
+                php_type: PhpType::Int,
+                by_ref: false,
+                variadic: false,
+            });
+
+            assert_eq!(function_signature_from_eir(&function).by_ref_return, by_ref_return);
+            assert_eq!(
+                function_signature_from_eir_with_param_count(&function, 0).by_ref_return,
+                by_ref_return,
+            );
+        }
+    }
 
     /// ARM64 string capture cleanup forwards the string pointer from x1, not the scalar result x0.
     #[test]

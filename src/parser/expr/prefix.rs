@@ -40,6 +40,13 @@ pub(super) fn parse_prefix(
 
     let span = tokens[*pos].1.span;
 
+    // Predefined tokens remain name segments before namespace or class access.
+    if crate::parser::stmt::token_as_import_name(&tokens[*pos].0, &tokens[*pos].1).is_some()
+        && matches!(tokens.get(*pos + 1), Some((Token::Backslash | Token::DoubleColon, _)))
+    {
+        return parse_named_expr(tokens, pos, span);
+    }
+
     // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\true`...: the lexer turns these predefined
     // constants into dedicated tokens, so the name parser never sees an identifier after the `\`
     // (#1307). The fully qualified spelling names the same global constant, so it parses as the
@@ -48,7 +55,14 @@ pub(super) fn parse_prefix(
     if tokens[*pos].0 == Token::Backslash {
         if let Some((next, metadata)) = tokens.get(*pos + 1) {
             let literal_constant = matches!(next, Token::True | Token::False | Token::Null);
-            if literal_constant || crate::parser::stmt::token_as_import_name(next, metadata).is_some() {
+            let continues_name = matches!(
+                tokens.get(*pos + 2),
+                Some((Token::Backslash | Token::DoubleColon | Token::LParen, _))
+            );
+            if literal_constant
+                || (crate::parser::stmt::token_as_import_name(next, metadata).is_some()
+                    && !continues_name)
+            {
                 *pos += 1;
                 let mut expr = parse_prefix(tokens, pos)?;
                 if let ExprKind::ConstRef(name) = &expr.kind {
@@ -266,6 +280,22 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
+        // `$this(...)` invokes the current object exactly like `($this)(...)`: through
+        // `__invoke` only. A plain `__invoke` method call would fall back to `__call`, which PHP
+        // never does for an object invocation.
+        Token::This if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) => {
+            let this = Expr::new(ExprKind::This, span);
+            *pos += 2;
+            let args = parse_args(tokens, pos, span)?;
+            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+            Ok(Expr::new(
+                ExprKind::ExprCall {
+                    callee: Box::new(this),
+                    args,
+                },
+                span,
+            ))
+        }
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
         other => Err(CompileError::new(

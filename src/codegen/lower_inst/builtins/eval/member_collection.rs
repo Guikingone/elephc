@@ -298,18 +298,19 @@ pub(super) fn eval_native_static_property_declaring_class<'a>(
         .unwrap_or(reflected_class)
 }
 
-/// Returns the class name that declares one AOT method metadata row.
+/// Returns the class name that declares one AOT method metadata row, reading the declaring-class
+/// maps before the implementing ones so attributes are keyed by the class eval reflection reports.
 pub(super) fn eval_native_method_declaring_class<'a>(
     reflected_class: &'a str,
     class_info: &'a ClassInfo,
     method_name: &str,
 ) -> &'a str {
     class_info
-        .method_impl_classes
+        .method_declaring_classes
         .get(method_name)
-        .or_else(|| class_info.static_method_impl_classes.get(method_name))
-        .or_else(|| class_info.method_declaring_classes.get(method_name))
         .or_else(|| class_info.static_method_declaring_classes.get(method_name))
+        .or_else(|| class_info.method_impl_classes.get(method_name))
+        .or_else(|| class_info.static_method_impl_classes.get(method_name))
         .map(String::as_str)
         .unwrap_or(reflected_class)
 }

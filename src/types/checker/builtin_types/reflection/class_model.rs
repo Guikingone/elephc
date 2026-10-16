@@ -340,7 +340,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_new_instance_method(),
             builtin_reflection_class_new_instance_args_method(),
             builtin_reflection_class_new_instance_without_constructor_method(),
-            builtin_reflection_owner_get_attributes_method(),
+            builtin_reflection_owner_get_attributes_method("ReflectionClass"),
         ],
         attributes: Vec::new(),
         constants: reflection_class_constants(),

@@ -19,6 +19,20 @@ pub struct CompileError {
     pub file: Option<String>,
     pub message: String,
     pub related: Vec<CompileError>,
+    pub kind: CompileErrorKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The class of a compile error, for consumers that must react to one class specifically.
+pub enum CompileErrorKind {
+    /// Every diagnostic without a more specific class.
+    #[default]
+    General,
+    /// A builtin argument that AOT compilation needs as a compile-time literal was not one.
+    ///
+    /// The backend reads such an argument while lowering the call (a result-shape flag, a
+    /// constant or class name), so no spelling of the call can defer it to run time.
+    AotLiteralRequired,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +50,15 @@ impl CompileError {
             file: None,
             message: message.to_string(),
             related: Vec::new(),
+            kind: CompileErrorKind::General,
+        }
+    }
+
+    /// Creates the error for a builtin argument that must be a compile-time literal in AOT mode.
+    pub fn aot_literal_required(span: Span, message: &str) -> Self {
+        Self {
+            kind: CompileErrorKind::AotLiteralRequired,
+            ..Self::new(span, message)
         }
     }
 

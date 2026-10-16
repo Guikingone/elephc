@@ -8,7 +8,7 @@
 //! Key details:
 //! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
 
-use crate::errors::CompileError;
+use crate::errors::{CompileError, CompileErrorKind};
 use crate::names::{php_symbol_key, Name};
 use crate::numeric_string::scan_numeric_prefix;
 use crate::parser::ast::{
@@ -349,6 +349,21 @@ impl Checker {
             InstanceOfTarget::Name(name) => {
                 self.resolve_instanceof_target_name(name, expr.span)?;
             }
+            // Instantiation rewrites a generic target to the class it names before this
+            // checker runs; one arriving here means no template answered it.
+            InstanceOfTarget::Generic(class_type) => {
+                return Err(CompileError::new(
+                    expr.span,
+                    &format!(
+                        "'{}' is written with type arguments but declares no type parameters",
+                        match class_type {
+                            crate::parser::ast::TypeExpr::GenericClass { name, .. } =>
+                                name.as_str().to_string(),
+                            other => crate::generics::describe_type(other),
+                        }
+                    ),
+                ));
+            }
             InstanceOfTarget::Expr(target_expr) => {
                 self.infer_type(target_expr, env)?;
             }
@@ -590,7 +605,7 @@ impl Checker {
             }
             return Err(CompileError::new(
                 expr.span,
-                &format!("Cannot call ${} — not a callable (got {:?})", var, var_ty),
+                &format!("Cannot call ${} — not a callable (got {})", var, var_ty),
             ));
         }
         if let Some(sig) = self.callable_sigs.get(var).cloned() {
@@ -793,7 +808,7 @@ impl Checker {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
-                    "Cannot call expression — not a callable (got {:?})",
+                    "Cannot call expression — not a callable (got {})",
                     callee_ty
                 ),
             ));
@@ -1104,8 +1119,20 @@ impl Checker {
         }
         // Ask the builtin contract at this first-class call site so argument-dependent results
         // such as array_slice preserve their checked storage layout.
-        let Ok(Some(result)) = self.check_builtin(name.as_str(), args, span, env) else {
-            return Ok(None);
+        let result = match self.check_builtin(name.as_str(), args, span, env) {
+            Ok(Some(result)) => result,
+            Ok(None) => return Ok(None),
+            // An argument the backend needs as a compile-time literal (a `preserve_keys` flag,
+            // a constant name) is needed by every lowering of this callee: the direct call
+            // refuses it in codegen and the callable wrapper drops or misreads it. Report it
+            // here, with the diagnostic the direct call already gives.
+            Err(error) if error.kind == CompileErrorKind::AotLiteralRequired => {
+                return Err(error);
+            }
+            // Any other rejection is the direct call's own view of its arguments, which can be
+            // narrower than the callable ABI: `$f = array_reverse(...); $f($mixed)` compiles and
+            // runs although `array_reverse($mixed)` is refused. The generic path decides.
+            Err(_) => return Ok(None),
         };
         self.first_class_builtin_call_types.insert(span, result.clone());
         Ok(Some(result))
@@ -1135,7 +1162,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: Span,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => self
                 .resolve_callable_array_class_name(name.as_str())
                 .map(str::to_string)
@@ -1305,7 +1341,7 @@ impl Checker {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
-                    "Pipe operator right-hand side must be a callable, got {:?}",
+                    "Pipe operator right-hand side must be a callable, got {}",
                     callable_ty
                 ),
             ));
@@ -1620,7 +1656,14 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
         PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Mixed
-    ) || checker.is_union_with_mixed_int_dispatch(ty)
+    )
+        // `int|float` is what an incremented integer local carries, and `$i & $mask` on one is
+        // ordinary PHP: the float side converts to int, exactly as it does for a `mixed` operand,
+        // which this already accepts. `type_supports_mixed_int_dispatch` deliberately excludes
+        // `Float` — integer-only dispatch is narrower — so the arithmetic union has to be named
+        // here rather than admitted there, where it would widen ordering too.
+        || ty.is_int_float_union()
+        || checker.is_union_with_mixed_int_dispatch(ty)
 }
 
 /// Returns `true` if `ty` uses mixed numeric dispatch — i.e., the result type

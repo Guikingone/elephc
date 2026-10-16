@@ -13,7 +13,7 @@ use super::*;
 fn expect_pdo_error(src: &str, expected_substr: &str) {
     let tokens = tokenize(src).expect("PDO diagnostic fixture must tokenize");
     let ast = parse(&tokens).expect("PDO diagnostic fixture must parse");
-    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::autoload::collect_aliases(ast).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).expect("PDO fixture names must resolve");
@@ -929,6 +929,31 @@ fn test_malformed_declarator_lists_are_rejected() {
     );
 }
 
+/// Verifies a redeclared constant names the kind of type that declares it (issue #1141).
+///
+/// The class-like body parser passed a hardcoded `"class"` for every owner, so a trait or an enum
+/// reported `Cannot redeclare class constant`; only the interface parser named its own kind. The
+/// duplicate is reported whether it repeats a whole `const` or sits inside one declarator list.
+#[test]
+fn test_constant_redeclaration_names_the_declaring_kind() {
+    expect_error(
+        "<?php class K { const A = 1; const A = 2; }",
+        "Cannot redeclare class constant A",
+    );
+    expect_error(
+        "<?php trait T { const A = 1, A = 2; }",
+        "Cannot redeclare trait constant A",
+    );
+    expect_error(
+        "<?php enum E { case X; const A = 1; const A = 2; }",
+        "Cannot redeclare enum constant A",
+    );
+    expect_error(
+        "<?php interface I { const A = 1; const A = 2; }",
+        "Cannot redeclare interface constant A",
+    );
+}
+
 /// Verifies PHP-final Exception accessors cannot be overridden by user subclasses.
 #[test]
 fn test_error_cannot_override_final_exception_method() {
@@ -944,5 +969,34 @@ fn test_error_cannot_override_final_exception_get_code() {
     expect_error(
         "<?php class CustomCodeException extends Exception { public function getCode(): int { return 0; } }",
         "Cannot override final method Exception::getCode",
+    );
+}
+
+/// Verifies a source class that merely shares the name of the compiler-injected `PDOException`
+/// gets no exemption: its real spans keep it off the prelude's SQLSTATE `getCode()` hatch, so
+/// overriding `getCode()` still reports `Exception` as the declaring class of the final method.
+#[test]
+fn test_error_user_pdo_exception_cannot_override_final_get_code() {
+    expect_error(
+        "<?php class PDOException extends Exception { public function getCode(): string|int { return 'HY000'; } }",
+        "Cannot override final method Exception::getCode",
+    );
+    expect_error(
+        "<?php namespace App; class PDOException extends \\Exception { public function getCode(): string|int { return 'HY000'; } }",
+        "Cannot override final method Exception::getCode",
+    );
+}
+
+/// Verifies `Error` shares the final Throwable accessors with `Exception`, and the diagnostic
+/// names `Error` as the declaring class, also for a subclass reached through `TypeError`.
+#[test]
+fn test_error_cannot_override_final_error_methods() {
+    expect_error(
+        "<?php class AppError extends Error { public function getMessage(): string { return 'custom'; } }",
+        "Cannot override final method Error::getMessage",
+    );
+    expect_error(
+        "<?php class AppTypeError extends TypeError { public function getPrevious(): ?Throwable { return null; } }",
+        "Cannot override final method Error::getPrevious",
     );
 }

@@ -296,12 +296,34 @@ those locations again. `elephc --print-capabilities` lists every archive this
 binary can need.
 ```
 
+When the override directory does hold an entry by that name but it is not a
+usable archive (an empty file, a directory, or a symbolic link, dangling or not),
+the error names that entry in `needs:` and says to replace it rather than to put
+the archive there:
+
+```
+Linker error: required Elephc bridge `elephc_web` could not be found
+  needs: /opt/stage/lib/libelephc_web.a
+  looked in:
+    /opt/stage/lib
+
+ELEPHC_WEB_LIB_DIR is set to /opt/stage/lib, which takes priority over every
+other location, so no other directory was consulted. Replace invalid archive
+/opt/stage/lib/libelephc_web.a with a non-empty regular file, point
+ELEPHC_WEB_LIB_DIR to a directory containing a valid libelephc_web.a, or unset
+ELEPHC_WEB_LIB_DIR to search the other locations again. `elephc
+--print-capabilities` lists every archive this binary can need.
+```
+
 When an exact archive path in the link plan is missing, empty, a directory, or
 a symbolic link, the error names that path in `needs:` and omits `looked in:`.
 The exact-path plan does not run the fallback search.
 An invalid archive found by fallback discovery also names its path, and retains
 the locations reached before it was found. The error tells you to replace the
-invalid file or point the directory override at a valid archive.
+invalid file or point the directory override at a valid archive. Discovery
+checks each candidate without following symbolic links, so a dangling link where
+an archive belongs stops the search and is reported this way instead of being
+skipped.
 
 #### The `eval()` bridge has two archive names
 
@@ -375,10 +397,11 @@ Dead stripping removes unreachable *code*. Stripping removes the *names* of the
 code that stays. The two are independent: the first changes what runs, the
 second changes only what the file says about itself.
 
-A linked **executable** is stripped of its symbol table. Nothing in a compiled
-program reads those names — `Throwable::getTrace()` and `getTraceAsString()` are
-not implemented, and the uncaught-exception report prints no stack trace — so
-they are dead weight at run time, and they are roughly a quarter of the file:
+A linked **executable** is stripped of its symbol table. Runtime introspection
+uses compiler-emitted descriptors rather than linker symbol names.
+`Throwable::getTrace()` and `getTraceAsString()` currently return an empty array
+and string, and the uncaught-exception report prints no stack trace. The linker
+names are unnecessary at run time and are roughly a quarter of the file:
 
 | program | linked | stripped |
 |---|--:|--:|

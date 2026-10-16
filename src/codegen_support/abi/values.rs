@@ -264,11 +264,11 @@ pub fn emit_branch_if_equal_wide(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
             emitter.instruction("b.ne 1f");                                     // skip the transfer when the previous compare was unequal
-            emitter.instruction(&format!("b {label}"));                        // take the equal edge with the wider branch range
+            emitter.instruction(&format!("b {label}"));                         // take the equal edge with the wider branch range
             emitter.label("1");                                                // resume after the conditional transfer
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("je {label}"));                       // x86_64 conditional branches already cover the generated function size
+            emitter.instruction(&format!("je {label}"));                        // x86_64 conditional branches already cover the generated function size
         }
     }
 }

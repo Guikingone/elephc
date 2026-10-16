@@ -19,14 +19,37 @@ elephc [OPTIONS] <source-file>
 elephc --version
 elephc native <COMMAND> [OPTIONS]
 elephc monitor <PROGRAM> [OPTIONS]
+elephc repl [OPTIONS]
 ```
 
-Except for `--help` and `--version`, exactly one positional argument is required:
+For compilation, except for `--help` and `--version`, exactly one positional argument is required:
 the path to tagged `.php` or tagless `.lfc` source. The binary is written next
 to it, named after the source without its extension.
-Only an exact first argument of `native` or `monitor` selects a subcommand
-family. A source file literally named `native` or `monitor` must therefore be
-passed as `./native` or by another explicit path.
+Only an exact first argument of `native`, `monitor`, or `repl` selects a subcommand
+family. Source files with those names must use an explicit path such as `./repl`.
+
+## Interactive REPL
+
+`elephc repl` starts a persistent dynamic-eval session with parser-driven multiline
+input, expression results, line editing, and history. The native host is compiled
+on first use and reused from the existing per-user cache root. See
+[Interactive REPL](repl.md) for session semantics, errors, and cache invalidation.
+
+| Option | Meaning |
+|---|---|
+| `--php-version VERSION` | Select the PHP profile; otherwise use project detection. Also accepts `--php-version=VERSION`. |
+| `--strict-php` | Hide elephc extension builtins in evaluated code. |
+| `--with-<capability>` | Enable an optional eval capability at host build time. Web and monitoring modes are unavailable. |
+| `--ini KEY=VALUE` | Override project INI settings; repeatable, last value wins. Also accepts `--ini=KEY=VALUE`. Nonempty `opcache.preload` is unsupported. |
+| `--heap-size=BYTES` | Set session heap size, using the compiler's normal limits/default. |
+| `--heap-debug`, `--gc-stats` | Enable normal runtime heap diagnostics or GC statistics. |
+| `--no-history` | Disable history loading and persistence. |
+| `--quiet`, `-q` | Hide the banner and host-build notice. |
+| `--help`, `-h` | Show REPL usage without building a host. |
+
+The session runs on the current supported desktop host, so `--target` and artifact
+output modes are not accepted. Piped input uses the same session semantics without
+prompts or history.
 
 ## Native dependency commands
 
@@ -439,9 +462,9 @@ Elephc CLI process, not a signed iOS application bundle.
 
 | Flag | Values | Default | Env override | Description |
 |---|---|---|---|---|
-| `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the EIR optimization passes: identity folding, peepholes, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, and the cross-function small-function inliner — run to a module-level fixed point. |
+| `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the EIR optimization passes in `src/ir_passes/`, including scalar promotion, canonical loop optimization, integer range analysis, concat scratch-state optimization, and the cross-function small-function inliner, run to a module-level fixed point. |
 | `--no-ir-opt` | — | — | `ELEPHC_IR_OPT=off` | Shorthand for `--ir-opt=off`. |
-| `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
+| `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan with cost-aware constant rematerialization, or stack-only fallback. |
 | `--null-repr=sentinel\|tagged` | `sentinel`, `tagged` | `tagged` | `ELEPHC_NULL_REPR` | Representation for null-capable scalar slots. |
 
 See [Optimization and codegen controls](optimization.md).
@@ -485,6 +508,10 @@ physical PHP-mode file:
   `function_exists()` returns `false` for them, calling one is an undefined
   function (the diagnostic names the disabled extension), and user code may
   declare its own functions with those names;
+- first-class callable and pipe targets carry the same disabled-extension hint as direct
+  calls. In PHP-mode source, a user-defined `is_real()` is not treated as the hidden
+  builtin's float type guard; LFC source retains the extension guard. Type narrowing
+  and mixed-storage warnings follow the guarded statement's file mode, not its caller;
 - names prefixed with `__elephc_` are reserved for the compiler and rejected in
   user code.
 
@@ -759,6 +786,40 @@ PHP's parsed fallback value. Runtime mutation of Core response defaults and raw
 encoding inheritance remains incomplete. The environment overrides below remain
 specific to the documented OPcache keys.
 
+### In the project file
+
+A project can state its directives once, in the `[ini]` table of its
+`elephc.toml`, instead of on every compile:
+
+```toml
+[ini]
+"opcache.enable_cli" = true
+"opcache.jit" = "tracing"
+"opcache.memory_consumption" = 256
+```
+
+elephc reads the nearest `elephc.toml` above the compiled PHP file, the same
+file [native dependencies](native-dependencies.md#project-discovery-and-files)
+use, on every compile. Each entry becomes one `--ini KEY=VALUE`, with the value
+spelled as a `php.ini` line would give it: a string as written, a number in
+decimal, `true` as `1` and `false` as the empty string. A TOML number is taken
+for its value, not its spelling (`0x10` becomes `16`, `1.0` becomes `1`); quote
+a value to hand the directive exact text. A dotted name may be quoted, written
+bare (`opcache.enable_cli = true`), or split into a sub-table
+(`[ini.opcache]` then `enable_cli = true`); all three name the same directive.
+
+These fail the compile, with a message naming the file:
+
+- a directive named twice in the file, under any two spellings;
+- a value with no INI equivalent: an array, a date, `inf` or `nan`;
+- a file that is not valid TOML, whatever section is broken;
+- a file the project search refuses, such as a symlinked `elephc.toml`.
+
+A `--ini` on the command line wins over the file for the same directive. String
+values are passed through unchanged, so a relative path means what it means
+with `--ini`. `examples/project-ini` is a program compiled this way; it prints
+what PHP prints with the same values given as `-d` flags.
+
 ### Runtime overrides: `ELEPHC_INI_*`
 
 Once a binary is built, a directive can still be re-pointed for a single run
@@ -796,8 +857,8 @@ for one set to nothing — but the override reads its value through a string cas
 and both arrive as `""` on the other side of it.
 
 **Which directives are overridable at run time.** Only the ones elephc merely
-*reports*. Ten `opcache.*` directives are consumed at compile time to bake code
-or baked constants, and honoring them on the reporting surface alone would
+*reports*. Seventeen `opcache.*` directives are consumed at compile time to bake
+code or baked constants, and honoring them on the reporting surface alone would
 produce a binary that contradicts itself (`ini_get('opcache.enable_cli') === '1'`
 next to an `opcache_get_status()` that still returns `false`). Their environment
 variables are ignored; use `--ini` for them instead:
@@ -805,9 +866,19 @@ variables are ignored; use `--ini` for them instead:
 `opcache.enable`, `opcache.enable_cli`, `opcache.memory_consumption`,
 `opcache.interned_strings_buffer`, `opcache.max_accelerated_files`,
 `opcache.revalidate_freq`, `opcache.jit`, `opcache.jit_buffer_size`,
-`opcache.restrict_api`, `opcache.preload`.
+`opcache.restrict_api`, `opcache.preload`, `opcache.validate_timestamps`,
+`opcache.max_file_size`, `opcache.file_update_protection`,
+`opcache.blacklist_filename`, `opcache.file_cache`,
+`opcache.file_cache_read_only` (8.5 only), `opcache.log_verbosity_level`,
+`opcache.error_log`.
 
-The other 44 directives of the PHP 8.5 set are runtime-overridable.
+The last eight govern the
+[runtime script cache](../php/opcache.md#the-runtime-script-cache), the
+[blacklist](../php/opcache.md#opcacheblacklist_filename) it consults, and the
+[`opcache.file_cache` startup validation](../php/opcache.md#opcachefile_cache),
+which can refuse to run — so they bake behavior, not just a report.
+
+The other 36 directives of the PHP 8.5 set are runtime-overridable.
 
 > **Not PHP parity — an elephc extension.** Reference PHP has *no*
 > per-directive environment override. Its only environment mechanisms are
@@ -822,6 +893,7 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `--timings` | — | off | Print per-phase compiler timings to stderr. |
+| `--report-generics` | — | off | Print a per-template summary of monomorphized generic instantiations to stderr: the total count, then each template's instantiation count and names (e.g. `class x2 Box [Box<int>, Box<string>]`), followed by the shape-oracle section, which lowers every surviving candidate into an isolated emitter and counts the dispatch slots whose emitted bodies are identical — the same comparison the emission-time fold uses to share one body behind a jump. Diagnostic only; it changes nothing in the emitted program. |
 | `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
 | `--counters` | — | off | Embed one BSS call counter per PHP function (a single prologue increment) and print exact `elephc-counters: <name> <count>` lines to stderr at exit. A fully inlined call site keeps its counter at zero, which makes inlining visible by difference. |

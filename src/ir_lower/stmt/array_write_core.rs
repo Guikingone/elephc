@@ -96,25 +96,50 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
-    let key_already_diagnosed = compound_array_write_value_reads_target(array, index, value, span);
-    lower_array_assign_with_diagnosed_key(ctx, array, index, value, span, key_already_diagnosed);
+    let update = desugared_element_update(value, span, |read| {
+        reads_local_array_element(read, array, index)
+    });
+    if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
+        crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+        return;
+    }
+    lower_array_assign_with_diagnosed_key(ctx, array, index, value, span, update.is_some());
 }
 
-/// Detects a desugared compound write whose value already read the same array dimension.
-pub(crate) fn compound_array_write_value_reads_target(
-    array: &str,
-    index: &Expr,
-    value: &Expr,
+/// How a statement value produced by the parser's update desugaring re-reads its own target.
+///
+/// `$place[$k] op= $v` is written as `$place[$k] op $v` and `$place[$k] ??= $v` as
+/// `$place[$k] ?? $v`, both built with the statement's own span. A right-hand side the user
+/// wrote never carries that span, so `$a[$k] = $a[$k] + 1` stays two separate PHP accesses.
+pub(crate) enum ElementUpdate<'a> {
+    /// A compound operator. The value already read the element, so the write reuses the key
+    /// that read converted instead of diagnosing a float key a second time.
+    Compound,
+    /// A null-coalescing assignment. `read` probes the element, and `default` is written only
+    /// when that probe produced null, as PHP does.
+    NullCoalesce { read: &'a Expr, default: &'a Expr },
+}
+
+/// Classifies a statement value that re-reads the element the statement writes.
+pub(crate) fn desugared_element_update<'a>(
+    value: &'a Expr,
     assignment_span: Span,
-) -> bool {
+    reads_target: impl Fn(&Expr) -> bool,
+) -> Option<ElementUpdate<'a>> {
     if value.span != assignment_span {
-        return false;
+        return None;
     }
-    let read = match &value.kind {
-        ExprKind::BinaryOp { left, .. } => left.as_ref(),
-        ExprKind::NullCoalesce { value, .. } => value.as_ref(),
-        _ => return false,
-    };
+    match &value.kind {
+        ExprKind::BinaryOp { left, .. } if reads_target(left) => Some(ElementUpdate::Compound),
+        ExprKind::NullCoalesce { value: read, default } if reads_target(read) => {
+            Some(ElementUpdate::NullCoalesce { read, default })
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether `read` is the element `$array[index]` of the named local.
+fn reads_local_array_element(read: &Expr, array: &str, index: &Expr) -> bool {
     matches!(
         &read.kind,
         ExprKind::ArrayAccess { array: receiver, index: read_index }
@@ -138,7 +163,7 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         array_value.ir_type,
         IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
     ) {
-        lower_boxed_array_local_set(ctx, array_value, index, value, span);
+        lower_boxed_array_local_set(ctx, array_value, index, value, span, key_already_diagnosed);
         return;
     }
     let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
@@ -212,12 +237,15 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
 
 /// Roots and retires operands borrowed by the boxed writer, including on same-frame catches.
 /// The backend copies strings and retains other payloads in a separate consumed box.
+/// `key_already_diagnosed` marks the write half of a compound update, whose read already
+/// reported a float key's conversion, so the boxed writer rebuilds the key silently.
 fn lower_boxed_array_local_set(
     ctx: &mut LoweringContext<'_, '_>,
     array: LoweredValue,
     index: &Expr,
     value: &Expr,
     span: Span,
+    key_already_diagnosed: bool,
 ) {
     let mut roots = Vec::new();
     let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
@@ -237,7 +265,7 @@ fn lower_boxed_array_local_set(
     ctx.emit_void(
         Op::RuntimeCall,
         vec![array.value, index.value, value.value],
-        None,
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
         Op::RuntimeCall.default_effects(),
         Some(span),
     );

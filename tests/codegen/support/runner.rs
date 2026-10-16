@@ -466,6 +466,20 @@ pub(crate) fn ensure_cli_bridge_staticlibs(actual_link_libs: &[&str]) {
     ensure_bridge_staticlibs(actual_link_libs, &bridge_staticlib_dir());
 }
 
+/// Pins CLI subprocesses to the same trusted archives used by archived test fixtures.
+/// Explicit linker overrides avoid comparing build-job artifacts with newer checkout
+/// timestamps. Ordinary local runs retain the compiler's source freshness checks.
+pub(crate) fn configure_prebuilt_cli_bridges(command: &mut Command) {
+    if !prebuilt_bridge_staticlibs_are_trusted() {
+        return;
+    }
+    let directory = bridge_staticlib_dir().canonicalize()
+        .expect("resolve prebuilt CLI bridge directory");
+    for bridge in TEST_BRIDGE_STATICLIBS {
+        command.env(format!("{}_LIB_DIR", bridge.lib_name.to_ascii_uppercase()), &directory);
+    }
+}
+
 /// Builds (or reuses, if fresh) the curl-aware magician archive a fixture that links BOTH
 /// `elephc_magician` (it calls `eval()`) and `elephc_curl` (it uses the curl surface, inside
 /// or outside eval) needs. Mirrors the production fix in `src/linker/bridges.rs`'s
@@ -1398,6 +1412,23 @@ pub(crate) fn run_binary_with_env(
     dir: &Path,
     env: &[(&str, &std::ffi::OsStr)],
 ) -> Output {
+    run_binary_with_env_and_args(bin_path, dir, env, &[])
+}
+
+/// Runs a compiled binary with extra command-line arguments after the program name, so the
+/// program starts with `$argc == 1 + args.len()`.
+pub(crate) fn run_binary_with_args(bin_path: &Path, dir: &Path, args: &[&str]) -> Output {
+    run_binary_with_env_and_args(bin_path, dir, &[], args)
+}
+
+/// Runs a compiled binary with environment overrides and extra command-line arguments, using
+/// qemu for cross-architecture Linux AArch64 fixtures when required.
+fn run_binary_with_env_and_args(
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
+) -> Output {
     let mut output = if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
@@ -1406,14 +1437,14 @@ pub(crate) fn run_binary_with_env(
         if let Some(sysroot) = qemu_sysroot() {
             cmd.args(["-L", sysroot]);
         }
-        cmd.arg(bin_path).current_dir(dir).envs(env.iter().copied());
+        cmd.arg(bin_path).args(args).current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
     } else {
         let mut cmd = Command::new(bin_path);
-        cmd.current_dir(dir).envs(env.iter().copied());
+        cmd.args(args).current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
     };
-    append_macos_signal_diagnostics(&mut output, bin_path, dir, env);
+    append_macos_signal_diagnostics(&mut output, bin_path, dir, env, args);
     output
 }
 
@@ -1424,6 +1455,7 @@ fn append_macos_signal_diagnostics(
     bin_path: &Path,
     dir: &Path,
     env: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
 ) {
     use std::os::unix::process::ExitStatusExt as _;
 
@@ -1463,6 +1495,7 @@ fn append_macos_signal_diagnostics(
         "--",
     ])
     .arg(bin_path)
+    .args(args)
     .current_dir(dir)
     .envs(env.iter().copied());
     let diagnostic = run_command_with_timeout(cmd);
@@ -1481,6 +1514,7 @@ fn append_macos_signal_diagnostics(
     _bin_path: &Path,
     _dir: &Path,
     _env: &[(&str, &std::ffi::OsStr)],
+    _args: &[&str],
 ) {
 }
 
@@ -1662,6 +1696,47 @@ pub(crate) fn assemble_and_run_capture(
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
     }
+}
+
+/// Assembles and links a fixture ONCE, then runs the binary once per argument vector and
+/// captures every run, without asserting success.
+///
+/// Every other runner starts the program with no arguments, so `$argc` is always 1 and a fixture
+/// whose control flow branches on `$argc` executes only one of its arms. Running the same binary
+/// again with extra arguments executes the others.
+pub(crate) fn assemble_and_run_capture_per_argv(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    argvs
+        .iter()
+        .map(|args| {
+            let output = run_binary_with_args(&bin_path, dir, args);
+            ProgramOutput {
+                stdout: String::from_utf8(output.stdout).unwrap(),
+                stderr: String::from_utf8(output.stderr).unwrap(),
+                success: output.status.success(),
+            }
+        })
+        .collect()
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,

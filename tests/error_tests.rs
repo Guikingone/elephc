@@ -58,7 +58,7 @@ fn check_source_with_defines_and_options(
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
-    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message)?;
     // Mirrors `pipeline::compile`: the hash prelude declares `HashContext` and the
     // `hash_*` context wrappers, and is injected between alias collection and name
     // resolution so a namespaced caller resolves to it. Without this the four
@@ -79,7 +79,14 @@ fn check_source_with_defines_and_options(
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check_with_options(&ast, options).map_err(|e| e.message.clone())?;
+    // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
+    // CLASS is instantiated by that driver, not by the checker, so a plain `check_with_options`
+    // here would hand the checker a template and report `Unknown type: T` in place of whatever
+    // the test is actually about.
+    elephc::generics::monomorphize(ast, |program, bounds| {
+        types::check_with_options_and_bounds(program, options, bounds)
+    })
+    .map_err(|e| e.message.clone())?;
     Ok(())
 }
 
@@ -87,7 +94,7 @@ fn check_source_with_defines_and_options(
 fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::errors::CompileError> {
     let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
     let ast = parse(&tokens)?;
-    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::autoload::collect_aliases(ast)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -96,7 +103,10 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check(&ast)
+    let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {
+        types::check_with_options_and_bounds(program, types::CheckOptions::default(), bounds)
+    })?;
+    Ok(result)
 }
 
 /// Resolves files error for this module.
@@ -261,6 +271,8 @@ fn resolver_error(src: &str) -> elephc::errors::CompileError {
     result.expect_err("expected resolver to fail")
 }
 
+#[path = "support/locals_retype_fixtures.rs"]
+mod locals_retype_fixtures;
 #[path = "error_tests/syntax.rs"]
 mod syntax;
 #[path = "error_tests/recovery.rs"]
@@ -275,6 +287,8 @@ mod reference_detach;
 mod exceptions_enums_magic;
 #[path = "error_tests/classes_traits.rs"]
 mod classes_traits;
+#[path = "error_tests/generics_review.rs"]
+mod generics_review;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
 #[path = "error_tests/strict_php.rs"]
@@ -289,6 +303,8 @@ mod mbstring;
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]
 mod array_builtins;
+#[path = "error_tests/registry_arity.rs"]
+mod registry_arity;
 #[path = "error_tests/callables.rs"]
 mod callables;
 #[path = "error_tests/never.rs"]
@@ -430,6 +446,6 @@ fn test_error_yield_from_rejects_non_generator_call() {
 function not_gen(): int { return 1; }
 function gen() { yield from not_gen(); }
 ",
-        "yield from expects an array literal or Generator, got Int",
+        "yield from expects an array literal or Generator, got int",
     );
 }

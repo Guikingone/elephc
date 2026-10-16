@@ -16,6 +16,7 @@ use super::*;
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
+    pub(super) name: String,
     pub(super) descriptor: *mut c_void,
     pub(super) invoker: NativeFunctionInvoker,
     pub(super) param_count: usize,
@@ -25,6 +26,7 @@ pub struct NativeFunction {
     pub(super) param_by_ref: Vec<bool>,
     pub(super) variadic_index: Option<usize>,
     pub(super) return_type: Option<EvalParameterType>,
+    pub(super) returns_reference: bool,
     pub(super) bridge_supported: bool,
     pub(super) shape: Option<NativeCallableShape>,
 }
@@ -37,6 +39,7 @@ impl NativeFunction {
         param_count: usize,
     ) -> Self {
         Self {
+            name: String::new(),
             descriptor,
             invoker,
             param_count,
@@ -46,9 +49,21 @@ impl NativeFunction {
             param_by_ref: Vec::new(),
             variadic_index: None,
             return_type: None,
+            returns_reference: false,
             bridge_supported: true,
             shape: None,
         }
+    }
+
+    /// Returns the lowercase name this callback was registered under, empty until registered.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns whether the generated registration identifies a compiler-internal declaration.
+    /// Registrations without origin metadata retain user-function semantics.
+    pub fn is_internal(&self) -> bool {
+        self.shape.is_some_and(|shape| shape.is_internal)
     }
 
     /// Returns the visible positional parameter count accepted by this callback.
@@ -156,6 +171,17 @@ impl NativeFunction {
     /// Returns the registered declared return type, if any.
     pub fn return_type(&self) -> Option<&EvalParameterType> {
         self.return_type.as_ref()
+    }
+
+    /// Records that the AOT declaration is `function &name()`.
+    pub fn set_returns_reference(&mut self, returns_reference: bool) {
+        self.returns_reference = returns_reference;
+    }
+
+    /// Returns whether the AOT declaration returns by reference, for
+    /// `ReflectionFunction::returnsReference()`.
+    pub const fn returns_reference(&self) -> bool {
+        self.returns_reference
     }
 
     /// Returns whether eval may dispatch this callback through the generated bridge.

@@ -2,7 +2,7 @@
 title: "mb_substitute_character()"
 description: "Reads or changes the replacement codepoint or mode used for invalid or unrepresentable characters."
 sidebar:
-  order: 887
+  order: 888
 ---
 
 ## mb_substitute_character()

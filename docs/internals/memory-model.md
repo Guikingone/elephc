@@ -42,9 +42,14 @@ This page explains where every value lives in memory at runtime.
 │   globals, static storage)   │  _heap_small_bins, _heap_debug_enabled,
 │                              │  _buffer_registry_free/_next,
 │                              │  _gc_allocs/_frees/_live/_peak,
-│                              │  _gc_collecting/_gc_release_suppressed,
+│                              │  _gc_* lifecycle, timing, and pin state,
 │                              │  _exc_handler_top, _exc_call_frame_top,
-│                              │  _exc_value, _rt_diag_suppression,
+│                              │  _exc_value, _php_*_handler_*,
+│                              │  _magic_set_guard_head,
+│                              │  _rt_diag_suppression, _rt_diag_pending_*,
+│                              │  _php_diagnostic_*,
+│                              │  _rt_unmanaged_ref_borrow_top,
+│                              │  _resource_inventory_head/_tail,
 │                              │  _json_last_error, _json_active_*,
 │                              │  _json_indent_depth, _json_validate_*,
 │                              │  _json_decode_assoc, _json_error_*,
@@ -89,7 +94,7 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
 - Strings take **two slots** (16 bytes): pointer at `[x29, #-offset]`, length at `[x29, #-(offset-8)]`
 - The total frame size is always 16-byte aligned (ARM64 ABI requirement)
 
-On the EIR backend the frame also reserves one save slot per callee-saved register that the linear-scan register allocator uses, and short-lived scalar SSA temporaries may live in registers instead of a stack slot. PHP local variables themselves are still slot-backed as shown above. See [The IR](the-ir.md) for the register allocation pass.
+On the EIR backend the frame also reserves one save slot per callee-saved register that the linear-scan register allocator uses. Eligible scalar PHP locals are promoted to SSA values, so their repeated loads and stores can disappear and loop-carried values can live in registers. The frame still reserves local slots, and address-taken, by-reference, global/static, refcounted, and volatile locals continue to use them. See [The IR](the-ir.md) for scalar promotion and register allocation.
 
 ### Variable allocation
 
@@ -194,6 +199,22 @@ The callee then reads the raw payload word as a Mixed pointer, and the caller's 
 `__rt_decref_mixed` runs on it — measured as a segfault on `var_export($nullableInt)` whether the
 value held an integer or null (#1040). The same shape is worth checking at any other match arm
 that treats a union as boxed.
+
+The per-class property descriptors the runtime walkers read (`_class_vd_desc_*` for `var_dump`,
+`_class_prop_desc_*` for `print_r`/`var_export`, `_class_json_desc_*`, `_class_serprop_*` for
+`serialize`/`unserialize`/`get_object_vars`/`(array)`, and `_class_serpdiag_*` for the
+`unserialize` hydration type guard) had the same hole: a `?int` property got
+the union's static tag 7, so every walker dereferenced the integer payload as a Mixed cell
+pointer (#1503). No static tag can describe that slot, because its tag is only known at run
+time, so those descriptors carry `TAGGED_SCALAR_PROPERTY_TAG` (12) instead, and each walker
+replaces it with the slot's high word before dispatching
+(`emit_resolve_tagged_scalar_property_tag`). `unserialize` writes the `{payload, tag}` pair
+back into such a slot, and `__rt_obj_store_prop` first consults the parallel `_class_serpdiag_*`
+row: it rejects a boxed tag the declared type does not accept with PHP's catchable `TypeError`,
+and rewrites an accepted `int` into a `float` only when the declared type includes
+`float` but not `int`; an `int|float` slot keeps the integer. The GC descriptor
+(`_class_gc_desc_*`) records the slot as `0`: it owns
+no heap reference, and tag 7 there had handed the payload to decref, clone and cycle marking.
 
 ### Pointer values
 
@@ -609,11 +630,11 @@ call, even when the return-alias summary is conservative. Returning a raw
 The runtime routine `__rt_heap_alloc`:
 
 1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.
-2. **Walk the general free list** — if no cached small block fits, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it so the remainder stays on the free list, then reset the allocated block's refcount to 1 and return it.
+2. **Walk the general free list** — if no cached small block fits, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it. A split remainder with payload up to 64 bytes enters the same small-bin class as an ordinary freed block; a larger remainder stays in address order on the general free list. Then reset the allocated block's refcount to 1 and return it.
 3. **Bump allocate** — if neither free path fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
 4. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
 
-Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed).
+Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed). A split requires room for a new 16-byte header and at least eight payload bytes. Its free header has reference count and kind zero and belongs to exactly one chain. Moving that already-free remainder into a bin does not count as an allocation or free and does not change live bytes. `gc_mem_caches()` drains these entries through the existing coalescing path, including tail trimming, without adding free events.
 
 ### How heap freeing works
 
@@ -787,9 +808,9 @@ The query-construction removal primitive, `__rt_mbstring_query_hash_remove`, pin
 
 `__rt_mbstring_query_hash_enter` returns one lifetime pin on a writable child hash. It preserves a unique child reached through unique ordinary Mixed boxes, excluding existing lifetime pins from PHP ownership. A shared box, shared child, or active write-guard borrow requires a shallow child copy. Persistent PHP reference wrappers are replaced by empty arrays for query entry; they are not traversed as ordinary storage. Dense children are promoted to hashes with retained contents. Replacements use `__rt_mbstring_query_hash_store_array`, the owned-array entry into the shared guarded construction writer. The child is pinned before old-value destruction, and its cursor remains valid after parent retargeting or pending cleanup. The caller must release that returned pin, including after status two.
 
-`__rt_mbstring_query_register` forwards the V5 host's normalized field plan to the shared Rust `elephc_mbstring_query_apply_v1` executor with a versioned native storage table. The executor transfers each newly pinned child before releasing its parent cursor. A failed append probe stops the field before any later nesting-limit removal. For root removal, it first releases the nested cursor, then resolves the writer's live root again so destructor retargeting remains visible. It reports nesting overflow only when that removal instruction is reached. Pending exceptions preserve completed mutations and are returned after every published cursor is released through protected cleanup; fatal storage statuses stop execution. Root selection ignores non-array values and reports unsupported shared indexed promotion as a failure. The native callback remains an internal integration boundary until the public query configuration and output-lvalue adapters are complete.
+`__rt_mbstring_query_register` forwards the V5 host's normalized field plan to the shared Rust `elephc_mbstring_query_apply_v1` executor with a versioned native storage table. The executor transfers each newly pinned child before releasing its parent cursor. A failed append probe stops the field before any later nesting-limit removal. For root removal, it first releases the nested cursor, then resolves the writer's live root again so destructor retargeting remains visible. It reports nesting overflow only when that removal instruction is reached. Pending exceptions preserve completed mutations and are returned after every published cursor is released through protected cleanup; fatal storage statuses stop execution. Root selection ignores non-array values and reports unsupported shared indexed promotion as a failure. Public `mb_parse_str()` reaches this callback through the native and eval query adapters; unsupported output-reference shapes fail before the shared executor mutates caller storage.
 
-The complete native query host is `__rt_mbstring_query_invoke`. Its V5 table shares argument cloning/pinning, destructive reference initialization, diagnostics, result materialization, and request-lifetime adoption of displaced values with the V4 capture host. `MbNativeQueryV1` begins with the existing 16-byte capture state, followed by an independent policy context and configuration/filter pointers. The caller keeps this 40-byte record and its context alive and immutable through the call, except for the capture prefix's displaced-owner slot. A missing configuration callback disables query output before argument cloning or initialization; an absent filter selects identity filtering. Configuration and filtering receive their policy context, while ordinary value callbacks retain the original eval context. Owned policy-result leases must be compatible with the native host's existing release callback; static borrowed bytes can use a null owner. The non-unwinding invocation returns value/status/length/kind after cleanup. `__rt_mbstring_query_native` propagates a pending PHP exception only after that shared call returns. Public INI routing, caller argument guards, and PHP lvalue binding remain separate integration requirements.
+The complete native query host is `__rt_mbstring_query_invoke`. Its V5 table shares argument cloning/pinning, destructive reference initialization, diagnostics, result materialization, and request-lifetime adoption of displaced values with the V4 capture host. `MbNativeQueryV1` begins with the existing 16-byte capture state, followed by an independent policy context and configuration/filter pointers. The caller keeps this 40-byte record and its context alive and immutable through the call, except for the capture prefix's displaced-owner slot. A missing configuration callback disables query output before argument cloning or initialization; an absent filter selects identity filtering. Configuration and filtering receive their policy context, while ordinary value callbacks retain the original eval context. Owned policy-result leases must be compatible with the native host's existing release callback; static borrowed bytes can use a null owner. The non-unwinding invocation returns value/status/length/kind after cleanup. `__rt_mbstring_query_native` propagates a pending PHP exception only after that shared call returns. Public INI routing supplies the live query settings, the shared contract enforces argument guards, and the AOT or eval lvalue adapter publishes the resulting array into supported reference storage.
 
 ### Entries (64 bytes each)
 
@@ -943,6 +964,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>` — per-class JSON descriptors used by object encoding and JsonSerializable dispatch
 - `_class_tostring_count`, `_class_tostring_ptrs` — dense per-class `__toString` method table used by runtime string coercions of boxed `mixed` objects
 - `_class_iface_method_count` (plus per-interface method tables), `_class_serprop_declaring_ptrs`, `_class_serprop_declaring_missing`, `_class_serprop_declaring_<id>` — interface-method ordering and property declaring-class tables used by `get_object_vars()` visibility filtering and object-to-array projection
+- `_class_serpdiag_ptrs`, `_class_serpdiag_<id>`, `_class_serpdiag_missing`, `_class_serpsuffix_<id>_<slot>` — per-class serialize-property hydration guard read by `__rt_obj_store_prop`: the declared-type message suffix, the set of accepted boxed value tags, and the flag to widen an accepted `int` into a `float`
 - `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — per-class PHP attribute metadata emitted from `ClassInfo`; current helper and Reflection APIs materialize supported static lookups during codegen instead of performing dynamic runtime class/member lookup
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual tables used for inherited instance-method dispatch
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used for late static binding
@@ -955,6 +977,31 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_elephc_bcmath_add_fn`, `_elephc_bcmath_sub_fn`, `_elephc_bcmath_mul_fn`, `_elephc_bcmath_div_fn`, `_elephc_bcmath_mod_fn`, `_elephc_bcmath_divmod_fn`, `_elephc_bcmath_pow_fn`, `_elephc_bcmath_powmod_fn`, `_elephc_bcmath_sqrt_fn`, `_elephc_bcmath_comp_fn`, `_elephc_bcmath_ceil_fn`, `_elephc_bcmath_floor_fn`, `_elephc_bcmath_round_fn`, `_elephc_bcmath_get_scale_fn`, `_elephc_bcmath_set_scale_fn`, `_elephc_bcmath_last_error_fn`, `_elephc_bcmath_free_fn` — late-bound decimal bridge entry points shared by arithmetic lowering and error/result marshalling
 - `_elephc_iconv_call_fn`, `_elephc_iconv_release_fn`, and `_elephc_curl_*_fn`: late-bound character-set conversion and curl easy, multi, share, callback, and multipart bridge entry points
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
+
+### Request and cleanup metadata
+
+The fixed runtime also reserves the following BSS metadata. Every symbol in
+this table occupies 8 bytes; queue nodes, handler-stack entries, and temporary
+values themselves live on the heap. These slots supplement the scratch buffers
+and heap counters described above.
+
+| Symbols | Purpose |
+|---|---|
+| `_mbstring_catalog_array` | Cached native mbstring catalog array |
+| `_mbstring_deferred_capture_head`, `_mbstring_deferred_capture_tail`, `_mbstring_deferred_capture_draining` | Deferred capture queue and its reentrancy guard |
+| `_mbstring_ini_native_active` | Native mbstring INI-state activation marker |
+| `_unser_temporaries` | Temporary-value cleanup state for unserialization |
+| `_elephc_eval_ob_release_fn` | Eval output-handler retirement callback, including owned Throwable output |
+| `_php_backtrace_next_line` | Source line for the next native backtrace frame |
+| `_gc_pending_throw` | Pending exception escaping cycle-collector cleanup |
+| `_hash_write_guard_top` | Active hash-mutation cleanup guard chain |
+| `_gc_runs`, `_gc_collected` | Productive collection count and cumulative collected nodes |
+| `_gc_application_started`, `_gc_collector_started`, `_gc_free_started`, `_gc_destructor_started` | Start timestamps for application and collection phases |
+| `_gc_collector_time`, `_gc_destructor_time`, `_gc_free_time`, `_gc_destructor_depth` | Accumulated phase durations and nested destructor depth |
+| `_php_error_handler_value`, `_php_error_handler_callable`, `_php_error_handler_mask` | Original PHP handler value, normalized callable, and accepted error levels |
+| `_php_error_handler_context`, `_php_error_handler_context_release`, `_php_error_handler_stack` | Eval handler context, its release callback, and prior error-handler registrations |
+| `_php_exception_handler_value`, `_php_exception_handler_callable` | Original PHP exception-handler value and normalized callable |
+| `_php_exception_handler_context`, `_php_exception_handler_context_release`, `_php_exception_handler_stack` | Eval handler context, its release callback, and prior exception-handler registrations |
 
 ### Global variables
 
@@ -1016,16 +1063,18 @@ Converting a boxed `Mixed` value into a concrete scalar, string, or object prope
 | print_r capture | `_print_r_buf` = 64KB; `_print_r_mode`, `_print_r_off` = 8 bytes each | `print_r($value, true)` renders into the capture buffer; oversized captures truncate at 64KB instead of overflowing adjacent data |
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |
-| Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn` = 8 bytes each | Late-bound magician callbacks for eval-registered output handlers and eval dynamic-object destructors |
+| Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn`, `_elephc_eval_closure_bind_fn`, `_elephc_eval_wrap_callback_fn`, `_elephc_eval_object_gc_child_fn`, `_elephc_eval_object_release_fn`, `_elephc_eval_array_reference_retire_fn`, `_elephc_eval_object_clone_fn` = 8 bytes each | Late-bound Magician callbacks for eval-managed handlers, closures, callbacks, objects, references, and cloning |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
-| Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
+| Heap and GC metadata | `_heap_off`, `_heap_free_list`, `_heap_debug_enabled`, `_heap_max`, and each `_gc_*` flag, counter, pointer, or timer = 8 bytes each; `_heap_small_bins` = 32 bytes | Fixed-size allocator, cycle-collector, destructor, pin, and timing bookkeeping |
 | Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: buffer registry exhausted` (an invalid requested size aborts earlier with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size`) |
-| Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value` = 24 bytes total | Fixed-size setjmp/longjmp handler and thrown-value bookkeeping |
-| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame` = 32 bytes total | Fixed-size current-fiber and main-frame resume bookkeeping |
-| Runtime diagnostics | `_rt_diag_suppression` = 8 bytes total | Fixed-size warning-suppression depth used by `@` and exception unwinding |
+| Exception and user-handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, and every `_php_error_handler_*` / `_php_exception_handler_*` slot = 8 bytes each | Active exception state and current user handlers; nested handler registrations use heap-backed linked stacks |
+| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-set recursion guard |
+| Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_ptr`, `_rt_diag_pending_len`, `_php_diagnostic_file`, `_php_diagnostic_file_len`, `_php_diagnostic_line` = 8 bytes each | Warning suppression plus deferred diagnostic message and source-location state |
+| Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
+| Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |
 | JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column` = 104 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations |
 | Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_unser_count` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context |
-| Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |
+| Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_strtotime_iso_buf` = 64 bytes; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override, the scratch copy a one-digit-month/day ISO date is zero-padded into, plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
@@ -1035,7 +1084,7 @@ Converting a boxed `Mixed` value into a concrete scalar, string, or object prope
 | Fill element count | `array_fill()` sizes its result from `$count` | A `$count` past `INT_MAX` (2147483647) never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("array_fill(): Argument #2 ($count) is too large"). Counts at or below the bound whose payload does not fit the heap still report "Fatal error: heap memory exhausted", which is what reference PHP reports as a memory-limit fatal too |
 | Buffer length | Fixed at `buffer_new<T>()` | A negative length, or a `length * stride` that does not fit in a non-negative machine word, aborts with "Fatal error: buffer_new() length is negative or exceeds the maximum buffer size" |
 | C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB each, `_empty_str` = 1 byte | Long converted paths/strings are truncated to buffer size; `_empty_str` is a safe zero-length string pointer |
-| File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors |
+| File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each; on Apple targets only, `_iconv_write_options` = 256 bytes | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors; `_iconv_write_options` holds each `convert.iconv` write filter's own `//TRANSLIT`/`//IGNORE` bits |
 | Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |
 | Stream context and callbacks | `_stream_context_options`, `_stream_notification_callback`, `_stream_connect_host`, `_stream_open_opened_path_scratch`, `_url_stat_matched` | Current stream-context options hash, notification callback, TLS peer host, wrapper opened-path scratch, and wrapper url_stat match flag |
 | TLS, compression, iconv, curl, crypto, and BCMath function slots | `_elephc_tls_*_fn`, `_zlib_*_fn`, `_bz2_*_fn`, `_phar_zlib_*_fn`, `_phar_bz2_*_fn`, `_iconv_*_fn`, `_elephc_iconv_*_fn`, `_elephc_curl_*_fn`, `_elephc_crypto_*_fn`, `_elephc_bcmath_*_fn` = 8 bytes per slot | Late-bound function pointers keep optional native support pay-for-use and are published only when the corresponding bridge is linked |
@@ -1066,7 +1115,7 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 
 ### Unboxing a Mixed hands back a reference
 
-`Op::MixedUnbox` is the coercion behind a typed target initialized from a Mixed source — `coerce_typed_assign_value` is its only emitter, for an `object` or `callable` target, and it has two callers: a typed local (`lower_typed_assign`) and a typed property write (`lower_property_assign`). Its lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload it produces carries a reference of its OWN rather than borrowing the box's.
+`Op::MixedUnbox` is the coercion behind a typed target initialized from a Mixed source — several lowering surfaces emit it for an `object` or `callable` target: the typed-assign coercer `coerce_typed_assign_value` (reached from a typed local and a typed property write), call-argument and closure coercion, static method-call receivers, typed foreach slot coercion, and the merge-temp coercion that hands a `??`-kept `?C` cell over to an object or callable temp (#1628). Each unbox's lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload it produces carries a reference of its OWN rather than borrowing the box's.
 
 That makes it an owning temporary, and `LoweringContext::value_is_owning_temporary` says so. The distinction is not cosmetic: while the unboxed value was read as a borrow, the store that consumed it acquired a second reference, and the one slot release in the function epilogue never balanced it. The unboxed object stayed alive for the rest of the process, and so did everything it owned — five heap blocks per call for a `ReflectionAttribute`, whose name string and argument array go with it.
 

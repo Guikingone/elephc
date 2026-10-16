@@ -20,7 +20,9 @@ mod curl_prelude;
 mod errors;
 mod eval_aot;
 mod exports;
+mod docblock;
 mod func_args;
+mod generics;
 mod global_decls;
 mod hash_prelude;
 mod image_prelude;
@@ -57,11 +59,13 @@ mod monitor;
 mod call_graph;
 mod php_profile;
 mod pprof_encode;
+mod project_ini;
 mod prelude_prune;
 mod probe_key;
 mod pipeline;
 mod progress;
 mod resolver;
+mod repl;
 mod runtime_cache;
 mod debug_info;
 mod source;
@@ -111,12 +115,31 @@ fn main_inner() {
         cli::print_mascotte();
     }
     match cli::parse_args(&args) {
-        cli::Command::Compile(config) => {
+        cli::Command::Repl(command) => std::process::exit(repl::run(command)),
+        cli::Command::Compile(mut config) => {
+            apply_project_ini(&mut config);
             emit_ini_override_warnings(&config);
             pipeline::compile(config);
         }
         cli::Command::Native(command) => run_native(command),
         cli::Command::Monitor(command) => std::process::exit(monitor::run(command)),
+    }
+}
+
+/// Puts the project's `elephc.toml` `[ini]` entries AHEAD of the command line's `--ini` ones,
+/// so an `--ini` for the same directive, being the later entry, is the value every consumer
+/// reads. A manifest that cannot be used stops the compile: its directives would otherwise be
+/// dropped without a word.
+fn apply_project_ini(config: &mut cli::CliConfig) {
+    match project_ini::project_ini_overrides(std::path::Path::new(&config.filename)) {
+        Ok(mut entries) => {
+            entries.append(&mut config.ini_overrides);
+            config.ini_overrides = entries;
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(1);
+        }
     }
 }
 

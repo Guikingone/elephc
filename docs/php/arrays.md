@@ -77,7 +77,8 @@ foreach ($map as $k => $v) { echo "$k=$v "; } // a=1 c=3 b=9
 
 `unset()` also works on indexed arrays. PHP removes the key **without renumbering** the survivors,
 so the array becomes sparse (a hole is left). The remaining keys keep their original values, and a
-later `$arr[] = ...` append continues at `max_key + 1`.
+later `$arr[] = ...` append uses the array's next integer key. Removing a key does not move this
+counter backward, even when the removed key was the highest one.
 
 ```php
 <?php
@@ -113,32 +114,19 @@ echo count($x);        // 1
 echo count($snapshot); // 2 — the copy taken before the call is untouched
 ```
 
-The one shape this does not cover is an **indexed** array reached by reference
-(`function f(array &$a) { unset($a[1]); }`). Removing a key from a packed list leaves a hole, so
-the array has to become a hash — and the caller's slot, still described as `array<T>`, is storage
-the callee cannot retype. That case reports a named compile error instead.
-
-**This refusal is deliberate and permanent, not a gap waiting to be filled.** Lifting it would
-mean a callee silently changing the representation of a caller's local, which is the one thing
-the typed-slot model does not allow; refusing loudly is the intended behaviour. Two workarounds
-cover every use:
+This also works for an **indexed** array passed by reference. Removing an element leaves a hole
+without renumbering the surviving keys, and the caller observes the removal. Appending afterward
+uses the preserved next integer key rather than one past the highest surviving key:
 
 ```php
 <?php
-// 1. Key the array with strings: the removal happens in place, through the reference.
-function dropAssoc(array &$a, string $k) { unset($a[$k]); }
-$map = ["a" => 10, "b" => 20];
-dropAssoc($map, "b");
-print_r($map);    // ["a" => 10]
-
-// 2. Or rebuild and return, letting the CALLER rebind its own slot.
-function dropIndexed(array $a, int $i): array {
-    unset($a[$i]);
-    return $a;
-}
+function dropIndexed(array &$a) { unset($a[1]); }
 $list = [10, 20, 30];
-$list = dropIndexed($list, 1);
-print_r($list);   // [0 => 10, 2 => 30] — PHP's holes, no renumbering
+dropIndexed($list);
+echo implode(",", array_keys($list)); // 0,2
+echo "|", implode(",", $list);       // |10,30
+$list[] = 40;
+echo "|", implode(",", array_keys($list)); // |0,2,3
 ```
 
 ## Array union
@@ -311,7 +299,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_values()` | `array_values($arr): array` | Returns copy of values. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
-| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. Indexed **string** arrays are supported: the slice copies each element's `{pointer, length}` pair and owns its own bytes, so writing into the result never disturbs the source. |
+| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. Indexed **string** arrays are supported: the slice copies each element's `{pointer, length}` pair and owns its own bytes, so writing into the result never disturbs the source. A `mixed` or declared `array` source is sliced by its runtime storage (a hash keeps its string keys and renumbers integer keys) and returns the boxed `array` type; a direct call then needs `$preserve_keys` to be `false`, while a callable (`array_slice(...)`, also through `call_user_func_array()` with a runtime argument array) applies the flag at run time. |
 | `array_splice()` | `array_splice($arr, $offset [, $length [, $replacement]]): array` | Remove a slice in place and return the removed elements. `$replacement` is inserted where the removed slice was: an array contributes its values, a bare scalar is treated as a one-element array, and `null` or `[]` inserts nothing. A replacement whose element type differs from the receiver's promotes the receiver to a heterogeneous array exactly as PHP does (`$a = [1,2,3]; array_splice($a, 1, 1, ["x"]);` leaves `[1, "x", 3]`). That promotion needs a receiver whose storage this call can retype, so it does not apply when the receiver is a by-reference parameter, a `&$x` binding, or an object/static property — those keep a named compile error instead of a mistyped insertion. `$replacement` may be the receiver itself: `array_splice($a, 1, 1, $a)` inserts what `$a` held on the way in, because PHP evaluates the replacement before the removal runs (`[1,2,3]` becomes `[1,1,2,3,3]`). That holds for every receiver form — a local, a property, a static property, a container element, a by-reference parameter, or a `&$x` binding naming the same array — and for every argument spelling. |
 | `array_chunk()` | `array_chunk($arr, $size [, $preserve_keys]): array` | Split arrays, including associative arrays, into chunks. A `$size` of `0` or less throws a `\ValueError`. `$preserve_keys` must be a literal `true`/`false`; when `true` each chunk keeps its source keys, and when `false` every key is dropped — **string keys included**, unlike `array_slice()` — and each chunk renumbers from `0`. |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
@@ -332,7 +320,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Two-array form: keeps values absent from $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. Supports closures, function names and first-class callables. |
 | `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Two-array form: keeps values also present in $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. |
 | `array_unique()` | `array_unique($arr): array` | Remove duplicates, keeping each survivor's original key — an indexed input therefore returns a sparse, hash-shaped result (keys `0, 1, 3` for `[1,2,2,3,1]`), exactly as in PHP |
-| `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array |
+| `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array. A declared `array` source, and a callable such as `array_reverse(...)` called through `call_user_func_array()`, take the flag at run time. |
 | `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
 | `array_shift()` | `array_shift($arr): mixed` | Remove and return first |
 | `array_unshift()` | `array_unshift($arr, ...$values): int` | Prepend one or more elements, in source order, and return the new count |
@@ -384,7 +372,7 @@ objects available in the compiled program. Invalid boxed callbacks throw
 array value with the original keys and copy-on-write behavior. The AOT path
 currently accepts one source array, not the multi-array zip form.
 
-> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` stores mixed result elements when the selected callback return shape is only known at runtime. `array_map()` also runs over a heterogeneous (boxed `mixed`) input array: each element is passed to the callback as a `mixed` value, so a callback with a `mixed` (or untyped) parameter sees and can return each element with its original runtime type.
+> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` uses direct element storage when the resolved callback returns `int`, `bool`, or `string`, including a known callback named by a string; descriptor wrappers cast boxed callback results to that declared type. Other or unresolved return shapes use boxed `mixed` elements. The checker and EIR report the same result container type across returns, arguments, and property storage. `array_map()` also runs over a heterogeneous (boxed `mixed`) input array: each element is passed to the callback as a `mixed` value, so a callback with a `mixed` (or untyped) parameter sees and can return each element with its original runtime type.
 > When a parameter is declared only as `array`, its element type is initially unknown. Array-callback checking preserves explicit callback parameter declarations and uses them to type the closure body instead of fabricating an `int` element. Known element types are still checked normally, and this contextual rule does not make `mixed` globally compatible with object, array, or other refcounted declarations. `array_map()` currently rejects known object-element arrays because its callback runtime does not yet support that input layout.
 > `call_user_func_array()` also accepts dynamic indexed and associative argument arrays for callbacks with a known signature, including userland variadic callbacks. When a callable value has no single static signature at the call site, elephc emits an AOT runtime dispatch over user functions and closure/FCC wrappers available in that codegen context, then applies the matched target's descriptor metadata: parameter names, defaults, by-reference flags, variadic position, return shape, captures, hidden receiver arguments, and callable shape. Runtime string callback names dispatch over user functions, supported builtins, and public static-method strings by case-insensitive name matching, materialize the matched descriptor, and invoke its generated descriptor invoker. Descriptor invokers receive a temporary boxed Mixed clone of the argument container and inspect its runtime tag to handle indexed arrays and associative hashes through the same signature-level wrapper, so the source `$args` remains usable with its original static layout after the call. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic arrays passed to by-reference callback parameters use temporary reference cells, so callback writes do not mutate the source argument array.
 

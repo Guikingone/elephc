@@ -182,8 +182,10 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
     // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
     // load — the merge's — per execution.
+    // The insert converts a float key again: PHP's probe and its insert are separate accesses,
+    // and each reports the deprecation.
     ctx.with_borrowed_write_operand(|ctx| {
-        lower_non_local_assignment_write_with_diagnosed_key(ctx, target, &temp_value, expr.span, true);
+        lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
     });
     branch_to(ctx, merge);
 
@@ -193,6 +195,63 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
 
     ctx.builder.position_at_end(merge);
     Some(take_owned_temp(ctx, temp_name, expr.span))
+}
+
+/// Lowers a statement-level `$place[$key] ??= $default` the way PHP executes it.
+///
+/// PHP probes the element once and inserts `$default` only when that probe produced null: a
+/// present element is never written back, and an inserted float key is converted twice, once
+/// by the probe and once by the insert, each reporting its deprecation. A statement has no
+/// result, so the probed value is dead as soon as the null test has consumed it.
+pub(crate) fn lower_null_coalesce_update_stmt(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    default: &Expr,
+    span: Span,
+) {
+    let current = lower_null_coalesce_value(ctx, target);
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![current.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, current, Some(span));
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let insert_block = ctx.builder.create_named_block("coalesce_assign.default", Vec::new());
+    let merge = ctx.builder.create_named_block("coalesce_assign.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: insert_block,
+        then_args: Vec::new(),
+        else_target: merge,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(insert_block);
+    lower_non_local_assignment_write(ctx, target, default, span);
+    let insert_reachable = !ctx.builder.insertion_block_is_terminated();
+    let insert_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        insert_initialized,
+        insert_reachable,
+        split_initialized.clone(),
+        true,
+    ));
+    // The probe answers non-null only when a local receiver already holds its array, and the
+    // insert stores into it, so that local is initialized on both paths. Without this fact the
+    // next store into it would skip releasing the array it replaces.
+    if let ExprKind::ArrayAccess { array, .. } = &target.kind {
+        if let ExprKind::Variable(name) = &array.kind {
+            ctx.mark_local_initialized(name);
+        }
+    }
 }
 
 /// Emits the write side of an assignment expression whose target is not a local variable.
@@ -219,11 +278,26 @@ fn lower_non_local_assignment_write_with_diagnosed_key(
     }
     if key_already_diagnosed {
         if let ExprKind::ArrayAccess { array, index } = &target.kind {
-            if let ExprKind::Variable(name) = &array.kind {
-                crate::ir_lower::stmt::lower_array_assign_with_diagnosed_key(
-                    ctx, name, index, value, span, true,
-                );
-                return;
+            match &array.kind {
+                ExprKind::Variable(name) => {
+                    crate::ir_lower::stmt::lower_array_assign_with_diagnosed_key(
+                        ctx, name, index, value, span, true,
+                    );
+                    return;
+                }
+                ExprKind::PropertyAccess { object, property } => {
+                    crate::ir_lower::stmt::lower_property_array_assign_with_diagnosed_key(
+                        ctx, object, property, index, value, span, true,
+                    );
+                    return;
+                }
+                ExprKind::StaticPropertyAccess { receiver, property } => {
+                    crate::ir_lower::stmt::lower_static_property_array_assign_with_diagnosed_key(
+                        ctx, receiver, property, index, value, span, true,
+                    );
+                    return;
+                }
+                _ => {}
             }
         }
     }
@@ -235,27 +309,34 @@ fn lower_non_local_assignment_write_with_diagnosed_key(
 }
 
 /// Finds a compound array read bound to the value temp before its write half runs.
+///
+/// The target is one dimension of a local, property, or static-property array, which are the
+/// write paths that can reuse the read's key conversion.
 fn compound_array_key_diagnosed_in_prelude(
     target: &Expr,
     value: &Expr,
     prelude: &[Stmt],
     span: Span,
 ) -> bool {
-    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else {
         return false;
     };
-    let ExprKind::Variable(array_name) = &array.kind else {
+    if !matches!(
+        &array.kind,
+        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+    ) {
         return false;
-    };
+    }
     let ExprKind::Variable(value_name) = &value.kind else {
         return false;
     };
     if prelude.iter().any(|stmt| {
         if let StmtKind::Assign { name, value: read_value } = &stmt.kind {
             name == value_name
-                && crate::ir_lower::stmt::compound_array_write_value_reads_target(
-                    array_name, index, read_value, span,
-                )
+                && crate::ir_lower::stmt::desugared_element_update(read_value, span, |read| {
+                    read == target
+                })
+                .is_some()
         } else {
             false
         }

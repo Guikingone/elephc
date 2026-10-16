@@ -492,6 +492,7 @@ fn test_example_typed_properties_compiles_and_runs() {
         out,
         concat!(
             "Ada:42\n",
+            "repository: UserRepository\n",
             "missing email\n",
             "query: 1/name\n",
             "tags: new, featured\n",

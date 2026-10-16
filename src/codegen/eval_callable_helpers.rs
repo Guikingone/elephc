@@ -27,7 +27,7 @@ use crate::codegen::callable_dispatch::{
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::runtime_callable_invoker::RuntimeCallableInvoker;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
@@ -130,32 +130,25 @@ pub(super) fn module_needs_eval_callable_descriptor_support(module: &Module) -> 
     module_uses_eval(module)
 }
 
-/// Returns true when the EIR module contains a function that can call eval.
+/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
+///
+/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
+/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
+/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
+/// like it. This used to scan for functions carrying an eval local instead, which is a
+/// different question that happened to give the same answer while the ONLY reason to link
+/// the archive was an `eval()` in the program.
+///
+/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
+/// cache, which lives in the archive, so a program calling it needs the archive whether or
+/// not it ever evaluates a string. Keeping the narrower scan here made that combination
+/// unlinkable, which is what kept the fold in place and left the function answering `false`
+/// where reference answers `true`.
+///
+/// The call sites are all inside a block already gated on the same flag, so for a program
+/// that does use `eval()` nothing changes.
 fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
+    module.required_runtime_features.eval_bridge
 }
 
 /// Emits shared runtime callable wrappers/invokers and returns descriptor cases.
@@ -760,7 +753,7 @@ fn receiver_bound_instance_method_case(
     }
 }
 
-/// Emits a descriptor invoker inline and branches around its global entry body.
+/// Emits a descriptor invoker out of line, after the function that first needed it.
 ///
 /// `current_class` is the class that DECLARES the callee, which is the scope `self::`,
 /// `static::` and `parent::` resolve in when the invoker materializes a parameter default.
@@ -778,7 +771,6 @@ fn emit_eval_runtime_callable_invoker_inline(
     state.argument_normalizer_needed |=
         super::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let label = state.next_label("callable_invoker");
-    let done_label = state.next_label("callable_invoker_done");
     let defaults = super::runtime_callable_invoker::resolve_invoker_defaults(
         module,
         current_class,
@@ -794,11 +786,10 @@ fn emit_eval_runtime_callable_invoker_inline(
         php_return_status: true,
         defaults: &defaults,
     };
-    let enclosing = emitter.current_text_section();
-    abi::emit_jump(emitter, &done_label);
+    // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = emitter.begin_out_of_line();
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
-    emitter.reopen_text_section(enclosing);
-    emitter.label(&done_label);
+    emitter.end_out_of_line(scope);
     label
 }
 
@@ -827,8 +818,9 @@ fn emit_eval_instance_method_descriptor_entry_wrapper(
 ) -> String {
     let visible_arg_types = descriptor_visible_arg_types(sig);
     let wrapper_label = state.next_label("callable_instance_method");
-    let done_label = state.next_label("callable_instance_method_done");
-    abi::emit_jump(emitter, &done_label);
+    // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`. The label is
+    // referenced only from a static descriptor in data, so its position is free.
+    let scope = emitter.begin_out_of_line();
     emitter.label(&wrapper_label);
     emit_eval_instance_method_descriptor_entry_wrapper_body(
         emitter,
@@ -836,7 +828,7 @@ fn emit_eval_instance_method_descriptor_entry_wrapper(
         method_key,
         &visible_arg_types,
     );
-    emitter.label(&done_label);
+    emitter.end_out_of_line(scope);
     wrapper_label
 }
 
@@ -851,8 +843,9 @@ fn emit_eval_static_method_descriptor_entry_wrapper(
 ) -> String {
     let visible_arg_types = descriptor_visible_arg_types(sig);
     let wrapper_label = state.next_label("static_method_descriptor_entry");
-    let done_label = state.next_label("static_method_descriptor_entry_done");
-    abi::emit_jump(emitter, &done_label);
+    // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`. The label is
+    // referenced only from a static descriptor in data, so its position is free.
+    let scope = emitter.begin_out_of_line();
     emitter.label(&wrapper_label);
     emit_eval_static_method_descriptor_entry_wrapper_body(
         emitter,
@@ -861,7 +854,7 @@ fn emit_eval_static_method_descriptor_entry_wrapper(
         &visible_arg_types,
         called_class_id,
     );
-    emitter.label(&done_label);
+    emitter.end_out_of_line(scope);
     wrapper_label
 }
 
@@ -1262,11 +1255,11 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
     emitter.instruction("cmp x0, #1");                                          // runtime tag 1 means a string callable name
     emitter.instruction(&format!("b.eq {}", string_label));                     // resolve string callables through descriptor metadata
     emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means an indexed callable array
-    emitter.instruction(&format!("b.eq {}", array_label));                      // resolve static callable arrays through descriptor metadata
+    abi::emit_branch_if_equal_wide(emitter, &array_label);                      // resolve indexed callable arrays past the string-name lookup table
     emitter.instruction("cmp x0, #5");                                          // runtime tag 5 means an associative callable array
-    emitter.instruction(&format!("b.eq {}", array_label));                      // resolve static callable arrays with numeric keys
+    abi::emit_branch_if_equal_wide(emitter, &array_label);                      // resolve callable arrays with numeric keys past that table
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means an invokable object candidate
-    emitter.instruction(&format!("b.eq {}", object_label));                     // resolve invokable objects through descriptor metadata
+    abi::emit_branch_if_equal_wide(emitter, &object_label);                     // resolve invokable objects past the string and array lookups
     abi::emit_jump(emitter, miss_label);
     emitter.label(&string_label);
     abi::emit_push_reg_pair(emitter, "x1", "x2");

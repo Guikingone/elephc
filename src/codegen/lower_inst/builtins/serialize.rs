@@ -28,9 +28,9 @@ use super::{expect_operand, store_if_result};
 
 /// Lowers `serialize($value)` into the shared serialize runtime helper.
 ///
-/// Scalar static types are formatted directly through `__rt_serialize_value`; a
-/// Mixed/Union argument is unboxed and dispatched by `__rt_serialize_mixed`.
-/// Non-scalar static types (arrays/objects) are not yet supported and are rejected.
+/// Scalar, array, object, and Closure static types are passed to `__rt_serialize_value` as a
+/// tagged value; a Mixed/Union argument is unboxed and dispatched by `__rt_serialize_mixed`.
+/// A Closure makes the runtime throw, as PHP does. Other static types are rejected.
 pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "serialize", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -143,6 +143,21 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             } else {
                 ctx.emitter.instruction("mov x1, x0");                          // value_lo = object pointer
                 ctx.emitter.instruction("mov x0, #6");                          // value_tag = object
+                ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+        }
+        PhpType::Callable => {
+            // A Closure reaches the runtime like any tagged value, which throws PHP's catchable
+            // `Serialization of 'Closure' is not allowed` there, as it does behind `mixed`.
+            ctx.load_value_to_result(value)?;
+            if is_x86 {
+                ctx.emitter.instruction("mov rsi, rax");                        // value_lo = callable descriptor pointer
+                ctx.emitter.instruction("mov rdi, 10");                         // value_tag = Closure
+                ctx.emitter.instruction("mov rdx, 0");                          // value_hi unused
+            } else {
+                ctx.emitter.instruction("mov x1, x0");                          // value_lo = callable descriptor pointer
+                ctx.emitter.instruction("mov x0, #10");                         // value_tag = Closure
                 ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
             }
             abi::emit_call_label(ctx.emitter, "__rt_serialize_value");

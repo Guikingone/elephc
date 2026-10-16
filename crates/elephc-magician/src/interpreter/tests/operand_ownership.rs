@@ -621,7 +621,7 @@ fn empty_activation_has_no_synthetic_argument_cells() {
     let mut values = FakeOps::default();
     let mut context = ElephcEvalContext::new();
     let binding = bind_evaluated_function_args_with_ref_mode(
-        &[], &[], &[], &[], &[], Vec::new(), EvalByRefBindingMode::RequireTarget,
+        "f", &[], &[], &[], &[], &[], Vec::new(), EvalByRefBindingMode::RequireTarget,
         &mut context, &mut values,
     ).unwrap();
     assert!(binding.params.is_empty());
@@ -639,7 +639,7 @@ fn activation_surplus_snapshot_releases_its_own_lease() {
     let value = values.string("extra").unwrap();
     let result = values.int(42).unwrap();
     let binding = bind_evaluated_function_args_with_ref_mode(
-        &[], &[], &[], &[], &[], positional_args(vec![value.borrowed()]),
+        "f", &[], &[], &[], &[], &[], positional_args(vec![value.borrowed()]),
         EvalByRefBindingMode::RequireTarget, &mut context, &mut values,
     ).unwrap();
     assert!(binding.params.is_empty());

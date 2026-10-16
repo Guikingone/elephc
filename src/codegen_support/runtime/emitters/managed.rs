@@ -234,6 +234,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     // SPL runtime-managed containers
     spl::emit_doubly_linked_list_runtime(emitter);
     spl::emit_fixed_array_runtime(emitter);
+    spl::emit_spl_offset_runtime(emitter);
 
     // PHP resource-id registry (its own numbering space, unrelated to object handles)
     resource_ids::emit_resource_ids(emitter);
@@ -253,6 +254,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_mixed_array_get(emitter);
     objects::emit_throw_object_not_array(emitter);
     objects::emit_throw_serialization_denied(emitter);
+    objects::emit_throw_unserialization_denied(emitter);
     objects::emit_mixed_array_set(emitter);
     objects::emit_mixed_array_append(emitter);
     objects::emit_mixed_array_fetch_for_write(emitter);

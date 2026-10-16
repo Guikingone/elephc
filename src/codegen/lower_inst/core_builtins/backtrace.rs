@@ -234,13 +234,13 @@ fn emit_trace_limit_guard(ctx: &mut FunctionContext<'_>, done: &str) {
 fn emit_skip_owned_guard(ctx: &mut FunctionContext<'_>, cursor: &str, next: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x11, [{cursor}, #16]"));
-            ctx.emitter.instruction(&format!("cmp x11, {cursor}"));
-            ctx.emitter.instruction(&format!("b.eq {next}"));
+            ctx.emitter.instruction(&format!("ldr x11, [{cursor}, #16]"));      // load the activation self-pointer or an owned-value payload
+            ctx.emitter.instruction(&format!("cmp x11, {cursor}"));             // distinguish activation records from ownership guards
+            ctx.emitter.instruction(&format!("b.eq {next}"));                   // continue only when this record exposes a frame reader
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp QWORD PTR [{cursor} + 16], {cursor}"));
-            ctx.emitter.instruction(&format!("je {next}"));
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [{cursor} + 16], {cursor}")); // distinguish activation records from ownership guards
+            ctx.emitter.instruction(&format!("je {next}"));                     // continue only when this record exposes a frame reader
         }
     }
 }

@@ -19,8 +19,8 @@ use super::{
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
-    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX,
-    POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
+    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
+    CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
@@ -29,7 +29,8 @@ use super::{
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
     STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
-    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
+    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_PROPERTY_ASSIGN_PREFIX,
+    UNSER_TYPE_GIVEN_SUFFIX,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -37,7 +38,7 @@ use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
 use crate::codegen_support::data_section::comm_directive_aligned;
-use crate::codegen_support::platform::Target;
+use crate::codegen_support::platform::{Platform, Target};
 use crate::php_version::PhpVersion;
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
@@ -119,6 +120,12 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _serialization_denied_suffix\n_serialization_denied_suffix:\n    .ascii {SERIALIZATION_DENIED_SUFFIX:?}\n"
     ));
     out.push_str(&format!(
+        ".globl _unserialization_denied_prefix\n_unserialization_denied_prefix:\n    .ascii {UNSERIALIZATION_DENIED_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _closure_class_name\n_closure_class_name:\n    .ascii {CLOSURE_CLASS_NAME:?}\n"
+    ));
+    out.push_str(&format!(
         ".globl _named_parameter_overwrite_prefix\n_named_parameter_overwrite_prefix:\n    .ascii {NAMED_PARAMETER_OVERWRITE_PREFIX:?}\n"
     ));
     out.push_str(&format!(
@@ -154,7 +161,28 @@ pub(crate) fn emit_runtime_data_fixed(
             ".globl {label}\n{label}:\n    .ascii {name:?}\n"
         ));
     }
+    // A hydrated property TypeError spells a bool value as its literal `true`/`false`
+    // (unlike the argument-type diagnostics, which spell the type as `bool`).
+    out.push_str(".globl _unser_type_true\n_unser_type_true:\n    .ascii \"true\"\n");
+    out.push_str(".globl _unser_type_false\n_unser_type_false:\n    .ascii \"false\"\n");
+    out.push_str(&format!(
+        ".globl _unser_property_assign_prefix\n_unser_property_assign_prefix:\n    .ascii {UNSER_PROPERTY_ASSIGN_PREFIX:?}\n"
+    ));
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    // `{pointer, length}` rows naming a rejected SPL offset's type, the shape of
+    // `_class_name_entries`; see `runtime::spl::offset_convert`.
+    out.push_str(".p2align 3\n.globl _spl_offset_type_rows\n_spl_offset_type_rows:\n");
+    for (symbol, len) in crate::codegen_support::runtime::spl::SPL_OFFSET_TYPE_ROWS {
+        out.push_str(&format!("    .quad {symbol}\n    .quad {len}\n"));
+    }
+    out.push_str(&format!(
+        ".globl _spl_float_string_prefix\n_spl_float_string_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _spl_float_string_suffix\n_spl_float_string_suffix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_SUFFIX
+    ));
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
     out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
     out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
@@ -287,6 +315,13 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_unser_count", 8, target));
     out.push_str(&comm_directive("_unser_values", 524288, target));
     out.push_str(&comm_directive("_strtotime_clock", 8, target));
+    // Scratch copy a one-digit-month/day ISO date (`2020-1-5`) is zero-padded into before the
+    // fixed-offset ISO parser reads it (see `system::strtotime::iso_date`).
+    out.push_str(&comm_directive(
+        "_strtotime_iso_buf",
+        system::STRTOTIME_ISO_PAD_BUF_LEN,
+        target,
+    ));
     // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
     // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
     // "UTC" literal returned in that default case.
@@ -704,6 +739,10 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_spl_dll_shift_empty_msg", "Can't shift from an empty datastructure"),
         ("_spl_dll_peek_empty_msg", "Can't peek at an empty datastructure"),
         (
+            "_spl_dll_frozen_mode_msg",
+            "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen",
+        ),
+        (
             "_spl_dll_add_range_msg",
             "SplDoublyLinkedList::add(): Argument #1 ($index) is out of range",
         ),
@@ -720,20 +759,20 @@ pub(crate) fn emit_runtime_data_fixed(
             "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) is out of range",
         ),
         (
-            "_spl_dll_offset_exists_type_msg",
-            "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_exists_type_prefix",
+            "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, ",
         ),
         (
-            "_spl_dll_offset_get_type_msg",
-            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_get_type_prefix",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, ",
         ),
         (
-            "_spl_dll_offset_set_type_msg",
-            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, non-int given",
+            "_spl_dll_offset_set_type_prefix",
+            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, ",
         ),
         (
-            "_spl_dll_offset_unset_type_msg",
-            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_unset_type_prefix",
+            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, ",
         ),
         (
             "_spl_fixed_construct_size_msg",
@@ -743,10 +782,8 @@ pub(crate) fn emit_runtime_data_fixed(
             "_spl_fixed_set_size_msg",
             "SplFixedArray::setSize(): Argument #1 ($size) must be greater than or equal to 0",
         ),
-        (
-            "_spl_fixed_offset_type_msg",
-            "Cannot access offset of type non-int on SplFixedArray",
-        ),
+        ("_spl_fixed_offset_type_prefix", "Cannot access offset of type "),
+        ("_spl_fixed_offset_type_suffix", " on SplFixedArray"),
         ("_spl_fixed_offset_range_msg", "Index invalid or out of range"),
         (
             "_spl_fixed_from_array_keys_msg",
@@ -906,6 +943,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_iconv_handles", 2048, target));
     out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_iconv_close_fn", 8, target));
+    // Apple iconv shares //TRANSLIT and //IGNORE per charset pair, so Apple targets record
+    // each write filter's own option bits per fd (256 fds x 1B) for the fwrite helper to
+    // restore before converting; glibc keeps them per descriptor and needs no table.
+    if target.platform == Platform::MacOS {
+        out.push_str(&comm_directive("_iconv_write_options", 256, target));
+    }
     out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
     out.push_str(&comm_directive("_ftp_data_addr", 64, target));
     // _ftp_use_tls: set to 1 by fopen("ftps://...") before __rt_ftp_open is
@@ -1736,6 +1779,24 @@ mod tests {
                 "expected the fixed runtime data to declare its usual common symbols, saw {}",
                 seen
             );
+        }
+    }
+
+    /// The per-fd `convert.iconv` write-filter option table exists only on Apple targets,
+    /// whose iconv shares `//TRANSLIT` and `//IGNORE` per charset pair (#811).
+    #[test]
+    fn test_iconv_write_options_table_is_apple_only() {
+        for (target, expected) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), true),
+            (
+                Target::new_apple(Arch::AArch64, crate::codegen_support::platform::AppleVariant::IOS),
+                true,
+            ),
+            (Target::new(Platform::Linux, Arch::AArch64), false),
+            (Target::new(Platform::Linux, Arch::X86_64), false),
+        ] {
+            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
+            assert_eq!(asm.contains("_iconv_write_options"), expected, "{target:?}");
         }
     }
 

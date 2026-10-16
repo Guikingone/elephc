@@ -170,6 +170,11 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
 pub(super) fn reflection_literal_parameter_default_value(
     default: &Expr,
 ) -> Option<ReflectionParameterDefaultValue> {
+    if let Some(ExprKind::StringLiteral(value)) =
+        crate::codegen::literal_defaults::fold_named_class_constant(&default.kind)
+    {
+        return Some(ReflectionParameterDefaultValue::Str(value));
+    }
     match &default.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionParameterDefaultValue::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionParameterDefaultValue::Bool(*value)),
@@ -210,6 +215,11 @@ pub(super) fn reflection_assoc_array_default_value(
 
 /// Converts one supported associative-array key expression into PHP-normalized metadata.
 pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefaultArrayKey> {
+    if let Some(ExprKind::StringLiteral(value)) =
+        crate::codegen::literal_defaults::fold_named_class_constant(&key.kind)
+    {
+        return reflection_default_string_array_key(&value);
+    }
     match &key.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
@@ -267,7 +277,16 @@ pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Opti
 
 /// Returns the PHP source-visible receiver label for ReflectionParameter constant defaults.
 pub(super) fn reflection_static_receiver_label(receiver: &StaticReceiver) -> String {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Static => "static".to_string(),

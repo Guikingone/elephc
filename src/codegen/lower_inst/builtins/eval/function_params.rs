@@ -206,6 +206,32 @@ pub(super) fn register_eval_native_function_return_type(
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 
+/// Emits the registration call marking a native function declared `function &name()`, which
+/// eval's `ReflectionFunction::returnsReference()` reports.
+pub(super) fn register_eval_native_function_returns_reference(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    function_name_label: &str,
+    function_name_len: usize,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        function_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        function_name_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_function_returns_reference");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
 /// Emits one native function parameter-default registration call.
 pub(super) fn register_eval_native_function_param_default(
     ctx: &mut FunctionContext<'_>,
@@ -301,19 +327,23 @@ pub(super) fn register_eval_native_function_param_default(
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 
-/// Emits one native-function explicit PHP signature shape registration call.
+/// Origin bit shared with `elephc_magician::context::NATIVE_SHAPE_FLAG_INTERNAL`.
+const NATIVE_SHAPE_FLAG_INTERNAL: i64 = 1 << 2;
+
+/// Emits one native-function explicit PHP signature shape and declaration-origin registration.
 ///
 /// Target-aware like every sibling emitter: the six ABI words go through
 /// `abi::int_arg_reg_name`, which is the integer-argument register sequence of whichever
 /// supported target is being emitted. Six is the limit on every supported target (x86_64 SysV
-/// passes only six integers in registers), which is why the two shape booleans travel packed in
-/// one flags word rather than as separate arguments.
+/// passes only six integers in registers), so signature and declaration-origin bits share one
+/// flags word rather than adding ABI arguments.
 pub(super) fn register_eval_native_function_shape(
     ctx: &mut FunctionContext<'_>,
     context_offset: usize,
     function_name_label: &str,
     function_name_len: usize,
     shape: &EvalNativeSignatureShape,
+    is_internal: bool,
 ) {
     load_eval_context_local_to_arg(ctx, context_offset, 0);
     abi::emit_symbol_address(
@@ -339,7 +369,7 @@ pub(super) fn register_eval_native_function_shape(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 5),
-        shape.flags(),
+        shape.flags() | if is_internal { NATIVE_SHAPE_FLAG_INTERNAL } else { 0 },
     );
     let symbol = ctx
         .emitter

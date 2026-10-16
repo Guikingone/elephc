@@ -14,6 +14,12 @@ use crate::errors::EvalStatus;
 use crate::interpreter::RuntimeValueOps;
 
 impl ElephcEvalContext {
+    /// Requires full escape validation once foreign callable metadata is possible.
+    /// Draining cell pins or replacing a handler never clears this capability.
+    pub(crate) fn needs_pcntl_escape_scan(&self) -> bool {
+        self.may_have_foreign_pcntl_callables
+    }
+
     /// Pins one foreign callable cell and the context metadata needed to invoke it.
     pub(crate) fn retain_pcntl_foreign_callable(
         &mut self,
@@ -28,6 +34,7 @@ impl ElephcEvalContext {
         let retained = values.retain(callback)?;
         self.pcntl_foreign_callables
             .insert(identity, (retained, owner));
+        self.may_have_foreign_pcntl_callables = true;
         Ok(())
     }
 
@@ -53,6 +60,7 @@ impl ElephcEvalContext {
         let retained = values.retain(target)?;
         self.pcntl_foreign_callables
             .insert(target_identity, (retained, owner));
+        self.may_have_foreign_pcntl_callables = true;
         Ok(())
     }
 
@@ -342,6 +350,14 @@ impl ElephcEvalContext {
     /// Removes an eval boundary after successful execution or an interpreted throwable.
     pub(crate) fn pop_eval_backtrace_boundary(&mut self) {
         self.eval_backtrace_boundaries.pop();
+    }
+
+    /// Reports whether an `eval()` call (bridge or nested) is executing in this context.
+    ///
+    /// The native frame that installed the global scope handle is alive for the whole call,
+    /// whereas a context a callback retains can outlive that frame and its scopes.
+    pub(crate) fn in_eval_execution(&self) -> bool {
+        !self.eval_backtrace_boundaries.is_empty()
     }
 
     /// Stores the non-owned global scope handle used by eval `global` aliases.

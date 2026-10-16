@@ -117,7 +117,18 @@ impl IntrospectionCall {
 /// Returns the rewritten program, or the combined diagnostics for every unsupported use.
 /// A program that declares its own function named after one of the three constructs is
 /// returned untouched, so the user's declaration keeps winning exactly as it does in PHP.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): both the detector and the
+/// rewriter walk the whole program, so an embedder calling it without the CLI driver's wrapper gets
+/// the same stack budget.
 pub fn desugar(program: Program) -> Result<Program, CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        desugar_on_compiler_stack(program)
+    })
+}
+
+/// The body of [`desugar`], run on the stack `with_compiler_stack` sized.
+fn desugar_on_compiler_stack(program: Program) -> Result<Program, CompileError> {
     let mut program = program;
     // The gate walks the program in place: its detector mode performs no rewrite, so there is
     // no reason to hand it a full copy of the AST.

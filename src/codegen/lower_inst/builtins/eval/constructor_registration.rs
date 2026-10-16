@@ -351,6 +351,9 @@ pub(super) fn register_eval_native_interface_property(
     if registration.requires_set {
         flags |= NATIVE_PROPERTY_REQUIRES_SET;
     }
+    if registration.get_by_ref {
+        flags |= NATIVE_PROPERTY_GET_BY_REF;
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 5),
@@ -402,6 +405,9 @@ pub(super) fn register_eval_native_abstract_property(
     }
     if registration.requires_set {
         flags |= NATIVE_PROPERTY_REQUIRES_SET;
+    }
+    if registration.get_by_ref {
+        flags |= NATIVE_PROPERTY_GET_BY_REF;
     }
     abi::emit_load_int_immediate(
         ctx.emitter,

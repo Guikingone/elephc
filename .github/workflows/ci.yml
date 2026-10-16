@@ -21,6 +21,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
   # Deep parser/lowering fixtures overflow Rust's small default worker stack on
   # ARM64 runners. Keep one value for every archived nextest process so shard
   # placement cannot change whether a test has enough stack.
@@ -49,13 +52,18 @@ jobs:
   # wait for a queued or slower macOS archive job.
   build-archive-macos-aarch64:
     name: Build & Archive Tests (macos-aarch64)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
+      - name: Test nextest artifact validation
+        run: sh scripts/ci/test_validate_archived_nextest.sh
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
         uses: actions/cache@v6
@@ -133,6 +141,7 @@ jobs:
         run: |
           cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
+          (cd "$RUNNER_TEMP" && shasum -a 256 cargo-nextest > cargo-nextest.sha256)
 
       - name: Run doctests
         # Doctests cannot run from a nextest archive, so run them here where the
@@ -212,6 +221,7 @@ jobs:
           path: |
             ${{ runner.temp }}/nextest-archive.tar.zst
             ${{ runner.temp }}/cargo-nextest
+            ${{ runner.temp }}/cargo-nextest.sha256
           retention-days: 1
           if-no-files-found: error
 
@@ -566,7 +576,7 @@ jobs:
   non-codegen-tests-macos-aarch64:
     name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/8)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -584,14 +594,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -607,8 +614,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Run non-codegen tests
         run: |
@@ -692,7 +698,7 @@ jobs:
   web-tests-macos-aarch64:
     name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -710,14 +716,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -733,8 +736,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Run web test shard
         run: |
@@ -815,7 +817,7 @@ jobs:
   codegen-tests-macos-aarch64:
     name: Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -833,14 +835,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -856,8 +855,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Cache managed native libxml2
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
@@ -1055,7 +1053,7 @@ jobs:
   pdo-codegen-tests-macos-aarch64:
     name: PDO Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -1073,14 +1071,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -1096,8 +1091,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Run PDO codegen shard in one process
         env:
@@ -1211,7 +1205,7 @@ jobs:
   curl-codegen-tests-macos-aarch64:
     name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1241,14 +1235,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -1264,8 +1255,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Extract test archive
         # `elephc` is a build dependency of other integration tests that invoke it via
@@ -1474,7 +1464,7 @@ jobs:
   # or misses a framework/archive on either platform, fails here.
   curl-ios-compile-link:
     name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1494,6 +1484,7 @@ jobs:
       - name: Install Rust with the iOS standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust build state
@@ -1534,7 +1525,7 @@ jobs:
   # libxml2, `-liconv`, or the SDK's zlib/bzip2 on either platform, fails here.
   xml-ios-compile-link:
     name: XML iOS Compile & Link (${{ matrix.elephc_target }})
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1554,6 +1545,7 @@ jobs:
       - name: Install Rust with the iOS standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust build state
@@ -1592,7 +1584,7 @@ jobs:
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: build-archive-macos-aarch64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -1610,14 +1602,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -1633,8 +1622,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Extract test archive
         run: |
@@ -1783,12 +1771,12 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust
-        # The exact toolchain `.github/docker/ci.Dockerfile` pins (RUST_VERSION), not
-        # floating `stable`: an unchanged commit must not start failing because a new
-        # compiler shipped.
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.95.0, 2026-09-03
+        # The exact toolchain `.github/docker/ci.Dockerfile` pins (RUST_VERSION),
+        # selected here through RUST_TOOLCHAIN, not floating `stable`: an unchanged
+        # commit must not start failing because a new compiler shipped.
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
-          toolchain: "1.95.0"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Install cargo-audit
         # Pinned for the same reason, and `--locked` so its own dependency tree is the
@@ -1824,6 +1812,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
         uses: actions/cache@v6
@@ -1903,6 +1893,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
         uses: actions/cache@v6
@@ -1958,7 +1950,7 @@ jobs:
       matrix:
         include:
           - target: macos-aarch64
-            runner: macos-14
+            runner: macos-15
           - target: linux-x86_64
             runner: ubuntu-24.04
           - target: linux-aarch64
@@ -1974,6 +1966,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
         uses: actions/cache@v6
@@ -2188,9 +2182,23 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Check undersized frame rejection in release mode
         run: cargo test -p elephc --release --lib test_emit_frame_
+
+  benchmark-tooling:
+    name: Benchmark tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check benchmark tooling and generated reports
+        run: |
+          python3 -B -m unittest discover -s benchmark/tests -v
+          python3 -B benchmark/report.py
+          git diff --exit-code -- benchmark/assets
 
   test:
     name: Build & Test
@@ -2226,6 +2234,7 @@ jobs:
       - security-audit
       - action-pins
       - frame-assertions-release
+      - benchmark-tooling
     if: always()
     steps:
       - name: Verify test jobs
@@ -2260,10 +2269,13 @@ jobs:
           test "${{ needs.security-audit.result }}" = "success"
           test "${{ needs.action-pins.result }}" = "success"
           test "${{ needs.frame-assertions-release.result }}" = "success"
+          test "${{ needs.benchmark-tooling.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
-    runs-on: macos-14  # Apple Silicon runner
+    runs-on: macos-15  # Apple Silicon runner
+    env:
+      BENCHMARK_RUNNER: macos-15
     # The benchmark suite does a full release build and only tracks trends, so it
     # runs on pushes to main rather than on every pull request.
     if: github.ref == 'refs/heads/main'
@@ -2272,28 +2284,29 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Set up PHP benchmark baseline
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          coverage: none
+          tools: none
+          ini-values: opcache.enable_cli=0, opcache.jit=0
 
       - name: Build release binary
         run: cargo build --release
 
-      - name: Run benchmark suite
-        run: python3 scripts/benchmark_suite.py --iterations 3 --warmup 1 --json benchmark-results.json --markdown benchmark-results.md
-
-      - name: Run magician benchmark suite
-        run: python3 scripts/benchmark_magician.py --iterations 3 --warmup 1 --json magician-benchmark-results.json --markdown magician-benchmark-results.md
+      - name: Run all benchmark suites
+        run: python3 -B benchmark/run.py --suite all --require-baselines --no-build --iterations 3 --warmup 1 --json benchmark-results/results.json --markdown benchmark-results/results.md
 
       - name: Publish benchmark summary
-        run: |
-          cat benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
-          printf '\n## Magician eval benchmark suite\n\n' >> "$GITHUB_STEP_SUMMARY"
-          cat magician-benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat benchmark-results/results.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
-          path: |
-            benchmark-results.json
-            benchmark-results.md
-            magician-benchmark-results.json
-            magician-benchmark-results.md
+          path: benchmark-results/
+          if-no-files-found: error

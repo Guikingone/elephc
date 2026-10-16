@@ -81,6 +81,8 @@ const NATIVE_GLOBAL_CONSTANT_STRING: i64 = 4;
 const NATIVE_GLOBAL_CONSTANT_RESOURCE: i64 = 5;
 const NATIVE_PROPERTY_REQUIRES_GET: i64 = 1;
 const NATIVE_PROPERTY_REQUIRES_SET: i64 = 2;
+/// The property's `get` contract is declared `&get` (returns by reference).
+const NATIVE_PROPERTY_GET_BY_REF: i64 = 4;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT: u8 = 2;
@@ -137,6 +139,7 @@ struct EvalNativeFunctionRegistration {
     name: String,
     signature: FunctionSig,
     bridge_supported: bool,
+    is_internal: bool,
 }
 
 /// A module-local method signature that can be registered with the eval context.
@@ -194,6 +197,7 @@ struct EvalNativeInterfacePropertyRegistration {
     type_spec: String,
     requires_get: bool,
     requires_set: bool,
+    get_by_ref: bool,
 }
 
 /// A module-local abstract class property contract that can be registered with the eval context.
@@ -204,6 +208,7 @@ struct EvalNativeAbstractPropertyRegistration {
     type_spec: String,
     requires_get: bool,
     requires_set: bool,
+    get_by_ref: bool,
 }
 
 /// A module-local property default that can be registered with the eval context.
@@ -319,6 +324,9 @@ use scope_reload::*;
 #[allow(unused_imports)]
 use status::*;
 
+/// Installing the compiled OPcache configuration is a STARTUP concern, not an eval one, so
+/// `crate::codegen::frame` reaches it directly from the prologue.
+pub(crate) use context_registration::configure_eval_opcache;
 pub(super) use calls::lower_eval;
 pub(super) use dynamic_calls::{
     lower_eval_function_call, lower_eval_function_call_array, lower_eval_method_call,

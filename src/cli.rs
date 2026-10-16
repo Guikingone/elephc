@@ -120,6 +120,7 @@ Arguments:
 
 Subcommands:
   native <COMMAND>        Native dependency management (see `elephc native --help`)
+  repl                    Interactive PHP through eval (see `elephc repl --help`)
   monitor <TARGET>        Profile a program built with --with-monitoring: a .php
                           source, a binary, or a running service's address
                           (see `elephc monitor --help`)
@@ -173,6 +174,8 @@ Linking:
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
+  --report-generics       Summarize monomorphized generic instantiations per
+                          template on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
@@ -213,6 +216,8 @@ pub(crate) struct CliConfig {
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
+    /// Print a per-template summary of monomorphized generic instantiations on stderr.
+    pub(crate) report_generics: bool,
     pub(crate) emit_debug_info: bool,
     /// Keep the symbol table in the linked executable; it is stripped by default.
     pub(crate) keep_symbols: bool,
@@ -256,8 +261,10 @@ pub(crate) struct CliConfig {
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
-/// A fully parsed top-level invocation of either the compiler or native package manager.
+/// A fully parsed compiler, REPL, monitoring, or native package invocation.
 pub(crate) enum Command {
+    /// One interactive eval session, or its isolated host build subprocess.
+    Repl(crate::repl::ReplCommand),
     /// The existing PHP compilation command and all of its normalized options.
     Compile(CliConfig),
     /// One validated `elephc native` subcommand.
@@ -266,8 +273,17 @@ pub(crate) enum Command {
     Monitor(crate::monitor::MonitorCommand),
 }
 
-/// Parses the exact top-level `native` selector before falling back to legacy compilation.
+/// Dispatches exact top-level subcommand selectors before falling back to compilation.
 pub(crate) fn parse_args(args: &[String]) -> Command {
+    if args.get(1).map(String::as_str) == Some("repl") {
+        return match crate::repl::parse_args(&args[2..]) {
+            Ok(command) => Command::Repl(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::repl::HELP);
+                process::exit(1);
+            }
+        };
+    }
     if args.get(1).map(String::as_str) == Some("monitor") {
         return match crate::monitor::parse_monitor_args(&args[2..]) {
             Ok(command) => Command::Monitor(command),
@@ -295,7 +311,7 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
 }
 
 /// Parses legacy compilation arguments into a normalized configuration.
-fn parse_compile_args(args: &[String]) -> CliConfig {
+pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
         fail("no source file given");
     }
@@ -324,6 +340,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut check_only = false;
     let mut emit_timings = false;
     let mut emit_source_map = false;
+    let mut report_generics = false;
     let mut emit_debug_info = false;
     let mut keep_symbols = false;
     let mut filename_arg = None;
@@ -429,6 +446,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_timings = true;
         } else if arg == "--source-map" {
             emit_source_map = true;
+        } else if arg == "--report-generics" {
+            report_generics = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
         } else if arg == "--keep-symbols" {
@@ -613,6 +632,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         check_only,
         emit_timings,
         emit_source_map,
+        report_generics,
         emit_debug_info,
         keep_symbols,
         regalloc_linear,
@@ -638,7 +658,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
 ///
 /// The monitoring bridges are excluded: they are how `--with-monitoring` is
 /// built, not something to ask for by mechanism.
-fn with_flag_is_known(name: &str) -> bool {
+pub(crate) fn with_flag_is_known(name: &str) -> bool {
     if MONITORING_BRIDGES.contains(&name) {
         return false;
     }

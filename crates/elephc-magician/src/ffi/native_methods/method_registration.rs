@@ -85,6 +85,7 @@ pub(super) unsafe fn register_native_interface_property_inner(
         return 0;
     };
     let property = EvalInterfaceProperty::new(property_name, requires_get, requires_set)
+        .with_get_returns_by_ref(flags & NATIVE_PROPERTY_GET_BY_REF != 0)
         .with_type(Some(property_type));
     i32::from(context.define_native_interface_property_requirement(
         interface_name,
@@ -133,6 +134,7 @@ pub(super) unsafe fn register_native_abstract_property_inner(
         return 0;
     };
     let property = EvalInterfaceProperty::new(property_name, requires_get, requires_set)
+        .with_get_returns_by_ref(flags & NATIVE_PROPERTY_GET_BY_REF != 0)
         .with_type(Some(property_type));
     i32::from(context.define_native_abstract_property_requirement(
         class_name,
