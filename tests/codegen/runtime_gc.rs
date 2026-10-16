@@ -155,6 +155,7 @@ mod serialize_magic_results;
 mod growth;
 #[path = "runtime_gc/heap.rs"]
 mod heap;
+mod split_remainders;
 #[path = "runtime_gc/implode_boxed_operand.rs"]
 mod implode_boxed_operand;
 #[path = "runtime_gc/heap_codegen.rs"]
