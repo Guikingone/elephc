@@ -164,3 +164,23 @@ fn native_catalog_rejects_dynamic_declarations_at_publication() {
         .unwrap();
     assert!(!context.publish_native_catalog());
 }
+
+/// Initialization panics return a null ABI handle and leave the module reusable.
+#[test]
+fn native_catalog_constructor_contains_initialization_panics() {
+    reset_cache();
+    let mut token = 0u64;
+    NATIVE_CATALOGS.with(|cache| {
+        let _borrow = cache.borrow_mut();
+        let context = unsafe {
+            crate::ffi::__elephc_eval_context_new_with_native_catalog(&mut token)
+        };
+        assert!(context.is_null());
+    });
+    unsafe {
+        let context = crate::ffi::__elephc_eval_context_new_with_native_catalog(&mut token);
+        assert!(!context.is_null());
+        assert_eq!(crate::ffi::__elephc_eval_context_publish_native_catalog(context), 1);
+        crate::ffi::__elephc_eval_context_free(context);
+    }
+}

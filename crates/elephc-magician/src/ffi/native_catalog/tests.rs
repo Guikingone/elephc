@@ -19,7 +19,8 @@ fn native_catalog_ffi_reuses_only_the_same_module_generation() {
         let first = __elephc_eval_context_new_with_native_catalog(&mut token);
         assert!(!first.is_null());
         assert_ne!(token, 0);
-        assert_eq!((*first).abi_version(), ABI_VERSION);
+        let context = first.as_ref().expect("catalog context allocation failed");
+        assert_eq!(context.abi_version(), ABI_VERSION);
         assert_eq!(__elephc_eval_context_native_catalog_ready(first), 0);
         assert_eq!(__elephc_eval_context_publish_native_catalog(first), 1);
         __elephc_eval_context_free(first);

@@ -44,9 +44,7 @@ pub unsafe extern "C" fn __elephc_eval_context_new_with_native_catalog(
     token: *mut u64,
 ) -> *mut ElephcEvalContext {
     std::panic::catch_unwind(|| {
-        let raw = super::context::__elephc_eval_context_new();
-        if raw.is_null() { return raw; }
-        let mut context = unsafe { Box::from_raw(raw) };
+        let mut context = super::context::allocate_eval_context();
         if let Some(generation) = unsafe { module_generation(token) } {
             context.use_native_catalog(generation);
         }
