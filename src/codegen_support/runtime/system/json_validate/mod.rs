@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - The exported validator must share JSON state slots with decode and encode entry points.
+//! - Public `json_validate()` does not publish `_json_error_source_ptr`, so its
+//!   candidate notes are not scanned. `json_decode()` publishes the original
+//!   source, and the shared string/number helpers then materialize coordinates
+//!   from `__rt_json_throw_error`.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;

@@ -423,7 +423,7 @@ fn emit_string_parser_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_utf16");
     emitter.instruction("str x12, [x9]");                                       // commit the failure index for diagnostics
     emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #10");                                         // JSON_ERROR_UTF16
     emitter.instruction("bl __rt_json_throw_error");                            // record the error and throw on JSON_THROW_ON_ERROR
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
@@ -433,7 +433,7 @@ fn emit_string_parser_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_ctrl_char");
     emitter.instruction("str x12, [x9]");                                       // commit the control-character failure index
     emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #3");                                          // JSON_ERROR_CTRL_CHAR
     emitter.instruction("bl __rt_json_throw_error");                            // record the control-character error and throw when requested
     emitter.instruction("mov x0, #0");                                          // report validation failure to the caller
@@ -443,7 +443,7 @@ fn emit_string_parser_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_utf8");
     emitter.instruction("str x12, [x9]");                                       // commit the malformed-UTF-8 failure index
     emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #5");                                          // JSON_ERROR_UTF8
     emitter.instruction("bl __rt_json_throw_error");                            // record the malformed-UTF-8 error and throw when requested
     emitter.instruction("mov x0, #0");                                          // report validation failure to the caller
@@ -453,7 +453,7 @@ fn emit_string_parser_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_syntax");
     emitter.instruction("str x12, [x9]");                                       // commit the failure index for downstream diagnostics
     emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
@@ -634,7 +634,7 @@ fn emit_number_parser_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_number_syntax");
     emitter.instruction("str x12, [x9]");                                       // store updated JSON validator state
     emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state

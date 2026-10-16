@@ -386,7 +386,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_utf16_x");
     abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // commit the failure index for diagnostics
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
-    emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
     emitter.instruction("mov rax, 10");                                         // JSON_ERROR_UTF16
     emitter.instruction("call __rt_json_throw_error");                          // record the error and throw on JSON_THROW_ON_ERROR
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state
@@ -397,7 +397,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_ctrl_char_x");
     abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // commit the control-character failure index
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
-    emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
     emitter.instruction("mov rax, 3");                                          // JSON_ERROR_CTRL_CHAR
     emitter.instruction("call __rt_json_throw_error");                          // record the control-character error and throw when requested
     emitter.instruction("mov rax, 0");                                          // report validation failure to the caller
@@ -408,7 +408,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_utf8_x");
     abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // commit the malformed-UTF-8 failure index
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
-    emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
     emitter.instruction("mov rax, 5");                                          // JSON_ERROR_UTF8
     emitter.instruction("call __rt_json_throw_error");                          // record the malformed-UTF-8 error and throw when requested
     emitter.instruction("mov rax, 0");                                          // report validation failure to the caller
@@ -419,7 +419,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_syntax_x");
     abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
-    emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state
@@ -594,7 +594,7 @@ fn emit_number_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_number_syntax_x");
     abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
-    emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state

@@ -1085,7 +1085,8 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_skip_ws` | Shared RFC 8259 whitespace skipper used by `json_decode_mixed` and its recursive array/object parsers; advances a caller-owned cursor to the next token or caller-supplied limit | JSON slice pointer, exclusive limit, cursor | updated cursor |
 | `__rt_json_validate` | Standalone RFC 8259 validator used by `json_validate()`; scalar validator helpers are also reused by `json_decode_mixed` for strings and numbers | `x1`/`x2` = JSON string | `x0` = 1 valid / 0 invalid |
 | `__rt_json_depth_enter` / `__rt_json_depth_exit` | Maintain `_json_active_depth` and compare against `_json_depth_limit` for recursive encode/decode/validate walks | global JSON state | status / updated state |
-| `__rt_json_set_error_location` | Convert a decoder target pointer into one-based line/column data relative to `_json_error_source_ptr` | target pointer | updates `_json_error_location_active`, `_json_error_line`, `_json_error_column` |
+| `__rt_json_note_error_candidate` | Store an absolute candidate pointer, or one byte past the offending token, without reading the source | candidate pointer | updates `_json_error_candidate_ptr` |
+| `__rt_json_set_error_location` | If a decode source is active, scan `[source, min(candidate, source+len))` into one-based line/column data, then clear the source and candidate pointers. Called only from `__rt_json_throw_error` | global candidate and source slots | updates `_json_error_location_active`, `_json_error_line`, `_json_error_column`, then zeroes the source slots |
 | `__rt_json_error_message` | Build the current JSON error message, appending the PHP 8.6 `" near location line:column"` suffix when decode location state is active | global JSON state | `x1`/`x2` = message |
 | `__rt_json_throw_error` | Record a JSON error code and construct/throw `JsonException` when `JSON_THROW_ON_ERROR` is active, using the shared formatted JSON error message | `x0` = JSON_ERROR_* code | may not return |
 | `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table, including decode location suffixes when active | global JSON state | `x1`/`x2` = message |
@@ -1595,10 +1596,14 @@ _buffer_registry_next:
 .comm _json_validate_ptr, 8  ; validator input pointer
 .comm _json_validate_len, 8  ; validator input length
 .comm _json_decode_assoc, 8  ; json_decode object-shape selector
-.comm _json_error_source_ptr, 8 ; json_decode input pointer for error locations
+.comm _json_error_source_ptr, 8 ; original json_decode input pointer
+.comm _json_error_source_len, 8 ; original json_decode input length in bytes
+.comm _json_error_candidate_ptr, 8 ; absolute candidate byte, noted in O(1)
 .comm _json_error_location_active, 8 ; whether line/column should be appended
 .comm _json_error_line, 8    ; one-based line for the last json_decode error
 .comm _json_error_column, 8  ; one-based column for the last json_decode error
+.comm _json_error_scan_count, 8 ; completed diagnostic location scans
+.comm _json_error_scan_bytes, 8 ; source bytes loaded by those scans
 _heap_max:
     .quad 8388608            ; configured heap size limit
 .comm _gc_allocs, 8          ; allocation counter
