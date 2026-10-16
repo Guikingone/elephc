@@ -19,6 +19,7 @@ mod dead_inst_test;
 mod dead_store_test;
 mod dominance_test;
 mod driver_test;
+mod fresh_mixed_transfer_test;
 mod identity_arith_test;
 mod inline_test;
 mod integer_range_test;

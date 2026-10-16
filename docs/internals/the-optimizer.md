@@ -12,6 +12,15 @@ declaration pruning before lowering; the EIR backend then runs value-, block-,
 and dominance-aware passes over the lowered module. This page focuses on the
 AST layer.
 
+After the EIR module reaches its ordinary optimization fixed point, an ownership
+finalizer transfers fresh checked integer add, subtract, and multiply results
+through assignment copies. It removes `MixedClone` only when the owned numeric
+cell is used solely by that clone and its adjacent release. Borrowed, retained,
+shared, and otherwise observed sources keep their copy. Checked arithmetic and
+its float promotion remain in place. Earlier representation-changing passes do
+not run again after this transfer, so removing the clone cannot expose a new
+integer-only sink. `--ir-opt=off` retains the original copy path.
+
 Today the AST optimizer is split into six passes:
 
 1. `fold_constants_for_target(program, target)` runs before type checking
