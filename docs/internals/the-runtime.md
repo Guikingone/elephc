@@ -59,6 +59,7 @@ __rt_itoa          integer → string
 __rt_resource_to_string resource → "Resource id #N"
 __rt_ftoa          float → string
 __rt_concat        string + string → string
+__rt_str_append    consuming append onto a local string owner
 __rt_str_eq        string == string → bool
 __rt_array_new     allocate a new array
 __rt_throw_current throw the active exception
@@ -230,6 +231,25 @@ Concatenates two strings by copying both into the [concat buffer](memory-model.m
 3. Copy right string bytes
 4. Update buffer offset
 5. Return pointer to start of result + total length
+
+### `__rt_str_append` — Consuming string append
+
+**File:** `strings/str_append.rs`, with the bodies in `strings/str_append/aarch64.rs` and `strings/str_append/x86_64.rs`
+
+Appends a borrowed right-hand string to a string owner that EIR has already decided to consume. Lowering calls it for an admitted `StrAppend`; ordinary `StrConcat` still calls `__rt_concat`. The helper uses the same pointer/length ABI as concat and does not allocate concat scratch. The header's size field is the payload capacity. The returned pair's length word is the logical length.
+
+**Input:** AArch64 `x1`/`x2` = left owner (ptr/len), `x3`/`x4` = borrowed right-hand string (ptr/len). x86_64 `rax`/`rdx` = left owner, `rdi`/`rsi` = borrowed right-hand string. Every AArch64 target, including iOS device and Simulator, uses the AArch64 body. Linux x86_64 uses the x86_64 body.
+**Output:** AArch64 `x1`/`x2`, x86_64 `rax`/`rdx` = result pointer and logical length.
+
+**Algorithm:**
+
+1. Add the two lengths before any payload access. Unsigned wrap, or a sum above `0xfffffff8` (the largest aligned payload the heap header can represent), branches to `__rt_alloc_overflow`. That trampoline recovers through an active cdylib boundary; an ordinary executable writes the allocation-overflow fatal and exits. On the unique kind-1 path, a right-hand interval whose end address wraps takes the same branch before the overlap test.
+2. A zero-length right-hand side returns the original pointer and length. Ownership and mbstring origin stay as they were.
+3. `__rt_heap_kind` classifies the left pointer. Kind 1 is an ordinary owned string. A literal, concat-scratch slice, or other non-kind-1 value is copied into a new allocation. This helper does not release that input.
+4. A kind-1 string with refcount 1, whose right-hand side lies completely outside `[payload, payload + capacity)`, is reused when the new logical length fits in that capacity. Reuse keeps the same owner. The suffix write happens after the origin refresh below.
+5. Otherwise it allocates before retiring any old owner. A unique buffer that is too small doubles its previous capacity. A shared string or an overlap, including appending a string to itself, copies instead, and that growth seed is the old logical length rather than unused spare capacity. A non-kind-1 input has no capacity to double, so the seed is zero. The reservation is the larger of that growth and the required length, and at least 16 bytes. When doubling would exceed `0xfffffff8`, the reservation is the exact required length. The new block is stamped kind 1, with the x86_64 `"ELPH"` marker in the kind word.
+6. When the mbstring runtime feature or the eval bridge is enabled, a non-empty append calls `__rt_mbstring_ini_fresh` with the result pointer and the new length before any result byte is stored, installing a fresh INI origin for the changed string. The call is omitted when those features are off. An empty append has already returned, so its origin is preserved either way.
+7. A new allocation copies the old prefix, then the right-hand side, including embedded NUL bytes. Only after that copy does the helper `__rt_decref_any` the old kind-1 owner. Reused unique owners skip that release. `__rt_heap_alloc` runs before the decref, so a failed allocation leaves the old local owner in place.
 
 ### `__rt_atoi` — String to integer
 

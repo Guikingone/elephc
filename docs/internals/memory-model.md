@@ -305,7 +305,7 @@ This is a bounds check, not an optimization. A producer that skips it writes str
 ### Implications
 
 - **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in 64KB — plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). For ordinary code this is comfortably within 64KB, and a result that does not fit takes the heap fallback above rather than overflowing.
-- **No mutation.** You can't modify a string in place — you always create a new one.
+- **Scratch copies.** Concatenation writes a new slice into `_concat_buf`, or a new heap block when the result outgrows the buffer. That scratch path leaves existing string bytes unchanged. In-place extension is the consuming heap append in [Performance characteristics](#performance-characteristics): a unique kind-1 buffer whose right-hand side does not overlap it.
 - **Scratch only.** The buffer is strictly temporary. Anything that needs to survive goes to the heap.
 
 ## The heap
@@ -1150,8 +1150,50 @@ The runtime now includes a targeted collector for heap-backed `array`, associati
 
 ### Performance characteristics
 
-For a loop like `for ($i = 0; $i < 1000; $i++) { $s .= "x"; }`:
-- Each iteration frees the old `$s` and allocates a new one
-- Old blocks go to the free list, new blocks come from bump allocation (growing size)
-- Net heap usage is O(N) for the final string, not O(N²)
-- With 8MB heap, this handles thousands of iterations comfortably
+A loop such as `for ($i = 0; $i < 1000; $i++) { $s .= "x"; }` uses
+[`__rt_str_append`](the-runtime.md#__rt_str_append-consuming-string-append) when
+`$s` is an initialized plain string local and the right-hand side is a string
+literal or an initialized plain string local. A borrowed parameter is allowed
+on the right. The EIR admission rules for that shape, including `$s = $s . $rhs`,
+are the **Consuming local string append** section of [The EIR Design](the-ir.md).
+Parameters, captures, references, globals, extern or eval-visible storage, and
+mixed or retyped slots stay on ordinary assignment: the previous value is
+released and a new string is allocated.
+
+For an admitted append, [`__rt_str_append`](the-runtime.md#__rt_str_append-consuming-string-append)
+chooses between in-place reuse and a copy:
+
+- A unique heap kind-1 string (refcount 1) whose right-hand side lies completely
+  outside that allocation is extended in place when the new logical length fits
+  in the header's payload capacity. The header size is the capacity. The
+  returned pair's length word is the logical length. The helper writes only
+  the new suffix and keeps the same owner.
+- When that unique buffer is too small, growth is geometric: the helper doubles
+  the previous capacity, then reserves at least the required length and at least
+  16 bytes. A doubled size larger than `0xfffffff8` (the largest aligned payload
+  the header can represent) is replaced by the exact required length. The new
+  block is kind 1, the old prefix and the suffix are copied into it, and the
+  previous kind-1 owner is released only after that copy finishes.
+- Copy-on-write applies when the string is shared (refcount other than 1), when
+  it is not kind 1 (a literal, a concat-scratch slice, or another non-owned
+  view), or when the right-hand side overlaps the allocation, including a
+  self-append. Those paths allocate independent storage and finish the copy
+  before a kind-1 owner is retired. Shared and overlapping copies seed growth
+  from the old logical length, so a retained snapshot does not keep doubling
+  unused spare capacity. A non-kind-1 input has no capacity to double; its
+  reservation is the required length, or 16 bytes when that is larger, and this
+  helper leaves that input for its existing owner to release.
+- Spare capacity is the trade-off. Doubling leaves the live block with unused
+  bytes — up to almost twice the logical length — and each byte of a unique
+  append loop is copied only when the buffer grows, so the copy volume across
+  the loop stays linear in the final length. Shared and overlap copies still
+  double, from the logical length rather than from leftover capacity, so their
+  spare bytes stay proportional to the bytes the snapshot holds.
+- An empty append returns the original owner and leaves its mbstring origin
+  unchanged. A wrapping length, or a replacement the header cannot represent,
+  reaches `__rt_alloc_overflow` before any payload byte is written.
+
+The retained result is one block whose capacity follows the final length. Blocks
+released by a growth copy return to the free list; the bump allocator supplies
+a block when the free list cannot. The default 8MB heap is sized for that one
+live string, not for one block per iteration.
