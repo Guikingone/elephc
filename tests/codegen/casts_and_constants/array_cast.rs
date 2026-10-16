@@ -15,6 +15,8 @@
 //!   associative literals, including with the EIR optimizer off and under `--heap-debug`.
 //! - `test_array_cast_of_unpredictable_sources_inside_literals_follows_php` covers sources
 //!   whose syntactic type is `int` but whose lowered type is not, in both literal shapes.
+//! - `test_array_cast_of_float_arithmetic_inside_literals_follows_php` checks `%` and the
+//!   other arithmetic operators on a runtime float parameter.
 
 use super::*;
 
@@ -775,4 +777,221 @@ fn test_array_cast_of_unpredictable_sources_inside_literals_leaves_a_clean_heap(
 fn test_array_cast_of_unpredictable_sources_inside_literals_leaves_a_clean_heap_without_ir_opt() {
     let out = without_ir_opt(|| compile_and_run_with_heap_debug(ARRAY_CAST_UNPREDICTABLE_SOURCES));
     assert_clean_unpredictable_sources(out);
+}
+
+/// `(array)` of arithmetic on a runtime float, in indexed and associative literals.
+///
+/// `%` of a float parameter is an int: the lowering coerces before the float path.
+/// `/`, `**`, `+`, `-`, and `*` stay floats. Shifts and `&`, `|`, `^` are always ints;
+/// a float reaches them through `mixed`, which the checker accepts and the lowering
+/// coerces. `~` requires an int, so the float is cast with `(int)` first.
+const ARRAY_CAST_FLOAT_ARITHMETIC: &str = r#"<?php
+function show($label, $row) {
+    echo $label, " json=", json_encode($row), "\n";
+    echo $label, " v=", $row[0], "\n";
+    echo $label, " count=", count($row), "\n";
+    echo $label, " foreach=";
+    foreach ($row as $k => $v) {
+        echo json_encode($k), ":", json_encode($v), ";";
+    }
+    echo "\n";
+}
+function arith(float $x) {
+    $idx = [(array)($x % 2)];
+    show("mod-i", $idx[0]);
+    $map = ["k" => (array)($x % 2)];
+    show("mod-a", $map["k"]);
+    $idx = [(array)($x / 2)];
+    show("div-i", $idx[0]);
+    $map = ["k" => (array)($x / 2)];
+    show("div-a", $map["k"]);
+    $idx = [(array)($x ** 2)];
+    show("pow-i", $idx[0]);
+    $map = ["k" => (array)($x ** 2)];
+    show("pow-a", $map["k"]);
+    $idx = [(array)($x + 0.25)];
+    show("add-i", $idx[0]);
+    $map = ["k" => (array)($x + 0.25)];
+    show("add-a", $map["k"]);
+    $idx = [(array)($x - 0.75)];
+    show("sub-i", $idx[0]);
+    $map = ["k" => (array)($x - 0.75)];
+    show("sub-a", $map["k"]);
+    $idx = [(array)($x * 2)];
+    show("mul-i", $idx[0]);
+    $map = ["k" => (array)($x * 2)];
+    show("mul-a", $map["k"]);
+}
+function bits(mixed $n) {
+    $idx = [(array)($n << 1)];
+    show("shl-i", $idx[0]);
+    $map = ["k" => (array)($n << 1)];
+    show("shl-a", $map["k"]);
+    $idx = [(array)($n >> 1)];
+    show("shr-i", $idx[0]);
+    $map = ["k" => (array)($n >> 1)];
+    show("shr-a", $map["k"]);
+    $idx = [(array)($n & 3)];
+    show("and-i", $idx[0]);
+    $map = ["k" => (array)($n & 3)];
+    show("and-a", $map["k"]);
+    $idx = [(array)($n | 2)];
+    show("or-i", $idx[0]);
+    $map = ["k" => (array)($n | 2)];
+    show("or-a", $map["k"]);
+    $idx = [(array)($n ^ 1)];
+    show("xor-i", $idx[0]);
+    $map = ["k" => (array)($n ^ 1)];
+    show("xor-a", $map["k"]);
+}
+function complement(float $x) {
+    $n = (int)$x;
+    $idx = [(array)(~$n)];
+    show("not-i", $idx[0]);
+    $map = ["k" => (array)(~$n)];
+    show("not-a", $map["k"]);
+}
+$x = $argc > 5 ? 1.25 : 5.75;
+arith($x);
+bits($x);
+complement($x);
+"#;
+
+/// Reference output for [`ARRAY_CAST_FLOAT_ARITHMETIC`].
+const ARRAY_CAST_FLOAT_ARITHMETIC_OUT: &str = r#"mod-i json=[1]
+mod-i v=1
+mod-i count=1
+mod-i foreach=0:1;
+mod-a json=[1]
+mod-a v=1
+mod-a count=1
+mod-a foreach=0:1;
+div-i json=[2.875]
+div-i v=2.875
+div-i count=1
+div-i foreach=0:2.875;
+div-a json=[2.875]
+div-a v=2.875
+div-a count=1
+div-a foreach=0:2.875;
+pow-i json=[33.0625]
+pow-i v=33.0625
+pow-i count=1
+pow-i foreach=0:33.0625;
+pow-a json=[33.0625]
+pow-a v=33.0625
+pow-a count=1
+pow-a foreach=0:33.0625;
+add-i json=[6]
+add-i v=6
+add-i count=1
+add-i foreach=0:6;
+add-a json=[6]
+add-a v=6
+add-a count=1
+add-a foreach=0:6;
+sub-i json=[5]
+sub-i v=5
+sub-i count=1
+sub-i foreach=0:5;
+sub-a json=[5]
+sub-a v=5
+sub-a count=1
+sub-a foreach=0:5;
+mul-i json=[11.5]
+mul-i v=11.5
+mul-i count=1
+mul-i foreach=0:11.5;
+mul-a json=[11.5]
+mul-a v=11.5
+mul-a count=1
+mul-a foreach=0:11.5;
+shl-i json=[10]
+shl-i v=10
+shl-i count=1
+shl-i foreach=0:10;
+shl-a json=[10]
+shl-a v=10
+shl-a count=1
+shl-a foreach=0:10;
+shr-i json=[2]
+shr-i v=2
+shr-i count=1
+shr-i foreach=0:2;
+shr-a json=[2]
+shr-a v=2
+shr-a count=1
+shr-a foreach=0:2;
+and-i json=[1]
+and-i v=1
+and-i count=1
+and-i foreach=0:1;
+and-a json=[1]
+and-a v=1
+and-a count=1
+and-a foreach=0:1;
+or-i json=[7]
+or-i v=7
+or-i count=1
+or-i foreach=0:7;
+or-a json=[7]
+or-a v=7
+or-a count=1
+or-a foreach=0:7;
+xor-i json=[4]
+xor-i v=4
+xor-i count=1
+xor-i foreach=0:4;
+xor-a json=[4]
+xor-a v=4
+xor-a count=1
+xor-a foreach=0:4;
+not-i json=[-6]
+not-i v=-6
+not-i count=1
+not-i foreach=0:-6;
+not-a json=[-6]
+not-a v=-6
+not-a count=1
+not-a foreach=0:-6;
+"#;
+
+/// Asserts stdout and a clean `--heap-debug` summary for the float-arithmetic fixture.
+fn assert_clean_float_arithmetic(out: ProgramOutput) {
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, ARRAY_CAST_FLOAT_ARITHMETIC_OUT, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies float `%`, shifts, bitwise ops, `/`, and `**` inside array literals.
+#[test]
+fn test_array_cast_of_float_arithmetic_inside_literals_follows_php() {
+    assert_eq!(
+        compile_and_run(ARRAY_CAST_FLOAT_ARITHMETIC),
+        ARRAY_CAST_FLOAT_ARITHMETIC_OUT
+    );
+}
+
+/// Verifies the float-arithmetic literal casts with the EIR optimizer off.
+#[test]
+fn test_array_cast_of_float_arithmetic_inside_literals_follows_php_without_ir_opt() {
+    let out = without_ir_opt(|| compile_and_run(ARRAY_CAST_FLOAT_ARITHMETIC));
+    assert_eq!(out, ARRAY_CAST_FLOAT_ARITHMETIC_OUT);
+}
+
+/// Verifies the float-arithmetic fixture releases every array under `--heap-debug`.
+#[test]
+fn test_array_cast_of_float_arithmetic_inside_literals_leaves_a_clean_heap() {
+    assert_clean_float_arithmetic(compile_and_run_with_heap_debug(ARRAY_CAST_FLOAT_ARITHMETIC));
+}
+
+/// Verifies the heap-debug float-arithmetic run with the EIR optimizer off.
+#[test]
+fn test_array_cast_of_float_arithmetic_inside_literals_leaves_a_clean_heap_without_ir_opt() {
+    let out = without_ir_opt(|| compile_and_run_with_heap_debug(ARRAY_CAST_FLOAT_ARITHMETIC));
+    assert_clean_float_arithmetic(out);
 }

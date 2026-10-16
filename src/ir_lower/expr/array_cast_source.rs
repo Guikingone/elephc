@@ -12,7 +12,7 @@
 //! - A kind whose only syntactic answer is `Int` is `Mixed`, so the cast takes the boxed
 //!   dynamic path instead of stamping `array<int>` over a property hash or another scalar.
 
-use crate::ir_lower::context::LoweringContext;
+use crate::ir_lower::context::{value_ir_type, LoweringContext};
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, MagicConstant};
 use crate::types::PhpType;
 
@@ -25,11 +25,14 @@ use super::indexed_array_literals::{
 };
 use super::lazy_branches::{strip_void_from_union, wider_type_for_merge};
 use super::merge_temps::{
-    branch_merge_result_type, match_merge_result_type, short_ternary_merge_result_type,
+    branch_merge_result_type, fallback_expr_type, match_merge_result_type,
+    short_ternary_merge_result_type,
 };
 use super::numeric_binary::{
     array_union_value_type, assoc_union_key_type, indexed_array_union_element_type,
+    numeric_binary_identity, numeric_binary_result_type,
 };
+use super::unary_logic::int_unary_result_type;
 use super::{
     array_access_expr_value_type_for_ir, eir_user_function_return_type, method_call_expr_type_for_ir,
     property_access_expr_type_for_ir, static_method_call_expr_type_for_ir,
@@ -68,7 +71,7 @@ pub(super) fn array_cast_source_type_for_ir(
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,
         ExprKind::BoolLiteral(_) => PhpType::Bool,
-        ExprKind::BinaryOp { left, op, right } => binary_source_type(ctx, left, op, right),
+        ExprKind::BinaryOp { left, op, right } => binary_source_type(ctx, left, op, right, expr),
         ExprKind::NullCoalesce { value, default } => null_coalesce_source_type(ctx, value, default),
         ExprKind::ShortTernary { value, default } => {
             short_ternary_merge_result_type(ctx, value, default)
@@ -154,15 +157,12 @@ fn negate_source_type(ctx: &LoweringContext<'_, '_>, inner: &Expr) -> PhpType {
     }
 }
 
-/// Returns the type of `~`.
+/// Returns the type of `~`, using the same rule as `lower_int_unary`.
 ///
-/// An int or bool is an `i64` bitwise complement. Any other operand is a runtime call whose
-/// result is boxed.
+/// An int or bool is an `i64` complement. A float is not coerced to int here, so the result
+/// is the mixed runtime call rather than `int`.
 fn bitnot_source_type(ctx: &LoweringContext<'_, '_>, inner: &Expr) -> PhpType {
-    match array_cast_source_type_for_ir(ctx, inner).codegen_repr() {
-        PhpType::Int | PhpType::Bool => PhpType::Int,
-        _ => PhpType::Mixed,
-    }
+    int_unary_result_type(value_ir_type(&array_cast_source_type_for_ir(ctx, inner)))
 }
 
 /// Returns the type of a binary operator from the operand types lowering will see.
@@ -171,6 +171,7 @@ fn binary_source_type(
     left: &Expr,
     op: &BinOp,
     right: &Expr,
+    expr: &Expr,
 ) -> PhpType {
     match op {
         BinOp::Concat => PhpType::Str,
@@ -186,20 +187,28 @@ fn binary_source_type(
         | BinOp::Or
         | BinOp::Xor => PhpType::Bool,
         BinOp::Spaceship => PhpType::Int,
-        BinOp::Add => array_add_source_type(ctx, left, right),
-        BinOp::Div => scalar_arithmetic_source_type(ctx, left, op, right, true),
-        BinOp::Sub | BinOp::Mul | BinOp::Pow | BinOp::Mod => {
-            scalar_arithmetic_source_type(ctx, left, op, right, false)
-        }
-        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
-            PhpType::Int
-        }
+        BinOp::Add => array_add_source_type(ctx, left, right, expr),
+        BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::Pow
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::ShiftLeft
+        | BinOp::ShiftRight => numeric_binary_php_type(ctx, left, op, right, expr),
         BinOp::NullCoalesce => PhpType::Mixed,
     }
 }
 
 /// Returns the type of `+`, including array union when both operands are arrays.
-fn array_add_source_type(ctx: &LoweringContext<'_, '_>, left: &Expr, right: &Expr) -> PhpType {
+fn array_add_source_type(
+    ctx: &LoweringContext<'_, '_>,
+    left: &Expr,
+    right: &Expr,
+    expr: &Expr,
+) -> PhpType {
     let left_ty = array_cast_source_type_for_ir(ctx, left).codegen_repr();
     let right_ty = array_cast_source_type_for_ir(ctx, right).codegen_repr();
     let united = match (&left_ty, &right_ty) {
@@ -240,63 +249,29 @@ fn array_add_source_type(ctx: &LoweringContext<'_, '_>, left: &Expr, right: &Exp
         }
         _ => None,
     };
-    united.unwrap_or_else(|| scalar_arithmetic_source_type(ctx, left, &BinOp::Add, right, false))
+    united.unwrap_or_else(|| numeric_binary_php_type(ctx, left, &BinOp::Add, right, expr))
 }
 
-/// Returns the type of scalar arithmetic, matching the checked-int and float paths.
+/// Returns the PHP type `lower_numeric_binary` stamps, from the operand types it will see.
 ///
-/// Division is a float unless an operand is only known at runtime. Integer `+`, `-`, and `*`
-/// stay `int` for the overflow-free identities (`x + 0`, `x - 0`, `x * 0`, `x * 1`) and are
-/// boxed otherwise, because the checked helper can promote an overflow to float.
-fn scalar_arithmetic_source_type(
+/// `%` and the bitwise operators are decided before the float check, so a float operand still
+/// produces `int`. `/` and `**` follow the same helper, including float division of two ints.
+fn numeric_binary_php_type(
     ctx: &LoweringContext<'_, '_>,
     left: &Expr,
     op: &BinOp,
     right: &Expr,
-    force_float: bool,
+    expr: &Expr,
 ) -> PhpType {
-    let left_ty = array_cast_source_type_for_ir(ctx, left).codegen_repr();
-    let right_ty = array_cast_source_type_for_ir(ctx, right).codegen_repr();
-    if matches!(left_ty, PhpType::Mixed | PhpType::Union(_))
-        || matches!(right_ty, PhpType::Mixed | PhpType::Union(_))
-    {
-        return PhpType::Mixed;
-    }
-    if force_float || left_ty == PhpType::Float || right_ty == PhpType::Float {
-        return PhpType::Float;
-    }
-    if matches!(op, BinOp::Mod) {
-        return PhpType::Int;
-    }
-    if matches!(op, BinOp::Pow) {
-        return PhpType::Mixed;
-    }
-    if matches!(left_ty, PhpType::Int | PhpType::Bool)
-        && matches!(right_ty, PhpType::Int | PhpType::Bool)
-        && int_arithmetic_identity(op, left, right)
-    {
-        return PhpType::Int;
-    }
-    if matches!(left_ty, PhpType::Int | PhpType::Bool)
-        && matches!(right_ty, PhpType::Int | PhpType::Bool)
-    {
-        return PhpType::Mixed;
-    }
-    PhpType::Mixed
-}
-
-/// Returns whether an integer operation cannot overflow, matching the lowering shortcut.
-fn int_arithmetic_identity(op: &BinOp, left: &Expr, right: &Expr) -> bool {
-    let left_zero = matches!(left.kind, ExprKind::IntLiteral(0));
-    let right_zero = matches!(right.kind, ExprKind::IntLiteral(0));
-    let left_one = matches!(left.kind, ExprKind::IntLiteral(1));
-    let right_one = matches!(right.kind, ExprKind::IntLiteral(1));
-    match op {
-        BinOp::Add => left_zero || right_zero,
-        BinOp::Sub => right_zero,
-        BinOp::Mul => left_zero || right_zero || left_one || right_one,
-        _ => false,
-    }
+    let lhs = value_ir_type(&array_cast_source_type_for_ir(ctx, left));
+    let rhs = value_ir_type(&array_cast_source_type_for_ir(ctx, right));
+    numeric_binary_result_type(
+        op,
+        lhs,
+        rhs,
+        &fallback_expr_type(expr),
+        numeric_binary_identity(op, left, right),
+    )
 }
 
 /// Returns the type of `??` after the null arm is removed.
