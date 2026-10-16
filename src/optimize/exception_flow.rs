@@ -75,6 +75,10 @@ pub(super) struct ExceptionFlowAnalysis {
 
 /// Returns whether argument binding can throw before entering an otherwise clean body.
 fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
+    // Literal false arguments are checked before ABI truthiness coercion, even for pure bodies.
+    if signature.params.iter().any(|(_, ty)| ty == &PhpType::False) {
+        return true;
+    }
     signature.params.iter().enumerate().any(|(index, (_, ty))| {
         signature.ref_params.get(index).copied().unwrap_or(false)
             && signature.declared_params.get(index).copied().unwrap_or(false)

@@ -21,6 +21,16 @@ pub(super) fn load_property_store_value_to_result(
 ) -> Result<()> {
     let slot_ty = &slot.php_type;
     let value_ty = ctx.value_php_type(value)?;
+    // A `false`-declared slot accepts ONLY the exact false bool: route a boxed mixed/union
+    // source through the false-slot guard instead of the bool truthiness cast, which would
+    // coerce `0`, `""` and `[]` into `false` where php throws. The nullable `?false` shape is
+    // a recorded limitation: its slot stores a box through the mixed machinery, and its
+    // default/read paths do not round-trip a stored `false` today.
+    if slot_ty == &PhpType::False
+        && matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        return emit_false_slot_mixed_guard(ctx, value, slot);
+    }
     let coerced_done_label = if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
         emit_mixed_property_type_guard(ctx, value, slot)?
     } else {
@@ -231,6 +241,9 @@ pub(super) fn emit_packed_field_store(
             abi::emit_push_reg(ctx.emitter, base_reg);
             ctx.load_value_to_reg(value, int_reg)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
+            if slot.php_type == PhpType::False {
+                emit_false_slot_payload_guard(ctx, slot);
+            }
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
         }
         _ => {

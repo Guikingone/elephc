@@ -63,6 +63,8 @@ mod property_values;
 mod receiver_place;
 mod runtime_calls;
 mod runtime_class_messages;
+mod literal_parameter_guards;
+pub(in crate::codegen) use literal_parameter_guards::emit_boxed_literal_parameter_guard;
 mod scoped_constants;
 mod static_locals;
 mod static_properties;

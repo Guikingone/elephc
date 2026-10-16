@@ -69,6 +69,21 @@ parameters, liveness, dominance, register placement, CSE, LICM, and inlining.
 
 ## Backend Contract
 
+Virtual instance, interface and late-static calls validate literal `false` and
+`null` parameters against the runtime implementation before ABI coercion.
+Ordinary signatures skip the literal guard lookup. A module-local parameter
+index caches candidates by method, staticness and argument count, including
+empty results, without resolving emitted method bodies. Ancestor traversal
+follows the complete chain with cycle detection; valid deep hierarchies do
+not lose argument checks.
+
+Runtime callable invokers also check declared `false` and `null` value parameters
+before converting their boxed arguments to the callee ABI. Indexed and named
+containers use the same checks after normal argument binding. Diagnostics name
+the declaring method while dispatch retains the actual receiver or called class.
+Temporary source boxes and earlier converted arguments remain rooted until the
+call succeeds or unwinds; null has no pushed result slot during source cleanup.
+
 The compiler lowers EIR through the target-aware assembly emitter in
 `src/codegen/`.
 
@@ -1707,6 +1722,125 @@ statement-boundary concat-buffer reset in the host frame and would otherwise fre
 in-flight scratch string argument. Call-site name resolution (`call` Data immediates
 and `function_variant_call` include-variant refs) uses snapshots taken before
 mutation, so the rewrite loop never aliases the module while holding a function.
+
+### Identical Lowered-Body Folding
+
+Monomorphization leaves duplication behind: a `T`-independent generic function
+instantiated once per concrete object class lowers to the same machine code every
+time, under a different name. elephc does **not** merge those bodies in EIR. An
+EIR-level merge compares a projection of the program, and every projection used so
+far — structural identity under a collapsed object shape, with nominal-use
+refusals bolted on — kept missing ways the backend consults the exact type after
+the projection claimed two bodies equal: property slot offsets keyed by the
+receiver's class, `get_object_vars` baking the lexical class id, `__toString` casts
+resolved through a `Cast`, static-local storage symbols derived from the
+instantiated name, and class-naming error strings. Getting each of those wrong is a
+silent miscompilation, so the projection approach was removed entirely.
+
+The active mechanism is emission-time folding (`src/codegen/block_emit.rs`). After
+the EIR is final, every candidate body — free functions and class methods whose
+name carries a type-argument list — is lowered **alone** into a fresh emitter with
+its own literal pool, so the text depends only on the body and the module's
+read-only context, never on label counters or caches the whole-module emission had
+reached. The isolated lowering's text AND its data section are shape-normalized:
+
+- every symbol naming the candidate (entry, epilogue and exceptional-cleanup
+  suffixes, the raw name the source-map marker quotes) is replaced by a
+  placeholder — except inside `.ascii` payloads, where the candidate's own name is
+  real string data whose bytes the program can print;
+- internal labels are renamed by definition order (the Linux assembler spells them
+  `.L_eir_…` where Apple spells them `L_eir_…`);
+- the isolated data section's emitted text is appended to the comparison, so two
+  bodies whose literal pools intern different contents under the same label are
+  refused — this is what keeps a folded `gettype` from returning the wrong word.
+
+Bodies whose normalized text is byte-equal share one emitted body: the survivor
+keeps the full body and each victim's entry becomes a jump to it
+(`emit_folded_body`). The victim **keeps its EIR function**, so direct calls still
+resolve the instantiation's own parameter types and pick their own coercion from
+them — the property that makes an int/bool fold sound where a name redirect would
+not be. The victim's `.globl` entry stays addressable through the thunk, so
+exports, vtables, callables and reflection all keep resolving it.
+
+Two state classes are refused up front: a body with a `StaticLocal` or
+`GlobalAlias` local (its storage symbol is derived from the instantiated name, and
+the erasure would fuse two counters into one), and the usual wrapper shapes
+(`main`, generators, closures, synthetic and invoker bodies).
+
+Because the comparison runs on the backend's final output, it is sound by
+observation: any lowering that consults the exact type — a boxing tag, a cast's
+resolved symbol, a class id, a class-naming error string — shows up in the emitted
+text or data and refuses the fold. The guard cannot rot as the lowering grows.
+What it costs is compile time (every candidate is lowered twice) and IR memory
+(duplicate functions are not freed), while the emitted size win is what remains:
+identical bodies collapse to one body plus a jump each.
+
+Class-naming error data makes whole method slots unfoldable in practice: a typed
+property read, `isset`, and an array append all carry the uninitialized-access
+fatal (`Typed property Box<User>::$value …`), and a dynamic property access on a
+`mixed` receiver carries the lexical-class private-property message. Constructors
+and class-independent stores carry no such data and fold. `--report-generics`
+measures the residual opportunity per slot (the assembly oracle), so a template's
+folding headroom is visible rather than guessed.
+
+### Why the earlier EIR shape merge was rejected
+
+The earlier EIR proposal used `shape()` and `has_nominal_use` to decide which type
+information could be erased. Those mechanisms were removed: EIR shape equality did
+not prove that the backend would emit equivalent code. The active merge compares
+normalized assembly bodies, including type-dependent tags and lowering choices.
+
+`Int`/`Bool`/`Float` illustrate why the rejected shape approach was insufficient. The backend stores scalars
+in raw untagged `I64` slots and bakes the runtime value tag only when boxing a value
+into a `Mixed` cell (`codegen_support/value_boxing.rs`), reading it from the exact
+`PhpType`: an int boxes with tag 0, a bool with tag 3. The tag is not an EIR immediate,
+so two bodies differing only by the scalar's static type compare equal under a collapsed
+shape while emitting different boxing code — the survivor's tag would be applied to the
+other instantiation.
+
+The blocker is wider than the boxing tag, and it splits into two classes:
+
+- **Constant divergence** — the same lowering arm bakes a different constant: the boxing
+  tag above, static-store tags, a search's `expected_tag`, `array_fill` element tags.
+  `value_php_type` is read and branched on at over a hundred lowering sites, and
+  `runtime_value_tag` is baked at about ninety codegen points.
+- **Structural divergence** — a DIFFERENT lowering arm is selected from the exact type:
+  truthiness as a cast destination (`conversions.rs`: `result_php_type == Bool ⇒
+  lower_is_truthy`), and comparison-arm selection (`comparisons.rs`: a comparison is
+  lowered as truthiness when either side is `Bool`). So `clamp<T>(T $v): T { if ($v ==
+  0) … }` compares equal under a collapsed shape while emitting different comparison
+  code, with no boxing anywhere.
+
+A class-2 divergence cannot be repaired by supplying a tag at runtime: the fix would be
+to emit BOTH arms under a runtime branch, which reintroduces the dynamic-type dispatch
+the AOT thesis exists to delete. And the distinction is load-bearing PHP semantics, not a
+lowering artifact: the runtime must remember that a stored `false` is a bool, and raw `0`
+stringifies as `"0"` for an int and `""` for a bool (`strings.rs`).
+
+Not every exact-type consultation implies different machine code — an FFI `(Int, Bool)`
+pair forwards the payload, and raw int and bool call operands materialize identically —
+but the sites that DO differ are the ones the EIR cannot see. Two further constraints
+close the door on a naive widening:
+
+- **Identical bodies do not imply interchangeable signatures.** A direct call resolves
+  the callee's parameter types at codegen time and picks its coercion from them, so
+  redirecting an `int` instantiation to a `bool` survivor would change the CALLER's
+  coercion even when the callee's instructions happen to match. The object merge is safe
+  precisely because object coercion is class-independent; a scalar merge is not. Concrete
+  PHP signatures must therefore be retained independently of shared machine-code
+  ownership.
+- **The only sound widening is post-lowering identical-body folding**: compare what the
+  backend actually emits — not the EIR, not a projection of it — so the differing boxing
+  tag, a resolved cast symbol and the per-function cleanup obligations are all visible.
+  That is the LLVM `MergeFunctions` analogue, and it is what elephc implements (the
+  section above): candidates are lowered into isolated emitters, the emitted text and
+  data are shape-normalized, and byte-equal bodies fold into one body plus a jump while
+  the victim's EIR function — and therefore its concrete signature for caller-side
+  coercion — stays intact. The measured win is bounded to the int/bool pair: `Float`
+  lowers to `F64` while `Int`/`Bool` lower to `I64`. `--report-generics` reports the
+  foldable count measured against the emitted output, so the measurement cannot rot as
+  the lowering grows: a future scalar-consulting lowering shows up as a refusal, not as
+  a silent miscompile.
 
 ## Dominance Analysis
 

@@ -187,7 +187,7 @@ fn optimize_module_to_fixed_point(module: &mut Module, passes: &[Box<dyn IrPass>
         changed |= run_module_function_passes(module, passes);
 
         if !changed {
-            return; // module-level fixed point reached
+            break; // module-level fixed point reached
         }
     }
     // Module-level non-convergence: keep the current (valid, more-optimized) IR.
