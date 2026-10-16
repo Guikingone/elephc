@@ -135,6 +135,97 @@ fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
     assert_eq!(compile_harness_and_run_with_heap_debug("<?php", 65536, &emitter), "1");
 }
 
+/// Draining a never-freed split remainder preserves counters and permits later coalescing.
+#[test]
+fn test_gc_small_split_remainder_drains_before_live_allocation_free() {
+    let mut emitter = String::new();
+    instruction(&mut emitter, "sub sp, sp, #64", "sub rsp, 64");
+    for remainder in [8, 16, 24, 32, 40, 64, 72] {
+        // -- create a split with a live allocation on each side --
+        for symbol in ["_gc_allocs", "_gc_frees", "_gc_peak"] {
+            let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
+            symbol_address(&mut emitter, reg, symbol);
+            instruction(&mut emitter, "str xzr, [x9]", "mov QWORD PTR [r8], 0");
+        }
+        let payload = 80 + 16 + remainder;
+        instruction(&mut emitter, &format!("mov x0, #{payload}"), &format!("mov eax, {payload}"));
+        call(&mut emitter, "__rt_heap_alloc");
+        instruction(&mut emitter, "str x0, [sp]", "mov QWORD PTR [rsp], rax");
+        instruction(&mut emitter, "mov x0, #8", "mov eax, 8");
+        call(&mut emitter, "__rt_heap_alloc");
+        instruction(&mut emitter, "str x0, [sp, #8]", "mov QWORD PTR [rsp + 8], rax");
+        instruction(&mut emitter, "ldr x0, [sp]", "mov rax, QWORD PTR [rsp]");
+        call(&mut emitter, "__rt_heap_free");
+        instruction(&mut emitter, "mov x0, #80", "mov eax, 80");
+        call(&mut emitter, "__rt_heap_alloc");
+        instruction(&mut emitter, "ldr x9, [sp]", "mov r8, QWORD PTR [rsp]");
+        instruction(&mut emitter, "cmp x0, x9", "cmp rax, r8");
+        expect_equal(&mut emitter);
+
+        // -- drain the split remainder without allocating it or freeing either live owner --
+        for pass in 0..2 {
+            expect_symbol(&mut emitter, "_gc_allocs", 3);
+            expect_symbol(&mut emitter, "_gc_frees", 1);
+            expect_symbol(&mut emitter, "_gc_live", 120);
+            expect_symbol(&mut emitter, "_gc_peak", payload + 40);
+            expect_symbol(&mut emitter, "_heap_off", payload + 40);
+            call(&mut emitter, "__rt_gc_mem_caches");
+            let released = if pass == 0 && remainder <= 64 { remainder + 16 } else { 0 };
+            instruction(&mut emitter, &format!("cmp x0, #{released}"), &format!("cmp rax, {released}"));
+            expect_equal(&mut emitter);
+        }
+        expect_symbol(&mut emitter, "_gc_allocs", 3);
+        expect_symbol(&mut emitter, "_gc_frees", 1);
+        expect_symbol(&mut emitter, "_gc_live", 120);
+        expect_symbol(&mut emitter, "_gc_peak", payload + 40);
+        expect_symbol(&mut emitter, "_heap_off", payload + 40);
+        let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
+        symbol_address(&mut emitter, reg, "_heap_small_bins");
+        for offset in [0, 8, 16, 24] {
+            instruction(&mut emitter, &format!("ldr x10, [x9, #{offset}]"),
+                &format!("mov r9, QWORD PTR [r8 + {offset}]"));
+            instruction(&mut emitter, "cmp x10, #0", "cmp r9, 0");
+            expect_equal(&mut emitter);
+        }
+        call(&mut emitter, "__rt_heap_debug_validate_free_list");
+
+        // -- free the leading owner and check coalescing before trimming the final guard --
+        instruction(&mut emitter, "ldr x0, [sp]", "mov rax, QWORD PTR [rsp]");
+        call(&mut emitter, "__rt_heap_free");
+        symbol_address(&mut emitter, reg, "_heap_free_list");
+        instruction(&mut emitter, "ldr x10, [x9]", "mov r9, QWORD PTR [r8]");
+        instruction(&mut emitter, "ldr x11, [sp]", "mov r10, QWORD PTR [rsp]");
+        instruction(&mut emitter, "sub x11, x11, #16", "sub r10, 16");
+        instruction(&mut emitter, "cmp x10, x11", "cmp r9, r10");
+        expect_equal(&mut emitter);
+        instruction(&mut emitter, "ldr w12, [x10]", "mov ecx, DWORD PTR [r9]");
+        instruction(&mut emitter, &format!("cmp w12, #{payload}"), &format!("cmp ecx, {payload}"));
+        expect_equal(&mut emitter);
+        expect_symbol(&mut emitter, "_gc_allocs", 3);
+        expect_symbol(&mut emitter, "_gc_frees", 2);
+        expect_symbol(&mut emitter, "_gc_live", 24);
+        instruction(&mut emitter, "ldr x0, [sp, #8]", "mov rax, QWORD PTR [rsp + 8]");
+        call(&mut emitter, "__rt_heap_free");
+        expect_symbol(&mut emitter, "_heap_off", 0);
+        expect_symbol(&mut emitter, "_heap_free_list", 0);
+        expect_symbol(&mut emitter, "_gc_live", 0);
+        expect_symbol(&mut emitter, "_gc_allocs", 3);
+        expect_symbol(&mut emitter, "_gc_frees", 3);
+    }
+    instruction(&mut emitter, "mov x0, #1", "mov eax, 1");
+    instruction(&mut emitter, "b split_test_print", "jmp split_test_print");
+    emitter.push_str("split_test_fail:\n");
+    instruction(&mut emitter, "mov x0, #0", "xor eax, eax");
+    emitter.push_str("split_test_print:\n");
+    call(&mut emitter, "__rt_itoa");
+    instruction(&mut emitter, "mov x0, #1", "mov rsi, rax");
+    if target().arch == Arch::X86_64 { instruction(&mut emitter, "", "mov edi, 1"); }
+    instruction(&mut emitter, "mov x16, #4", "mov eax, 1");
+    instruction(&mut emitter, "svc #0x80", "syscall");
+    instruction(&mut emitter, "add sp, sp, #64", "add rsp, 64");
+    assert_eq!(compile_harness_and_run_with_heap_debug("<?php", 65536, &emitter), "1");
+}
+
 /// Checks repeated nested decoding and reuse without changing existing JSON lifetime semantics.
 #[test]
 fn test_gc_small_split_remainder_nested_json_php_and_optimizer_modes() {
