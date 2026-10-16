@@ -12,6 +12,7 @@
 //!   by itself discard a closure whose arguments are proved `int|float`.
 //! - The existing unwritten raw-scalar path is unchanged. Do/while never takes the new path.
 //! - An incomplete numeric proof keeps the ordinary descriptor invoke.
+//! - A numeric-proof binding cannot authorize other calls through the raw-scalar gate.
 
 mod numeric_proof;
 
@@ -75,8 +76,9 @@ pub(crate) fn begin_loop_closure_facts(
                 &ctx.numeric_closure_sites, local, condition, update, body,
             );
             if admitted {
-                if let StaticCallableBinding::Closure { loop_guarded, .. } = binding {
+                if let StaticCallableBinding::Closure { loop_guarded, numeric_loop_guarded, .. } = binding {
                     *loop_guarded = true;
+                    *numeric_loop_guarded = true;
                 }
             }
             return admitted;
@@ -86,8 +88,9 @@ pub(crate) fn begin_loop_closure_facts(
         };
         ctx.numeric_closure_sites.extend(proof.spans);
         ctx.numeric_tracked_locals.extend(proof.locals);
-        if let StaticCallableBinding::Closure { loop_guarded, .. } = binding {
+        if let StaticCallableBinding::Closure { loop_guarded, numeric_loop_guarded, .. } = binding {
             *loop_guarded = true;
+            *numeric_loop_guarded = true;
         }
         true
     });
@@ -111,19 +114,21 @@ pub(crate) fn retain_loop_body_facts(
 
 /// Applies strict call gates only to facts newly carried through for/while loops.
 ///
-/// A span admitted by the numeric proof uses the ordinary Mixed `Op::Call` ABI.
-/// Every other loop-guarded call still needs unwritten raw scalar arguments.
+/// A numeric-proof binding uses the ordinary Mixed `Op::Call` ABI only at admitted spans.
+/// Other loop-guarded bindings still require unwritten raw scalar arguments.
 pub(crate) fn direct_call_is_eligible(
     ctx: &LoweringContext<'_, '_>,
     binding: &StaticCallableBinding,
     args: &[Expr],
     span: Span,
 ) -> bool {
-    let StaticCallableBinding::Closure { signature, loop_guarded: true, .. } = binding else {
+    let StaticCallableBinding::Closure {
+        signature, loop_guarded: true, numeric_loop_guarded, ..
+    } = binding else {
         return true;
     };
-    if ctx.numeric_closure_sites.contains(&span) {
-        return true;
+    if *numeric_loop_guarded {
+        return ctx.numeric_closure_sites.contains(&span);
     }
     scalar_nothrow_target(ctx, binding)
         && args.len() == signature.params.len()

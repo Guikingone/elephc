@@ -261,3 +261,52 @@ fn known_loop_closure_accepts_unwritten_scalar_arguments_on_all_targets() {
         }
     }
 }
+
+/// One admitted numeric call cannot authorize another call whose argument changes tag.
+#[test]
+fn known_loop_closure_numeric_proof_is_scoped_to_call_sites() {
+    for replacement in ["null", "true", "false"] {
+        for body in [
+            format!("$result=$f($value);$value={replacement};$sink=$f($i);"),
+            format!("$sink=$f($i);$result=$f($value);$value={replacement};"),
+        ] {
+            for loop_body in [
+                format!("for($i=0;$i<2;$i++){{{body}}}"),
+                format!("$i=0;while($i<2){{{body}$i++;}}"),
+            ] {
+                let source = format!("<?php $f=function($x){{return$x;}};$value=10;{loop_body}echo gettype($result),':',$result;");
+                for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+                    let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"),
+                        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+                    assert_eq!(calls(&module), (1, 1), "{target}: {source}");
+                }
+            }
+        }
+    }
+}
+
+/// Numeric bindings require a proof even for other calls with literal scalar arguments.
+#[test]
+fn known_loop_closure_numeric_proof_keeps_non_numeric_literals_generic() {
+    for argument in ["null", "true"] {
+        let source = fixture("function($x){return$x;}",
+            &format!("$result=$f({argument});$sink=$f($i);"), "$i++");
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"),
+                std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+            assert_eq!(calls(&module), (1, 1), "{target}: {argument}");
+        }
+    }
+}
+
+/// Each separately proved numeric call still uses the direct Mixed ABI in the same loop.
+#[test]
+fn known_loop_closure_numeric_proof_admits_multiple_numeric_sites() {
+    let source = fixture("function($x){return$x+1;}", "$sum+=$f($i);$sum+=$f($i);", "$i++");
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        assert_eq!(calls(&module), (2, 0), "{target}");
+        assert_mixed_direct_call(&module, &source);
+    }
+}

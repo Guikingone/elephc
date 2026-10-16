@@ -98,6 +98,8 @@ pub(crate) enum StaticCallableBinding {
         return_alias: ReturnArgAlias,
         /// Requires scalar/nonthrowing call gates for newly preserved loop facts.
         loop_guarded: bool,
+        /// Allows direct calls only at spans admitted by the numeric loop proof.
+        numeric_loop_guarded: bool,
     },
     StaticMethod {
         receiver: StaticReceiver,

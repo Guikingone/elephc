@@ -597,6 +597,7 @@ pub(super) fn build_bound_closure_binding(
         captures: bound_captures,
         return_alias,
         loop_guarded: false,
+        numeric_loop_guarded: false,
     };
     Some((bound, bound_descriptor))
 }

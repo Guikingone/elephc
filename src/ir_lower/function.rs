@@ -1832,6 +1832,7 @@ fn seed_recursive_closure_binding(
             captures,
             return_alias: binding.return_alias,
             loop_guarded: false,
+            numeric_loop_guarded: false,
         },
     );
 }

@@ -314,3 +314,23 @@ fn test_known_closure_loop_unwritten_argument_controls() {
         check_closure_loop(&source, "12");
     }
 }
+
+/// A proved counter call cannot change null/bool tags at another call of the same closure.
+#[test]
+fn test_known_closure_loop_numeric_admission_is_per_call_site() {
+    for (replacement, expected) in [("null", "NULL:"), ("true", "boolean:1"), ("false", "boolean:")] {
+        for body in [
+            format!("$result=$f($value);$value={replacement};$sink=$f($i);"),
+            format!("$sink=$f($i);$result=$f($value);$value={replacement};"),
+            format!("$result=$f($value);$value={replacement};"),
+        ] {
+            for loop_body in [
+                format!("for($i=0;$i<2;$i++){{{body}}}"),
+                format!("$i=0;while($i<2){{{body}$i++;}}"),
+            ] {
+                let source = format!("<?php $f=function($x){{return$x;}};$value=10;{loop_body}echo gettype($result),':',$result;");
+                check_closure_loop(&source, expected);
+            }
+        }
+    }
+}

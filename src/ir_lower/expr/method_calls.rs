@@ -378,6 +378,7 @@ pub(super) fn lower_planned_scoped_closure_bind(
         captures,
         return_alias: plan.return_alias,
         loop_guarded: false,
+        numeric_loop_guarded: false,
     });
     bound
 }

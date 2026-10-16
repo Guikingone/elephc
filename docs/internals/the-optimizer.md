@@ -841,7 +841,9 @@ owner cleanup. Locals in the proof whose final slot is Mixed are stored and
 loaded as Mixed from the first store, so a later float, null sentinel, or
 signed zero is not read back through an integer cast. The admission is recorded
 per call span. One admitted call does not admit a different call of the same
-local.
+local. Bindings retained by the numeric proof carry a separate marker, including
+during final-storage replay. An unadmitted call on such a binding keeps descriptor
+invocation instead of falling back to the unwritten-scalar gate.
 
 The numeric path requires an untyped Mixed signature, no references, variadics,
 generators, named arguments, spreads, or omitted defaults, and captures that are
