@@ -10,6 +10,9 @@
 
 use crate::support::*;
 
+#[path = "gc_incoming_cache/dynamic_hash.rs"]
+mod dynamic_hash;
+
 /// Compiles one collector fixture in both optimizer modes with heap and optional PHP checks.
 fn check_gc_cache(source: &str, expected: &str) {
     for mode in ["--ir-opt=off", "--ir-opt=on"] {

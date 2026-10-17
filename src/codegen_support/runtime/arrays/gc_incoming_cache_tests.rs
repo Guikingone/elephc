@@ -43,3 +43,20 @@ fn gc_incoming_cache_all_targets_define_unique_edge_helpers() {
         }
     }
 }
+
+/// Each object contributes one fixed-slot walk and exactly one dynamic-tail edge in both modes.
+#[test]
+fn gc_incoming_cache_dynamic_tail_is_counted_once() {
+    for pic in [false, true] {
+        let mut emitter = Emitter::new(Target::parse("linux-x86_64").unwrap());
+        emitter.pic_data_refs = pic;
+        emit_gc_collect_cycles(&mut emitter);
+        let asm = emitter.output();
+        let object = asm.split_once("__rt_gc_collect_cycles_eval_done:").unwrap().1
+            .split_once("__rt_gc_collect_cycles_count_next:").unwrap().0;
+        assert_eq!(object.matches("call __rt_gc_note_child_ref").count(), 2,
+            "pic={pic}: one declared-slot site and one dynamic-tail site prime the cache");
+        assert_eq!(object.matches("add QWORD PTR [rbp - 48], 1").count(), 2,
+            "pic={pic}: exact fallback enumerates the same two edge sites");
+    }
+}

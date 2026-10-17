@@ -268,11 +268,6 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");                  // load the class-declared payload size, not reused heap capacity
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags");
     emitter.instruction("mov rcx, QWORD PTR [r11 + r10 * 8]");                  // load whether the layout includes a dynamic-property tail
-    // -- count the owned dynamic-property hash before scanning fixed slots --
-    emitter.instruction("test rcx, rcx");                                       // fixed-only objects have no dynamic-property child
-    emitter.instruction("jz __rt_gc_collect_cycles_count_object_fixed");        // continue with ordinary property descriptors
-    edge_cache::emit_edge(emitter, "QWORD PTR [r9 + rax - 8]", "__rt_gc_collect_cycles_count_object_fixed", "dynamic_head");
-    emitter.label("__rt_gc_collect_cycles_count_object_fixed");
     emitter.instruction("sub rax, 8");                                          // subtract the leading class_id field
     emitter.instruction("shl rcx, 3");                                          // convert the tail flag into its eight-byte storage size
     emitter.instruction("sub rax, rcx");                                        // exclude the optional tail from the fixed property region
