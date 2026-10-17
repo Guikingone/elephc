@@ -180,3 +180,5 @@ mod class_param_return;
 mod reflection_attribute_filter;
 #[path = "runtime_gc/tagged_scalar_boxing.rs"]
 mod tagged_scalar_boxing;
+#[path = "runtime_gc/gc_incoming_cache.rs"]
+mod gc_incoming_cache;
