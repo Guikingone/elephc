@@ -161,6 +161,7 @@ fn test_core_review_error_exception_unpack_stream_eval() {
 
 const CALLABLE_SOURCE: &str = r#"
 function coreInvokeConstructor(callable $callback, array $values): void { $callback(...$values); }
+function coreConstructorOrderArray(): array { return ['message' => 'bad', 9 => 1]; }
 $previous = new Exception('cause');
 $error = new ErrorException('kept', 7, E_WARNING, 'base.php', 5, $previous);
 $constructor = $error->__construct(...);
@@ -177,12 +178,14 @@ try { coreInvokeConstructor($constructor, [9 => 'bad', 'message' => 'again']); }
 catch (Error $failure) { echo $failure->getMessage(), ';'; }
 try { coreInvokeConstructor($constructor, ['message' => 'bad', 9 => 1]); }
 catch (Error $failure) { echo $failure->getMessage(), ';'; }
+try { call_user_func_array($constructor, coreConstructorOrderArray()); }
+catch (Error $failure) { echo $failure->getMessage(), ';'; }
 try { coreInvokeConstructor($constructor, [9 => 'm', 2 => 0, 3 => 1, 4 => null, 5 => null, 6 => null, 7 => 'extra']); }
 catch (ArgumentCountError $failure) { echo $failure->getMessage(); }
 unset($error, $previous, $constructor);
 "#;
 
-const CALLABLE_EXPECTED: &str = "fresh:7:base.php:27;fresh:27;:7:named.php:0:same;Unknown named parameter $unknown;Named parameter $message overwrites previous argument;Cannot use positional argument after named argument during unpacking;ErrorException::__construct() expects at most 6 arguments, 7 given";
+const CALLABLE_EXPECTED: &str = "fresh:7:base.php:27;fresh:27;:7:named.php:0:same;Unknown named parameter $unknown;Named parameter $message overwrites previous argument;Cannot use positional argument after named argument during unpacking;Cannot use positional argument after named argument;ErrorException::__construct() expects at most 6 arguments, 7 given";
 
 /// Descriptor calls preserve the nullable line's physical width before the captured receiver.
 #[test]

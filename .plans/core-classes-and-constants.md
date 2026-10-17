@@ -306,3 +306,19 @@ comments, and whitespace checks pass without generated registry changes.
 
 Final review and CI acceptance are recorded on PR1870 and in Code Journal against the
 immutable published SHA. No clean-review or green-CI claim applies to an older head.
+
+
+## CI catchability fixture follow-up
+
+CI run `39069667333` passed 1721 Magician tests and ignored one, with a single
+failure expecting `RuntimeFatal` for positional values after named call-array
+entries. The updated test catches `Error` and checks the PHP message. Both owned
+and legacy array traversal preserve the shorter `call_user_func_array` wording;
+actual unpack syntax retains its `during unpacking` suffix.
+
+All 13 focused call-array unit cases pass, including direct and context-level
+errors. Four native/eval constructor stream/callable checks pass after the
+message-context change. The extended native/eval callable cases also pass with
+PHP-equivalent call-array diagnostics and clean heaps. Build, generated docs,
+registry/site/EIR audits, Rustdoc and whitespace checks pass. Final exact-head CI
+and review results remain recorded externally on PR1870 and in Code Journal.
