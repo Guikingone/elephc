@@ -42,6 +42,8 @@ mod destructor_resurrection;
 mod argument_guards;
 #[path = "runtime_gc/deep_cleanup.rs"]
 mod deep_cleanup;
+#[path = "runtime_gc/scalar_mixed_cleanup.rs"]
+mod scalar_mixed_cleanup;
 #[path = "runtime_gc/eval_constructor.rs"]
 mod eval_constructor;
 #[path = "runtime_gc/eval_native_calls.rs"]
