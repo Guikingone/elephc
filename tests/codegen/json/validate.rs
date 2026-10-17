@@ -593,7 +593,7 @@ fn test_json_validate_syntax_message_has_location() {
             echo json_last_error(), "|", json_last_error_msg();
         "#,
     );
-    assert_eq!(out, "4|Syntax error near location 1:1");
+    assert_eq!(out, "4|Syntax error near location 1:2");
 }
 
 /// Verifies a successful validate clears a previous decode location message.

@@ -7,8 +7,8 @@
 //! Key details:
 //! - Valid decodes must leave `_json_error_scan_count` and `_json_error_scan_bytes` at zero.
 //! - One recorded decode error performs one source scan, bounded by the original source length.
-//! - PHP 8.5 messages have no `near location` suffix; comparisons strip that elephc suffix
-//!   and check the error code, exception class, and base message separately.
+//! - PHP 8.6 oracles compare full coordinates; older versions compare base messages.
+//! - ELEPHC_JSON_PHP_BINARY can select a PHP CLI wrapper for the opt-in oracle.
 //! - Native expectations always run; the live PHP oracle requires `ELEPHC_PHP_CHECK`.
 
 use super::*;
@@ -140,7 +140,7 @@ fn assert_scan_counts(source: &str, scans: u64, max_bytes: u64) {
 
 /// Executes the explicitly requested PHP oracle with `php -n -r` and returns stdout.
 pub(super) fn php_cli(body: &str) -> String {
-    let output = std::process::Command::new("php")
+    let output = std::process::Command::new(std::env::var_os("ELEPHC_JSON_PHP_BINARY").unwrap_or_else(|| "php".into()))
         .arg("-n")
         .arg("-r")
         .arg(body)
@@ -154,7 +154,18 @@ pub(super) fn php_cli(body: &str) -> String {
     String::from_utf8(output.stdout).expect("php stdout is utf-8")
 }
 
-/// Removes elephc's `near location L:C` suffix so the base text can be compared with PHP 8.5.
+/// Reads the selected PHP oracle version once per test process.
+pub(super) fn php_json_version() -> u32 {
+    static VERSION: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *VERSION.get_or_init(|| {
+        php_cli("echo PHP_VERSION_ID;").trim().parse::<u32>().expect("PHP version id")
+    })
+}
+
+/// Reports whether the selected PHP oracle exposes JSON coordinate suffixes.
+pub(super) fn php_json_error_has_locations() -> bool { php_json_version() >= 80600 }
+
+/// Removes the location suffix only when comparing base messages to older PHP versions.
 pub(super) fn strip_location_suffix(message: &str) -> String {
     match message.find(" near location ") {
         Some(index) => message[..index].to_string(),
@@ -185,7 +196,7 @@ echo json_last_error(), "\n";
 #[test]
 fn test_json_decode_one_error_scans_source_once() {
     let cases: &[(&str, &str, u64)] = &[
-        ("x", "Syntax error near location 1:2", 1),
+        ("x", "Syntax error near location 1:1", 0),
         ("[", "Syntax error near location 1:2", 1),
         ("[{", "Syntax error near location 1:3", 2),
         ("[1,]", "Syntax error near location 1:4", 3),
@@ -305,14 +316,14 @@ echo strlen($json), "\n", json_last_error(), "\n", json_last_error_msg(), "\n";
     assert_eq!(lines.next(), Some("4"));
     assert_eq!(
         lines.next(),
-        Some("Syntax error near location 1:553601")
+        Some("Syntax error near location 1:553602")
     );
     assert_eq!(scans, 1);
-    assert_eq!(bytes, 553_600);
+    assert_eq!(bytes, 553_601);
     let (_, scans_off, bytes_off) =
         without_ir_opt(|| decode_with_scan_counts_heap(&invalid, 67_108_864));
     assert_eq!(scans_off, 1);
-    assert_eq!(bytes_off, 553_600);
+    assert_eq!(bytes_off, 553_601);
 }
 
 /// An error, a success, and another error scan only the two failures.
@@ -325,9 +336,9 @@ json_decode("not json");
 echo json_last_error_msg(), "\n";
 "#;
     let (body, scans, bytes) = decode_with_scan_counts(source);
-    assert_eq!(body, "Syntax error near location 1:9");
+    assert_eq!(body, "Syntax error near location 1:1");
     assert_eq!(scans, 2);
-    assert!(bytes <= 2 + 8);
+    assert_eq!(bytes, 2);
     let (body_off, scans_off, _) = without_ir_opt(|| decode_with_scan_counts(source));
     assert_eq!(body_off, body);
     assert_eq!(scans_off, 2);
@@ -342,9 +353,9 @@ json_validate("{");
 echo json_last_error_msg(), "\n";
 "#;
     let (body, scans, bytes) = decode_with_scan_counts(source);
-    assert_eq!(body, "Syntax error near location 1:1");
+    assert_eq!(body, "Syntax error near location 1:2");
     assert_eq!(scans, 2, "decode and validate each scan their own failure");
-    assert!(bytes <= 2);
+    assert!(bytes <= 3);
 }
 
 /// Replacing the source string after a failure leaves the numeric location readable.
@@ -441,9 +452,9 @@ echo json_last_error(), "\n";
     );
 }
 
-/// Control characters, invalid UTF-8, and a multibyte prefix keep byte columns.
+/// Control characters and UTF-8 failures use token starts and Unicode character columns.
 #[test]
-fn test_json_decode_byte_columns_for_utf8_and_controls() {
+fn test_json_decode_unicode_columns_for_utf8_and_controls() {
     let source = r#"<?php
 json_decode("\"a" . chr(0x0A) . "b\"");
 echo json_last_error(), "|", json_last_error_msg(), "\n";
@@ -455,7 +466,7 @@ echo json_last_error(), "|", json_last_error_msg(), "\n";
     let expected = "\
 3|Control character error, possibly incorrectly encoded near location 1:1
 5|Malformed UTF-8 characters, possibly incorrectly encoded near location 1:1
-4|Syntax error near location 1:7
+4|Syntax error near location 1:6
 ";
     assert_eq!(compile_and_run(source), expected);
     assert_eq!(without_ir_opt(|| compile_and_run(source)), expected);
@@ -514,7 +525,8 @@ JsonException|4|Syntax error
 ";
     let php_out = std::env::var_os("ELEPHC_PHP_CHECK").map(|_| php_cli(body));
     if let Some(oracle) = &php_out {
-        assert_eq!(oracle, expected, "PHP error reference changed");
+        let base = oracle.lines().map(strip_location_suffix).collect::<Vec<_>>().join("\n");
+        assert_eq!(base, expected.trim_end(), "PHP base error reference changed");
     }
     let expected_lines: Vec<&str> = expected.lines().collect();
     let source = format!("<?php\n{body}");
@@ -528,7 +540,12 @@ JsonException|4|Syntax error
         assert_eq!(elephc_base, expected_lines, "ir-opt off={ir_opt_off}: {elephc_out}");
         if let Some(oracle) = &php_out {
             let php_lines: Vec<&str> = oracle.lines().collect();
-            assert_eq!(elephc_base, php_lines, "PHP mismatch with ir-opt off={ir_opt_off}");
+            let native = if php_json_error_has_locations() {
+                elephc_out.lines().map(str::to_owned).collect::<Vec<_>>()
+            } else {
+                elephc_base.clone()
+            };
+            assert_eq!(native, php_lines, "PHP mismatch with ir-opt off={ir_opt_off}");
         }
     }
 }

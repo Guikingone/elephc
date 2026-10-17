@@ -60,3 +60,6 @@ mod evaluation_order;
 mod error_location;
 #[path = "json/diagnostic_regressions.rs"]
 mod diagnostic_regressions;
+
+#[path = "json/coordinate_regressions.rs"]
+mod coordinate_regressions;

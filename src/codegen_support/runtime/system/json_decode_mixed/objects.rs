@@ -280,8 +280,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // load the parser cursor at the failing object byte
     emitter.instruction("add x0, x0, x9");                                      // convert the object-local cursor to an absolute source pointer
     emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
-    emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
-    emitter.instruction("bl __rt_json_throw_error");                            // record or throw the syntax error
+    emitter.instruction("bl __rt_json_decode_syntax_error");                    // record or throw the syntax error
     emitter.label("__rt_json_decode_object_real_propagate");
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON decoder state
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // load or prepare JSON decoder state
@@ -556,8 +555,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the object slice pointer for location reporting
     emitter.instruction("add rax, QWORD PTR [rbp - 24]");                       // convert the object-local cursor to an absolute source pointer
     emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
-    emitter.instruction("mov rax, 4");                                          // JSON_ERROR_SYNTAX
-    emitter.instruction("call __rt_json_throw_error");                          // record or throw the syntax error
+    emitter.instruction("call __rt_json_decode_syntax_error");                  // record or throw the syntax error
     emitter.label("__rt_json_decode_object_real_propagate_x");
     emitter.instruction("xor rax, rax");                                        // update the JSON decoder cursor or counter
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON decoder state

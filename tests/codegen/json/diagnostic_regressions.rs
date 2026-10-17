@@ -6,17 +6,26 @@
 //!
 //! Key details:
 //! - Every case runs with both optimizer modes and normal/heap-debug runtimes.
-//! - PHP8.2-8.5 base messages are checked separately from Elephc coordinates.
+//! - PHP 8.6 compares complete coordinates; older oracles compare compatible base messages.
 
 use super::*;
-use super::error_location::{php_cli, scan_counter_harness, strip_location_suffix};
+use super::error_location::{php_cli, php_json_error_has_locations, php_json_version, scan_counter_harness, strip_location_suffix};
 
 /// Checks PHP base-message parity and native diagnostics under all fixture modes.
-fn assert_json_diagnostics(source: &str, expected: &str) {
-    if std::env::var_os("ELEPHC_PHP_CHECK").is_some() {
+pub(super) fn assert_json_diagnostics(source: &str, expected: &str) {
+    assert_json_diagnostics_since(source, expected, 80300);
+}
+
+/// Runs every native fixture mode, selecting the live oracle only from its reference version.
+pub(super) fn assert_json_diagnostics_since(source: &str, expected: &str, minimum_php_version: u32) {
+    if std::env::var_os("ELEPHC_PHP_CHECK").is_some() && php_json_version() >= minimum_php_version {
         let oracle = php_cli(source.strip_prefix("<?php").unwrap());
-        let base = expected.lines().map(strip_location_suffix).collect::<Vec<_>>().join("\n");
-        assert_eq!(oracle.trim_end(), base, "PHP base messages differ");
+        let expected = if php_json_error_has_locations() {
+            expected.trim_end().to_owned()
+        } else {
+            expected.lines().map(strip_location_suffix).collect::<Vec<_>>().join("\n")
+        };
+        assert_eq!(oracle.trim_end(), expected, "PHP JSON diagnostics differ");
     }
     for ir_opt_off in [false, true] {
         let run = || {
@@ -53,7 +62,7 @@ echo json_last_error(), "|", json_last_error_msg(), "\n";
     assert_json_diagnostics(source, "4|Syntax error\nJsonException|4|Syntax error\n4|Syntax error\n");
 }
 
-/// Encoding errors in values and object keys use the opening quote and byte columns.
+/// String errors in values and keys use the opening quote and Unicode character columns.
 #[test]
 fn test_json_diagnostics_string_errors_use_token_opening() {
     let source = r#"<?php
@@ -86,7 +95,7 @@ foreach ($cases as $json) {
         (10, "Single unpaired UTF-16 surrogate in unicode escape", "1:1"),
         (10, "Single unpaired UTF-16 surrogate in unicode escape", "1:2"),
         (3, "Control character error, possibly incorrectly encoded", "2:3"),
-        (5, "Malformed UTF-8 characters, possibly incorrectly encoded", "1:8"),
+        (5, "Malformed UTF-8 characters, possibly incorrectly encoded", "1:7"),
     ] {
         for _ in 0..3 {
             expected.push_str(&format!("{code}|{message} near location {location}\n"));

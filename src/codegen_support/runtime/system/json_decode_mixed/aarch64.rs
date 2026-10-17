@@ -133,8 +133,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #80]");                                   // load the trimmed raw slice length for location reporting
     emitter.instruction("add x0, x0, x9");                                      // report syntax errors at the end of the offending slice
     emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
-    emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
-    emitter.instruction("bl __rt_json_throw_error");                            // record syntax error and throw when requested
+    emitter.instruction("bl __rt_json_decode_syntax_error");                    // record syntax error and throw when requested
     emitter.instruction("mov x0, #0");                                          // return null-signal to the json_decode wrapper
     emitter.instruction("b __rt_json_decode_mixed_done");                       // continue in the JSON decoder control path
 

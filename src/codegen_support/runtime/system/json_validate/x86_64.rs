@@ -50,6 +50,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_syntax_error_x");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state
@@ -133,6 +134,7 @@ fn emit_value_x(emitter: &mut Emitter) {
     emitter.instruction("jle __rt_json_validate_value_number_x");               // branch on the current JSON validator condition
 
     emitter.label("__rt_json_validate_value_syntax_x");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state
@@ -204,6 +206,7 @@ fn emit_match_literal_x(emitter: &mut Emitter, suffix: &str, lit: &[char]) {
     emitter.instruction("pop rbp");                                             // preserve or restore JSON validator scratch state
     emitter.instruction("ret");                                                 // return from the JSON validator helper
     emitter.label(&fail_label);
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state
@@ -422,7 +425,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_validate_string_syntax_x");
     abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
-    emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
+    emitter.instruction("add rax, QWORD PTR [rbp - 8]");                        // convert validator index to an absolute source pointer
     emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
@@ -679,6 +682,7 @@ fn emit_array_parser_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_array_syntax_x");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state
@@ -687,6 +691,7 @@ fn emit_array_parser_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_array_depth_x");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov rax, 1");                                          // JSON_ERROR_DEPTH
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state
@@ -776,6 +781,7 @@ fn emit_object_parser_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_object_syntax_x");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state
@@ -784,6 +790,7 @@ fn emit_object_parser_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_object_depth_x");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov rax, 1");                                          // JSON_ERROR_DEPTH
     emitter.instruction("call __rt_json_throw_error");                          // call the json throw error helper
     emitter.instruction("mov rax, 0");                                          // load or prepare JSON validator state

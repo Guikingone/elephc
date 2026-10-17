@@ -81,5 +81,5 @@ fn test_json_last_error_msg_validate_has_own_location_suffix() {
             echo json_last_error_msg();
         "#,
     );
-    assert_eq!(out, "Syntax error near location 1:1");
+    assert_eq!(out, "Syntax error near location 1:2");
 }

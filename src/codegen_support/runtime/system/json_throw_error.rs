@@ -106,7 +106,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
 /// Emits AArch64 `__rt_json_note_error_candidate`.
 ///
 /// Input `x0` is an absolute pointer into the original decode or validate source,
-/// or one byte past the offending token. The helper stores that pointer and
+/// or the exclusive source end for EOF. The helper stores that pointer and
 /// does not read the source.
 fn emit_json_note_error_candidate_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -155,7 +155,7 @@ fn emit_json_set_error_location_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x14");                                         // clamp a past-the-end candidate to the source end
     emitter.label("__rt_json_set_error_location_limit");
 
-    // -- count LF bytes before the candidate --
+    // -- count lines and Unicode code points before the candidate --
     emitter.label("__rt_json_set_error_location_loop");
     emitter.instruction("cmp x9, x0");                                          // have we reached the exclusive scan limit?
     emitter.instruction("b.ge __rt_json_set_error_location_store");             // stop before loading the candidate or the source end
@@ -163,7 +163,10 @@ fn emit_json_set_error_location_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x13, x13, #1");                                    // count the loaded byte toward the diagnostic total
     emitter.instruction("cmp w12, #10");                                        // newline resets the column and advances the line
     emitter.instruction("b.eq __rt_json_set_error_location_newline");           // handle LF as the JSON line separator
-    emitter.instruction("add x11, x11, #1");                                    // advance the one-based column for a non-newline byte
+    emitter.instruction("and w12, w12, #0xC0");                                 // classify a UTF-8 continuation byte
+    emitter.instruction("cmp w12, #0x80");                                      // continuation bytes do not start another code point
+    emitter.instruction("b.eq __rt_json_set_error_location_loop");              // keep the same character column inside a code point
+    emitter.instruction("add x11, x11, #1");                                    // advance the one-based character column
     emitter.instruction("b __rt_json_set_error_location_loop");                 // continue scanning toward the candidate pointer
     emitter.label("__rt_json_set_error_location_newline");
     emitter.instruction("add x10, x10, #1");                                    // advance to the next one-based line
@@ -257,7 +260,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
 /// Emits x86_64 `__rt_json_note_error_candidate`.
 ///
 /// Input `rax` is an absolute pointer into the original decode or validate source,
-/// or one byte past the offending token. The helper stores that pointer and
+/// or the exclusive source end for EOF. The helper stores that pointer and
 /// does not read the source.
 fn emit_json_note_error_candidate_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -300,7 +303,7 @@ fn emit_json_set_error_location_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, rax");                                        // clamp a past-the-end candidate to the source end
     emitter.label("__rt_json_set_error_location_limit_x");
 
-    // -- count LF bytes before the candidate --
+    // -- count lines and Unicode code points before the candidate --
     emitter.instruction("mov rax, r8");                                         // scan pointer starts at the original source
     emitter.label("__rt_json_set_error_location_loop_x");
     emitter.instruction("cmp rax, rcx");                                        // have we reached the exclusive scan limit?
@@ -310,7 +313,10 @@ fn emit_json_set_error_location_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 1");                                          // count the loaded byte toward the diagnostic total
     emitter.instruction("cmp rdx, 10");                                         // newline resets the column and advances the line
     emitter.instruction("je __rt_json_set_error_location_newline_x");           // handle LF as the JSON line separator
-    emitter.instruction("add r10, 1");                                          // advance the one-based column for a non-newline byte
+    emitter.instruction("and edx, 0xC0");                                       // classify a UTF-8 continuation byte
+    emitter.instruction("cmp edx, 0x80");                                       // continuation bytes do not start another code point
+    emitter.instruction("je __rt_json_set_error_location_loop_x");              // keep the same character column inside a code point
+    emitter.instruction("add r10, 1");                                          // advance the one-based character column
     emitter.instruction("jmp __rt_json_set_error_location_loop_x");             // continue scanning toward the candidate pointer
     emitter.label("__rt_json_set_error_location_newline_x");
     emitter.instruction("add r9, 1");                                           // advance to the next one-based line
