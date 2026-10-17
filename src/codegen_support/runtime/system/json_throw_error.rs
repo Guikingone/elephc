@@ -29,7 +29,8 @@ use crate::codegen_support::abi;
 ///   - When `JSON_THROW_ON_ERROR` is set: `_exc_value` is written, heap is
 ///     allocated for a JsonException object, and control does not return
 ///     (tail-calls `__rt_throw_current`).
-///   - Clobbers: x9-x13 (ARM64), r10-r11 (x86_64), and scratch stack frame.
+///   - Returning path clobbers x0, x9-x14 and NZCV (ARM64), or rax, rcx,
+///     rdx, r8-r11 and flags (x86_64). Stack and linkage are restored.
 pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_json_throw_error_linux_x86_64(emitter);
@@ -104,7 +105,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
 
 /// Emits AArch64 `__rt_json_note_error_candidate`.
 ///
-/// Input `x0` is an absolute pointer into the original `json_decode()` source,
+/// Input `x0` is an absolute pointer into the original decode or validate source,
 /// or one byte past the offending token. The helper stores that pointer and
 /// does not read the source.
 fn emit_json_note_error_candidate_aarch64(emitter: &mut Emitter) {
@@ -122,7 +123,7 @@ fn emit_json_note_error_candidate_aarch64(emitter: &mut Emitter) {
 
 /// Emits AArch64 `__rt_json_set_error_location`.
 ///
-/// Reads `_json_error_candidate_ptr` and, when a decode source is active,
+/// Reads `_json_error_candidate_ptr` when a nonempty diagnostic source is active,
 /// scans only `[source, min(candidate, source+len))`. The byte at `source+len`
 /// is never loaded. LF (`\n`) advances the line; CR counts as a column byte.
 /// After publishing numeric coordinates the helper clears the source and
@@ -134,12 +135,13 @@ fn emit_json_set_error_location_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address while scanning the source
     emitter.instruction("mov x29, sp");                                         // establish a stable frame for location calculation
 
-    // -- load the original decode source, or drop a stale candidate --
+    // -- load the original diagnostic source, or drop a stale candidate --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_json_error_source_ptr");
-    emitter.instruction("ldr x9, [x14]");                                       // load the original json_decode source pointer
-    emitter.instruction("cbz x9, __rt_json_set_error_location_drop");           // leave numeric coordinates unchanged when no decode source is active
+    emitter.instruction("ldr x9, [x14]");                                       // load the original decode or validate source pointer
+    emitter.instruction("cbz x9, __rt_json_set_error_location_drop");           // leave numeric coordinates unchanged when no JSON diagnostic source is active
     crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_json_error_source_len");
     emitter.instruction("ldr x14, [x14]");                                      // load the original source length in bytes
+    emitter.instruction("cbz x14, __rt_json_set_error_location_drop");          // empty input has no source location and performs no scan
     crate::codegen_support::abi::emit_symbol_address(emitter, "x0", "_json_error_candidate_ptr");
     emitter.instruction("ldr x0, [x0]");                                        // load the absolute candidate pointer noted during parsing
     emitter.instruction("mov x10, #1");                                         // line counter starts at 1
@@ -254,7 +256,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
 
 /// Emits x86_64 `__rt_json_note_error_candidate`.
 ///
-/// Input `rax` is an absolute pointer into the original `json_decode()` source,
+/// Input `rax` is an absolute pointer into the original decode or validate source,
 /// or one byte past the offending token. The helper stores that pointer and
 /// does not read the source.
 fn emit_json_note_error_candidate_x86_64(emitter: &mut Emitter) {
@@ -267,7 +269,7 @@ fn emit_json_note_error_candidate_x86_64(emitter: &mut Emitter) {
 
 /// Emits x86_64 `__rt_json_set_error_location`.
 ///
-/// Reads `_json_error_candidate_ptr` and, when a decode source is active,
+/// Reads `_json_error_candidate_ptr` when a nonempty diagnostic source is active,
 /// scans only `[source, min(candidate, source+len))`. The byte at `source+len`
 /// is never loaded. LF (`\n`) advances the line; CR counts as a column byte.
 /// After publishing numeric coordinates the helper clears the source and
@@ -279,11 +281,13 @@ fn emit_json_set_error_location_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while scanning the source
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for location calculation
 
-    // -- load the original decode source, or drop a stale candidate --
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_json_error_source_ptr", 0);   // load the original json_decode source pointer
-    emitter.instruction("test r8, r8");                                         // check whether json_decode published an input source pointer
-    emitter.instruction("je __rt_json_set_error_location_drop_x");              // leave numeric coordinates unchanged when no decode source is active
+    // -- load the original diagnostic source, or drop a stale candidate --
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_json_error_source_ptr", 0);   // load the original decode or validate source pointer
+    emitter.instruction("test r8, r8");                                         // check whether a JSON operation published an input source pointer
+    emitter.instruction("je __rt_json_set_error_location_drop_x");              // leave numeric coordinates unchanged when no JSON diagnostic source is active
     abi::emit_load_symbol_to_reg(emitter, "rax", "_json_error_source_len", 0);  // load the original source length in bytes
+    emitter.instruction("test rax, rax");                                       // empty input has no source location
+    emitter.instruction("je __rt_json_set_error_location_drop_x");              // skip the scan and keep the cleared coordinates
     abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_error_candidate_ptr", 0); // load the absolute candidate pointer noted during parsing
     emitter.instruction("mov r9, 1");                                           // line counter starts at 1
     emitter.instruction("mov r10, 1");                                          // column counter starts at 1

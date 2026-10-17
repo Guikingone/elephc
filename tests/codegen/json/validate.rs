@@ -75,13 +75,13 @@ fn test_json_validate_failure_sets_syntax_error_code() {
     assert_eq!(out, "4");
 }
 
-/// Verifies json_validate failure sets the error message to "Syntax error".
+/// Verifies a nonempty json_validate failure includes the Elephc location suffix.
 #[test]
 fn test_json_validate_failure_sets_syntax_error_msg() {
     let out = compile_and_run(
         r#"<?php json_validate("garbage"); echo json_last_error_msg();"#,
     );
-    assert_eq!(out, "Syntax error");
+    assert_eq!(out, "Syntax error near location 1:1");
 }
 
 /// Verifies a successful json_validate call clears the previous error state.
@@ -584,16 +584,16 @@ fn test_json_validate_valid_surrogate_pair_returns_true() {
     assert_eq!(out, "ok");
 }
 
-/// Verifies json_validate reports the syntax code without a json_decode location suffix.
+/// Verifies json_validate reports the syntax code with its own location suffix.
 #[test]
-fn test_json_validate_syntax_message_has_no_location() {
+fn test_json_validate_syntax_message_has_location() {
     let out = compile_and_run(
         r#"<?php
             json_validate("{");
             echo json_last_error(), "|", json_last_error_msg();
         "#,
     );
-    assert_eq!(out, "4|Syntax error");
+    assert_eq!(out, "4|Syntax error near location 1:1");
 }
 
 /// Verifies a successful validate clears a previous decode location message.

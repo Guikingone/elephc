@@ -183,7 +183,7 @@ fn test_json_decode_control_character_error_location() {
     );
     assert_eq!(
         out,
-        "3|Control character error, possibly incorrectly encoded near location 1:3"
+        "3|Control character error, possibly incorrectly encoded near location 1:1"
     );
 }
 
@@ -198,7 +198,7 @@ fn test_json_decode_malformed_utf8_error_location() {
     );
     assert_eq!(
         out,
-        "5|Malformed UTF-8 characters, possibly incorrectly encoded near location 1:3"
+        "5|Malformed UTF-8 characters, possibly incorrectly encoded near location 1:1"
     );
 }
 
@@ -298,7 +298,7 @@ fn test_json_decode_lone_high_with_throw_flag_throws() {
     );
     assert_eq!(
         out,
-        "thrown:Single unpaired UTF-16 surrogate in unicode escape near location 1:8"
+        "thrown:Single unpaired UTF-16 surrogate in unicode escape near location 1:1"
     );
 }
 
@@ -362,16 +362,16 @@ fn test_json_decode_scalar_depth_one_succeeds() {
     assert_eq!(out, "0:42");
 }
 
-/// Verifies an empty document reports the syntax error at column 1 without a later container.
+/// Verifies an empty document reports the PHP syntax message without coordinates.
 #[test]
-fn test_json_decode_empty_input_location_is_one_one() {
+fn test_json_decode_empty_input_has_no_location() {
     let out = compile_and_run(
         r#"<?php
             json_decode("");
             echo json_last_error_msg();
         "#,
     );
-    assert_eq!(out, "Syntax error near location 1:1");
+    assert_eq!(out, "Syntax error");
 }
 
 /// Verifies a CRLF line break counts CR as a column and LF as the line separator.

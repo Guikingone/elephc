@@ -58,3 +58,5 @@ mod case_insensitive;
 mod evaluation_order;
 #[path = "json/error_location.rs"]
 mod error_location;
+#[path = "json/diagnostic_regressions.rs"]
+mod diagnostic_regressions;

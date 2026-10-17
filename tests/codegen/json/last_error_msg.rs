@@ -71,9 +71,9 @@ fn test_json_last_error_msg_clears_location_after_success() {
     assert_eq!(out, "No error");
 }
 
-/// Verifies public json_validate failures do not append a decode location.
+/// Verifies public json_validate failures replace a previous decode location.
 #[test]
-fn test_json_last_error_msg_validate_has_no_location_suffix() {
+fn test_json_last_error_msg_validate_has_own_location_suffix() {
     let out = compile_and_run(
         r#"<?php
             json_decode("[{");
@@ -81,5 +81,5 @@ fn test_json_last_error_msg_validate_has_no_location_suffix() {
             echo json_last_error_msg();
         "#,
     );
-    assert_eq!(out, "Syntax error");
+    assert_eq!(out, "Syntax error near location 1:1");
 }

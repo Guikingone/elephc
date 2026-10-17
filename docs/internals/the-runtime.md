@@ -1086,10 +1086,10 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_validate` | Standalone RFC 8259 validator used by `json_validate()`; scalar validator helpers are also reused by `json_decode_mixed` for strings and numbers | `x1`/`x2` = JSON string | `x0` = 1 valid / 0 invalid |
 | `__rt_json_depth_enter` / `__rt_json_depth_exit` | Maintain `_json_active_depth` and compare against `_json_depth_limit` for recursive encode/decode/validate walks | global JSON state | status / updated state |
 | `__rt_json_note_error_candidate` | Store an absolute candidate pointer, or one byte past the offending token, without reading the source | candidate pointer | updates `_json_error_candidate_ptr` |
-| `__rt_json_set_error_location` | If a decode source is active, scan `[source, min(candidate, source+len))` into one-based line/column data, then clear the source and candidate pointers. Called only from `__rt_json_throw_error` | global candidate and source slots | updates `_json_error_location_active`, `_json_error_line`, `_json_error_column`, then zeroes the source slots |
-| `__rt_json_error_message` | Build the current JSON error message, appending the PHP 8.6 `" near location line:column"` suffix when decode location state is active | global JSON state | `x1`/`x2` = message |
+| `__rt_json_set_error_location` | If a nonempty decode or validate source is active, scan `[source, min(candidate, source+len))` into one-based line/column data, then clear the source and candidate pointers. Called only from `__rt_json_throw_error` | global candidate and source slots | updates `_json_error_location_active`, `_json_error_line`, `_json_error_column`, then zeroes the source slots |
+| `__rt_json_error_message` | Build the current JSON error message, appending Elephc's `" near location line:column"` suffix when decode or validate location state is active; PHP 8.2-8.5 base messages remain the comparison oracle | global JSON state | `x1`/`x2` = message |
 | `__rt_json_throw_error` | Record a JSON error code and construct/throw `JsonException` when `JSON_THROW_ON_ERROR` is active, using the shared formatted JSON error message | `x0` = JSON_ERROR_* code | may not return |
-| `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table, including decode location suffixes when active | global JSON state | `x1`/`x2` = message |
+| `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table, including decode/validate location suffixes when active | global JSON state | `x1`/`x2` = message |
 | `__rt_json_pretty_push` / `__rt_json_pretty_pop` / `__rt_json_pretty_line` / `__rt_json_pretty_colon_space` | Maintain `_json_indent_depth` and append PHP-style pretty-print whitespace while each container encoder emits bytes. These helpers are no-ops unless `JSON_PRETTY_PRINT` is active, avoiding a second buffer walk. | current JSON state, `x11` write pointer for line/space helpers | updated formatting state / `x11` write pointer |
 
 ### Serialization routines
@@ -1596,12 +1596,12 @@ _buffer_registry_next:
 .comm _json_validate_ptr, 8  ; validator input pointer
 .comm _json_validate_len, 8  ; validator input length
 .comm _json_decode_assoc, 8  ; json_decode object-shape selector
-.comm _json_error_source_ptr, 8 ; original json_decode input pointer
-.comm _json_error_source_len, 8 ; original json_decode input length in bytes
+.comm _json_error_source_ptr, 8 ; original decode/validate input pointer
+.comm _json_error_source_len, 8 ; original decode/validate input length in bytes
 .comm _json_error_candidate_ptr, 8 ; absolute candidate byte, noted in O(1)
 .comm _json_error_location_active, 8 ; whether line/column should be appended
-.comm _json_error_line, 8    ; one-based line for the last json_decode error
-.comm _json_error_column, 8  ; one-based column for the last json_decode error
+.comm _json_error_line, 8    ; one-based line for the last JSON error (zero for empty input)
+.comm _json_error_column, 8  ; one-based column for the last JSON error (zero for empty input)
 .comm _json_error_scan_count, 8 ; completed diagnostic location scans
 .comm _json_error_scan_bytes, 8 ; source bytes loaded by those scans
 _heap_max:

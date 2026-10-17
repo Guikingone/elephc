@@ -105,6 +105,7 @@ pub(crate) fn lower_json_validate(
     lower_json_validate_flags(ctx, inst)?;
     lower_json_validate_depth(ctx, inst)?;
     load_json_source_string(ctx, json, "json_validate source")?;
+    store_json_error_source_ptr(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_json_validate");
     clear_json_diagnostic_source_refs(ctx);
     store_if_result(ctx, inst)
@@ -599,7 +600,7 @@ fn emit_static_string_result(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
-/// Stores the original `json_decode()` source pointer and length.
+/// Publishes the original decode or validate source and clears its coordinates.
 ///
 /// The length bounds the deferred line/column scan. The candidate slot starts
 /// empty so a later container or syntax error can publish an absolute position
@@ -609,9 +610,11 @@ fn store_json_error_source_ptr(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_reg_to_symbol(ctx.emitter, ptr_reg, "_json_error_source_ptr", 0);
     abi::emit_store_reg_to_symbol(ctx.emitter, len_reg, "_json_error_source_len", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_candidate_ptr", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_line", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_column", 0);
 }
 
-/// Drops decode-source pointers after a public JSON operation returns.
+/// Drops diagnostic-source pointers after a public JSON operation returns.
 ///
 /// Numeric line/column state is left intact for `json_last_error_msg()`.
 /// Recursive `__rt_json_decode_mixed` returns do not call this helper.

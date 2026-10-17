@@ -17,8 +17,9 @@ use super::*;
 ///
 /// The counters are BSS symbols, not PHP builtins. The harness runs after user
 /// code and writes `scan_count` and `scan_bytes` as decimal lines.
-fn scan_counter_harness() -> &'static str {
-    match target().arch {
+/// ARM64 write syscalls are selected explicitly for Darwin or Linux.
+pub(super) fn scan_counter_harness() -> String {
+    let asm = match target().arch {
         Arch::AArch64 => {
             r#"    adrp x0, _json_error_scan_count@PAGE
     add x0, x0, _json_error_scan_count@PAGEOFF
@@ -81,6 +82,11 @@ fn scan_counter_harness() -> &'static str {
     pop rax
     add rsp, 8"#
         }
+    };
+    if target().arch == Arch::AArch64 && target().platform == Platform::Linux {
+        asm.replace("mov x16, #4", "mov x8, #64").replace("svc #0x80", "svc #0")
+    } else {
+        asm.to_string()
     }
 }
 
@@ -91,7 +97,7 @@ fn decode_with_scan_counts(source: &str) -> (String, u64, u64) {
 
 /// Runs `source` with an explicit heap and returns user stdout plus the scan counters.
 fn decode_with_scan_counts_heap(source: &str, heap_size: usize) -> (String, u64, u64) {
-    let out = compile_harness_and_run(source, heap_size, scan_counter_harness());
+    let out = compile_harness_and_run(source, heap_size, &scan_counter_harness());
     let mut lines: Vec<&str> = out.lines().collect();
     assert!(
         lines.len() >= 2,
@@ -133,7 +139,7 @@ fn assert_scan_counts(source: &str, scans: u64, max_bytes: u64) {
 }
 
 /// Executes the explicitly requested PHP oracle with `php -n -r` and returns stdout.
-fn php_cli(body: &str) -> String {
+pub(super) fn php_cli(body: &str) -> String {
     let output = std::process::Command::new("php")
         .arg("-n")
         .arg("-r")
@@ -149,7 +155,7 @@ fn php_cli(body: &str) -> String {
 }
 
 /// Removes elephc's `near location L:C` suffix so the base text can be compared with PHP 8.5.
-fn strip_location_suffix(message: &str) -> String {
+pub(super) fn strip_location_suffix(message: &str) -> String {
     match message.find(" near location ") {
         Some(index) => message[..index].to_string(),
         None => message.to_string(),
@@ -164,6 +170,8 @@ $values = ["0", "42", "true", "false", "null", "\"hi\"", "1.5", "[]", "{}", "[[]
 foreach ($values as $json) {
     json_decode($json);
     if (json_last_error() != 0) { echo "fail:$json\n"; }
+    json_validate($json);
+    if (json_last_error() != 0) { echo "validate-fail:$json\n"; }
 }
 $rows = [];
 for ($i = 0; $i < 8; $i++) { $rows[] = range(0, 7); }
@@ -177,14 +185,13 @@ echo json_last_error(), "\n";
 #[test]
 fn test_json_decode_one_error_scans_source_once() {
     let cases: &[(&str, &str, u64)] = &[
-        ("", "Syntax error near location 1:1", 0),
         ("x", "Syntax error near location 1:2", 1),
         ("[", "Syntax error near location 1:2", 1),
         ("[{", "Syntax error near location 1:3", 2),
         ("[1,]", "Syntax error near location 1:4", 3),
         ("[1,\n 2,]", "Syntax error near location 2:4", 7),
         ("[1,\r\n2,]", "Syntax error near location 2:3", 7),
-        ("\"a\\uD83D\"", "Single unpaired UTF-16 surrogate in unicode escape near location 1:9", 9),
+        ("\"a\\uD83D\"", "Single unpaired UTF-16 surrogate in unicode escape near location 1:1", 0),
     ];
     for (json, message, max_bytes) in cases {
         let source = format!(
@@ -199,6 +206,12 @@ fn test_json_decode_one_error_scans_source_once() {
         assert_eq!(scans_off, 1, "ir-opt off json={json:?}");
         assert!(bytes_off <= *max_bytes, "ir-opt off json={json:?} bytes={bytes_off}");
     }
+}
+
+/// Empty decode and validate failures do not scan or retain previous coordinates.
+#[test]
+fn test_json_empty_sources_do_not_scan() {
+    assert_scan_counts(r#"<?php json_decode(""); json_validate("");"#, 0, 0);
 }
 
 /// A document with many containers and one trailing syntax error still scans once.
@@ -241,6 +254,16 @@ fn write_benchmark_document(path: &str, corrupt_tail: bool) {
     std::fs::write(path, json).unwrap();
 }
 
+/// Owns the unique benchmark fixture directory for one test invocation.
+struct JsonLocationFixtures(std::path::PathBuf);
+
+impl Drop for JsonLocationFixtures {
+    /// Removes fixture files on success and when a test assertion unwinds.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// The 800 by 200 document from the location benchmark performs no diagnostic scan.
 ///
 /// The document is loaded from a file. `json_encode()` of this shape is not used:
@@ -248,16 +271,17 @@ fn write_benchmark_document(path: &str, corrupt_tail: bool) {
 /// 70 KiB, which is outside this change.
 #[test]
 fn test_json_decode_benchmark_document_scans_only_on_error() {
-    let valid_path = "/tmp/elephc_json_loc_800.json";
-    let invalid_path = "/tmp/elephc_json_loc_800_bad.json";
-    write_benchmark_document(valid_path, false);
-    write_benchmark_document(invalid_path, true);
-    let valid = r#"<?php
-$json = file_get_contents("/tmp/elephc_json_loc_800.json");
+    let fixtures = JsonLocationFixtures(make_cli_test_dir("elephc_json_location"));
+    let valid_path = fixtures.0.join("valid.json").to_string_lossy().into_owned();
+    let invalid_path = fixtures.0.join("invalid.json").to_string_lossy().into_owned();
+    write_benchmark_document(&valid_path, false);
+    write_benchmark_document(&invalid_path, true);
+    let valid = format!(r#"<?php
+$json = file_get_contents({valid_path:?});
 $decoded = json_decode($json, true);
 echo strlen($json), "\n", json_last_error(), "\n", count($decoded), "\n";
-"#;
-    let (body, scans, bytes) = decode_with_scan_counts_heap(valid, 67_108_864);
+"#);
+    let (body, scans, bytes) = decode_with_scan_counts_heap(&valid, 67_108_864);
     let mut lines = body.lines();
     let len: u64 = lines.next().unwrap().parse().unwrap();
     assert_eq!(len, 553_601, "compact 800x200 document size");
@@ -265,16 +289,16 @@ echo strlen($json), "\n", json_last_error(), "\n", count($decoded), "\n";
     assert_eq!(lines.next(), Some("800"));
     assert_eq!(scans, 0);
     assert_eq!(bytes, 0);
-    let (_, scans_off, bytes_off) = without_ir_opt(|| decode_with_scan_counts_heap(valid, 67_108_864));
+    let (_, scans_off, bytes_off) = without_ir_opt(|| decode_with_scan_counts_heap(&valid, 67_108_864));
     assert_eq!(scans_off, 0);
     assert_eq!(bytes_off, 0);
 
-    let invalid = r#"<?php
-$json = file_get_contents("/tmp/elephc_json_loc_800_bad.json");
+    let invalid = format!(r#"<?php
+$json = file_get_contents({invalid_path:?});
 json_decode($json, true);
 echo strlen($json), "\n", json_last_error(), "\n", json_last_error_msg(), "\n";
-"#;
-    let (body, scans, bytes) = decode_with_scan_counts_heap(invalid, 67_108_864);
+"#);
+    let (body, scans, bytes) = decode_with_scan_counts_heap(&invalid, 67_108_864);
     let mut lines = body.lines();
     let len: u64 = lines.next().unwrap().parse().unwrap();
     assert_eq!(len, 553_602);
@@ -286,7 +310,7 @@ echo strlen($json), "\n", json_last_error(), "\n", json_last_error_msg(), "\n";
     assert_eq!(scans, 1);
     assert_eq!(bytes, 553_600);
     let (_, scans_off, bytes_off) =
-        without_ir_opt(|| decode_with_scan_counts_heap(invalid, 67_108_864));
+        without_ir_opt(|| decode_with_scan_counts_heap(&invalid, 67_108_864));
     assert_eq!(scans_off, 1);
     assert_eq!(bytes_off, 553_600);
 }
@@ -309,17 +333,17 @@ echo json_last_error_msg(), "\n";
     assert_eq!(scans_off, 2);
 }
 
-/// Public `json_validate` does not publish a decode source, so it does not scan.
+/// Public json_validate scans its own nonempty source once on failure.
 #[test]
-fn test_json_validate_does_not_scan_or_suffix_location() {
+fn test_json_validate_publishes_its_own_location_and_scan() {
     let source = r#"<?php
 json_decode("[{");
 json_validate("{");
 echo json_last_error_msg(), "\n";
 "#;
     let (body, scans, bytes) = decode_with_scan_counts(source);
-    assert_eq!(body, "Syntax error");
-    assert_eq!(scans, 1, "validate must not add a second scan");
+    assert_eq!(body, "Syntax error near location 1:1");
+    assert_eq!(scans, 2, "decode and validate each scan their own failure");
     assert!(bytes <= 2);
 }
 
@@ -429,8 +453,8 @@ json_decode("[\"é\",]");
 echo json_last_error(), "|", json_last_error_msg(), "\n";
 "#;
     let expected = "\
-3|Control character error, possibly incorrectly encoded near location 1:3
-5|Malformed UTF-8 characters, possibly incorrectly encoded near location 1:3
+3|Control character error, possibly incorrectly encoded near location 1:1
+5|Malformed UTF-8 characters, possibly incorrectly encoded near location 1:1
 4|Syntax error near location 1:7
 ";
     assert_eq!(compile_and_run(source), expected);
