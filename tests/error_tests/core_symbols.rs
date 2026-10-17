@@ -43,7 +43,9 @@ fn test_core_symbols_no_discard_warning() {
 #[test]
 fn test_core_symbols_property_override() {
     expect_error("<?php class Bad { #[Override] public int $value = 0; }", "no matching parent property");
+    expect_error("<?php class PrivateParent { private int $value = 0; } class Bad extends PrivateParent { #[Override] public int $value = 1; }", "no matching parent property");
     check_source("<?php class ParentProperty { public int $value = 0; } class ChildProperty extends ParentProperty { #[Override] public int $value = 1; }").unwrap();
+    check_source("<?php interface PropertyContract { public int $value { get; } } class ChildProperty implements PropertyContract { #[Override] public int $value = 1; }").unwrap();
 }
 
 /// New Core constructors retain normal argument-count and type diagnostics.

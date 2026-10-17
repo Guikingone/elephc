@@ -23,6 +23,46 @@ pub(super) fn validate_eval_core_attribute_targets(attributes: &[EvalAttribute],
     Ok(())
 }
 
+/// Requires a marked property to override a visible parent or interface property.
+pub(super) fn validate_eval_property_override(
+    class: &EvalClass,
+    property: &EvalClassProperty,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !eval_attributes_have_global_builtin_attribute(property.attributes(), "Override") {
+        return Ok(());
+    }
+    if class.parent().and_then(|parent| context.class_property(parent, property.name()))
+        .is_some_and(|(_, inherited)| inherited.visibility() != EvalVisibility::Private
+            && inherited.is_static() == property.is_static())
+    {
+        return Ok(());
+    }
+    if let Some(parent) = pending_class_native_parent_name(class, context) {
+        if values.class_exists(&parent)? {
+            if let Some(flags) = values.reflection_property_flags(&parent, property.name())? {
+                if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE == 0
+                    && (flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0) == property.is_static()
+                {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    if !property.is_static() {
+        if pending_class_interface_names(class, context).iter().any(|interface| {
+            context.interface_property_requirements(interface).iter()
+                .any(|requirement| requirement.name() == property.name())
+        }) || pending_class_aot_interface_property_requirements(class, context, values)?.iter()
+            .any(|(_, requirement)| requirement.name() == property.name())
+        {
+            return Ok(());
+        }
+    }
+    Err(EvalStatus::RuntimeFatal)
+}
+
 /// Emits the PHP warning for an ignored result from an interpreted marked declaration.
 pub(super) fn warn_eval_discarded_call(
     expression: &EvalExpr,

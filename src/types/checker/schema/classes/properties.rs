@@ -37,8 +37,14 @@ pub(super) fn apply_properties(
         {
             let inherited = if prop.is_static {
                 state.static_property_declaring_classes.contains_key(&prop.name)
+                    && state.static_property_visibilities.get(&prop.name) != Some(&Visibility::Private)
             } else {
                 state.property_declaring_classes.contains_key(&prop.name)
+                    && state.property_visibilities.get(&prop.name) != Some(&Visibility::Private)
+                    || class.implements.iter().chain(&state.interfaces).any(|interface| {
+                        checker.interfaces.get(interface)
+                            .is_some_and(|info| info.properties.contains_key(&prop.name))
+                    })
             };
             if !inherited {
                 return Err(CompileError::new(class.span, &format!(

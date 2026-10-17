@@ -99,6 +99,7 @@ pub(super) fn validate_property_parent_redeclaration(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_eval_property_override(class, property, context, values)?;
     let Some(parent) = class.parent() else {
         return Ok(());
     };

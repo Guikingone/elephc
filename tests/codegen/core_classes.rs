@@ -9,6 +9,28 @@
 
 use crate::support::*;
 
+/// Property markers accept inherited native and interpreted class and interface contracts.
+#[test]
+fn test_core_classes_property_override_in_opaque_eval() {
+    let out = compile_and_run(r#"<?php
+class NativeOverrideParent { public int $value = 1; }
+interface NativeOverrideContract { public int $value { get; } }
+class NativeOverrideChild extends NativeOverrideParent { #[Override] public int $value = 2; }
+class NativeOverrideImpl implements NativeOverrideContract { #[Override] public int $value = 3; }
+echo (new NativeOverrideChild())->value, ':', (new NativeOverrideImpl())->value, ':';
+$source = 'class EvalNativeOverride extends NativeOverrideParent { #[Override] public int $value = 4; }
+class EvalNativeImpl implements NativeOverrideContract { #[Override] public int $value = 5; }
+class EvalOverrideParent { public int $value = 6; }
+class EvalOverrideChild extends EvalOverrideParent { #[Override] public int $value = 7; }
+interface EvalOverrideContract { public int $value { get; } }
+class EvalOverrideImpl implements EvalOverrideContract { #[Override] public int $value = 8; }
+echo (new EvalNativeOverride())->value, ":", (new EvalNativeImpl())->value, ":";
+echo (new EvalOverrideChild())->value, ":", (new EvalOverrideImpl())->value;' . ' // ' . $argc;
+eval($source);
+"#);
+    assert_eq!(out, "2:3:4:5:7:8");
+}
+
 /// Key cycles do not become strong edges through a WeakMap observer registration.
 #[test]
 fn test_core_classes_weak_map_cycle_collection() {
