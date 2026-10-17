@@ -203,4 +203,35 @@ mod tests {
         }
     }
 
+    /// Both ARM64 probes must retain the heap base until the upper bound rejects foreign pointers.
+    #[test]
+    fn cleanup_arm64_bounds_preserve_base_before_header_reads() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            for pic in [false, true] {
+                let target = Target::parse(name).unwrap();
+                let mut emitter = Emitter::new(target);
+                emitter.pic_data_refs = pic;
+                emit_cleanup_invoke(&mut emitter);
+                let asm = emitter.output();
+                let scalar = asm.split_once("__rt_cleanup_invoke_direct:").unwrap().0;
+                let array = asm.split_once(&format!("{}:", empty_array::CANDIDATE)).unwrap().1;
+
+                // -- resolving the bump offset must not overwrite the live base in x9 --
+                let mut bounds = Emitter::new(target);
+                bounds.pic_data_refs = pic;
+                abi::emit_symbol_address(&mut bounds, "x10", "_heap_off");
+                bounds.instruction("ldr x10, [x10]");                           // read the bump offset through its own address register
+                bounds.instruction("add x10, x9, x10");                         // combine the offset with the preserved heap base
+                bounds.instruction("cmp x1, x10");                              // bound the payload before any header access
+                bounds.instruction("b.hs __rt_cleanup_invoke_protected");        // foreign pointers must take the protected fallback
+                bounds.instruction("ldr w10, [x1, #-12]");                      // only an in-range payload permits a refcount read
+                let required = bounds.output();
+                for (kind, probe) in [("scalar", scalar), ("empty array", array)] {
+                    assert!(probe.contains(&required),
+                        "{name}, pic={pic}, {kind}: preserve x9 and reject the heap end before reading the header\n{probe}");
+                }
+            }
+        }
+    }
+
 }

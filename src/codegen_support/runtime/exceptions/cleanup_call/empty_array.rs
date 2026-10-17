@@ -33,7 +33,8 @@ fn emit_aarch64(emitter: &mut Emitter, protected: &str, direct: &str) {
     emitter.instruction("add x10, x9, #16");                                    // the first payload follows the uniform heap header
     emitter.instruction("cmp x1, x10");                                         // reject null, literals, sentinels and foreign payloads
     emitter.instruction(&format!("b.lo {protected}"));                          // do not read a header below the managed payload range
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_heap_off", 0);
+    abi::emit_symbol_address(emitter, "x10", "_heap_off");
+    emitter.instruction("ldr x10, [x10]");                                      // preserve the heap base in x9 while loading its bump offset
     emitter.instruction("add x10, x9, x10");                                    // derive the allocated heap end
     emitter.instruction("cmp x1, x10");                                         // require an address within managed storage
     emitter.instruction(&format!("b.hs {protected}"));                          // out-of-range values retain existing behavior

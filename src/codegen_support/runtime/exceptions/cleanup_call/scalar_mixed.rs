@@ -56,7 +56,8 @@ fn emit_aarch64_gate(emitter: &mut Emitter) {
     emitter.instruction("add x10, x9, #16");                                    // the first payload begins after the uniform heap header
     emitter.instruction("cmp x1, x10");                                         // null, literals and sentinels cannot be scalar heap cells
     emitter.instruction(&format!("b.lo {PROTECTED}"));                          // preserve the original handling of foreign payloads
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_heap_off", 0);
+    abi::emit_symbol_address(emitter, "x10", "_heap_off");
+    emitter.instruction("ldr x10, [x10]");                                      // preserve the heap base in x9 while loading its bump offset
     emitter.instruction("add x10, x9, x10");                                    // derive the current managed heap end
     emitter.instruction("cmp x1, x10");                                         // reject addresses outside allocated heap storage
     emitter.instruction(&format!("b.hs {PROTECTED}"));                          // leave invalid payload handling to the protected dispatcher
