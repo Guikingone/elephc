@@ -284,6 +284,72 @@ fn test_nested_default_tenth_review_chained_new_error_no_ir_opt() {
     without_ir_opt(test_nested_default_tenth_review_chained_new_error);
 }
 
+/// Builds identical slot checks for direct, dynamic and reflected allocation paths.
+fn reference_property_program(construction: &str) -> String {
+    r#"<?php
+class Probe {
+    public const FLAG = true;
+    public string $label = self::FLAG ? 'ok' : 'no';
+    public int $count;
+    public array $items = self::FLAG ? ['ok'] : [];
+}
+function inspect(Probe $probe): void {
+    echo $probe->label, ':', isset($probe->count) ? 'bad' : 'U', ':';
+    try { $alias = &$probe->count; echo 'bad'; }
+    catch (Error $error) { echo 'E:'; unset($error); }
+    $copy = &$probe->items;
+    $copy[] = 'extra';
+    echo json_encode($probe->items), '|';
+}
+/* construction */
+"#.replace("/* construction */", construction)
+}
+
+/// Shared initializer thunks preserve uninitialized reference properties without leaking cells.
+#[test]
+fn test_nested_default_grok_review_reference_property_cells() {
+    check(&reference_property_program("inspect(new Probe()); $class = Probe::class; $dynamic = new $class(); if ($dynamic instanceof Probe) { inspect($dynamic); } else { echo 'bad-class'; } unset($dynamic);"),
+        "ok:U:E:[\"ok\",\"extra\"]|".repeat(2).as_str(), true);
+}
+
+/// Reference-cell initialization is equally balanced without EIR optimization.
+#[test]
+fn test_nested_default_grok_review_reference_property_cells_no_ir_opt() {
+    without_ir_opt(test_nested_default_grok_review_reference_property_cells);
+}
+
+/// By-name reflected construction installs an uninitialized cell when allocation did not.
+#[test]
+fn test_nested_default_grok_review_reflected_reference_property_cells() {
+    check(&reference_property_program("$reflection = new ReflectionClass(Probe::class); inspect($reflection->newInstanceWithoutConstructor()); unset($reflection);"),
+        "ok:U:E:[\"ok\",\"extra\"]|", false);
+}
+
+/// Reflected reference slots retain their initialization state without EIR optimization.
+#[test]
+fn test_nested_default_grok_review_reflected_reference_property_cells_no_ir_opt() {
+    without_ir_opt(test_nested_default_grok_review_reflected_reference_property_cells);
+}
+
+/// PHP defers global parent::class closure defaults using the no-scope self wording.
+#[test]
+fn test_nested_default_grok_review_global_parent_class_default() {
+    check(r#"<?php
+$closure = function (string $name = parent::class): string { return $name; };
+$arrow = fn(string $name = parent::class): string => $name;
+echo $closure('kept'), '|', $arrow('kept'), '|';
+try { $closure(); } catch (Error $error) { echo $error->getMessage(), '|'; unset($error); }
+try { $arrow(); } catch (Error $error) { echo $error->getMessage(); unset($error); }
+unset($closure, $arrow);
+"#, "kept|kept|Cannot use \"self\" when no class scope is active|Cannot use \"self\" when no class scope is active", true);
+}
+
+/// Global relative-name default deferral retains PHP's behavior without EIR optimization.
+#[test]
+fn test_nested_default_grok_review_global_parent_class_default_no_ir_opt() {
+    without_ir_opt(test_nested_default_grok_review_global_parent_class_default);
+}
+
 /// A trait's native default helpers preserve each consuming class's constructor scope.
 #[test]
 fn test_nested_default_ninth_review_trait_helper_scope() {

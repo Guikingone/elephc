@@ -163,6 +163,42 @@ deferred_reflection_target_case!(property_default_review_reflection_ios_sim_arm6
 deferred_reflection_target_case!(property_default_review_reflection_linux_aarch64, "linux-aarch64");
 deferred_reflection_target_case!(property_default_review_reflection_linux_x86_64, "linux-x86_64");
 
+/// Every target reuses preallocated reference cells and initializes missing by-name cells.
+#[test]
+fn property_default_review_reference_cells_on_all_supported_targets() {
+    let source = r#"<?php
+class ReferenceProbe {
+    public const FLAG = true;
+    public string $label = self::FLAG ? 'ok' : 'no';
+    public int $count;
+    public array $items = self::FLAG ? ['ok'] : [];
+}
+function inspect(ReferenceProbe $probe): void {
+    try { $alias = &$probe->count; } catch (Error $error) { echo $error->getMessage(); }
+    $copy = &$probe->items; $copy[] = 'extra';
+}
+inspect(new ReferenceProbe());
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let class = &module.class_infos["ReferenceProbe"];
+        assert!(class.owned_reference_properties.contains("count"), "{name}");
+        assert!(class.owned_reference_properties.contains("items"), "{name}");
+        let thunk = format!("_class_propinit_{}", class.class_id);
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let initializer = assembly.split(&format!("@fn name={thunk} ")).nth(1)
+            .expect("the initializer is emitted")
+            .split("@endfn").next().unwrap();
+        assert!(initializer.contains("property_reference_initialized"),
+            "{name}: the initializer must guard allocation of each object-owned reference cell");
+        assert!(initializer.contains("__rt_reference_cell_new"),
+            "{name}: zeroed by-name allocations still need an initial reference cell");
+    }
+}
+
 /// Valid and unbound trait defaults both pass through target-independent EIR.
 #[test]
 fn property_default_review_all_supported_targets() {
