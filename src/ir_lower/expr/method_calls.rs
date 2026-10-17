@@ -178,6 +178,12 @@ pub(super) fn lower_method_call(
     } else {
         (object, None)
     };
+    // Internal value-class methods can reject a scalar after their temporary receiver exists.
+    let receiver_pins = if crate::types::object_operators::operator_class(
+        &ctx.builder.value_php_type(object.value),
+    ).is_some() {
+        pin_in_flight_owners(ctx, &[object.value], object_expr.span)
+    } else { Vec::new() };
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
@@ -216,6 +222,7 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    unpin_in_flight_owners(ctx, receiver_pins, object_expr.span);
     if let Some(owner) = default_receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     } else {
@@ -322,6 +329,7 @@ pub(super) fn plan_scoped_closure_bind(
         signature,
         captures,
         return_alias,
+        ..
     } = binding
     else {
         return None;
@@ -412,6 +420,8 @@ pub(super) fn lower_planned_scoped_closure_bind(
         signature: plan.signature,
         captures,
         return_alias: plan.return_alias,
+        loop_guarded: false,
+        numeric_loop_guarded: false,
     });
     bound
 }

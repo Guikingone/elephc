@@ -49,6 +49,8 @@ thread_local! {
 /// Fixed-point exception summaries and hierarchy shared by post-typecheck DCE.
 #[derive(Clone, Debug)]
 pub(super) struct ExceptionFlowAnalysis {
+    /// Object arithmetic can throw independently of its operand expressions or divisor.
+    has_internal_object_operators: bool,
     hierarchy: ExceptionHierarchy,
     function_throws: HashMap<String, ThrownTypes>,
     static_method_throws: HashMap<String, ThrownTypes>,
@@ -83,6 +85,10 @@ pub(super) struct ExceptionFlowAnalysis {
 
 /// Returns whether argument binding can throw before entering an otherwise clean body.
 fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
+    // Literal false arguments are checked before ABI truthiness coercion, even for pure bodies.
+    if signature.params.iter().any(|(_, ty)| ty == &PhpType::False) {
+        return true;
+    }
     signature.params.iter().enumerate().any(|(index, (_, ty))| {
         signature.ref_params.get(index).copied().unwrap_or(false)
             && signature.declared_params.get(index).copied().unwrap_or(false)
@@ -353,6 +359,8 @@ impl ExceptionFlowAnalysis {
                 &mut static_method_unresolved_defaults, &mut instance_method_unresolved_defaults);
         }
         let mut analysis = Self {
+            has_internal_object_operators: class_contexts.keys().any(|name|
+                elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())),
             hierarchy,
             function_throws: empty_summaries(function_bodies.keys()),
             static_method_throws: empty_summaries(static_method_bodies.keys()),
@@ -728,8 +736,13 @@ impl ExceptionFlowAnalysis {
             ExprKind::Throw(inner) => self
                 .expr_throws(inner, bindings, class_context)
                 .combined(self.thrown_value_types(inner, bindings, class_context)),
-            ExprKind::Negate(inner)
-            | ExprKind::Not(inner)
+            ExprKind::Negate(inner) => {
+                let thrown = self.expr_throws(inner, bindings, class_context);
+                if self.has_internal_object_operators && !effects::literal_scalar_operand(inner) {
+                    thrown.combined(ThrownTypes::unknown())
+                } else { thrown }
+            }
+            ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::ErrorSuppress(inner)
             | ExprKind::PtrCast { expr: inner, .. } => self.expr_throws(inner, bindings, class_context),
@@ -758,7 +771,9 @@ impl ExceptionFlowAnalysis {
                 let mut thrown = self
                     .expr_throws(left, bindings, class_context)
                     .combined(self.expr_throws(right, bindings, class_context));
-                if let Some(class_name) = binary_op_exact_throw_type(left, op, right) {
+                if self.has_internal_object_operators && effects::internal_arithmetic_candidate(left, op, right) {
+                    thrown = thrown.combined(ThrownTypes::unknown());
+                } else if let Some(class_name) = binary_op_exact_throw_type(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::exact(class_name));
                 } else if binary_op_has_dynamic_throw(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::unknown());

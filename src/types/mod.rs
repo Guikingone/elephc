@@ -19,6 +19,8 @@ mod array_keys;
 pub mod dynamic_params;
 /// Array storage-representation conversions shared by checking and lowering.
 mod array_storage;
+/// `(array)` cast classification shared by checking and lowering.
+mod array_cast;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
 /// Shared detection of lazy lexical errors in normalized default expression trees.
@@ -33,6 +35,7 @@ pub(crate) mod param_binding;
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
+pub(crate) mod object_operators;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;
 /// Type checker result types and the `check` entry point.
@@ -62,6 +65,7 @@ pub(crate) use array_keys::{
     merge_array_key_types, normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
+pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayCast};
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
