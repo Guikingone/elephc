@@ -985,6 +985,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
             &ast,
             &check_result,
             target,
+            emit,
             filename,
             web,
             ir_opt,
