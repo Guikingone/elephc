@@ -1059,6 +1059,12 @@ elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp
 
 The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes `Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stderr before exiting with status 255. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, the line from the payload's creation-line slot (`THROWABLE_CREATION_LINE_OFFSET`, formatted through `__rt_itoa`), and the file from `_script_source_file`. An empty message drops the `": "` separator, and a zero line drops the whole ` in <file>:<line>` suffix, both matching reference PHP.
 
+Ordinary Throwable objects, including `ErrorException` and subclasses with extra
+properties, retain the creation-line word in the inherited prefix. Fixed and
+dynamic EIR allocation stamp the allocating expression's line after property
+defaults and before the constructor runs. `ErrorException` location getters use
+an explicit constructor override when present, including line zero.
+
 Codegen guards in `codegen::lower_inst::exceptions` have their OWN uncaught path: they write a fatal message baked at emit time and exit before the throwable is ever allocated, so they never reach this helper. They share `UNCAUGHT_EXIT_STATUS` with it so the status a script observes does not depend on which kind of exception escaped.
 
 The runtime also resets the concat-buffer cursor before the final `longjmp`, so partially built string state from the throwing frame does not leak into the resumed catch/finally code.

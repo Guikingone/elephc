@@ -1,11 +1,12 @@
 //! Purpose:
-//! Allocates compact Throwable payloads and initializes constructor fields.
+//! Allocates compact Throwable payloads and records construction lines for both object layouts.
 //!
 //! Called from:
 //! - The object lowering facade and sibling object support modules.
 //!
 //! Key details:
-//! - Creation lines, message storage, previous-object retention, and target layouts are unchanged.
+//! - Ordinary objects record creation lines after property defaults initialize the shared prefix.
+//! - Message storage and previous-object retention follow the receiver's native layout.
 
 use super::*;
 
@@ -106,6 +107,22 @@ fn throwable_inherits_only_builtin_storage_and_constructor(class_info: &ClassInf
 
 /// Compact Throwable payload bytes: class_id + message(16) + code(16) + previous(16).
 const THROWABLE_COMPACT_PAYLOAD_SIZE: u64 = 56;
+
+/// Stamps ordinary Throwable storage after defaults have initialized the code slot's high word.
+pub(super) fn emit_regular_throwable_creation_line(
+    ctx: &mut FunctionContext<'_>,
+    source: ValueId,
+    object_reg: &str,
+) {
+    let creation_line = ctx.function.value(source).and_then(|value| {
+        let ValueDef::Instruction { inst, .. } = value.def else { return None };
+        ctx.function.instruction(inst)?.span
+    }).map_or(0, |span| span.line);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_throwable_creation_line_aarch64(ctx, object_reg, "x9", creation_line),
+        Arch::X86_64 => emit_throwable_creation_line_x86_64(ctx, object_reg, creation_line),
+    }
+}
 
 /// Allocates a compact Throwable payload and stamps its heap kind, class id and creation line.
 ///

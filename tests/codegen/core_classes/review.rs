@@ -9,6 +9,61 @@
 
 use crate::support::*;
 
+/// Native allocation keeps default ErrorException lines through inheritance, factories, and rethrows.
+#[test]
+fn test_core_review_error_exception_creation_line() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class LocatedError extends ErrorException { public int $extra = 1; }
+class LocationFactory extends ErrorException {
+    public static function make(): static {
+        $line = __LINE__ + 1;
+        $error = new static('factory');
+        echo $error->getLine() === $line ? 'factory:' : 'bad:';
+        return $error;
+    }
+}
+$firstLine = __LINE__ + 1;
+$error = new ErrorException('default');
+echo $error->getLine() === $firstLine ? 'native:' : 'bad:';
+$line = __LINE__ + 1;
+$child = new LocatedError('inherited');
+echo $child->getLine() === $line ? 'inherited:' : 'bad:';
+$factory = LocationFactory::make();
+$class = $argc > 0 ? ErrorException::class : LocatedError::class;
+$line = __LINE__ + 1;
+$dynamic = new $class('dynamic');
+echo $dynamic->getLine() === $line ? 'dynamic:' : 'bad:';
+$line = __LINE__ + 1;
+$located = new ErrorException(message: 'nullable', filename: null, line: null);
+echo $located->getLine() === $line ? 'nullable:' : 'bad:';
+$explicit = new ErrorException(line: 73);
+$zero = new ErrorException(line: 0);
+echo $explicit->getLine(), ':', $zero->getLine(), ':';
+try { throw $error; } catch (Exception $caught) {
+    echo $caught->getLine() === $firstLine ? 'thrown:' : 'bad:';
+}
+unset($error, $child, $factory, $dynamic, $located, $explicit, $zero);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "native:inherited:factory:dynamic:nullable:73:0:thrown:");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Opaque eval reads the native construction line through the Throwable method bridge.
+#[test]
+fn test_core_review_error_exception_creation_line_eval_read() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$error = new ErrorException('native');
+$line = __LINE__ - 1;
+$source = 'echo $error->getLine() === ' . $line . ' ? "eval" : "bad";' . ' // ' . $argc;
+eval($source);
+unset($error);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "eval");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A throwing warning handler does not strand the already produced instance-method result.
 #[test]
 fn test_core_review_no_discard_throwing_warning() {

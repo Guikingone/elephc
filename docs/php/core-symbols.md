@@ -52,6 +52,9 @@ new ErrorException(
 
 Filename and line overrides remain visible through an `Exception` parameter and
 inside `eval()`. A null override uses the usual exception creation location.
+Native construction records the line of `new`, including inherited constructors
+and runtime class names, before invoking the constructor. The line remains the
+construction line when the exception is thrown later.
 
 Every enum implicitly implements `UnitEnum`, whose static `cases()` method
 returns its cases. Backed enums also implement `BackedEnum`, which extends

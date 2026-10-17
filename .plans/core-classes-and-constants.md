@@ -63,7 +63,7 @@ the symbol registries and compatibility documentation through
 ## Completed verification
 
 - Shared baseline contract gate: Core functions 62/62, class-likes 40/40, constants 89/89.
-- Focused Core tests: 24 class tests, 10 review regressions, 5 constant tests, and 7 diagnostic tests.
+- Focused Core tests: 24 class tests, 12 review regressions, 5 constant tests, and 7 diagnostic tests.
 - Native and opaque eval cover weak object and closure keys, identity, cloning, live iteration,
   sensitive traces, deferred attributes, executable-path aliases, and serialization hooks.
 - Heap-debug regressions cover cycles, key resurrection, throwing value destructors, and
@@ -121,3 +121,22 @@ all five targets, the complete x86 runtime alignment audit, and two negative
 audit regressions. The archived REPL cache test passes in 86.48 seconds. The
 compiler build is warning-free, Rustdoc checks and `git diff --check` pass, and
 no global test timeout or production runtime behavior changes in this follow-up.
+
+
+## Independent Grok review correction
+
+- [x] Reproduce default ErrorException construction lines on the reviewed head.
+- [x] Stamp ordinary Throwable construction lines after defaults for fixed, dynamic, and late-static allocation.
+- [x] Verify native inheritance, factories, delayed throws, explicit zero/null overrides, and native-to-eval getters.
+- [x] Check all three allocation paths on all five targets and assemble representative programs.
+
+Grok delegation `14b44edf-751e-438e-9b98-064b8b1b031f` found one actionable
+defect on `c5cbece4b4`: a default ErrorException line read zero because ordinary
+property initialization cleared the inherited creation-line word. Five focused
+codegen tests and the all-target allocation test validate the repair. Review
+outcomes for the final published head remain tracked in Code Journal and on PR1870.
+
+The broader opaque-eval construction-location gap affects existing Exception as
+well and is task `5b678980`. Separate owner-retention controls using compact
+Exception and stdClass are tasks `f53ab0fe` and `6436dcd1`. The new native and
+bridge regressions each retain their clean-heap assertions.

@@ -479,6 +479,10 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
         abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
         emit_property_default(ctx, object_base_reg, default)?;
     }
+    if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+        emit_regular_throwable_creation_line(ctx, result, object_reg);
+    }
     let construction_guard_bytes = candidate
         .constructor_impl
         .as_ref()
