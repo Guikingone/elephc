@@ -14,6 +14,8 @@
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]
 mod string_append;
+#[path = "runtime_gc/bcmath_number.rs"]
+mod bcmath_number;
 #[path = "runtime_gc/basics.rs"]
 mod basics;
 #[path = "runtime_gc/large_unary_string_results.rs"]

@@ -31,6 +31,8 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+mod object_comparisons;
+pub(super) use object_comparisons::lower_object_comparison_dispatch;
 pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.

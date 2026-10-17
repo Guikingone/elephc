@@ -208,6 +208,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         (with_crates.contains("image"), "image"),
         (with_crates.contains("curl"), "curl"),
         (with_crates.contains("xml"), "xml"),
+        (with_crates.contains("bcmath"), "bcmath"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -405,6 +406,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over

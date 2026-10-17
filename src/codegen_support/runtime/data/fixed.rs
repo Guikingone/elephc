@@ -1060,6 +1060,20 @@ pub(crate) fn emit_runtime_data_fixed(
     // helpers call through these slots so unrelated programs never reference the
     // optional elephc-bcmath archive.
     for slot in [
+        "_elephc_bcmath_number_add_fn",
+        "_elephc_bcmath_number_ceil_fn",
+        "_elephc_bcmath_number_comp_fn",
+        "_elephc_bcmath_number_create_fn",
+        "_elephc_bcmath_number_div_fn",
+        "_elephc_bcmath_number_divmod_fn",
+        "_elephc_bcmath_number_floor_fn",
+        "_elephc_bcmath_number_mod_fn",
+        "_elephc_bcmath_number_mul_fn",
+        "_elephc_bcmath_number_pow_fn",
+        "_elephc_bcmath_number_powmod_fn",
+        "_elephc_bcmath_number_round_fn",
+        "_elephc_bcmath_number_sqrt_fn",
+        "_elephc_bcmath_number_sub_fn",
         "_elephc_bcmath_add_fn",
         "_elephc_bcmath_sub_fn",
         "_elephc_bcmath_mul_fn",
