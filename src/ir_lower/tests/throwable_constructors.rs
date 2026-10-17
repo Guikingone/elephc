@@ -10,6 +10,33 @@
 use super::*;
 use crate::ir::{Effects, Immediate, IrHeapKind, IrType, RuntimeCallTarget};
 
+/// Runtime constructor binding reaches valid fixed and lexical calls on every supported target.
+#[test]
+fn hidden_constructor_unpack_streams_lower_on_all_targets() {
+    let source = r#"<?php
+class StreamTarget extends ErrorException {
+    public static function make(array $values): static { return new static(...$values); }
+    public function reset(array $values): void { parent::__construct(...$values); }
+}
+$values = [9 => 'fresh', 'filename' => 'named.php'];
+$error = new ErrorException(...$values);
+$error->__construct(...$values);
+$child = StreamTarget::make($values);
+$child->reset($values);
+function invokeStreamConstructor(callable $callback, array $values): void { $callback(...$values); }
+$constructor = $error->__construct(...);
+invokeStreamConstructor($constructor, $values);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains(&crate::names::method_symbol("ErrorException", "__construct")), "{name}");
+    }
+}
+
 /// A lexical parent call alone keeps its builtin constructor dependency on every target.
 #[test]
 fn parent_static_calls_retain_builtin_throwable_constructors_on_all_targets() {

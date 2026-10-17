@@ -802,6 +802,11 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     };
     let literal_bound = rewrite_literal_param_bindings(sig, args);
     let args = literal_bound.as_deref().unwrap_or(args);
+    if crate::func_args::sig_collects_surplus_args(sig) {
+        if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, "", false) {
+            return operands;
+        }
+    }
     if crate::types::call_args::has_named_args(args) {
         let operands = lower_named_args_with_signature_options(
             ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,

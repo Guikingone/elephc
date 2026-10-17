@@ -424,7 +424,9 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
             EVAL_TAG_INT => {
                 if *saw_named {
                     values.release(key)?;
-                    return Err(EvalStatus::RuntimeFatal);
+                    return eval_throw_error(
+                        "Cannot use positional argument after named argument during unpacking", context, values,
+                    );
                 }
                 let value = match values.array_get(array, key) {
                     Ok(value) => value,

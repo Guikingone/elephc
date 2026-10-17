@@ -63,7 +63,7 @@ the symbol registries and compatibility documentation through
 ## Completed verification
 
 - Shared baseline contract gate: Core functions 62/62, class-likes 40/40, constants 89/89.
-- Focused Core tests: 24 class tests, 23 review regressions, 5 constant tests, and 7 diagnostic tests.
+- Focused Core tests: 24 class tests, 27 review regressions, 5 constant tests, and 7 diagnostic tests.
 - Native and opaque eval cover weak object and closure keys, identity, cloning, live iteration,
   sensitive traces, deferred attributes, executable-path aliases, and serialization hooks.
 - Heap-debug regressions cover cycles, key resurrection, throwing value destructors, and
@@ -256,3 +256,53 @@ An exploratory plain-function argument collector reaches an existing Iterable
 representation diagnostic and is tracked separately as task `e93eafd7`; it is not
 claimed as covered by the constructor repair. Final review and CI results are
 recorded against the immutable published SHA in Code Journal and on PR1870.
+
+
+## Sixth independent Grok and Greptile correction
+
+- [x] Reproduce numeric unpack keys disappearing, unknown names being accepted, and lost overflow.
+- [x] Extend the existing EIR iterator binder for visible defaults and compiler-owned collectors.
+- [x] Preserve positional insertion order, duplicate/name-order errors, and the actual argument extent.
+- [x] Keep fixed, instance, lexical parent, class-string, and late-static constructor dispatch coherent.
+- [x] Retain a reusable class-name root across nonmatching dynamic constructor candidates.
+- [x] Finish the native/eval regressions, all-target checks, and documentation audits.
+- [ ] Obtain a clean Grok review and Greptile 5/5 on the final published SHA.
+
+Grok delegation `0becf7d6-53a9-4444-8c63-86cd66883156` returned NOT CLEAN on
+`8a7d6737f2`; Greptile independently rated that head 4/5 for the same binding gap.
+The string-key probes could not represent the PHP argument stream. The replacement
+walks runtime arrays in insertion order, binds integer entries positionally, tracks
+named occupancy, supplies missing defaults, and retains overflow in the hidden
+collector. The constructor receives its actual PHP argument extent and enforces
+its six-argument limit through the normal body.
+
+Late-static construction now reuses planned fixed-class branches. Repeated class-name
+probes borrow a guarded root instead of consuming an owned temporary on the first
+nonmatching branch. The dispatch planner has a dedicated module. Native probes match
+PHP for sparse keys, multiple unpacks, explicit locations and previous identity,
+lexical parents, factories, and all three binding errors, with clean heap reports.
+
+Direct constructor calls retain their normal EIR binding and dispatch. Dynamic class-string
+construction and constructor callables keep the descriptor binder. Its nullable integer
+coercion now stages both payload and tag before later arguments and the captured receiver,
+preserves the pair across temporary-box cleanup, and rejects unknown names for hidden
+collectors. Native callback probes match PHP with clean heaps. This completes the ABI work
+tracked by Code Journal task `5e4a396e` as part of the Core correction.
+
+Eval binding also creates catchable `Error` objects for unknown names, duplicate slots, and
+positional entries after named unpack entries, preserving ordinary argument cleanup.
+The published `8a7d6737f2` PDO workflow passed; its main CI was cancelled after the
+new review finding. Replacement exact-head CI and review results remain pending.
+
+
+Final local validation passes 28 focused codegen cases, 82 Magician argument/scope cases,
+all 28 descriptor-invoker unit cases, and five focused library checks. The latter include
+all-target direct/late-static/callable construction, nullable ABI width, boxed binding,
+parent reachability, and complete x86 runtime call alignment. Native/eval stream and
+constructor-callable regressions require PHP-equivalent output and clean heaps. Combined
+stream/callable programs compile and assemble for all five targets. The compiler build is
+warning-free; builtin documentation generation/audits, EIR boundary, Rustdoc, assembly
+comments, and whitespace checks pass without generated registry changes.
+
+Final review and CI acceptance are recorded on PR1870 and in Code Journal against the
+immutable published SHA. No clean-review or green-CI claim applies to an older head.

@@ -237,14 +237,7 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
             }
         }
     }
-    if crate::func_args::sig_collects_surplus_args(sig) {
-        let minimum = named_plan_actual_arg_count(&plan.source_values);
-        let count = assoc_spread_actual_count_expr(sig, &prefix_temp, minimum, call_span);
-        let count = lower_expr(ctx, &count);
-        operands.push(lower_empty_func_args_collector(ctx, sig, count, call_span).value);
-    } else {
-        operands.push(lower_variadic_tail_array(ctx, sig, &[], 0).value);
-    }
+    operands.push(lower_variadic_tail_array(ctx, sig, &[], 0).value);
     Some(operands)
 }
 

@@ -38,6 +38,7 @@ mod public_args;
 mod reference_args;
 mod reference_return;
 mod string_return;
+mod tagged_args;
 
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
@@ -1692,7 +1693,7 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
             abi::emit_load_int_immediate(emitter, temp_reg, 2);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
         }
-        PhpType::Str => {
+        PhpType::Str | PhpType::TaggedScalar => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
             abi::emit_store_to_address(emitter, ptr_reg, cell_reg, 0);
@@ -1728,7 +1729,7 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
             abi::emit_load_int_immediate(emitter, temp_reg, 9);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
         }
-        PhpType::TaggedScalar | PhpType::Void | PhpType::Never => {
+        PhpType::Void | PhpType::Never => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
             abi::emit_store_zero_to_address(emitter, cell_reg, 8);
@@ -2626,6 +2627,10 @@ fn coerce_current_value_to_target(
     target_ty: Option<&PhpType>,
 ) -> (PhpType, bool) {
     let source_repr = source_ty.codegen_repr();
+    if target_ty.is_some_and(|target| target.codegen_repr() == PhpType::TaggedScalar) {
+        tagged_args::coerce(emitter, ctx, source_ty);
+        return (PhpType::TaggedScalar, false);
+    }
     if source_repr != PhpType::Callable
         && target_ty.is_some_and(|target| target.codegen_repr() == PhpType::Callable)
     {
@@ -2816,7 +2821,7 @@ fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: 
 fn restore_pushed_value_after_release(emitter: &mut Emitter, pushed_ty: &PhpType) {
     match pushed_ty.codegen_repr() {
         PhpType::Float => abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter)),
-        PhpType::Str => {
+        PhpType::Str | PhpType::TaggedScalar => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
         }
@@ -2951,7 +2956,8 @@ fn restore_concat_offset_after_nested_call(
 /// such a call raises `Unknown named parameter $<name>`, which is a PHP-visible diagnostic the
 /// program can catch, instead of corrupting the collector.
 pub(crate) fn variadic_collector_accepts_named_entries(sig: &FunctionSig) -> bool {
-    crate::types::signatures::variadic_storage_accepts_named_entries(sig)
+    !crate::func_args::sig_collects_surplus_args(sig)
+        && crate::types::signatures::variadic_storage_accepts_named_entries(sig)
 }
 
 /// Returns the element type a variadic collector's storage holds, for BOTH container shapes.

@@ -210,27 +210,6 @@ pub(super) fn named_plan_actual_arg_count(
     regular + surplus
 }
 
-/// Builds an empty compiler collector with a runtime-computed optional argument count.
-pub(super) fn lower_empty_func_args_collector(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    count: LoweredValue,
-    span: crate::span::Span,
-) -> LoweredValue {
-    debug_assert!(crate::func_args::sig_collects_surplus_args(sig));
-    let count_metadata = crate::func_args::sig_collects_optional_arg_count(sig);
-    let array_ty = variadic_array_type(sig);
-    let array = ctx.emit_value(
-        Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(u32::from(count_metadata))),
-        array_ty.clone(), Op::ArrayNew.default_effects(), Some(span),
-    );
-    if count_metadata {
-        let elem_ty = indexed_array_literal_element_type(&array_ty);
-        push_func_args_count_value(ctx, array.value, &array_ty, &elem_ty, count, span);
-    }
-    array
-}
-
 /// Appends the actual argument count as the first boxed Mixed collector element.
 fn push_func_args_count(
     ctx: &mut LoweringContext<'_, '_>,
@@ -241,18 +220,6 @@ fn push_func_args_count(
     span: crate::span::Span,
 ) {
     let count = emit_i64_at_span(ctx, actual_count as i64, span);
-    push_func_args_count_value(ctx, array, array_ty, elem_ty, count, span);
-}
-
-/// Publishes a computed count with the same boxing and ownership as a static count.
-fn push_func_args_count_value(
-    ctx: &mut LoweringContext<'_, '_>,
-    array: crate::ir::ValueId,
-    array_ty: &PhpType,
-    elem_ty: &Option<PhpType>,
-    count: LoweredValue,
-    span: crate::span::Span,
-) {
     let count = coerce_variadic_tail_value(ctx, count, array_ty, span);
     ctx.emit_void(
         Op::ArrayPush,

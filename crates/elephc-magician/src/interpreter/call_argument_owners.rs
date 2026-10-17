@@ -120,7 +120,9 @@ fn append_unpacked_arguments(
             EVAL_TAG_INT => {
                 if *saw_named {
                     values.release(key)?;
-                    return Err(EvalStatus::RuntimeFatal);
+                    return eval_throw_error(
+                        "Cannot use positional argument after named argument during unpacking", context, values,
+                    );
                 }
                 let read = if owners.is_some() && preserve_references {
                     values.array_get_preserving_references(array, key)

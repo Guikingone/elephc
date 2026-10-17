@@ -208,8 +208,7 @@ pub(super) fn lower_assoc_spread_only_args(
     let ExprKind::Spread(inner) = &arg.kind else {
         return None;
     };
-    let hidden_collector = crate::func_args::sig_collects_surplus_args(sig);
-    if !is_assoc_spread_source(ctx, inner) || (sig.variadic.is_some() && !hidden_collector) {
+    if !is_assoc_spread_source(ctx, inner) || sig.variadic.is_some() {
         return None;
     }
     let spread = lower_expr(ctx, inner);
@@ -218,41 +217,13 @@ pub(super) fn lower_assoc_spread_only_args(
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, arg.span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
-    let regular = crate::types::call_args::regular_param_count(sig);
     let mut operands = Vec::with_capacity(sig.params.len());
-    for (idx, (param_name, _)) in sig.params.iter().take(regular).enumerate() {
+    for (idx, (param_name, _)) in sig.params.iter().enumerate() {
         let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
         let param_expr = assoc_spread_param_expr(&spread_expr, param_name, default, arg.span);
         operands.push(lower_arg_with_signature(ctx, sig, idx, &param_expr));
     }
-    if hidden_collector {
-        let count = assoc_spread_actual_count_expr(sig, &spread_expr, 0, arg.span);
-        let count = lower_expr(ctx, &count);
-        operands.push(lower_empty_func_args_collector(ctx, sig, count, arg.span).value);
-    }
     Some(operands)
-}
-
-/// Counts filled optional positions from dynamic keys and already supplied named slots.
-pub(super) fn assoc_spread_actual_count_expr(
-    sig: &FunctionSig,
-    spread: &Expr,
-    minimum: usize,
-    span: crate::span::Span,
-) -> Expr {
-    let mut count = Expr::new(ExprKind::IntLiteral(minimum as i64), span);
-    let regular = crate::types::call_args::regular_param_count(sig);
-    for (index, (name, _)) in sig.params.iter().take(regular).enumerate().skip(minimum) {
-        count = Expr::new(ExprKind::Ternary {
-            condition: Box::new(Expr::new(ExprKind::FunctionCall {
-                name: Name::unqualified("array_key_exists"),
-                args: vec![Expr::new(ExprKind::StringLiteral(name.clone()), span), spread.clone()],
-            }, span)),
-            then_expr: Box::new(Expr::new(ExprKind::IntLiteral((index + 1) as i64), span)),
-            else_expr: Box::new(count),
-        }, span);
-    }
-    count
 }
 
 /// Builds an expression that reads one named parameter from an associative spread.
@@ -394,6 +365,6 @@ pub(super) fn is_assoc_spread_source(ctx: &LoweringContext<'_, '_>, expr: &Expr)
     match &expr.kind {
         ExprKind::Variable(name) => matches!(ctx.local_types.get(name), Some(PhpType::AssocArray { .. })),
         ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => true,
-        _ => matches!(materialized_expr_type_for_merge(ctx, expr).codegen_repr(), PhpType::AssocArray { .. }),
+        _ => matches!(infer_expr_type_syntactic(expr), PhpType::AssocArray { .. }),
     }
 }
