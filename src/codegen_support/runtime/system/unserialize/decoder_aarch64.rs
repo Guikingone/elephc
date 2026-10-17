@@ -135,6 +135,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_unser_at_array");                            // parse array
     emitter.instruction("cmp w9, #79");                                         // ASCII 'O' (object)?
     emitter.instruction("b.eq __rt_unser_at_object");                           // parse object
+    emitter.instruction("cmp w9, #67");                                         // C carries an opaque Serializable payload
+    emitter.instruction("b.eq __rt_unser_at_object");                           // share class allocation and reference publication
     emitter.instruction("b __rt_unser_at_fail");                                // unsupported wire form
 
     // -- null: "N;" --
@@ -367,6 +369,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- object: "O:" + namelen + ":\"" + class + "\":" + count + ":{" + count*(key value) + "}" --
     emitter.label("__rt_unser_at_object");
+    emitter.instruction("ldr x9, [sp]");                                        // preserve the original marker before cursor reuse
+    emitter.instruction("ldr x10, [sp, #8]");                                   // load the original object position
+    emitter.instruction("ldrb w9, [x9, x10]");                                  // distinguish C payloads from O property tables
+    emitter.instruction("str x9, [sp, #120]");                                  // retain the marker in unused parser scratch
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x10, x10, x11");                                   // pointer to the type byte
@@ -459,6 +465,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload base
     emitter.instruction("sub x12, x12, x9");                                    // body position offset
     emitter.instruction("str x12, [sp, #8]");                                   // advance the cursor to the body
+    super::custom::emit_body(emitter);
     emitter.instruction("ldr x9, [sp, #80]");                                   // reload allowed_classes decision
     emitter.instruction("cbz x9, __rt_unser_obj_default");                      // blocked objects must never inspect class hook tables
     // -- __unserialize magic: parse the body into an assoc array, then call

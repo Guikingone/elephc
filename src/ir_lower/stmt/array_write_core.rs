@@ -159,10 +159,7 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
 ) {
     let array_value = load_array_local_for_write(ctx, array, span);
     let op = array_set_op(array_value.ir_type);
-    if op == Op::RuntimeCall && matches!(
-        array_value.ir_type,
-        IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
-    ) {
+    if op == Op::RuntimeCall {
         lower_boxed_array_local_set(ctx, array_value, index, value, span, key_already_diagnosed);
         return;
     }
@@ -248,6 +245,8 @@ fn lower_boxed_array_local_set(
     key_already_diagnosed: bool,
 ) {
     let mut roots = Vec::new();
+    let (array, receiver_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, array, span);
+    if let Some(owner) = receiver_owner { roots.push(owner); }
     let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
         let value = lower_expr(ctx, expr);
         let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);

@@ -59,6 +59,9 @@ mod strtotime;
 mod time;
 mod microtime;
 mod php_uname;
+mod php_binary;
+
+pub(crate) use php_binary::emit_php_binary;
 
 pub(crate) use build_argv::emit_build_argv;
 pub(crate) use date::emit_date;

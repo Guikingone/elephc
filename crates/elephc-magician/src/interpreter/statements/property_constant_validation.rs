@@ -227,7 +227,7 @@ pub(super) fn eval_aot_property_declaring_class(
 pub(super) fn validate_eval_declared_constants(constants: &[EvalClassConstant]) -> Result<(), EvalStatus> {
     let mut names = std::collections::HashSet::new();
     for constant in constants {
-        validate_eval_non_method_attribute_targets(constant.attributes())?;
+        validate_eval_core_attribute_targets(constant.attributes(), 16)?;
         if !names.insert(constant.name().to_string()) {
             return Err(EvalStatus::RuntimeFatal);
         }

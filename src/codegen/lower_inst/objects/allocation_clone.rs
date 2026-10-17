@@ -10,7 +10,7 @@
 use super::*;
 
 /// Emits allocation, class-id stamping, and declared-property slot initialization.
-pub(super) fn emit_object_allocation(
+pub(in crate::codegen::lower_inst) fn emit_object_allocation(
     ctx: &mut FunctionContext<'_>,
     class_id: u64,
     property_count: usize,

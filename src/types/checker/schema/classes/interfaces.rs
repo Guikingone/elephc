@@ -39,6 +39,14 @@ pub(super) fn collect_interfaces(
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
     for interface_name in class.implements.iter().rev() {
+        if php_symbol_key(interface_name) == "unitenum"
+            || checker.interface_extends_interface(interface_name, "UnitEnum")
+        {
+            return Err(CompileError::new(
+                class.span,
+                &format!("Non-enum class {} cannot implement interface UnitEnum", class.name),
+            ));
+        }
         if interface_is_throwable_contract(checker, interface_name)
             && !class_can_implement_throwable_contract(state, class)
         {

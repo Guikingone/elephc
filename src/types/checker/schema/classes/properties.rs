@@ -32,6 +32,19 @@ pub(super) fn apply_properties(
     checker: &Checker,
 ) -> Result<(), CompileError> {
     for prop in &class.properties {
+        if prop.attributes.iter().flat_map(|group| &group.attributes)
+            .any(|attribute| super::super::validation::matches_global_builtin_attribute(attribute, "Override"))
+        {
+            let inherited = if prop.is_static {
+                state.static_property_declaring_classes.contains_key(&prop.name)
+            } else {
+                state.property_declaring_classes.contains_key(&prop.name)
+            };
+            if !inherited {
+                return Err(CompileError::new(class.span, &format!(
+                    "{}::${} has #[\\Override] attribute, but no matching parent property was found", class.name, prop.name)));
+            }
+        }
         if prop.is_static {
             apply_static_property(state, class, checker, prop)?;
         } else {

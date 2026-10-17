@@ -247,6 +247,10 @@ impl Scanner<'_> {
     /// Scans a direct call, distinguishing literal introspection from dynamic hazards.
     pub(super) fn scan_function_call(&mut self, name: &str, args: &[Expr]) {
         let key = self.record_callable(name);
+        if matches!(key.as_str(), "debug_backtrace" | "debug_print_backtrace") {
+            let class = self.record_class("SensitiveParameterValue");
+            self.usage.instantiated_classes.insert(class);
+        }
         self.record_builtin_requirements(name, args);
         self.scan_builtin_callback_arguments(&key, args);
         self.scan_declaration_arguments(&key, args);

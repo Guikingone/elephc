@@ -41,6 +41,10 @@ pub(super) fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
     matches!(
         class_name,
         "Error"
+            | "ClosedGeneratorException"
+            | "CompileError"
+            | "ParseError"
+            | "RequestParseBodyException"
             | "TypeError"
             | "ArgumentCountError"
             | "ValueError"

@@ -34,6 +34,7 @@ use crate::codegen_support::sentinels::{
 };
 
 mod magic_result;
+mod custom;
 mod sleep_result;
 
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
@@ -51,6 +52,7 @@ pub(crate) fn emit_serialize(emitter: &mut Emitter) {
     }
     magic_result::emit_magic_result(emitter);
     sleep_result::emit_sleep_result(emitter);
+    custom::emit(emitter);
 }
 
 /// AArch64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
@@ -642,6 +644,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #-2");                                        // synthetic __PHP_Incomplete_Class id
     emitter.instruction("cmp x1, x10");                                         // is this a semantic __PHP_Incomplete_Class payload?
     emitter.instruction("b.eq __rt_serialize_object_incomplete");               // serialize its retained class name and property hash
+    custom::emit_probe(emitter);
     emit_symbol_address(emitter, "x9", "_class_name_entries");
     emitter.instruction("add x10, x9, x1, lsl #4");                             // entry = base + class_id*16
     emitter.instruction("ldr x11, [x10]");                                      // class name pointer
@@ -1588,6 +1591,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the class id
     emitter.instruction("cmp rax, -2");                                         // synthetic __PHP_Incomplete_Class id
     emitter.instruction("je __rt_serialize_object_incomplete_x");               // serialize its retained class name and property hash
+    custom::emit_probe(emitter);
     emit_symbol_address(emitter, "r10", "_class_name_entries");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // class id
     emitter.instruction("shl rcx, 4");                                          // class_id * 16 (entry stride)

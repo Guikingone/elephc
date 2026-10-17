@@ -526,6 +526,11 @@ pub(crate) fn emit_runtime_data_fixed(
         target,
     ));
     out.push_str(&comm_directive(
+        "_obj_weak_reference_index",
+        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 8,
+        target,
+    ));
+    out.push_str(&comm_directive(
         "_obj_handle_free",
         crate::codegen_support::runtime::object_handle_free_slots(heap_size) * 4,
         target,

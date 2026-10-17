@@ -858,6 +858,8 @@ fn is_magic_method(method: &str) -> bool {
             | "__invoke"
             | "__serialize"
             | "__unserialize"
+            | "serialize"
+            | "unserialize"
             | "__sleep"
             | "__wakeup"
             | "__debuginfo"

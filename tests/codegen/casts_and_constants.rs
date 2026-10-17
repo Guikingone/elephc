@@ -21,3 +21,5 @@ mod predicates;
 mod math_builtins;
 #[path = "casts_and_constants/constants.rs"]
 mod constants;
+#[path = "casts_and_constants/core_constants.rs"]
+mod core_constants;

@@ -43,6 +43,8 @@ pub(crate) mod global_decls;
 mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod hash_prelude;
+/// Core attribute and sensitive-value class declarations.
+pub mod core_prelude;
 pub mod image_prelude;
 /// Intrinsic call handling.
 pub mod intrinsics;

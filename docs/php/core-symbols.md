@@ -1,0 +1,123 @@
+---
+title: "Core classes and constants"
+description: "PHP Core attribute objects, enum interfaces, exceptions, weak object collections, and predefined constants."
+sidebar:
+  order: 24
+---
+
+## Weak object references
+
+`WeakReference::create(object $object): WeakReference` returns the same live
+wrapper when called repeatedly for an object. `get(): ?object` acquires a normal
+reference for its result and returns `null` after the referent is destroyed.
+Keeping the wrapper alive does not retain the referent. Direct construction,
+cloning, and serialization are refused.
+
+`WeakMap` implements `ArrayAccess`, `Countable`, and `IteratorAggregate`.
+Keys must be objects, including closures. Values are owned by the map and are removed when their
+key dies, including during cycle collection. Null values count as entries but
+fail `isset()`. Cloning gives the copy an independent value table with the same
+weak keys. Iteration yields object keys and pins the current key while the
+iterator uses it.
+
+```php
+$cache = new WeakMap();
+$object = new stdClass();
+$weak = WeakReference::create($object);
+$cache[$object] = 'cached value';
+unset($object);
+echo count($cache);             // 0
+var_dump($weak->get());         // NULL
+```
+
+## Exceptions and enum interfaces
+
+Core provides `CompileError extends Error`, `ParseError extends CompileError`,
+`ClosedGeneratorException extends Exception`, and
+`RequestParseBodyException extends Exception`, alongside its existing throwable
+hierarchy. Their constructors and getters follow the standard Exception API.
+
+`ErrorException` extends `Exception` and adds a final `getSeverity(): int`:
+
+```php
+new ErrorException(
+    message: 'Upload failed',
+    code: UPLOAD_ERR_CANT_WRITE,
+    severity: E_WARNING,
+    filename: 'upload.php',
+    line: 12,
+    previous: null,
+);
+```
+
+Filename and line overrides remain visible through an `Exception` parameter and
+inside `eval()`. A null override uses the usual exception creation location.
+
+Every enum implicitly implements `UnitEnum`, whose static `cases()` method
+returns its cases. Backed enums also implement `BackedEnum`, which extends
+`UnitEnum` and adds `from(int|string $value): static` and
+`tryFrom(int|string $value): ?static`. Ordinary classes cannot implement these
+interfaces, including through user-defined marker interfaces.
+
+## Legacy serialization
+
+`Serializable` provides `serialize(): ?string` and `unserialize(string $data): void`.
+A string result produces PHP's `C:<name-length>:"<class>":<payload-length>:{<bytes>}`
+wire form; null produces `N;`. Payloads can contain braces and NUL bytes.
+Unserialization skips the constructor, preserves repeated object references, and
+honors `allowed_classes`. `__serialize()` takes precedence for writing, while
+`__unserialize()` handles modern `O:` payloads.
+
+## Attribute objects
+
+The predefined final classes are `Attribute`, `AllowDynamicProperties`,
+`ReturnTypeWillChange`, `SensitiveParameter`, `Override`, `Deprecated`,
+`NoDiscard`, and `DelayedTargetValidation`. They can be constructed and inspected
+through the supported Reflection APIs.
+
+`Attribute` exposes mutable `int $flags`, defaulting to `Attribute::TARGET_ALL`,
+and the `TARGET_CLASS`, `TARGET_FUNCTION`, `TARGET_METHOD`, `TARGET_PROPERTY`,
+`TARGET_CLASS_CONSTANT`, `TARGET_PARAMETER`, `TARGET_ALL`, and `IS_REPEATABLE`
+constants. `Deprecated` exposes readonly nullable `message` and `since`
+properties; `NoDiscard` exposes a readonly nullable `message` property.
+
+`SensitiveParameterValue(mixed $value)` stores a private readonly value.
+`getValue(): mixed` returns it, while `__debugInfo(): array` hides it from debug
+output. Serialization is refused. `SensitiveParameter` wraps fixed and variadic backtrace
+arguments without changing values read by `func_get_args()`. `NoDiscard` diagnoses
+ignored direct calls; assign to `$_` to consume a deliberately ignored result.
+`DelayedTargetValidation` defers Core target errors until `newInstance()`.
+Attribute execution and Reflection limits
+are documented in [Classes](classes.md#attributes).
+
+## Predefined constants
+
+All Core constants in the pinned PHP 8.5 baseline are registered through the
+shared symbol catalog. They are available as bare constants, through
+`constant()` and `defined()`, in `get_defined_constants(true)['Core']`, and in
+opaque `eval()` fragments, except for the existing `STDIN`, `STDOUT`, and `STDERR`
+resource restriction in eval. `TRUE`, `FALSE`, and `NULL` retain their PHP types and
+special case-insensitive names. Other constant names remain case-sensitive.
+
+The portable groups include error levels, `DEBUG_BACKTRACE_*`, integer and
+floating-point limits, `PHP_FLOAT_DIG`, `PHP_OUTPUT_HANDLER_*`, `UPLOAD_ERR_*`,
+and the debug/thread build flags.
+
+Environment constants describe the compiled Elephc program:
+
+| Constants | Value |
+|---|---|
+| `PHP_BINARY` | The running executable's path, resolved at runtime |
+| `PHP_BUILD_DATE`, `PHP_BUILD_PROVIDER` | UTC compiler build date and `elephc` |
+| `DEFAULT_INCLUDE_PATH` | `.` |
+| `PHP_FD_SETSIZE` | `1024` |
+| `PHP_MAXPATHLEN` | `4096` on Linux, `1024` on Apple targets |
+| `PHP_SHLIB_SUFFIX` | `so` on Linux, `dylib` on Apple targets |
+| `PHP_CLI_PROCESS_TITLE` | Whether the target supplies the process-title facility |
+| `PHP_DEBUG`, `PHP_ZTS`, `ZEND_DEBUG_BUILD`, `ZEND_THREAD_SAFE` | `false`, since the program has no Zend debug or thread-safe engine |
+| `ZEND_VM_KIND` | `ZEND_VM_KIND_NONE`, since there is no Zend VM |
+| `PHP_PREFIX`, `PHP_BINDIR`, `PHP_SBINDIR`, `PHP_LIBDIR`, `PHP_DATADIR`, `PHP_SYSCONFDIR`, `PHP_LOCALSTATEDIR`, `PHP_MANDIR` | Empty strings, since a standalone program has no PHP installation |
+| `PHP_CONFIG_FILE_PATH`, `PHP_CONFIG_FILE_SCAN_DIR`, `PHP_EXTENSION_DIR`, `PEAR_INSTALL_DIR`, `PEAR_EXTENSION_DIR` | Empty strings, since there are no PHP ini, extension, or PEAR directories |
+
+The compiler host's PHP installation paths and the baseline Docker image's
+paths are never copied into these constants.
