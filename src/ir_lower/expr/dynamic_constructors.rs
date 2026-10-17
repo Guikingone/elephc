@@ -91,7 +91,7 @@ pub(super) fn lower_new_dynamic_planned_value(
     }
 
     let name_value = ctx.load_local(&name_temp, Some(expr.span));
-    let fallback = lower_new_dynamic_generic(ctx, name_value, args, expr);
+    let fallback = super::object_construction::lower_new_dynamic_generic(ctx, name_value, args, expr);
     store_value_into_temp(ctx, &result_temp, PhpType::Mixed, fallback, expr.span);
     branch_to(ctx, merge);
 

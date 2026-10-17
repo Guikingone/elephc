@@ -2817,13 +2817,18 @@ fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: 
     abi::emit_release_temporary_stack(emitter, 16);
 }
 
-/// Restores a pushed result value after releasing another value.
+/// Restores a pushed result using the registers for its own ABI representation.
 fn restore_pushed_value_after_release(emitter: &mut Emitter, pushed_ty: &PhpType) {
     match pushed_ty.codegen_repr() {
         PhpType::Float => abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter)),
-        PhpType::Str | PhpType::TaggedScalar => {
+        PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
+        }
+        PhpType::TaggedScalar => {
+            let payload = abi::int_result_reg(emitter);
+            let tag = crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter);
+            abi::emit_pop_reg_pair(emitter, payload, tag);
         }
         PhpType::Void | PhpType::Never => {}
         _ => abi::emit_pop_reg(emitter, abi::int_result_reg(emitter)),

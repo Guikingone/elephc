@@ -344,3 +344,42 @@ on every target, the existing constructor/boxed/parent target checks, and full
 x86 runtime call alignment. The reference-marker program compiles and assembles
 for all five targets. Compiler/exporter build, generated documentation, registry,
 site/EIR boundary, Rustdoc, assembly-comment and whitespace checks pass.
+
+
+## Seventh independent review and ARM64 execution correction
+
+Grok delegation `0a28781f-5c49-41e2-b16d-86b4a6046a9c` completed NOT CLEAN
+on `260cf07cb6`. The nullable reference-marker owner finding was already fixed
+in `2f75f88f75`; its final verdict did not review that later head. Greptile then
+rated `2f75f88f75` 4/5 for the ARM64 nullable result-register restoration.
+
+The planned dynamic-new miss now calls the single argument-container fallback
+in `object_construction.rs`. Removing the duplicate raw helper preserves unknown
+names, positional unpack entries, and cleanup for nonmatching planned classes,
+Exception, ErrorException, and typed variadic constructors. Nullable cleanup
+restores TaggedScalar into the integer-result and tag registers independently
+of the string ABI. The all-target regression checks the post-release pair.
+
+Actual Linux ARM64 execution exposed two additional ownership/ABI edges. Descriptor
+entry wrappers now reserve the shared caller-stack gap around instance, static,
+and late-bound calls with overflow arguments. Temporary by-reference Array(Mixed)
+cells retain borrowed associative storage even though the PHP types differ. The
+full dynamic constructor and nullable reference regressions pass under QEMU with
+clean heaps after these repairs. A boxed static/late-bound method regression
+covers nine visible integer arguments.
+
+The preceding `2f75f88f75` CI run also hit a GHCR Docker-login infrastructure
+failure before its affected shard ran tests. Replacement exact-head CI, a new
+independent Grok review, and Greptile 5/5 remain mandatory publication gates.
+Their final outcomes are recorded on PR1870 and in Code Journal against the
+immutable published SHA.
+
+Final focused verification passes all35 selected library checks and all9 native/eval
+codegen cases. After the last ownership refinement, the three new executable
+regressions pass again. The compiler/library/exporter build is warning-free and
+generated docs, registry/site/EIR audits, Rustdoc, assembly comments, and whitespace
+checks pass without generated drift.
+
+Combined nullable, dynamic-constructor, and static/late-bound descriptor programs
+compile and assemble with clang on all five supported targets. iOS device and
+Simulator use the supported static-library output mode.

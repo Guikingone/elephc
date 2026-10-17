@@ -10,6 +10,36 @@
 
 use crate::support::*;
 
+/// Nonmatching planned classes preserve named keys and unpacked values in dynamic construction.
+#[test]
+fn test_core_review_dynamic_constructor_fallback_preserves_arguments() {
+    let source = r#"<?php
+class FallbackOpt { public function __construct($a = 1, $b = 2) {} }
+class FallbackExact { public function __construct(public int $x) {} }
+class FallbackVariadic {
+    public function __construct(int ...$values) { echo count($values), ':', $values[0], ':', $values[1], ';'; }
+}
+function fallbackNamed(string $name): mixed { return new $name(b: 5); }
+function fallbackSpread(string $name, $values): mixed { return new $name(...$values); }
+foreach ([FallbackExact::class, Exception::class, ErrorException::class] as $name) {
+    try { $object = fallbackNamed($name); echo 'accepted;'; unset($object); }
+    catch (Error $error) { echo $error->getMessage(), ';'; unset($error); }
+}
+$object = fallbackSpread(Exception::class, [4, 5]);
+echo $object->getMessage(), ':', $object->getCode(), ';';
+unset($object);
+$object = fallbackSpread(ErrorException::class, [6, 7]);
+echo $object->getMessage(), ':', $object->getCode(), ';';
+unset($object);
+$object = fallbackSpread(FallbackVariadic::class, [8, 9]);
+unset($object, $name);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Unknown named parameter $b;".repeat(3) + "4:5;6:7;2:8:9;");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 const SOURCE: &str = r#"
 function coreState(ErrorException $error, Exception $previous): void {
     echo $error->getMessage(), ':', $error->getCode(), ':',

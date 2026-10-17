@@ -9,6 +9,31 @@
 
 use crate::support::*;
 
+/// Static and late-bound descriptors preserve arguments that overflow the native registers.
+#[test]
+fn test_boxed_method_descriptors_preserve_stack_arguments() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StackDescriptorBase {
+    public static function sum(int $a, int $b, int $c, int $d, int $e, int $f, int $g, int $h, int $i): int {
+        return $a + $b + $c + $d + $e + $f + $g + $h + $i;
+    }
+    public static function choose(): callable { return static::sum(...); }
+}
+class StackDescriptorChild extends StackDescriptorBase {
+    public static function sum(int $a, int $b, int $c, int $d, int $e, int $f, int $g, int $h, int $i): int {
+        return 100 + $a + $b + $c + $d + $e + $f + $g + $h + $i;
+    }
+}
+function stackDescriptorCalls(array $callbacks): void {
+    foreach ($callbacks as $callback) { echo $callback(...[1, 2, 3, 4, 5, 6, 7, 8, 9]), ';'; }
+}
+stackDescriptorCalls([StackDescriptorBase::sum(...), StackDescriptorBase::choose(), StackDescriptorChild::choose()]);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "45;45;145;", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Variable and expression calls dispatch every boxed callable shape after the source is released.
 #[test]
 fn test_boxed_array_reads_dispatch_direct_callable_shapes() {

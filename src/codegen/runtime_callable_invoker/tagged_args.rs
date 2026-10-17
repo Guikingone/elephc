@@ -100,7 +100,16 @@ mod tests {
                 Some(&target_type), true, &mut emitter, &mut ctx, &mut DataSection::new(),
             );
             assert_eq!(result, PhpType::TaggedScalar, "{target}");
-            assert_eq!(emitter.output().matches("__rt_decref_mixed").count(), 1, "{target}");
+            let arch = emitter.target.arch;
+            let assembly = emitter.output();
+            assert_eq!(assembly.matches("__rt_decref_mixed").count(), 1, "{target}");
+            let restore = assembly.split_once("__rt_decref_mixed").unwrap().1;
+            if arch == Arch::AArch64 {
+                assert!(restore.contains("ldp x0, x1, [sp], #16"), "{target}: {restore}");
+            } else {
+                assert!(restore.contains("mov rax, QWORD PTR [rsp]"), "{target}: {restore}");
+                assert!(restore.contains("mov rdx, QWORD PTR [rsp + 8]"), "{target}: {restore}");
+            }
         }
     }
 }

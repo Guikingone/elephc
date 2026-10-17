@@ -10,6 +10,30 @@
 use super::*;
 use crate::ir::{Effects, Immediate, IrHeapKind, IrType, RuntimeCallTarget};
 
+/// Every missed dynamic class branch retains a boxed runtime argument container on every target.
+#[test]
+fn dynamic_constructor_fallbacks_keep_runtime_argument_containers_on_all_targets() {
+    let source = r#"<?php
+class FallbackOpt { public function __construct($a = 1, $b = 2) {} }
+class FallbackExact { public function __construct(public int $x) {} }
+function fallbackNamed(string $name): mixed { return new $name(b: 5); }
+function fallbackSpread(string $name, array $values): mixed { return new $name(...$values); }
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        for function in ["fallbackNamed", "fallbackSpread"] {
+            let function = module.functions.iter().find(|candidate| candidate.name == function).unwrap();
+            let fallback = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::DynamicObjectNewMixed).unwrap();
+            assert_eq!(fallback.immediate, Some(Immediate::Bool(true)), "{name}: {}", function.name);
+            assert_eq!(fallback.operands.len(), 2, "{name}: {}", function.name);
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Runtime constructor binding reaches valid fixed and lexical calls on every supported target.
 #[test]
 fn hidden_constructor_unpack_streams_lower_on_all_targets() {
