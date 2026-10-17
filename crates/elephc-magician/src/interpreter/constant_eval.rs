@@ -117,6 +117,7 @@ fn eval_native_user_constant_element<V: RuntimeValueOps>(
     values: &mut V,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match value {
+        NativeCallableDefault::ExecutablePath => Err(EvalStatus::RuntimeFatal),
         NativeCallableDefault::Null => values.null(),
         NativeCallableDefault::Bool(value) => values.bool_value(*value),
         NativeCallableDefault::Int(value) => values.int(*value),

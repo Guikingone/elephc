@@ -431,3 +431,45 @@ Deprecated; object/reflection tests assert the PHP8.5 values.
 
 The eighth verdict covers the older published head. A fresh independent Grok
 review, Greptile5/5 and CI acceptance are required on the final repair SHA.
+
+
+## Runtime executable defaults and final CI corrections
+
+Greptile rated integration head `f5cb1cbab9` 3/5. Executable-path defaults
+were incorrectly resolved from the empty metadata placeholder. A shared scalar
+ABI marker now preserves the runtime value across aliases, descriptor invokers,
+eval binding, nested array defaults, and Reflection metadata. Initial declaration
+checking retains known constant types. Fresh strings transfer into Mixed/hash
+storage or retire after indexed-array copying; constant declarations transfer
+owned executable-path results into their global box.
+
+The reported native WeakMap nested assignment already wrote through correctly.
+A new regression covers direct and compound nested writes and requires a clean
+heap. It also exposed a computed Mixed value retained after the boxed writer
+stored it. Nested writes now reuse shared operand roots and retire parent, key,
+and value on normal and exception paths. The regression passes on native x86_64
+and actual Linux ARM64. Existing nested-write, evaluation-order, and nullable
+property cleanup regressions pass as well.
+
+The three failed non-codegen shard5 jobs in CI `39073868167` share the same
+x86 stack-audit failure. The fatal report reserves location scratch space before
+a terminal exit syscall; the static CFG previously fell through to the fallback
+label with another frame depth. Explicit `ud2` terminators preserve the actual
+nonreturning behavior without expanding audit allowlists. All8 SysV audit tests
+pass after the correction.
+
+A generic opaque-eval grammar restriction accepts only one subscript dimension
+in assignments, reproduced with ordinary arrays and tracked as task `95e8d65f`.
+A separate literal-default callable control with a later eval barrier retains a
+descriptor and captures; task `97836066` tracks exact base attribution. Neither
+is counted as fixed by the executable-path regression.
+
+All30 descriptor-invoker unit tests and the shared scalar/nested-array ABI decode
+regression pass. The final executable-default regression passes with clean heaps on x86_64
+and actual Linux ARM64. The same program compiles and assembles on all five
+targets, including iOS device and Simulator static-library output. The final
+compiler/library/exporter build is warning-free. Complete documentation and
+registry/site/EIR audits pass without generated drift. Publication gates are
+recorded in Code Journal against the immutable published SHA.
+A fresh clean Grok verdict, Greptile5/5, and green CI on that same SHA remain
+required before this plan is complete.

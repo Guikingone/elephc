@@ -10,6 +10,9 @@
 
 use crate::ConstValue;
 
+/// Native default-value ABI kind that resolves PHP_BINARY in the running program.
+pub const EXECUTABLE_PATH_DEFAULT_KIND: u64 = 6;
+
 /// Returns target/build Core metadata without embedding the compiler host's installation paths.
 pub fn core_environment_constant(name: &str, apple: bool) -> Option<ConstValue> {
     Some(match name {

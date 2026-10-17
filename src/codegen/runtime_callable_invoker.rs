@@ -2486,13 +2486,17 @@ fn push_default_value_arg(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    let owned_runtime_string = matches!(ctx.resolved_default(index),
+        Some(InvokerDefaultValue::Scalar { kind: crate::codegen::const_default_values::CONST_DEFAULT_EXECUTABLE_PATH, .. }));
     let source_ty = emit_default_to_result(index, target_ty, emitter, ctx, data);
-    let pushed_ty = if source_ty.is_refcounted()
+    let pushed_ty = if (source_ty.is_refcounted() || owned_runtime_string)
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
         && source_ty.codegen_repr() != PhpType::Mixed
     {
         emit_box_current_owned_value_as_mixed(emitter, &source_ty);
         PhpType::Mixed
+    } else if owned_runtime_string && target_ty.is_none_or(|ty| ty.codegen_repr() == PhpType::Str) {
+        source_ty
     } else {
         // Heap defaults are newly allocated, not borrowed from the argument container.
         owned_value_args::coerce(emitter, ctx, data, &source_ty, target_ty).0

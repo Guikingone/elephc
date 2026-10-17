@@ -9,6 +9,38 @@
 
 use crate::support::*;
 
+/// Runtime descriptor and eval binders resolve executable-path defaults in the running program.
+#[test]
+fn test_core_constants_runtime_binary_indirect_defaults() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+const PROGRAM_BINARY = PHP_BINARY;
+function defaultRuntimePath(string $path = PHP_BINARY): string { return $path; }
+function aliasRuntimePath(string $path = PROGRAM_BINARY): string { return $path; }
+function arrayRuntimePath(array $paths = [PHP_BINARY]): string { return $paths[0]; }
+function mixedRuntimePath(mixed $path = PHP_BINARY): string { return $path; }
+function invokeRuntimePath(callable $callback): string { return $callback(); }
+class RuntimePathDefaults {
+    public function path(string $value = PHP_BINARY): string { return $value; }
+}
+function invokeMethodRuntimePath(): string {
+    $object = new RuntimePathDefaults();
+    return invokeRuntimePath($object->path(...));
+}
+echo invokeRuntimePath(defaultRuntimePath(...)) === PHP_BINARY ? 'callback;' : 'empty;';
+echo invokeRuntimePath(aliasRuntimePath(...)) === PHP_BINARY ? 'alias;' : 'empty;';
+echo invokeRuntimePath(arrayRuntimePath(...)) === PHP_BINARY ? 'array;' : 'empty;';
+echo invokeRuntimePath(mixedRuntimePath(...)) === PHP_BINARY ? 'mixed;' : 'empty;';
+echo invokeMethodRuntimePath() === PHP_BINARY ? 'method;' : 'empty;';
+$source = 'echo defaultRuntimePath() === PHP_BINARY ? "eval;" : "empty;";
+echo arrayRuntimePath() === PHP_BINARY ? "array;" : "empty;";
+echo (new RuntimePathDefaults())->path() === PHP_BINARY ? "method;" : "empty;";';
+eval($source . ' // ' . $argc);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "callback;alias;array;mixed;method;eval;array;method;", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Executable metadata belongs to the running program and agrees across all lookup routes.
 #[test]
 fn test_core_constants_runtime_binary() {

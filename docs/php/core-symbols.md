@@ -142,5 +142,9 @@ Environment constants describe the compiled Elephc program:
 | `PHP_PREFIX`, `PHP_BINDIR`, `PHP_SBINDIR`, `PHP_LIBDIR`, `PHP_DATADIR`, `PHP_SYSCONFDIR`, `PHP_LOCALSTATEDIR`, `PHP_MANDIR` | Empty strings, since a standalone program has no PHP installation |
 | `PHP_CONFIG_FILE_PATH`, `PHP_CONFIG_FILE_SCAN_DIR`, `PHP_EXTENSION_DIR`, `PEAR_INSTALL_DIR`, `PEAR_EXTENSION_DIR` | Empty strings, since there are no PHP ini, extension, or PEAR directories |
 
+`PHP_BINARY` parameter defaults resolve the running path for direct calls,
+first-class callables, and calls from opaque eval. Constant aliases and array
+defaults containing the path preserve that runtime value.
+
 The compiler host's PHP installation paths and the baseline Docker image's
 paths are never copied into these constants.
