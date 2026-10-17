@@ -1815,7 +1815,7 @@ impl MyConn {
         let (ssl_config, _ca_bundle) =
             normalize_ssl_ca_sources(ssl_config, driver_options.ssl_ca_path.as_deref())?;
         if let Some(public_key) = driver_options.server_public_key.clone() {
-            opts = opts.server_public_key_path(Some(public_key));
+            opts = opts.server_key_path(Some(public_key));
         }
         opts = apply_ssl_opts(opts, &ssl_config, driver_options.ssl_cipher.as_deref())?;
         if driver_options.compress {
@@ -2285,7 +2285,7 @@ impl MyConn {
     /// standalone binary, so reporting the linked client crate is the truthful
     /// equivalent of `mysql_get_client_info()`.
     pub fn client_version(&self) -> String {
-        "mysql 28.0.3".to_string()
+        "mysql 28.0.4".to_string()
     }
 
     /// Returns the connection transport description in the same shape as

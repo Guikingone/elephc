@@ -168,12 +168,6 @@ pdo-cubrid = ["elephc-pdo/cubrid"]
 # export the curl rows into the generated builtin documentation.
 curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
 
-# PDO needs caller-supplied authentication RSA keys, which upstream 28.0.3
-# does not expose. Cipher-suite selection uses the unmodified upstream API.
-# Keep only the small audited RSA patch in-tree until it lands upstream.
-[patch.crates-io]
-mysql = { path = "vendor/mysql-28.0.3" }
-
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
 # the six test binaries. `line-tables-only` keeps file:line in panic backtraces
