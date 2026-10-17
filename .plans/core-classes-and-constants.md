@@ -101,3 +101,23 @@ hydration hooks now have a heap-debug regression that also executes on ARM64.
 The separate nonempty modern hydration-data owner issue is tracked as Code Journal
 task `a1321652`; its parse/insert path is unchanged from main. The focused nested
 reference regression uses explicit empty modern payloads to isolate reference state.
+
+
+## CI follow-up after the serialization review
+
+- [x] Scope whole-module assertions to their fixture functions after Core prelude injection.
+- [x] Audit aligned dynamic serialization snapshots without enlarging the ABI allowlist.
+- [x] Validate and reduce repeated work in the archived REPL cache regression.
+- [x] Schedule each target of the argument-owner probe independently under the existing timeout.
+- [ ] Publish focused validation and verify CI and Greptile on the final commit.
+
+Run `39038329288` repeated three structural assertion failures and one ABI-audit
+limitation across executable platforms. Linux ARM64 also reached the global
+60-second limit in a five-target argument-owner test, and the macOS archived
+REPL probe reached 240 seconds while rerunning the broader cache lifecycle test.
+
+Focused validation passes 40 library/CLI cases under the CI profile, including
+all five targets, the complete x86 runtime alignment audit, and two negative
+audit regressions. The archived REPL cache test passes in 86.48 seconds. The
+compiler build is warning-free, Rustdoc checks and `git diff --check` pass, and
+no global test timeout or production runtime behavior changes in this follow-up.
