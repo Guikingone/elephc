@@ -340,7 +340,9 @@ including in object keys and nested values.
 
 Backed enum cases encode as their integer or string backing value, including in
 nested containers. An enum implementing `JsonSerializable` uses `jsonSerialize()`
-instead, for both unit and backed cases.
+instead, for both unit and backed cases. If it returns the enum receiver itself,
+the result exposes `name`, followed by `value` for backed cases. The serializer
+runs once and the result consumes one object depth level.
 
 Encoding a unit enum without `JsonSerializable` fails with
 `JSON_ERROR_NON_BACKED_ENUM` (11) and the message

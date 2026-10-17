@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Executable PHP behavior is covered by the JSON codegen integration tests.
+//! - Direct and PIC modes exercise shared runtime symbol access on both architectures.
 //! - Scratch files are confined to one unique directory and removed on every exit path.
 
 use super::*;
@@ -40,15 +41,18 @@ fn json_compatibility_assembles_on_all_supported_targets() {
         ("linux-aarch64", "aarch64-linux-gnu"),
         ("linux-x86_64", "x86_64-linux-gnu"),
     ] {
-        let target = Target::parse(name).unwrap();
-        let mut emitter = Emitter::new(target);
-        emit_json_encode_str(&mut emitter);
-        emit_json_encode_object(&mut emitter);
-        let syntax = if target.arch == Arch::X86_64 { ".intel_syntax noprefix\n" } else { "" };
-        let source = scratch.0.join(format!("{name}.s"));
-        fs::write(&source, format!("{syntax}.text\n{}", emitter.output())).unwrap();
-        let output = Command::new("clang").args(["-target", triple, "-c"]).arg(&source)
-            .arg("-o").arg(source.with_extension("o")).output().unwrap();
-        assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
+        for pic in [false, true] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emitter.pic_data_refs = pic;
+            emit_json_encode_str(&mut emitter);
+            emit_json_encode_object(&mut emitter);
+            let syntax = if target.arch == Arch::X86_64 { ".intel_syntax noprefix\n" } else { "" };
+            let source = scratch.0.join(format!("{name}-{pic}.s"));
+            fs::write(&source, format!("{syntax}.text\n{}", emitter.output())).unwrap();
+            let output = Command::new("clang").args(["-target", triple, "-c"]).arg(&source)
+                .arg("-o").arg(source.with_extension("o")).output().unwrap();
+            assert!(output.status.success(), "{name} PIC={pic}: {}", String::from_utf8_lossy(&output.stderr));
+        }
     }
 }

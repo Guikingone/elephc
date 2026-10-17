@@ -1082,7 +1082,7 @@ pub(crate) fn emit_runtime_data_user(
         // Per-property name strings used by the JSON descriptor below. We
         // emit them as labels before the descriptor so the descriptor
         // table holds plain (ptr, len) pairs.
-        let public_props: Vec<(usize, &(String, PhpType))> = class_info
+        let mut public_props: Vec<(usize, &(String, PhpType))> = class_info
             .properties
             .iter()
             .enumerate()
@@ -1098,6 +1098,10 @@ pub(crate) fn emit_runtime_data_user(
                     .map_or(true, |v| matches!(v, Visibility::Public))
             })
             .collect();
+        if enums.contains_key(class_name.as_str()) {
+            // PHP exposes enum names before backing values, independently of slot layout.
+            public_props.sort_by_key(|(_, (name, _))| name.as_str() != "name");
+        }
         for (prop_index, (prop_name, _)) in &public_props {
             out.push_str(&format!(
                 ".globl _class_json_pname_{}_{}\n_class_json_pname_{}_{}:\n    .ascii {:?}\n",

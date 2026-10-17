@@ -91,10 +91,19 @@ fn append_enum_serialization(
                     && values.object_identity(result)? as usize == identity
                 {
                     // PHP exposes the properties when jsonSerialize() returns its receiver.
+                    let native_receiver = dynamic_object_is_a(
+                        result, "UnitEnum", false, context, values,
+                    )?.is_none();
                     arrays_seen.pop();
-                    let encoded = append_properties(
-                        result, context, values, flags, depth_limit, depth, arrays_seen, error, output,
-                    );
+                    let encoded = if native_receiver {
+                        append_native_enum_properties(
+                            result, context, values, flags, depth_limit, depth, arrays_seen, error, output,
+                        )
+                    } else {
+                        append_properties(
+                            result, context, values, flags, depth_limit, depth, arrays_seen, error, output,
+                        )
+                    };
                     arrays_seen.push(identity);
                     encoded
                 } else {
@@ -108,6 +117,52 @@ fn append_enum_serialization(
         }
         Err(status) => Err(status),
     };
+    arrays_seen.pop();
+    encoded
+}
+
+/// Reads native enum properties explicitly because its bridge iterator covers only stdClass.
+fn append_native_enum_properties(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    flags: i64,
+    depth_limit: usize,
+    depth: usize,
+    arrays_seen: &mut Vec<usize>,
+    error: &mut Option<EvalJsonEncodeError>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    let count = if values.property_is_initialized(value, "value")? { 2 } else { 1 };
+    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
+    let encoded = (|| {
+        let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
+        output.push(b'{');
+        if pretty { output.push(b'\n'); }
+        for (position, name) in ["name", "value"].iter().take(count).enumerate() {
+            if position > 0 {
+                output.push(b',');
+                if pretty { output.push(b'\n'); }
+            }
+            if pretty { eval_json_encode_pretty_indent(output, depth + 1); }
+            output.push(b'"');
+            output.extend_from_slice(name.as_bytes());
+            output.push(b'"');
+            eval_json_encode_append_colon(flags, output);
+            let property = eval_property_get_result(value, name, context, values)?;
+            let encoded = eval_json_encode_append(
+                property, context, values, flags, depth_limit, depth + 1, arrays_seen, error, output,
+            );
+            let released = release_encoded_value(property, context, values);
+            encoded.and(released)?;
+        }
+        if pretty {
+            output.push(b'\n');
+            eval_json_encode_pretty_indent(output, depth);
+        }
+        output.push(b'}');
+        Ok(())
+    })();
     arrays_seen.pop();
     encoded
 }

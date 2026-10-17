@@ -1156,7 +1156,9 @@ cases encode as their integer or string value. Enum `JsonSerializable` callbacks
 run before either default enum rule, and their returned value is encoded
 recursively with the outer flags. Unit enums without custom serialization fail
 with `JSON_ERROR_NON_BACKED_ENUM` (11), or encode as `0` when partial output is
-requested.
+requested. A serializer returning its enum receiver exposes `name`, then the
+backing `value` when present. This also works for native enum cases passed into
+eval, with the same depth and pretty-print rules as eval-declared cases.
 
 Eval local filesystem calls operate on host filesystem paths and support the
 implemented stream-wrapper paths, including `file://`, `php://memory`,

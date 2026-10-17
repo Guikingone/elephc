@@ -128,3 +128,44 @@ echo json_encode(["case" => JsonCustomIntCase::N], JSON_THROW_ON_ERROR) . ":" . 
 "#);
     assert_eq!(out, "\"ready\"\n{\"case\":\"ready\"}:0");
 }
+
+/// Self-returning enum serializers expose properties once and consume one object depth.
+#[test]
+fn test_json_enum_serializer_self_returns_native() {
+    let source = r#"<?php
+enum JsonSelfUnit implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { echo "self:"; return $this; }
+}
+enum JsonSelfInt: int implements JsonSerializable {
+    case N = 7;
+    public function jsonSerialize(): mixed { return $this; }
+}
+enum JsonSelfString: string implements JsonSerializable {
+    case Hi = "hi";
+    public function jsonSerialize(): mixed { return $this; }
+}
+foreach ([JsonSelfUnit::Ready, JsonSelfInt::N, JsonSelfString::Hi] as $case) {
+    try { $encoded = json_encode($case, JSON_THROW_ON_ERROR, 1); }
+    catch (JsonException $e) { echo "unexpected:" . $e->getCode(); exit(0); }
+    echo $encoded . "\n";
+    echo json_encode([$case], 0, 2) . "\n";
+    echo json_encode($case, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR, 1) . "\n";
+}
+echo json_last_error();
+"#;
+    let expected = concat!(
+        "self:{\"name\":\"Ready\"}\nself:[{\"name\":\"Ready\"}]\nself:{\n    \"name\": \"Ready\"\n}\n",
+        "{\"name\":\"N\",\"value\":7}\n[{\"name\":\"N\",\"value\":7}]\n{\n    \"name\": \"N\",\n    \"value\": 7\n}\n",
+        "{\"name\":\"Hi\",\"value\":\"hi\"}\n[{\"name\":\"Hi\",\"value\":\"hi\"}]\n{\n    \"name\": \"Hi\",\n    \"value\": \"hi\"\n}\n",
+        "0",
+    );
+    let run = || {
+        assert_eq!(compile_and_run(source), expected);
+        let debug = compile_and_run_with_heap_debug(source);
+        assert!(debug.success, "{}", debug.stderr);
+        assert_eq!(debug.stdout, expected);
+    };
+    run();
+    without_ir_opt(run);
+}

@@ -27,3 +27,10 @@ enum ExportMessage implements JsonSerializable {
     public function jsonSerialize(): mixed { return "ready"; }
 }
 echo json_encode(ExportMessage::Ready) . "\n";
+
+// Return the case itself to export both its name and its stable backing value.
+enum ExportCaseDetails: string implements JsonSerializable {
+    case Ready = "ready";
+    public function jsonSerialize(): mixed { return $this; }
+}
+echo json_encode(ExportCaseDetails::Ready) . "\n";
