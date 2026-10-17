@@ -89,7 +89,8 @@ function __elephc_dom_is_name(string $c): bool {
 function __elephc_dom_is_void(string $name): bool {
     return $name === "area" || $name === "base" || $name === "br" || $name === "col"
         || $name === "hr" || $name === "img" || $name === "input"
-        || $name === "link" || $name === "meta" || $name === "param";
+        || $name === "link" || $name === "meta" || $name === "param"
+        || $name === "frame" || $name === "isindex";
 }
 
 function __elephc_dom_skip_ws(string $html, int $i): int {
@@ -151,11 +152,15 @@ function __elephc_dom_read_attrs(string $html, int $i): mixed {
         }
         if ($_c === "/") {
             $i = $i + 1;
-            $i = __elephc_dom_skip_ws($html, $i);
             if (__elephc_dom_char($html, $i) === ">") {
                 $_self = 1;
                 $i = $i + 1;
                 break;
+            }
+            // A malformed slash-prefixed attribute is discarded through its next separator.
+            while ($i < $_len && !__elephc_dom_is_ws(__elephc_dom_char($html, $i))
+                && __elephc_dom_char($html, $i) !== ">") {
+                $i = $i + 1;
             }
             continue;
         }
@@ -398,8 +403,8 @@ function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
             if ($_k === "text" && ($flags & LIBXML_NOBLANKS) !== 0
                 && trim((string) $_tok["v"]) === "" && count($_stack) > 0) {
                 $_parent = $_stack[count($_stack) - 1];
-                // Legacy HTML filters wrapper blanks, not title/body or other element text.
-                if ($_parent["name"] === "html" || $_parent["name"] === "head") {
+                // Html whitespace may enter an implied body; filter it after wrapper selection.
+                if ($_parent["name"] === "head") {
                     continue;
                 }
             }
@@ -428,6 +433,19 @@ function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
                 $_stack = __elephc_dom_append_child($_stack, $_node);
             }
         } elseif ($_k === "start") {
+            if ($_tok["n"] === "html") {
+                $_html_open = false;
+                for ($_open_index = 0; $_open_index < count($_stack); $_open_index++) {
+                    $_open = $_stack[$_open_index];
+                    if ($_open["name"] === "html") {
+                        $_html_open = true;
+                    }
+                }
+                if ($_html_open) {
+                    // A repeated start tag cannot create a nested html while the root is open.
+                    continue;
+                }
+            }
             $_node = __elephc_dom_new_node("element", (string) $_tok["n"], "", $_tok["a"], []);
             if ((int) $_tok["void"] === 1) {
                 if (count($_stack) === 0) {
@@ -483,15 +501,21 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
     if (count($roots) > 0 && $roots[0]["kind"] === "element" && $roots[0]["name"] === "html") {
         $_html = $roots[0];
         $_children = $_html["children"];
+        $_needs_body = false;
         if (__elephc_dom_find_child($_html, "body") === null) {
-            // Imply a body only for original content, never around head or reopened roots.
+            $_needs_body = true;
+            // Keep metadata before the first body content.
             $_prefix_children = [];
             $_body_children = [];
             $_original_children = $_html["children"];
             for ($_child_index = 0; $_child_index < count($_original_children); $_child_index++) {
                 $_child = $_original_children[$_child_index];
                 $_prefix = $_child["kind"] === "comment" || $_child["kind"] === "pi"
-                    || ($_child["kind"] === "element" && $_child["name"] === "head");
+                    || ($_child["kind"] === "element"
+                        && ($_child["name"] === "head" || $_child["name"] === "base"
+                            || $_child["name"] === "link" || $_child["name"] === "meta"
+                            || $_child["name"] === "title" || $_child["name"] === "script"
+                            || $_child["name"] === "style"));
                 if ($_child["kind"] === "text") {
                     $_text = (string) $_child["value"];
                     $_prefix = trim($_text) === "";
@@ -505,6 +529,7 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
             if (count($_body_children) > 0) {
                 $_body = __elephc_dom_new_node("element", "body", "", [], $_body_children);
                 $_prefix_children[] = $_body;
+                $_needs_body = false;
             }
             $_children = $_prefix_children;
         }
@@ -521,6 +546,42 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
             } else {
                 $_reopened = __elephc_dom_new_node("element", "html", "", [], $_later);
             }
+            $_reopened_has_body = false;
+            $_reopened_children = $_reopened["children"];
+            for ($_reopened_scan_index = 0; $_reopened_scan_index < count($_reopened_children); $_reopened_scan_index++) {
+                $_child = $_reopened_children[$_reopened_scan_index];
+                if ($_child["kind"] === "element" && $_child["name"] === "body") {
+                    $_reopened_has_body = true;
+                }
+            }
+            if ($_needs_body && !$_reopened_has_body) {
+                $_reopened_prefix = [];
+                $_reopened_body = [];
+                $_reopened_children = $_reopened["children"];
+                for ($_reopened_child_index = 0; $_reopened_child_index < count($_reopened_children); $_reopened_child_index++) {
+                    $_child = $_reopened_children[$_reopened_child_index];
+                    $_prefix = $_child["kind"] === "comment" || $_child["kind"] === "pi"
+                        || ($_child["kind"] === "element"
+                        && ($_child["name"] === "head" || $_child["name"] === "base"
+                            || $_child["name"] === "link" || $_child["name"] === "meta"
+                            || $_child["name"] === "title" || $_child["name"] === "script"
+                            || $_child["name"] === "style"));
+                    if ($_child["kind"] === "text") {
+                        $_prefix = trim((string) $_child["value"]) === "";
+                    }
+                    if (count($_reopened_body) === 0 && $_prefix) {
+                        $_reopened_prefix[] = $_child;
+                    } else {
+                        $_reopened_body[] = $_child;
+                    }
+                }
+                if (count($_reopened_body) > 0) {
+                    $_reopened_body_node = __elephc_dom_new_node("element", "body", "", [], $_reopened_body);
+                    $_reopened_prefix[] = $_reopened_body_node;
+                }
+                $_reopened_attrs = $_reopened["attrs"];
+                $_reopened = __elephc_dom_new_node("element", "html", "", $_reopened_attrs, $_reopened_prefix);
+            }
             $_children[] = $_reopened;
         }
         $_html["children"] = $_children;
@@ -531,6 +592,29 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
     }
     $_body = __elephc_dom_new_node("element", "body", "", [], $roots);
     return __elephc_dom_new_node("element", "html", "", [], [$_body]);
+}
+// Only direct html blanks are removed after implied bodies have claimed their text.
+function __elephc_dom_filter_html_children(mixed $children): mixed {
+    $_out = [];
+    for ($_index = 0; $_index < count($children); $_index++) {
+        $_child = $children[$_index];
+        if ($_child["kind"] === "text") {
+            $_blank_text = (string) $_child["value"];
+            $_blank_trimmed = trim($_blank_text);
+            if ($_blank_trimmed === "") {
+                continue;
+            }
+        }
+        if ($_child["kind"] === "element" && $_child["name"] === "html") {
+            $_nested = $_child["children"];
+            $_filtered = __elephc_dom_filter_html_children($_nested);
+            $_child_value = (string) $_child["value"];
+            $_child_attrs = $_child["attrs"];
+            $_child = __elephc_dom_new_node("element", "html", $_child_value, $_child_attrs, $_filtered);
+        }
+        $_out[] = $_child;
+    }
+    return $_out;
 }
 
 function __elephc_dom_parse_html(string $html, int $flags): mixed {
@@ -578,6 +662,11 @@ function __elephc_dom_document_from_roots(mixed $roots, int $flags): mixed {
     $_value = "";
     if (count($_content) > 0) {
         $_html = __elephc_dom_wrap_html($_content);
+        if (($flags & LIBXML_NOBLANKS) !== 0) {
+            $_html_children = $_html["children"];
+            $_html_children = __elephc_dom_filter_html_children($_html_children);
+            $_html["children"] = $_html_children;
+        }
         $_value = __elephc_dom_text_of($_html);
         $_html["value"] = $_value;
         $_document_children[] = $_html;

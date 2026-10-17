@@ -64,6 +64,10 @@ $doc->loadHTML('<html><head></head><div>B</div></html><html><span>C</span></html
 echo $doc->saveXML(), $doc->getElementsByTagName('body')->item(0)->childNodes->item(0)->nodeName;
 $doc->loadHTML('<div>a<embed>b</embed><source>c</source><track>d</track><wbr>e</wbr></div>');
 echo $doc->saveXML();
+$doc->loadHTML('<html><head></head></html><html><title>T</title><div>B</div></html>', LIBXML_NOBLANKS);
+echo $doc->saveXML(), $doc->getElementsByTagName('body')->length;
+$doc->loadHTML('<html><html><head></head> <meta name=x><div /class=x>A<frame>B<isindex>C</div> </html></html>', LIBXML_NOBLANKS);
+echo $doc->saveXML(), $doc->getElementsByTagName('html')->length;
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
@@ -75,6 +79,9 @@ echo $doc->saveXML();
     assert!(module.functions.iter().any(|function| {
         function.name == "__elephc_dom_escape_attr_non_ascii"
     }), "{target}: Unicode attribute references use the ordinary target-aware PHP lowering path");
+    assert!(module.functions.iter().any(|function| {
+        function.name == "__elephc_dom_filter_html_children"
+    }), "{target}: implied-body boundaries use the shared target-aware lowering path");
 }
 
 /// Schedules every target independently without weakening the CI timeout.

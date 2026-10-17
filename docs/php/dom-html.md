@@ -59,16 +59,26 @@ its remaining input are discarded, following the legacy libxml HTML tokenizer.
 An explicit `</body>` is honored: in `<body>A</body><div>B</div>`, the `div` is
 a sibling of `body`, whose child walk contains only `A`. Extra content after an
 explicit `</html>` follows the legacy PHP/libxml 2.9.14 fallback: it reopens an
-`html` child without adding another `body`, while immediately trailing comments
+`html` child without adding another `body` when one already exists. If the
+original document contained only a head, the reopened content receives its first
+body. Immediately trailing comments
 and instructions stay after the outer `html`. This is not a promise to preserve
 source order for malformed whole documents; newer libxml tree-repair rules can differ.
 
 When an explicit `html` has no `body`, its `head` and leading wrapper nodes stay
-outside the implied body. Content following that closed `html` is attached only
+outside the implied body. Head-compatible metadata (`base`, `link`, `meta`,
+`title`, `script`, and `style`) also stays outside until body content begins.
+Content following that closed `html` is attached only
 after the original body is built; an explicit reopened `html` is not wrapped in
-another `html`. A head-only document does not gain an empty body. Legacy void
-elements exclude `embed`, `source`, `track`, and `wbr`, which can retain children
+another `html`. A repeated `html` start tag while the original is still open is
+ignored, including its attributes. A head-only document does not gain an empty
+body. Legacy void elements include `frame` and `isindex` but exclude `embed`,
+`source`, `track`, and `wbr`, which can retain children
 under the libxml 2.9.14 compatibility behavior used here.
+
+Only an immediate `/>` self-closes a start tag. A slash beginning a malformed
+attribute consumes that run through its next whitespace or closing `>`; slashes
+inside unquoted attribute values remain part of the value.
 
 ### `LIBXML_*` flags Termwind uses
 
@@ -80,7 +90,7 @@ These constants are always available (including inside a namespace, and in
 | `LIBXML_NOXMLDECL` | 2 | Save flag; parse ignores it. `saveXML()` never emits `<?xml …?>`. |
 | `LIBXML_HTML_NODEFDTD` | 4 | No default doctype is added (none is added anyway). |
 | `LIBXML_NOERROR` | 32 | Parse is silent and forgiving. |
-| `LIBXML_NOBLANKS` | 256 | Drops trailing document-level whitespace padding and whitespace-only text directly under `html` or `head`. Whitespace inside `body`, `title`, and other elements remains, including between body siblings. Without this flag, wrapper whitespace and trailing fragment padding are preserved; padding after an explicit `</html>` is always ignored. XML blank-node filtering is outside this HTML-only subset. |
+| `LIBXML_NOBLANKS` | 256 | Drops trailing document-level whitespace padding and whitespace-only text that remains directly under `html` or `head` after body insertion. Whitespace moved into an implied body is retained, including between body siblings and after the last child. Whitespace inside `body`, `title`, and other elements remains. Without this flag, wrapper whitespace and trailing fragment padding are preserved; padding after an explicit `</html>` is always ignored. XML blank-node filtering is outside this HTML-only subset. |
 | `LIBXML_COMPACT` | 65536 | Accepted and ignored (libxml compaction is an optimizer hint). |
 
 ## Remaining gaps versus full PHP DOM

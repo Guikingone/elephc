@@ -110,3 +110,183 @@ fn dom_html_current_review_wrapper_owners_no_ir_opt() {
 fn dom_html_current_review_head_only_no_ir_opt() {
     without_ir_opt(dom_html_current_review_head_only);
 }
+
+/// A reopened document creates its first body when the original html contained only a head.
+#[test]
+fn dom_html_latest_review_head_only_reopened_body() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach (['<html><head></head></html><div>B</div>', '<html><head></head></html><html lang="en"><div>B</div></html>'] as $source) {
+    $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    $body = $doc->getElementsByTagName('body')->item(0);
+    echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), ':', $body->nodeValue, '|';
+}
+"#);
+    assert_eq!(out, "<html><head/><html><body><div>B</div></body></html></html>:B|<html><head/><html lang=\"en\"><body><div>B</div></body></html></html>:B|");
+}
+
+/// An html start tag inside an open html is ignored, including its attributes.
+#[test]
+fn dom_html_latest_review_redundant_html() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach (['<html id=a><html id=b class=c><div>B</div></html></html>', '<html><body>A</body><html lang=en><span>B</span></html></html>'] as $source) {
+    $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->getElementsByTagName('html')->length, ':', $doc->saveXML($doc->getElementsByTagName('html')->item(0)), '|';
+}
+"#);
+    assert_eq!(out, "1:<html id=\"a\"><body><div>B</div></body></html>|1:<html><body>A</body><span>B</span></html>|");
+}
+
+/// Head-compatible metadata after head stays outside the subsequently implied body.
+#[test]
+fn dom_html_latest_review_post_head_metadata() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$doc->loadHTML('<html><head></head><script>X</script><style>Y</style><base href=x><link href=y><meta name=z><title>T</title><div>B</div></html>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), ':', $doc->getElementsByTagName('body')->item(0)->nodeValue;
+"#);
+    assert_eq!(out, "<html><head/><script><![CDATA[X]]></script><style><![CDATA[Y]]></style><base href=\"x\"/><link href=\"y\"/><meta name=\"z\"/><title>T</title><body><div>B</div></body></html>:B");
+}
+
+/// NOBLANKS removes wrapper padding only after the implied body's boundaries are known.
+#[test]
+fn dom_html_latest_review_implied_body_blanks() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach ([0, LIBXML_NOBLANKS] as $extra) {
+    $doc->loadHTML('<html><head></head> <div>A</div> <b>B</b> </html>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR | $extra);
+    echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), ':', $doc->getElementsByTagName('body')->item(0)->childNodes->length, '|';
+}
+"#);
+    assert_eq!(out, "<html><head/> <body><div>A</div> <b>B</b> </body></html>:4|<html><head/><body><div>A</div> <b>B</b> </body></html>:4|");
+}
+
+/// Legacy frame and isindex tags are void and leave following text beside them.
+#[test]
+fn dom_html_latest_review_legacy_void_elements() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+$doc->loadHTML('<div>A<frame>B<isindex>C</div>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+$div = $doc->getElementsByTagName('div')->item(0);
+echo $doc->saveXML($div), ':', $div->childNodes->length, ':', $div->nodeValue;
+"#);
+    assert_eq!(out, "<div>A<frame/>B<isindex/>C</div>:5:ABC");
+}
+
+/// A stray slash consumes its malformed attribute run but does not self-close a tag.
+#[test]
+fn dom_html_latest_review_stray_attribute_slash() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach (['<div /class=x /id=y>A</div><b>Z</b>', '<div a/b=c d=e>A</div><b>Z</b>', '<div / / >A</div><b>Z</b>', '<div a=x/ b=y>A</div><b>Z</b>'] as $source) {
+    $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->saveXML($doc->getElementsByTagName('body')->item(0)), '|';
+}
+"#);
+    assert_eq!(out, "<body><div>A</div><b>Z</b></body>|<body><div a=\"\" d=\"e\">A</div><b>Z</b></body>|<body><div>A</div><b>Z</b></body>|<body><div a=\"x/\" b=\"y\">A</div><b>Z</b></body>|");
+}
+
+/// Reopened-body construction is independent of EIR optimization.
+#[test]
+fn dom_html_latest_review_head_only_reopened_body_no_ir_opt() {
+    without_ir_opt(dom_html_latest_review_head_only_reopened_body);
+}
+
+/// Ignoring redundant html tags is independent of EIR optimization.
+#[test]
+fn dom_html_latest_review_redundant_html_no_ir_opt() {
+    without_ir_opt(dom_html_latest_review_redundant_html);
+}
+
+/// Post-head metadata placement is independent of EIR optimization.
+#[test]
+fn dom_html_latest_review_post_head_metadata_no_ir_opt() {
+    without_ir_opt(dom_html_latest_review_post_head_metadata);
+}
+
+/// Implied-body whitespace is preserved without EIR optimization.
+#[test]
+fn dom_html_latest_review_implied_body_blanks_no_ir_opt() {
+    without_ir_opt(dom_html_latest_review_implied_body_blanks);
+}
+
+/// Legacy void-element boundaries are independent of EIR optimization.
+#[test]
+fn dom_html_latest_review_legacy_void_elements_no_ir_opt() {
+    without_ir_opt(dom_html_latest_review_legacy_void_elements);
+}
+
+/// Attribute slash recovery is independent of EIR optimization.
+#[test]
+fn dom_html_latest_review_stray_attribute_slash_no_ir_opt() {
+    without_ir_opt(dom_html_latest_review_stray_attribute_slash);
+}
+
+/// Isolates one wrapper ownership path from the tokenizer and cyclic DOM object graph.
+fn verify_literal_tree_owners(reopened: bool, flags: u32) {
+    let setup = r#"<?php
+function enableDom(DOMDocument $doc): void {}
+for ($i = 0; $i < 8; $i++) {
+    $head = __elephc_dom_new_node('element', 'head', '', [], []);
+    $div = __elephc_dom_new_node('element', 'div', '', [], [__elephc_dom_new_node('text', '#text', 'A', [], [])]);
+"#;
+    let roots = if reopened {
+        r#"$html = __elephc_dom_new_node('element', 'html', '', [], [$head]);
+$later = __elephc_dom_new_node('element', 'html', '', [], [$div]);
+$roots = [$html, $later];
+"#
+    } else {
+        r#"$blank = __elephc_dom_new_node('text', '#text', ' ', [], []);
+$title = __elephc_dom_new_node('element', 'title', '', [], [__elephc_dom_new_node('text', '#text', 'T', [], [])]);
+$html = __elephc_dom_new_node('element', 'html', '', [], [$head, $blank, $title, $div, $blank]);
+$roots = [$html];
+"#
+    };
+    let finish = r#"$tree = __elephc_dom_document_from_roots($roots, LIBXML_NOBLANKS);
+echo __elephc_dom_text_of($tree), '|';
+unset($tree, $roots);
+}
+"#;
+    let finish = finish.replace("LIBXML_NOBLANKS", &flags.to_string());
+    let out = compile_and_run_with_heap_debug(&[setup, roots, &finish].concat());
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, if reopened { "A|" } else { "TA |" }.repeat(8));
+}
+
+/// Literal metadata and whitespace trees retire the new body and filter owners.
+#[test]
+fn dom_html_latest_review_tree_owners() {
+    verify_literal_tree_owners(false, 256);
+}
+
+/// Body and whitespace temporary owners stay balanced without EIR optimization.
+#[test]
+fn dom_html_latest_review_tree_owners_no_ir_opt() {
+    without_ir_opt(dom_html_latest_review_tree_owners);
+}
+
+/// A head-only document's reopened body retires all temporary wrapper owners.
+#[test]
+fn dom_html_latest_review_reopened_tree_owners() {
+    verify_literal_tree_owners(true, 256);
+}
+
+/// Reopened-body temporary owners stay balanced without EIR optimization.
+#[test]
+fn dom_html_latest_review_reopened_tree_owners_no_ir_opt() {
+    without_ir_opt(dom_html_latest_review_reopened_tree_owners);
+}
+
+/// The reopened-body ownership control also covers parsing without blank filtering.
+#[test]
+fn dom_html_latest_review_reopened_tree_owners_no_flags() {
+    verify_literal_tree_owners(true, 0);
+}
+
+/// Reopened-body ownership without flags is independent of EIR optimization.
+#[test]
+fn dom_html_latest_review_reopened_tree_owners_no_flags_no_ir_opt() {
+    without_ir_opt(dom_html_latest_review_reopened_tree_owners_no_flags);
+}
