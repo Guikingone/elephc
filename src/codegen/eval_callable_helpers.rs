@@ -32,6 +32,9 @@ use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method
 use crate::parser::ast::Visibility;
 use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 
+#[cfg(test)]
+mod tests;
+
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
@@ -917,7 +920,10 @@ fn emit_eval_instance_method_descriptor_entry_wrapper_body(
             actual_stack_offsets[idx],
         );
     }
+    let padding = abi::outgoing_call_stack_pad_bytes(emitter.target, actual_overflow_bytes);
+    abi::emit_reserve_temporary_stack(emitter, padding);
     abi::emit_call_label(emitter, &method_symbol(class_name, method_key));
+    abi::emit_release_temporary_stack(emitter, padding);
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
     }
@@ -987,7 +993,10 @@ fn emit_eval_static_method_descriptor_entry_wrapper_body(
             );
         }
     }
+    let padding = abi::outgoing_call_stack_pad_bytes(emitter.target, actual_overflow_bytes);
+    abi::emit_reserve_temporary_stack(emitter, padding);
     abi::emit_call_label(emitter, &static_method_symbol(impl_class, method_key));
+    abi::emit_release_temporary_stack(emitter, padding);
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
     }
