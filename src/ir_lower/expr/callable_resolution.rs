@@ -48,7 +48,7 @@ pub(super) fn lower_static_callable_call(
     if !static_callable_call_lowers_directly(ctx, &target) {
         return None;
     }
-    if !crate::ir_lower::loop_closures::direct_call_is_eligible(ctx, &target, callback_args) {
+    if !crate::ir_lower::loop_closures::direct_call_is_eligible(ctx, &target, callback_args, expr.span) {
         return None;
     }
     match target {
@@ -597,6 +597,7 @@ pub(super) fn build_bound_closure_binding(
         captures: bound_captures,
         return_alias,
         loop_guarded: false,
+        numeric_loop_guarded: false,
     };
     Some((bound, bound_descriptor))
 }

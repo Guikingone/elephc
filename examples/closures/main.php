@@ -196,3 +196,13 @@ for ($index = 0; $index < 2; $index++) {
     $sample = 1.5;
 }
 echo "Last increment after changing to float: ", $last, "\n";
+
+// A known closure can be called with the loop counter. The counter and the
+// accumulator may be boxed after integer overflow; the call still uses them
+// as numbers.
+$incrementCounter = function ($x) { return $x + 1; };
+$counterTotal = 0;
+for ($index = 0; $index < 4; $index++) {
+    $counterTotal += $incrementCounter($index);
+}
+echo "Counter total: ", (int) $counterTotal, "\n";

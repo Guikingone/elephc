@@ -4,14 +4,23 @@
 //!
 //! Called from:
 //! - `stmt::loops` at loop entry and `expr::callable_resolution` before direct calls.
+//! - `function::lower_body_into_function` when a numeric proof must be replayed
+//!   against final Mixed storage.
 //!
 //! Key details:
-//! - New for/while facts require unwritten raw scalar inputs and one closed primitive body block.
-//! - Opaque syntax and indirect mutation fail closed; ordinary descriptor calls remain available.
-//! - Do/while retains existing call eligibility only after identity and argument-write filtering.
+//! - Identity and the numeric domain are separate proofs. A written counter does not
+//!   by itself discard a closure whose arguments are proved `int|float`.
+//! - The existing unwritten raw-scalar path is unchanged. Do/while never takes the new path.
+//! - An incomplete numeric proof keeps the ordinary descriptor invoke.
+//! - A numeric-proof binding cannot authorize other calls through the raw-scalar gate.
+//! - Compiler-only argument transport needs its own prologue proof and never seeds numeric facts.
+
+mod numeric_proof;
+mod argument_transport;
 
 use crate::ir::{Effects, Immediate, IrType, Op, Terminator};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::span::Span;
 use crate::types::{FunctionSig, PhpType};
 use std::collections::{HashMap, HashSet};
 
@@ -46,16 +55,46 @@ pub(crate) fn begin_loop_closure_facts(
             return false;
         }
         let mut arguments = LoopArguments::default();
-        let stable = condition.is_none_or(|expr| stable_expr(ctx, local, &mut arguments, expr))
+        let identity = condition.is_none_or(|expr| stable_expr(ctx, local, &mut arguments, expr))
             && update.is_none_or(|stmt| stable_stmt(ctx, local, &mut arguments, stmt))
-            && stable_body(ctx, local, &mut arguments, body)
-            && arguments.passed.is_disjoint(&arguments.written);
-        if stable {
+            && stable_body(ctx, local, &mut arguments, body);
+        if !identity {
+            return false;
+        }
+        // The unwritten raw-scalar path stays exactly the #1850 gate. Written
+        // arguments fall through to the numeric proof instead of widening this one.
+        let scalar_inputs = arguments.passed.is_disjoint(&arguments.written);
+        if scalar_inputs {
             if let StaticCallableBinding::Closure { loop_guarded, .. } = binding {
                 *loop_guarded |= new_direct_path;
             }
+            return true;
         }
-        stable
+        if !new_direct_path {
+            return false;
+        }
+        if ctx.numeric_proof_sealed {
+            let admitted = numeric_proof::loop_has_sealed_call(
+                &ctx.numeric_closure_sites, local, condition, update, body,
+            );
+            if admitted {
+                if let StaticCallableBinding::Closure { loop_guarded, numeric_loop_guarded, .. } = binding {
+                    *loop_guarded = true;
+                    *numeric_loop_guarded = true;
+                }
+            }
+            return admitted;
+        }
+        let Some(proof) = numeric_proof::prove(ctx, local, binding, condition, update, body) else {
+            return false;
+        };
+        ctx.numeric_closure_sites.extend(proof.spans);
+        ctx.numeric_tracked_locals.extend(proof.locals);
+        if let StaticCallableBinding::Closure { loop_guarded, numeric_loop_guarded, .. } = binding {
+            *loop_guarded = true;
+            *numeric_loop_guarded = true;
+        }
+        true
     });
     let mut header_facts = original;
     header_facts.retain(|_, target| !matches!(target, StaticCallableBinding::Closure { .. }));
@@ -76,16 +115,25 @@ pub(crate) fn retain_loop_body_facts(
 }
 
 /// Applies strict call gates only to facts newly carried through for/while loops.
+///
+/// A numeric-proof binding uses the ordinary Mixed `Op::Call` ABI only at admitted spans.
+/// Other loop-guarded bindings still require unwritten raw scalar arguments.
 pub(crate) fn direct_call_is_eligible(
     ctx: &LoweringContext<'_, '_>,
     binding: &StaticCallableBinding,
     args: &[Expr],
+    span: Span,
 ) -> bool {
-    let StaticCallableBinding::Closure { signature, loop_guarded: true, .. } = binding else {
+    let StaticCallableBinding::Closure {
+        signature, loop_guarded: true, numeric_loop_guarded, ..
+    } = binding else {
         return true;
     };
+    if *numeric_loop_guarded {
+        return ctx.numeric_closure_sites.contains(&span);
+    }
     scalar_nothrow_target(ctx, binding)
-        && args.len() == signature.params.len()
+        && Some(args.len()) == argument_transport::visible_arity(signature)
         && args.iter().zip(&signature.params).all(|(arg, (_, parameter))| {
             scalar_argument_type(ctx, arg).is_some_and(|actual| {
                 *parameter == PhpType::Mixed || *parameter == actual
@@ -112,13 +160,18 @@ fn scalar_nothrow_target(ctx: &LoweringContext<'_, '_>, binding: &StaticCallable
     let Some(function) = ctx.closure_function(name) else { return false };
     if function.flags.is_generator || function.flags.by_ref_return || function.blocks.len() != 1
         || function.return_type == IrType::Void
+        || function.params.len() != signature.params.len() + captures.len()
     {
         return false;
     }
+    let Some(transport) = argument_transport::prologue_values(function, signature) else {
+        return false;
+    };
     let fallible = Effects::MAY_THROW | Effects::MAY_FATAL | Effects::MAY_WARN;
     function.instructions.iter().all(|inst| {
         !inst.effects.intersects(fallible)
-            && (scalar_type(&inst.result_php_type) || inst.result_php_type == PhpType::Mixed)
+            && (scalar_type(&inst.result_php_type) || inst.result_php_type == PhpType::Mixed
+                || inst.result.is_some_and(|value| transport.contains(&value)))
             && (inst.op == Op::ConcatReset
                 || !inst.effects.intersects(Effects::READS_GLOBAL | Effects::WRITES_GLOBAL))
             && scalar_body_primitive(inst.op)
@@ -142,11 +195,12 @@ fn scalar_body_primitive(op: Op) -> bool {
         | Move | Borrow | EnsureOwned | ConcatReset | Nop)
 }
 
-/// Allows exact positional scalar calls without coercion, defaults, references, or generators.
+/// Allows exact scalar calls without coercion, omitted arguments, source variadics or references.
 fn scalar_signature(signature: &FunctionSig) -> bool {
-    signature.variadic.is_none() && !signature.by_ref_return && !signature.is_generator
+    let Some(arity) = argument_transport::visible_arity(signature) else { return false };
+    !signature.by_ref_return && !signature.is_generator
         && signature.deprecation.is_none() && !signature.ref_params.iter().any(|by_ref| *by_ref)
-        && signature.params.iter().all(|(_, ty)| scalar_type(ty) || *ty == PhpType::Mixed)
+        && signature.params.iter().take(arity).all(|(_, ty)| scalar_type(ty) || *ty == PhpType::Mixed)
         && (scalar_type(&signature.return_type) || signature.return_type == PhpType::Mixed)
 }
 
@@ -227,9 +281,88 @@ fn stable_stmt(
 }
 
 /// Rejects reference, global, and destructor-bearing locals as possible implicit callbacks.
+///
+/// Locals forced to Mixed by a sealed numeric proof are still `int|float` values.
+/// The storage label alone is not what makes them harmless.
 fn harmless_local(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
     !ctx.is_ref_bound_local(name) && ctx.can_track_static_callable_local(name)
-        && (scalar_type(&ctx.local_type(name)) || ctx.local_type(name) == PhpType::Str)
+        && (ctx.final_mixed_locals.contains(name)
+            || scalar_type(&ctx.local_type(name))
+            || ctx.local_type(name) == PhpType::Str)
+}
+
+/// Lowers a body, then replays it when an admitted numeric local's final slot is Mixed
+/// but an earlier load still used a narrower type.
+///
+/// The proof is sealed from the discovery pass, whose entry seeds are still the
+/// proven `I64`/`F64` types. Replaying must not re-seed those locals from the Mixed
+/// label it is about to force. A parameter or a reference cell is not rewritten in
+/// place; that call stays on the descriptor path.
+pub(crate) fn lower_body_observing_numeric_closures(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+) {
+    let checkpoint = ctx.snapshot();
+    lower_stmts(ctx, body);
+    if ctx.numeric_closure_sites.is_empty() {
+        return;
+    }
+    let sites = ctx.numeric_closure_sites.clone();
+    let tracked = ctx.numeric_tracked_locals.clone();
+    let params = ctx
+        .builder
+        .function()
+        .params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<HashSet<_>>();
+    let mut force = HashSet::new();
+    let mut suppress = false;
+    for name in &tracked {
+        if !narrow_load_of_mixed_slot(ctx, name) {
+            continue;
+        }
+        if params.contains(name) || ctx.is_ref_bound_local(name) {
+            suppress = true;
+        } else {
+            force.insert(name.clone());
+        }
+    }
+    if tracked.iter().any(|name| ctx.is_ref_bound_local(name)) {
+        suppress = true;
+    }
+    if !suppress && force.is_empty() {
+        return;
+    }
+    ctx.restore(checkpoint);
+    ctx.numeric_proof_sealed = true;
+    if !suppress {
+        ctx.numeric_closure_sites = sites;
+        ctx.final_mixed_locals = force;
+    }
+    lower_stmts(ctx, body);
+}
+
+/// Lowers each statement in source order.
+fn lower_stmts(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
+    for stmt in body {
+        crate::ir_lower::stmt::lower_stmt(ctx, stmt);
+    }
+}
+
+/// Reports a load whose result type is narrower than the slot's final Mixed storage.
+fn narrow_load_of_mixed_slot(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    let Some(slot) = ctx.local_slots.get(name).copied() else {
+        return false;
+    };
+    if ctx.builder.local_php_type(slot).codegen_repr() != PhpType::Mixed {
+        return false;
+    }
+    ctx.builder.function().instructions.iter().any(|inst| {
+        inst.op == Op::LoadLocal
+            && matches!(inst.immediate, Some(Immediate::LocalSlot(loaded)) if loaded == slot)
+            && inst.result_php_type.codegen_repr() != PhpType::Mixed
+    })
 }
 
 /// Rejects opaque calls, aliases, declarations, and indirect writes anywhere in the loop.

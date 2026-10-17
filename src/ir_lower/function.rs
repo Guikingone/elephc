@@ -1785,9 +1785,7 @@ fn lower_body_into_function(
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) {
-            for stmt in body {
-                crate::ir_lower::stmt::lower_stmt(ctx, stmt);
-            }
+            crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
         }
     });
     terminate_open_block(&mut ctx);
@@ -1834,6 +1832,7 @@ fn seed_recursive_closure_binding(
             captures,
             return_alias: binding.return_alias,
             loop_guarded: false,
+            numeric_loop_guarded: false,
         },
     );
 }
