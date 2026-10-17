@@ -404,7 +404,7 @@ class EvalPropertyRelativeBase {
     public EvalPropertyRelativeBase $parentValue;
 }
 class EvalPropertyRelativeChild extends EvalPropertyRelativeBase {
-    public self $selfValue;
+    public EvalPropertyRelativeBase $selfValue;
     public parent $parentValue;
 }
 class EvalPropertyReadonlyPreserveBase {
@@ -435,6 +435,27 @@ return $box->value . ":" . $readonly->count . ":" . $widened->count . ":" . $wid
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.get(result), FakeValue::String("ok:7:9:9".to_string()));
+}
+
+/// Redeclaring concrete storage with child-relative self violates the parent's invariant type.
+#[test]
+fn execute_program_rejects_owner_relative_self_property_redeclaration() {
+    let program = parse_fragment(
+        br#"class EvalPropertyOwnerRelativeBase {
+    public self $value;
+}
+class EvalPropertyOwnerRelativeChild extends EvalPropertyOwnerRelativeBase {
+    public self $value;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("child self must not narrow inherited concrete storage");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
 /// Verifies eval rejects inherited property redeclarations that violate PHP invariance.

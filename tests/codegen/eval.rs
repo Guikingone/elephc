@@ -22790,7 +22790,7 @@ class EvalPropertyRelativeBase {
     public EvalPropertyRelativeBase $parentValue;
 }
 class EvalPropertyRelativeChild extends EvalPropertyRelativeBase {
-    public self $selfValue;
+    public EvalPropertyRelativeBase $selfValue;
     public parent $parentValue;
 }
 class EvalPropertyReadonlyPreserveBase {
