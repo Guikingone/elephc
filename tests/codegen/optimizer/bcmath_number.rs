@@ -61,6 +61,8 @@ $n += 2;
 $pair = $n->divmod('.3');
 echo $pair[1]->round(mode: RoundingMode::HalfEven)->value;
 var_dump(empty($n), $n <=> 2);
+$text = str_repeat('1', $argc);
+echo $text % 2;
 "#).expect("write Number target fixture");
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let compile = elephc_cli_command(&dir.0).args(["--target", target, "--emit", "staticlib", "--emit-asm"])

@@ -9,6 +9,30 @@
 
 use crate::support::*;
 
+/// Scalar numeric conversions retire captured strings while preserving their original locals.
+#[test]
+fn test_bcmath_number_scalar_string_owners() {
+    let body = r#"
+$text = str_repeat('1', 2);
+for ($i = 0; $i < 16; $i++) {
+    $mask = ((int)$text) & 3;
+    $remainder = $text % 3;
+    $right = ($argc * 23) % str_repeat('2', 2);
+}
+echo $mask, '|', $remainder, '|', $right, '|', $text;
+unset($text);
+"#;
+    for (setup, cleanup) in [
+        ("<?php ", ""),
+        ("<?php $number = new BcMath\\Number('1.20'); echo $number->value, '|'; ", "unset($number);"),
+    ] {
+        let out = compile_and_run_with_heap_debug(&[setup, body, cleanup].concat());
+        let prefix = if cleanup.is_empty() { "" } else { "1.20|" };
+        assert_eq!(out.stdout, format!("{prefix}3|2|1|11"), "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
 /// Keeping Number available must not strand checked scalar boxes consumed by bitwise operators.
 #[test]
 fn test_bcmath_number_scalar_checked_owners() {
