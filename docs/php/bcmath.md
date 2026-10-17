@@ -111,6 +111,13 @@ scale. `pow()` calls its operand `$exponent`. `powmod($exponent, $modulus,
 `ceil()`, and `floor()` return Numbers. `divmod()` returns an indexed pair of
 Number objects: an integer quotient and a decimal remainder.
 
+In coercive calls, constructor and method operands follow PHP's `string|int`
+binding: finite floats within the signed 64-bit integer range truncate towards
+zero, booleans become `0` or `1`, and null becomes `0`. For example,
+`(new Number('2.50'))->add(1.5)->value` is `"3.50"`. Nonfinite and out-of-range
+floats fail decimal validation with `ValueError`. Arithmetic operators truncate
+in-range floats too, but reject nonfinite and out-of-range floats with `TypeError`.
+
 `round(int $precision = 0, RoundingMode $mode =
 RoundingMode::HalfAwayFromZero)` supports all eight PHP rounding modes.
 `__toString()`, `__serialize()`, and `__unserialize()` preserve the decimal
@@ -135,6 +142,10 @@ as do unary `+`/`-`, compound assignments, and immutable `++`/`--` replacements.
 Value comparisons `==`, `!=`, `<`, `<=`, `>`, `>=`, and `<=>` compare decimals.
 Strict `===` and `!==` compare object identity. A zero Number is false in
 boolean contexts, including `empty()`.
+`switch` cases and non-strict `in_array()` use the same decimal equality, so
+`1.20` and `1.200` match despite their different scales. Strict membership keeps
+object identity. Boolean comparisons follow PHP 8.5 truthiness: a nonzero Number
+compares equal to `true`, and a zero Number compares equal to `false`.
 
 ## Current scope
 

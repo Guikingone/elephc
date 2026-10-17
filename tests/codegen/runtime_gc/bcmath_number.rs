@@ -9,6 +9,42 @@
 
 use crate::support::*;
 
+/// Runtime equality and internal scalar adapters retire both successful and exceptional owners.
+#[test]
+fn test_bcmath_number_review_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function number_switch(mixed $n): bool {
+    switch ($n) {
+        case new BcMath\Number('9.00'): return false;
+        case new BcMath\Number('1.200'): return true;
+        default: return false;
+    }
+}
+for ($i = 0; $i < 8; $i++) {
+    $matched = number_switch(new BcMath\Number('1.20'));
+    $member = in_array(new BcMath\Number('1.20'), [new BcMath\Number('1.200')]);
+    switch (new BcMath\Number('5')) {
+        case new BcMath\Number('5.00'): $matched = true; break;
+        default: $matched = false;
+    }
+    switch (new BcMath\Number('8')) {
+        case new BcMath\Number('9'): $member = false; break;
+        default: break;
+    }
+    try {
+        switch (new BcMath\Number('5')) { case new BcMath\Number('bad'): break; }
+    } catch (ValueError $e) { unset($e); }
+    $coerced = (new BcMath\Number(1.5))->add(1.5);
+    try { (new BcMath\Number('2.50'))->add(INF); } catch (ValueError $e) { unset($e); }
+    try { new BcMath\Number('2.50') + INF; } catch (TypeError $e) { unset($e); }
+    unset($coerced);
+}
+echo (int)$matched, '|', (int)$member;
+"#);
+    assert_eq!(out.stdout, "1|1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Scalar numeric conversions retire captured strings while preserving their original locals.
 #[test]
 fn test_bcmath_number_scalar_string_owners() {

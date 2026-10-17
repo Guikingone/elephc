@@ -945,7 +945,15 @@ fallback boxes both operands and calls the first one.
 | `__rt_mixed_array_loose_eq` | Equal counts plus, for every key of the left array, the same key on the right with a loosely equal value (order-independent) | `x0`/`x1` = boxed arrays, `x2` = depth | `x0` = 0/1 |
 | `__rt_obj_loose_eq` | Same instance, or same runtime class id with every descriptor property loosely equal | `x0`/`x1` = object pointers, `x2` = depth | `x0` = 0/1 |
 
-Rule order inside `__rt_mixed_loose_eq` is load-bearing: a `bool` operand coerces
+An object operand first enters the program-specific
+`__elephc_internal_object_compare` function generated from the internal class
+operator contracts. Its ordinary EIR static calls preserve hidden argument-count
+and collector parameters. Result `3` requests the ordinary comparison table;
+handled comparisons are equal only at `0`, so unordered result `2` is false.
+This also gives `switch`, loose `in_array()`, and recursive array/property
+comparisons the decimal equality defined by `BcMath\Number`.
+
+For unhandled values, rule order inside `__rt_mixed_loose_eq` is load-bearing: a `bool` operand coerces
 both sides first, then `null` (converted to `""` against a string and to `bool`
 otherwise), then containers (an array equals only another array), then objects,
 then strings, then a numeric comparison. Same-tag int/resource/callable payloads

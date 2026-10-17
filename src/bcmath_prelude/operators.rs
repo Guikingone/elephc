@@ -13,9 +13,11 @@ use crate::parser::ast::Expr;
 
 /// Builds the runtime predicate for the scalar/object domain accepted by Number arithmetic.
 fn accepted(value: Expr) -> Expr {
-    let tests = ["is_int", "is_string", "is_bool", "is_float"].into_iter()
+    let tests = ["is_int", "is_string", "is_bool"].into_iter()
         .map(|name| global_call(name, vec![value.clone()]));
-    tests.chain(std::iter::once(e_instance_of(value.clone(), NUMBER_CLASS)))
+    let float = e_binop(global_call("is_float", vec![value.clone()]), BinOp::And,
+        global_call("__elephc_bcnumber_float_fits", vec![value.clone()]));
+    tests.chain([float, e_instance_of(value.clone(), NUMBER_CLASS)])
         .reduce(|left, right| e_binop(left, BinOp::Or, right)).expect("Number operand domain")
 }
 
@@ -87,6 +89,21 @@ pub(super) fn add_adapters(mut number: ClassBuilder) -> ClassBuilder {
 /// Declares scalar coercion through an ordinary coercive int parameter, including PHP diagnostics.
 pub(super) fn declarations() -> Program {
     vec![
+        function("__elephc_bcnumber_float_fits").param("_bcfloat", TypeExpr::Float)
+            .returns(TypeExpr::Bool).returning(e_binop(
+                e_binop(e_var("_bcfloat"), BinOp::GtEq, e_float(-9223372036854775808.0)), BinOp::And,
+                e_binop(e_var("_bcfloat"), BinOp::Lt, e_float(9223372036854775808.0)),
+            )).build(),
+        function("__elephc_bcnumber_parameter").param("_bcparameter", t_mixed()).returns(TypeExpr::Str)
+            .body(vec![
+                s_if(e_binop(global_call("is_bool", vec![e_var("_bcparameter")]), BinOp::Or,
+                    global_call("is_null", vec![e_var("_bcparameter")])),
+                    vec![s_return(decimal(e_cast(CastType::Int, e_var("_bcparameter"))))], vec![], None),
+                s_if(e_binop(global_call("is_float", vec![e_var("_bcparameter")]), BinOp::And,
+                    global_call("__elephc_bcnumber_float_fits", vec![e_var("_bcparameter")])),
+                    vec![s_return(decimal(e_cast(CastType::Int, e_var("_bcparameter"))))], vec![], None),
+                s_return(decimal(e_var("_bcparameter"))),
+            ]).build(),
         function("__elephc_bcnumber_type").param("_bctype", t_mixed()).returns(TypeExpr::Str)
             .body(vec![
                 s_if(global_call("is_object", vec![e_var("_bctype")]),

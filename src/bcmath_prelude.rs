@@ -31,6 +31,11 @@ fn decimal(value: crate::parser::ast::Expr) -> crate::parser::ast::Expr {
     e_cast(CastType::String, value)
 }
 
+/// Applies the internal string-or-integer parameter conversion before decimal parsing.
+fn parameter_decimal(value: crate::parser::ast::Expr) -> crate::parser::ast::Expr {
+    global_call("__elephc_bcnumber_parameter", vec![value])
+}
+
 /// Builds a typed internal decimal operation with ordinary evaluated call arguments.
 fn operation(name: &str, args: Vec<crate::parser::ast::Expr>) -> crate::parser::ast::Expr {
     global_call(&format!("__elephc_bcnumber_{name}"), args)
@@ -66,14 +71,14 @@ pub(crate) fn bcmath_declarations() -> Program {
             .readonly_prop("scale", TypeExpr::Int)
             .method(method("__construct")
                 .param("num", TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::Int]))
-                .body(initialize(decimal(e_var("num")))))
+                .body(initialize(parameter_decimal(e_var("num")))))
             .method(method("__toString").returns(TypeExpr::Str).returning(e_this_prop("value")))
             .method(method("__serialize").returns(t_array())
                 .returning(e_array_assoc(vec![(e_str("value"), e_this_prop("value"))])));
 
         for name in ["add", "sub", "mul", "div", "mod", "pow", "compare"] {
             let parameter = if name == "pow" { "exponent" } else { "num" };
-            let args = vec![e_this_prop("value"), decimal(e_var(parameter)), e_var("scale")];
+            let args = vec![e_this_prop("value"), parameter_decimal(e_var(parameter)), e_var("scale")];
             let result = operation(if name == "compare" { "comp" } else { name }, args);
             number = number.method(method(name)
                 .param(parameter, operand_type())
@@ -96,14 +101,14 @@ pub(crate) fn bcmath_declarations() -> Program {
                 .param_default("scale", t_nullable(TypeExpr::Int), e_null())
                 .returns(t_class(NUMBER_CLASS))
                 .returning(e_new_fq(NUMBER_CLASS, vec![operation("powmod", vec![
-                    e_this_prop("value"), decimal(e_var("exponent")), decimal(e_var("modulus")), e_var("scale"),
+                    e_this_prop("value"), parameter_decimal(e_var("exponent")), parameter_decimal(e_var("modulus")), e_var("scale"),
                 ])])))
             .method(method("divmod")
                 .param("num", operand_type())
                 .param_default("scale", t_nullable(TypeExpr::Int), e_null())
                 .returns(TypeExpr::Array(Box::new(t_class(NUMBER_CLASS))))
                 .body(vec![
-                    s_assign("_bcpair", operation("divmod", vec![e_this_prop("value"), decimal(e_var("num")), e_var("scale")])),
+                    s_assign("_bcpair", operation("divmod", vec![e_this_prop("value"), parameter_decimal(e_var("num")), e_var("scale")])),
                     s_return(e_array(vec![
                         e_new_fq(NUMBER_CLASS, vec![e_index(e_var("_bcpair"), e_int(0))]),
                         e_new_fq(NUMBER_CLASS, vec![e_index(e_var("_bcpair"), e_int(1))]),

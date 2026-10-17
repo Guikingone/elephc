@@ -63,13 +63,17 @@ echo $pair[1]->round(mode: RoundingMode::HalfEven)->value;
 var_dump(empty($n), $n <=> 2);
 $text = str_repeat('1', $argc);
 echo $text % 2;
+switch ($n) { case new Decimal('3.200'): echo 'equal'; }
+var_dump(in_array($n, ['3.200']));
+echo (new Decimal(1.5))->add(1.5)->value;
+try { $n + INF; } catch (TypeError $e) { echo 'range'; }
 "#).expect("write Number target fixture");
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let compile = elephc_cli_command(&dir.0).args(["--target", target, "--emit", "staticlib", "--emit-asm"])
             .arg(&php).output().expect("emit Number target assembly");
         assert!(compile.status.success(), "{target}: {}", String::from_utf8_lossy(&compile.stderr));
         let assembly = fs::read_to_string(dir.0.join("main.s")).expect("read Number target assembly");
-        for symbol in ["elephc_bcmath_number_create", "elephc_bcmath_number_add", "elephc_bcmath_number_divmod", "elephc_bcmath_number_round"] {
+        for symbol in ["elephc_bcmath_number_create", "elephc_bcmath_number_add", "elephc_bcmath_number_divmod", "elephc_bcmath_number_round", "__elephc_internal_object_compare"] {
             assert!(assembly.contains(symbol), "{target} missing {symbol}");
         }
     }
@@ -85,8 +89,15 @@ fn test_bcmath_number_opaque_eval_capability() {
         .output().expect("compile opaque eval fixture");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
     let output = Command::new(dir.0.join("main"))
-        .arg(r#"$n = new \BcMath\Number('1.20'); echo ($n + 2)->round(mode: \RoundingMode::HalfEven)->value;"#)
+        .arg(r#"$n = new \BcMath\Number('1.20'); echo ($n + 2)->round(mode: \RoundingMode::HalfEven)->value, '|';
+$n = new \BcMath\Number('2.50');
+echo (new \BcMath\Number(1.5))->value, '|', $n->add(1.5)->value, '|', $n->compare(2.9), '|';
+echo (new \BcMath\Number(false))->value, '|', (new \BcMath\Number(null))->value, '|';
+var_dump(in_array(new \BcMath\Number('1.20'), [new \BcMath\Number('1.200')]));
+switch (new \BcMath\Number('1.20')) { case '1.200': echo 'switch|'; break; }
+try { $n + INF; } catch (\TypeError $e) { echo 'operator|'; }
+try { $n->add(INF); } catch (\ValueError $e) { echo 'method'; }"#)
         .output().expect("run opaque eval Number fixture");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "3");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3|1|3.50|1|0|0|bool(true)\nswitch|operator|method");
 }
