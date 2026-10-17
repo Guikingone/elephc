@@ -4585,6 +4585,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits an `is_truthy` conversion when a value is not already I64.
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+        if let Some(value) = super::expr::object_operators::lower_object_truthy(self, input, span) {
+            return value;
+        }
         if input.ir_type == IrType::I64 {
             return input;
         }

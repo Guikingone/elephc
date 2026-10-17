@@ -17,9 +17,10 @@ macro_rules! class {
     (
         $name:literal, $canonical:literal, $kind:ident, $module:ident, $route:ident
         $(, since: $since:ident)? $(, extension: $extension:literal)? $(, internal: $internal:literal)?
-        $(, targets: $targets:expr)? $(,)?
+        $(, targets: $targets:expr)? $(, operators: $operators:expr)? $(,)?
     ) => {
         ClassContract {
+            operators: class!(@operators $($operators)?),
             id: BuiltinId::from_canonical_name($canonical),
             name: $name,
             kind: ClassKind::$kind,
@@ -38,6 +39,8 @@ macro_rules! class {
     (@flag) => { false };
     (@targets $targets:expr) => { Some($targets) };
     (@targets) => { None };
+    (@operators $operators:expr) => { Some($operators) };
+    (@operators) => { None };
 }
 
 pub(crate) static CLASSES: &[ClassContract] = &[
@@ -60,6 +63,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("BackedEnum", "backedenum", Interface, Core, CheckerInjected, since: Php81),
     class!("BadFunctionCallException", "badfunctioncallexception", Class, Spl, CheckerInjected),
     class!("BadMethodCallException", "badmethodcallexception", Class, Spl, CheckerInjected),
+    class!("BcMath\\Number", "bcmath\\number", Class, Bcmath, Prelude, since: Php84, operators: &crate::BCMATH_NUMBER_OPERATORS),
     class!("CachingIterator", "cachingiterator", Class, Spl, CheckerInjected),
     class!("CairoAntialias", "cairoantialias", Class, Cairo, Prelude),
     class!("CairoContext", "cairocontext", Class, Cairo, Prelude),
@@ -217,6 +221,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("RegexIterator", "regexiterator", Class, Spl, CheckerInjected),
     class!("RequestParseBodyException", "requestparsebodyexception", Class, Core, CheckerInjected, since: Php84),
     class!("ReturnTypeWillChange", "returntypewillchange", Class, Core, Prelude, since: Php81),
+    class!("RoundingMode", "roundingmode", Enum, Standard, Prelude, since: Php84),
     class!("RuntimeException", "runtimeexception", Class, Spl, CheckerInjected),
     class!("SeekableIterator", "seekableiterator", Interface, Spl, CheckerInjected),
     class!("SensitiveParameter", "sensitiveparameter", Class, Core, Prelude, since: Php82),

@@ -357,6 +357,18 @@ before propagating. The typed-property unset bridge has a versioned Throwable
 output argument so this propagation returns to Magician as an eval exception
 instead of jumping across Rust frames.
 
+`__rt_cleanup_invoke` can release a validated scalar Mixed cell without creating
+a new jump buffer. It first authenticates the exact `__rt_decref_any` callback,
+managed heap storage, a live owner count, the Mixed heap kind, and an int, float,
+bool, or null runtime tag. It invokes that same callback pointer, so ordinary
+refcounting and collector sweep suppression remain authoritative. This path
+reports no new exception and preserves the enclosing pending exception state.
+A separate proof authenticates the exact `__rt_decref_array` callback and a
+live indexed array with logical length zero. Reserved capacity owns no child
+slots, so the original dispatcher can release that array without a new handler.
+Hash-promoted storage, nonempty arrays, strings, objects, resources, reference
+cells, unknown tags, and other callbacks use the protected cleanup boundary.
+
 Interpreter value releases and native-call argument cleanup use a versioned
 release boundary with an owned Throwable accumulator. Releasing a group finishes
 every element and preserves earlier destructor exceptions in the resulting chain.
@@ -669,7 +681,7 @@ In full-reset `--web` mode, the next request reclaims the previous PHP heap aren
 - **`unset()`**: releases the current heap-backed value before nulling the slot
 - **Targeted cycle collection**: `__rt_gc_collect_cycles` counts heap-only incoming edges and marks externally reachable blocks. Before sweeping an unreachable graph containing objects, it snapshots and pins its candidate nodes, runs their destructors while their data remains intact, then repeats root analysis to observe mutations and resurrection. Pin owners are discounted from root counts. Surviving nodes lose only their temporary pins; unreachable nodes are deep-freed, and the separately allocated snapshot chunks are discarded without reading reclaimed PHP storage
 - **Generator frame release**: Generator frames are object-kind heap blocks, but their custom Mixed slots and active `yield from` delegate are released by a Generator-specific branch in object deep-free
-- **Object destructors (`__destruct`)**: `__rt_call_object_destructor` dispatches through the eval hook or class-id-indexed `_class_destruct_ptrs` table with a borrowed `$this`. Refcount bit 31 guards active execution. For collector-triggered destruction, heap-kind bit 17 remembers completion after that temporary guard is cleared, so a resurrected object is not destructed again on later collection or final release. Eval class/property metadata survives until actual object release. Ordinary last-owner destruction still runs at the top of `__rt_object_free_deep`, before property release; resurrection on that ordinary path remains unsupported
+- **Object destructors (`__destruct`)**: `__rt_call_object_destructor` dispatches through the eval hook or class-id-indexed `_class_destruct_ptrs` table with a borrowed `$this`. Refcount bit 31 guards active execution. For collector-triggered destruction, heap-kind bit 14 remembers completion after that temporary guard is cleared, so a resurrected object is not destructed again on later collection or final release. Eval class/property metadata survives until actual object release. Ordinary last-owner destruction still runs at the top of `__rt_object_free_deep`, before property release; resurrection on that ordinary path remains unsupported
 - **Process exit**: all memory is reclaimed by the OS
 
 Collector-triggered destructors run under individual native exception handlers.
@@ -1072,7 +1084,7 @@ Converting a boxed `Mixed` value into a concrete scalar, string, or object prope
 | Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_ptr`, `_rt_diag_pending_len`, `_php_diagnostic_file`, `_php_diagnostic_file_len`, `_php_diagnostic_line` = 8 bytes each | Warning suppression plus deferred diagnostic message and source-location state |
 | Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
 | Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |
-| JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column` = 104 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations |
+| JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_source_len`, `_json_error_candidate_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column`, `_json_error_scan_count`, `_json_error_scan_bytes` = 136 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations. The candidate pointer is recorded in constant time; line and column are scanned from the original source only when an error is recorded. |
 | Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_ser_legacy_active`, `_unser_count`, `_unser_legacy_active` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context while legacy Serializable callbacks share references |
 | Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_strtotime_iso_buf` = 64 bytes; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override, the scratch copy a one-digit-month/day ISO date is zero-padded into, plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
@@ -1113,6 +1125,28 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 10. **Resource scope-cleanup** — Mixed-boxed resources (tag 9) carry a resource-kind subtype in the high payload word, and `__rt_mixed_free_deep` runs the matching destructor when the box is released: kind 1 = native stream fd (`close()`), kind 2 = HashContext handle (`elephc_crypto_free` through `__rt_hash_ctx_free`), kind 3 = `popen` pipe (`__rt_pclose`, which closes the `FILE*` and reaps the child), kind 4 = `opendir` stream (`__rt_closedir`). Kind 0 resources (generic resources) are skipped, and every fd-backed kind also skips handles `>= 0x40000000` — synthetic wrapper handles and the `-1` sentinel that an explicit `fclose`/`pclose`/`closedir` stamps into the box so the descriptor is never released twice (even if its fd number was reused). Alias safety comes from the Mixed box refcount — `$b = $a` increfs the box, so only the last release triggers the destructor
 11. **Process exit** — all memory reclaimed by the OS
 
+### JSON decoder construction owners
+
+The native JSON parser builds an acyclic graph of fresh Mixed cells and
+containers. Array insertion retains a borrowed child, so the parser releases
+its original child reference immediately after insertion. Hash insertion
+adopts the fresh value cell and persists the key bytes; the temporary decoded
+key cell is released after insertion. Boxing a fresh array, hash, or stdClass
+retires the builder's original container reference after Mixed acquires its own.
+
+Recursive parse failures return normally while each parser frame releases its
+partial container and any pending key. The outer `__rt_json_decode_mixed`
+boundary temporarily masks only `JSON_THROW_ON_ERROR`, restores the caller's
+flags after recursion, and then publishes the recorded exception. Parsing
+invokes no PHP callbacks, so the temporary flag mask cannot be observed by user
+code. Diagnostics retain the original parse error while cleanup completes.
+
+Positional source strings are persisted into owned evaluation roots before
+later arguments run. Those roots retire on success, parser exceptions, and
+exceptions raised while evaluating a later argument. A decoded alias remains
+alive through its own reference; releasing the parser's construction references
+does not bypass normal copy-on-write or final-owner destruction.
+
 ### Unboxing a Mixed hands back a reference
 
 `Op::MixedUnbox` is the coercion behind a typed target initialized from a Mixed source — several lowering surfaces emit it for an `object` or `callable` target: the typed-assign coercer `coerce_typed_assign_value` (reached from a typed local and a typed property write), call-argument and closure coercion, static method-call receivers, typed foreach slot coercion, and the merge-temp coercion that hands a `??`-kept `?C` cell over to an object or callable temp (#1628). Each unbox's lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload it produces carries a reference of its OWN rather than borrowing the box's.
@@ -1146,7 +1180,16 @@ The runtime now includes a targeted collector for heap-backed `array`, associati
 - owned property references form `object -> cell -> value` graph edges; a local cell alias therefore roots the referenced graph independently of the original object
 - mixed release paths use `__rt_decref_any`, so deep-free and GC walks can release nested strings/arrays/hashes/objects through one uniform dispatcher
 
-`__rt_gc_collect_cycles` is intentionally narrower than a full tracing GC: it ignores strings and raw helper buffers as candidates, clears transient marks, counts heap-only incoming edges, and marks externally reachable container/object blocks. An object-destructor phase pins graph candidates before running PHP, then repeats root analysis before freeing the unmarked remainder. Heap-kind bit 18 identifies an artificial pin, distinct from the persistent destructor-completion bit 17 and reachability bit 16. `_gc_collecting` suppresses recursive collection throughout these phases; `_gc_freeing_unreachable` suppresses decrements of doomed graph children only during the final sweep. Destructor-side writes therefore update real ownership normally. `_gc_pin_head` links C-allocated snapshot chunks outside the PHP heap. This remains a non-moving collector for structural cycles, not Zend collector-buffer parity.
+`__rt_gc_collect_cycles` is intentionally narrower than a full tracing GC: it ignores strings and raw helper buffers as candidates, clears transient marks, counts heap-only incoming edges, and marks externally reachable container/object blocks. An object-destructor phase pins graph candidates before running PHP, then repeats root analysis before freeing the unmarked remainder. Heap-kind bit 18 identifies an artificial pin, distinct from snapshot membership bit 17, destructor completion bit 14, and reachability bit 16. `_gc_collecting` suppresses recursive collection throughout these phases; `_gc_freeing_unreachable` suppresses decrements of doomed graph children only during the final sweep. Destructor-side writes therefore update real ownership normally. `_gc_pin_head` links C-allocated snapshot chunks outside the PHP heap. This remains a non-moving collector for structural cycles, not Zend collector-buffer parity.
+
+On x86_64, one outgoing-edge traversal caches incoming counts in transient
+kind-word bits 19 through 31. The high 32-bit ELPH marker and actual refcounts
+remain intact. Counts saturate at 8191; a saturated candidate uses the original
+full-precision heap rescan before any root decision. Already reachable nodes
+need no additional root classification. Each root scan clears cached fields
+before destructor callbacks, and destructor mutations trigger fresh counting.
+The ARM64 collector continues using its existing 32-bit incoming-count field.
+Both ABIs enumerate retained eval-object children through the same callback.
 
 ### Performance characteristics
 
@@ -1199,3 +1242,11 @@ chooses between in-place reuse and a copy:
 The retained result is one block whose capacity follows the final length. Blocks
 released by a growth copy return to the free list; the bump allocator supplies
 a block when the free list cannot.
+
+Native mbstring string identity belongs to the allocation containing the string
+bytes. A kind-5 Mixed wrapper holding a string owns a separate byte buffer; the
+identity belongs to that child, never to the wrapper. Its final heap release
+skips the string-registry lookup; the child's release still retires its own
+identity before allocator reuse. Eval array-reference observers retire before
+this skip, including when a Mixed cell no longer contains its former array
+value. Other allocation kinds retain their existing identity retirement path.

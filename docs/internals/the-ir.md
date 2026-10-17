@@ -392,7 +392,7 @@ Ownership operations:
 |---|---|---|---|---|
 | `Acquire` | refcounted/string/callable value | `Void` or retained value alias | `REFCOUNT_OP`, maybe `WRITES_HEAP` | `__rt_incref`, string persist/retain, callable descriptor retain if added |
 | `Acquire` + `Bool` immediate | same | same | same | same; the immediate marks a *lifetime pin* and only opts the pair out of acquire/release cancellation |
-| `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
+| `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, destruction may throw and debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
 | `Move` | any value | same type | pure validator operation | no machine instruction |
 | `Borrow` | value with live owner | same type | pure validator operation | no machine instruction |
 | `EnsureOwned` | maybe-owned value | same type | may branch, refcount effect | emits conditional retain/ownership normalization |
@@ -463,6 +463,33 @@ retain a conservative fallback. The descriptor can distinguish fresh, borrowed,
 independent, explicit argument-alias, and may-alias storage, including scratch-backed
 results that are not fresh heap blocks. That contract feeds direct-call cleanup,
 optimizer reasoning, and summaries for source wrappers.
+
+#### Property publication and throwing cleanup
+
+For a receiver whose property storage is known only at runtime, lowering keeps an
+owning source temporary explicit through `PropSet` or `DynamicPropSet`. Each backend
+arm borrows or retains the representation it stores. EIR releases the source after
+publication, so a Stringable source's destructor observes the new property value.
+Scalar narrowing paths that adopt a box retire that box in the shared property
+materializer; receiver dispatch must not repeat that retirement.
+
+An owning nested receiver, such as the read of `$h->next` in
+`$h->next->s = make_label()`, has a separate in-flight cleanup pin. These pins do
+not acquire references: they park the existing owner for exceptional cleanup.
+The source pin is detached after a successful store and before releasing the
+source. The receiver pin remains registered throughout that release, because a
+source destructor can throw after the field has already been published. Only
+after source cleanup returns is the receiver pin detached and the receiver's
+normal release emitted. Detaching both pins immediately after the store would
+leak the nested receiver whenever the source destructor throws; retaining the
+source pin during its release would instead expose the same source to cleanup
+twice.
+
+Borrowed receivers and sources keep their existing owners. A source whose
+reference moves into a known slot follows that slot's transfer discipline rather
+than receiving an additional post-store release. These rules live in
+`src/ir_lower/stmt/instance_property_writes.rs` and the shared property-store
+materializer, using target-aware runtime cleanup on every supported target.
 
 ### A reference cell must be as wide as what the callee may write
 

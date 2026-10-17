@@ -383,3 +383,27 @@ checks pass without generated drift.
 Combined nullable, dynamic-constructor, and static/late-bound descriptor programs
 compile and assemble with clang on all five supported targets. iOS device and
 Simulator use the supported static-library output mode.
+
+
+## Integration with current main
+
+After `8ace75e93c` was published, main advanced through five independently
+reviewed PRs to `4b5681d5fc4da297073dbae64d0b7c811913803e`. GitHub reported
+conflicts and did not start replacement CI/PDO workflows. The integration
+preserves both Core and BCMath prelude registrations in the compiler and test
+harnesses, keeps Core attribute classes alongside RoundingMode in the catalog,
+and combines the current JSON state with legacy Serializable bookkeeping.
+Generated module/comparison documentation is regenerated from the merged catalog.
+
+Focused validation checks the corrected Core constructors and callables together
+with weak GC/resurrection, Serializable, enum interfaces, BCMath Number/RoundingMode,
+JSON locations, incoming-edge/scalar cleanup, and tail-call ownership boundaries.
+Final Grok and Greptile acceptance must cover the resulting published integration
+SHA against `4b5681d5fc4da297073dbae64d0b7c811913803e`.
+
+The integrated compiler/library/exporter build passes without warnings. All55
+selected library checks,18 integration codegen cases, and10 Core/BCMath diagnostic
+cases pass. Both prelude registrations remain active. Generated docs and
+registry/site/EIR audits pass; the comparison page reports Core40/40 classes and
+89/89 constants, with overall coverage163/329 classes. Compiler/clang syntax
+checks pass for all5 targets, and Rustdoc, assembly comments and whitespace pass.

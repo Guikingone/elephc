@@ -616,9 +616,15 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_json_validate_len", 8, target));
     out.push_str(&comm_directive("_json_decode_assoc", 8, target));
     out.push_str(&comm_directive("_json_error_source_ptr", 8, target));
+    out.push_str(&comm_directive("_json_error_source_len", 8, target));
+    out.push_str(&comm_directive("_json_error_candidate_ptr", 8, target));
     out.push_str(&comm_directive("_json_error_location_active", 8, target));
     out.push_str(&comm_directive("_json_error_line", 8, target));
     out.push_str(&comm_directive("_json_error_column", 8, target));
+    // Diagnostic counters for the deferred location scan. Valid decodes leave
+    // both at zero; a recorded decode error increments them once.
+    out.push_str(&comm_directive("_json_error_scan_count", 8, target));
+    out.push_str(&comm_directive("_json_error_scan_bytes", 8, target));
     // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
     // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
     // "this block never acquired a handle".
@@ -1062,6 +1068,20 @@ pub(crate) fn emit_runtime_data_fixed(
     // helpers call through these slots so unrelated programs never reference the
     // optional elephc-bcmath archive.
     for slot in [
+        "_elephc_bcmath_number_add_fn",
+        "_elephc_bcmath_number_ceil_fn",
+        "_elephc_bcmath_number_comp_fn",
+        "_elephc_bcmath_number_create_fn",
+        "_elephc_bcmath_number_div_fn",
+        "_elephc_bcmath_number_divmod_fn",
+        "_elephc_bcmath_number_floor_fn",
+        "_elephc_bcmath_number_mod_fn",
+        "_elephc_bcmath_number_mul_fn",
+        "_elephc_bcmath_number_pow_fn",
+        "_elephc_bcmath_number_powmod_fn",
+        "_elephc_bcmath_number_round_fn",
+        "_elephc_bcmath_number_sqrt_fn",
+        "_elephc_bcmath_number_sub_fn",
         "_elephc_bcmath_add_fn",
         "_elephc_bcmath_sub_fn",
         "_elephc_bcmath_mul_fn",
