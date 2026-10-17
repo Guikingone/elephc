@@ -249,6 +249,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after reporting the throwable
+    emitter.instruction("ud2");                                                 // keep the terminal syscall from falling through into a differently sized frame
 
     emitter.label("__rt_uncaught_fallback");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_msg");
@@ -259,6 +260,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // same status as the reporting path
     emitter.instruction("mov eax, 60");                                         // syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after the fallback diagnostic
+    emitter.instruction("ud2");                                                 // terminate control flow if the exit syscall unexpectedly returns
 }
 
 #[cfg(test)]
