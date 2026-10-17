@@ -64,6 +64,85 @@ unset($error);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Protected scalar writes and compound assignments keep independent construction metadata.
+#[test]
+fn test_core_review_error_exception_code_writes_preserve_line() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+#[AllowDynamicProperties]
+class CodeError extends ErrorException {
+    public function __construct(string $message, int $status) {
+        parent::__construct($message);
+        $this->code = $status;
+    }
+    public function revise(int $status): void {
+        $this->code += 1;
+        $this->code = $status;
+    }
+}
+class CodeException extends Exception {
+    public function __construct(int $status) {
+        parent::__construct('ordinary');
+        $this->code = $status;
+    }
+}
+$line = __LINE__ + 1;
+$error = new CodeError('failed', 500);
+$error->detail = str_repeat('detail', 5);
+echo $error->getCode(), ':', $error->getLine() === $line ? 'kept:' : 'lost:';
+$error->revise(600);
+echo $error->getCode(), ':', $error->getLine() === $line ? 'kept:' : 'lost:';
+$line = __LINE__ + 1;
+$ordinary = new CodeException(700);
+echo $ordinary->getCode(), ':', $ordinary->getLine() === $line ? 'kept' : 'lost';
+unset($error, $ordinary);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "500:kept:600:kept:700:kept");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Uncaught reporting reads the dedicated ordinary location after a protected code write.
+#[test]
+fn test_core_review_error_exception_uncaught_creation_line() {
+    let source = "<?php\nclass ReportError extends ErrorException {\npublic function __construct(string $message) { parent::__construct($message); $this->code = 500; }\n}\n$error = new ReportError('uncaught');\nthrow $error;";
+    let line = source.lines().position(|line| line.starts_with("$error = new")).unwrap() + 1;
+    let out = compile_and_run_capture(source);
+    assert!(!out.success);
+    assert!(out.stdout.contains("Fatal error: Uncaught ReportError: uncaught in "), "{}", out.stdout);
+    assert!(out.stdout.ends_with(&format!(":{line}\n")), "{}", out.stdout);
+}
+
+/// Runtime property-name dispatch preserves construction metadata independently of the code slot.
+#[test]
+fn test_core_review_error_exception_dynamic_code_write_preserves_line() {
+    let out = compile_and_run(r#"<?php
+class DynamicCodeError extends ErrorException {
+    public function revise(string $name, int $status): void { $this->$name = $status; }
+}
+$line = __LINE__ + 1;
+$error = new DynamicCodeError('failed');
+$error->revise('code', 503);
+echo $error->getCode(), ':', $error->getLine() === $line ? 'kept' : 'lost';
+"#);
+    assert_eq!(out, "503:kept");
+}
+
+/// Opaque eval property setters cannot clear a native ErrorException's dedicated location.
+#[test]
+fn test_core_review_error_exception_reflection_code_write_preserves_line() {
+    let out = compile_and_run(r#"<?php
+$error = new ErrorException('native');
+$line = __LINE__ - 1;
+$source = '$property = new ReflectionProperty(ErrorException::class, "code");
+$property->setValue($error, 501);
+echo $error->getCode(), ":", $error->getLine() === ' . $line . ' ? "kept" : "lost";
+unset($property);' . ' // ' . $argc;
+eval($source);
+unset($error);
+"#);
+    assert_eq!(out, "501:kept");
+}
+
 /// A throwing warning handler does not strand the already produced instance-method result.
 #[test]
 fn test_core_review_no_discard_throwing_warning() {

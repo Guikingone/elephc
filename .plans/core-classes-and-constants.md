@@ -63,7 +63,7 @@ the symbol registries and compatibility documentation through
 ## Completed verification
 
 - Shared baseline contract gate: Core functions 62/62, class-likes 40/40, constants 89/89.
-- Focused Core tests: 24 class tests, 12 review regressions, 5 constant tests, and 7 diagnostic tests.
+- Focused Core tests: 24 class tests, 16 review regressions, 5 constant tests, and 7 diagnostic tests.
 - Native and opaque eval cover weak object and closure keys, identity, cloning, live iteration,
   sensitive traces, deferred attributes, executable-path aliases, and serialization hooks.
 - Heap-debug regressions cover cycles, key resurrection, throwing value destructors, and
@@ -140,3 +140,20 @@ The broader opaque-eval construction-location gap affects existing Exception as
 well and is task `5b678980`. Separate owner-retention controls using compact
 Exception and stdClass are tasks `f53ab0fe` and `6436dcd1`. The new native and
 bridge regressions each retain their clean-heap assertions.
+
+
+## Second independent Grok correction
+
+- [x] Reproduce protected `code` assignment clearing construction metadata.
+- [x] Reserve ordinary Throwable metadata after PHP properties and the optional dynamic hash.
+- [x] Keep property/GC payload sizes distinct from full allocation sizes.
+- [x] Update allocation, location readers, uncaught reporting, and shallow-copy storage on both architectures.
+- [x] Add scalar, compound, dynamic-name and eval Reflection write regressions.
+
+Grok delegation `74583fbf-67ea-42f2-86fc-b1000645293d` found that the first
+repair still reused the high word of `code`. The second repair gives ordinary
+Throwables a separate metadata word. Dynamic-name scalar writes have an existing
+boxing-owner leak even for a plain user class (Code Journal task `0a0ba2ab`), and
+Reflection metadata retention remains task `7215b48c`. Those functional probes
+check line preservation; the native scalar/compound and native-to-eval location
+probes separately require a clean heap.

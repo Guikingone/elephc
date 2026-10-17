@@ -421,6 +421,25 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Construction metadata is allocation storage, not a declared property or dynamic hash.
+    for (symbol, allocation_size) in [("_class_throwable_line_offsets", false), ("_class_object_allocation_sizes", true)] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n"));
+        if let Some(max_class_id) = max_class_id {
+            for class_id in 0..=max_class_id {
+                let word = match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
+                    (Some(class), Some(name)) => {
+                        let offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset(name, classes);
+                        if allocation_size {
+                            class_object_payload_size(name, class) + usize::from(offset.is_some()) * 8
+                        } else { offset.unwrap_or(0) }
+                    }
+                    _ => 0,
+                };
+                out.push_str(&format!("    .quad {word}\n"));
+            }
+        }
+    }
+
     out.push_str(".globl _class_object_dynamic_prop_flags\n_class_object_dynamic_prop_flags:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
@@ -875,7 +894,7 @@ pub(crate) fn emit_runtime_data_user(
         emit_eval_reflection_source_file_data(&mut out, source_path);
     }
     out.push_str(".p2align 3\n");
-    emit_classes_by_name_table(&mut out, &sorted_classes);
+    emit_classes_by_name_table(&mut out, &sorted_classes, classes);
     if emit_eval_reflection_metadata {
         out.push_str(".p2align 3\n");
         emit_eval_reflection_method_lookup_data(&mut out, &sorted_classes, &sorted_interfaces);
@@ -2799,14 +2818,15 @@ fn emit_callable_function_data(
 ///   [16..24) class_id   — runtime class id (matches the static
 ///                         `class_info.class_id` stamped by
 ///                         `__rt_heap_alloc` callers)
-///   [24..32) obj_size   — `8 + num_props*16 + dyn_props_slot`, the same
-///                         allocation size emit_new_object_core uses
+///   [24..32) obj_size: class id, properties, optional dynamic hash and
+///                         optional ordinary Throwable creation metadata
 ///
 /// The accompanying `_classes_by_name_count` symbol holds the entry count
 /// so the runtime helper can bound its linear scan.
 fn emit_classes_by_name_table(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
+    classes: &HashMap<String, ClassInfo>,
 ) {
     for (class_name, class_info) in sorted_classes {
         out.push_str(&format!(
@@ -2820,7 +2840,8 @@ fn emit_classes_by_name_table(
     out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
     for (class_name, class_info) in sorted_classes {
-        let obj_size = class_object_payload_size(class_name, class_info);
+        let obj_size = class_object_payload_size(class_name, class_info)
+            + usize::from(crate::codegen_support::throwable_layout::ordinary_creation_line_offset(class_name, classes).is_some()) * 8;
         out.push_str(&format!(
             "    .quad _class_by_name_str_{}\n",
             class_info.class_id

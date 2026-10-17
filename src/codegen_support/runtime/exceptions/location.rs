@@ -58,7 +58,7 @@ fn emit_aarch64(emitter: &mut Emitter, stem: &str, file: bool) {
         abi::emit_load_symbol_to_reg(emitter, "x2", "_script_source_file_len", 0);
     } else {
         emitter.instruction("ldr x9, [sp, #16]");                               // recover the original Throwable receiver
-        emitter.instruction("ldr x0, [x9, #32]");                               // return the creation line recorded by allocation
+        emit_creation_line_load(emitter, "x9", "x0", "x10", stem);
     }
     emitter.label(&ready);
     if file { abi::emit_call_label(emitter, "__rt_str_persist"); }
@@ -104,10 +104,54 @@ fn emit_x86_64(emitter: &mut Emitter, stem: &str, file: bool) {
         abi::emit_load_symbol_to_reg(emitter, "rdx", "_script_source_file_len", 0);
     } else {
         emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                    // recover the original Throwable receiver
-        emitter.instruction("mov rax, QWORD PTR [r10 + 32]");                   // return the allocation's creation line
+        emit_creation_line_load(emitter, "r10", "rax", "r11", stem);
     }
     emitter.label(&ready);
     if file { abi::emit_call_label(emitter, "__rt_str_persist"); }
     emitter.instruction("leave");                                               // release scratch and restore the caller's frame
     emitter.instruction("ret");                                                 // return the declared PHP location representation
+}
+
+/// Loads compact or ordinary creation metadata without calls or ownership changes.
+/// The receiver, result, and scratch registers must be distinct; `stem` scopes branch labels.
+pub(crate) fn emit_creation_line_load(
+    emitter: &mut Emitter,
+    object: &str,
+    result: &str,
+    scratch: &str,
+    stem: &str,
+) {
+    debug_assert!(object != result && object != scratch && result != scratch);
+    let compact = format!("{stem}_compact_line");
+    let done = format!("{stem}_line_loaded");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldurb {scratch_w}, [{object}, #-8]", scratch_w = scratch.replacen('x', "w", 1))); // inspect the physical layout without GC metadata bits
+            emitter.instruction(&format!("cmp {scratch}, #6"));                 // compact runtime Throwables retain their fixed metadata word
+            emitter.instruction(&format!("b.eq {compact}"));                    // select the compact payload layout
+            emitter.instruction(&format!("ldr {scratch}, [{object}]"));         // resolve the ordinary class id
+            abi::emit_symbol_address(emitter, result, "_class_throwable_line_offsets");
+            emitter.instruction(&format!("ldr {result}, [{result}, {scratch}, lsl #3]")); // locate metadata beyond PHP property and hash storage
+            emitter.instruction(&format!("cbz {result}, {done}"));              // absent metadata reports an unknown origin
+            emitter.instruction(&format!("ldr {result}, [{object}, {result}]")); // read the ordinary object's dedicated creation line
+            emitter.instruction(&format!("b {done}"));                          // skip the compact payload read
+            emitter.label(&compact);
+            emitter.instruction(&format!("ldr {result}, [{object}, #32]"));     // read the compact Throwable creation line
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("movzx {scratch}, BYTE PTR [{object} - 8]")); // inspect the heap kind without GC or magic bits
+            emitter.instruction(&format!("cmp {scratch}, 6"));                  // compact runtime Throwables retain their fixed metadata word
+            emitter.instruction(&format!("je {compact}"));                      // select the compact payload layout
+            emitter.instruction(&format!("mov {scratch}, QWORD PTR [{object}]")); // resolve the ordinary class id
+            abi::emit_symbol_address(emitter, result, "_class_throwable_line_offsets");
+            emitter.instruction(&format!("mov {result}, QWORD PTR [{result} + {scratch} * 8]")); // locate metadata beyond PHP property and hash storage
+            emitter.instruction(&format!("test {result}, {result}"));           // test whether this layout reserves construction metadata
+            emitter.instruction(&format!("jz {done}"));                         // absent metadata reports an unknown origin
+            emitter.instruction(&format!("mov {result}, QWORD PTR [{object} + {result}]")); // read the ordinary object's dedicated creation line
+            emitter.instruction(&format!("jmp {done}"));                        // skip the compact payload read
+            emitter.label(&compact);
+            emitter.instruction(&format!("mov {result}, QWORD PTR [{object} + 32]")); // read the compact Throwable creation line
+        }
+    }
+    emitter.label(&done);
 }

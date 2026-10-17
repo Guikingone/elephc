@@ -108,19 +108,30 @@ fn throwable_inherits_only_builtin_storage_and_constructor(class_info: &ClassInf
 /// Compact Throwable payload bytes: class_id + message(16) + code(16) + previous(16).
 const THROWABLE_COMPACT_PAYLOAD_SIZE: u64 = 56;
 
-/// Stamps ordinary Throwable storage after defaults have initialized the code slot's high word.
+/// Stamps ordinary Throwable metadata outside every PHP-visible property slot.
 pub(super) fn emit_regular_throwable_creation_line(
     ctx: &mut FunctionContext<'_>,
     source: ValueId,
     object_reg: &str,
+    class_id: u64,
 ) {
+    let offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset_by_id(
+        class_id, &ctx.module.class_infos,
+    ).expect("ordinary Throwable must reserve its construction metadata");
     let creation_line = ctx.function.value(source).and_then(|value| {
         let ValueDef::Instruction { inst, .. } = value.def else { return None };
         ctx.function.instruction(inst)?.span
     }).map_or(0, |span| span.line);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => emit_throwable_creation_line_aarch64(ctx, object_reg, "x9", creation_line),
-        Arch::X86_64 => emit_throwable_creation_line_x86_64(ctx, object_reg, creation_line),
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", i64::from(creation_line));
+            abi::emit_store_to_address(ctx.emitter, "x9", object_reg, offset);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!(                                   // record the allocation line outside mutable PHP property storage
+                "mov QWORD PTR [{object_reg} + {offset}], {creation_line}"
+            ));                                                                 // preserve construction metadata across property writes
+        }
     }
 }
 

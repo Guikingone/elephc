@@ -19,8 +19,8 @@
 //!   An empty message drops the `: ` separator entirely; that is why the length is tested before
 //!   the separator is written, not after.
 //!
-//! - THE ` in <file>:<line>` SUFFIX. The line is the one stamped into the compact Throwable
-//!   payload at `THROWABLE_CREATION_LINE_OFFSET` by whichever emitter allocated it, and the file
+//! - THE ` in <file>:<line>` SUFFIX. The line is stamped into dedicated ordinary metadata
+//!   or the compact Throwable prefix by whichever emitter allocated it, and the file
 //!   is the module's canonical source path in `_script_source_file`. Both are the CONSTRUCTION
 //!   site, not the throw site, because that is what PHP reports: `$e = new RuntimeException(...)`
 //!   on line 2 followed by `throw $e;` on line 5 prints line 2.
@@ -43,7 +43,7 @@
 //!   without a throwable (an internal invariant break); reporting a class read from a null pointer
 //!   would turn a diagnostic into a segfault.
 //!
-//! - Register discipline: only caller-saved scratch (`x9`-`x11`, `r8`-`r10`) holds state across
+//! - Register discipline: only caller-saved scratch (`x9`-`x12`, `r8`-`r10`) holds state across
 //!   the `write` syscalls, and the helper never returns, so no callee-saved register is disturbed.
 //!   The throwable pointer is RE-READ from `_exc_value` at each step of the location block rather
 //!   than parked in a register, because `abi::emit_load_symbol_to_reg` resolves an AArch64 symbol
@@ -62,7 +62,7 @@
 //!   memory access by AAPCS64, and `sub sp, sp, #16` preserves that.
 
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET;
+use super::location::emit_creation_line_load;
 use crate::codegen_support::{abi, emit::Emitter};
 
 /// Byte length of `"Fatal error: Uncaught "`.
@@ -142,10 +142,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
 
     emitter.label("__rt_uncaught_location");
     abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);               // re-read: x9 is AArch64's symbol scratch, so every symbol load below overwrites it
-    emitter.instruction(&format!(
-        "ldr x10, [x9, #{}]",
-        THROWABLE_CREATION_LINE_OFFSET
-    ));                                                                         // creation line stamped by the allocating `new`
+    emit_creation_line_load(emitter, "x9", "x10", "x12", "__rt_uncaught_check");
     emitter.instruction("cbz x10, __rt_uncaught_newline");                      // line 0 means no user `new` behind this throwable: omit rather than invent
     abi::emit_load_symbol_to_reg(emitter, "x11", "_script_source_file_len", 0);
     emitter.instruction("cbz x11, __rt_uncaught_newline");                      // a module with no source path has no filename to print
@@ -163,10 +160,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);               // reload: the file-length load above resolved its symbol through x9
-    emitter.instruction(&format!(
-        "ldr x0, [x9, #{}]",
-        THROWABLE_CREATION_LINE_OFFSET
-    ));                                                                         // itoa takes the line in x0
+    emit_creation_line_load(emitter, "x9", "x0", "x10", "__rt_uncaught_format");
     emitter.instruction("bl __rt_itoa");                                        // returns pointer in x1 and length in x2 — already the write arguments
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
@@ -240,10 +234,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_uncaught_location");
     abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);               // re-read for symmetry with the AArch64 arm, whose x9 scratch makes this mandatory
-    emitter.instruction(&format!(
-        "mov r9, QWORD PTR [r8 + {}]",
-        THROWABLE_CREATION_LINE_OFFSET
-    ));                                                                         // creation line stamped by the allocating `new`
+    emit_creation_line_load(emitter, "r8", "r9", "r10", "__rt_uncaught_check");
     emitter.instruction("test r9, r9");                                         // line 0 means no user `new` behind this throwable: omit rather than invent
     emitter.instruction("jz __rt_uncaught_newline");                            // omit a location when the throwable has no creation line
     abi::emit_load_symbol_to_reg(emitter, "r10", "_script_source_file_len", 0);
@@ -266,10 +257,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the filename/line separator to stderr
     abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);               // reload for symmetry: SysV `syscall` spares r8/r9, but the AArch64 arm cannot
-    emitter.instruction(&format!(
-        "mov rax, QWORD PTR [r8 + {}]",
-        THROWABLE_CREATION_LINE_OFFSET
-    ));                                                                         // itoa takes the line in rax
+    emit_creation_line_load(emitter, "r8", "rax", "r10", "__rt_uncaught_format");
     emitter.instruction("call __rt_itoa");                                      // returns pointer in rax and length in rdx
     emitter.instruction("mov rsi, rax");                                        // move the digits out of rax before it becomes the syscall number
     emitter.instruction("mov edi, 1");                                          // fd = stdout
@@ -345,13 +333,13 @@ mod tests {
         let asm = emitter.output();
         assert!(asm.contains("cbz x2, __rt_uncaught_location"));
         assert!(asm.contains("__rt_uncaught_location:\n"));
-        assert!(asm.contains(&format!("ldr x10, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET)));
+        assert!(asm.contains("ldr x10, [x9, #32]"));
         assert!(asm.contains("cbz x10, __rt_uncaught_newline"));
         assert!(asm.contains("cbz x11, __rt_uncaught_newline"));
         assert!(asm.contains("_uncaught_exc_in"));
         assert!(asm.contains("_script_source_file"));
         assert!(asm.contains("_uncaught_exc_colon"));
-        assert!(asm.contains(&format!("ldr x0, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET)));
+        assert!(asm.contains("ldr x0, [x9, #32]"));
         assert!(asm.contains("bl __rt_itoa"));
     }
 
@@ -394,18 +382,12 @@ mod tests {
         let asm = emitter.output();
         assert!(asm.contains("jz __rt_uncaught_location"));
         assert!(asm.contains("__rt_uncaught_location:\n"));
-        assert!(asm.contains(&format!(
-            "mov r9, QWORD PTR [r8 + {}]",
-            THROWABLE_CREATION_LINE_OFFSET
-        )));
+        assert!(asm.contains("mov r9, QWORD PTR [r8 + 32]"));
         assert_eq!(asm.matches("jz __rt_uncaught_newline").count(), 2);
         assert!(asm.contains("_uncaught_exc_in"));
         assert!(asm.contains("_script_source_file"));
         assert!(asm.contains("_uncaught_exc_colon"));
-        assert!(asm.contains(&format!(
-            "mov rax, QWORD PTR [r8 + {}]",
-            THROWABLE_CREATION_LINE_OFFSET
-        )));
+        assert!(asm.contains("mov rax, QWORD PTR [r8 + 32]"));
         assert!(asm.contains("call __rt_itoa"));
         assert!(asm.contains("mov rsi, rax"));
     }

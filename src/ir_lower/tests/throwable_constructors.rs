@@ -17,14 +17,17 @@ fn ordinary_throwable_creation_lines_are_stamped_on_all_targets() {
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = Target::parse(name).unwrap();
         let module = lower_source_at_for_target(source, Path::new("main.php"), Path::new("."), target);
+        let offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset(
+            "ErrorException", &module.class_infos,
+        ).unwrap();
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         for (function, line) in [("fixedLocation", 3), ("dynamicLocation", 6), ("StaticLocation::make", 10)] {
             let start = format!("@fn name={function} symbol=");
             let end = format!("@endfn name={function}");
             let body = assembly.split_once(&start).unwrap().1.split_once(&end).unwrap().0;
             let stamp = match target.arch {
-                crate::codegen::platform::Arch::AArch64 => format!("mov x9, #{line}\n    str x9, [x0, #32]"),
-                crate::codegen::platform::Arch::X86_64 => format!("mov QWORD PTR [rax + 32], {line}"),
+                crate::codegen::platform::Arch::AArch64 => format!("mov x9, #{line}\n    str x9, [x0, #{offset}]"),
+                crate::codegen::platform::Arch::X86_64 => format!("mov QWORD PTR [rax + {offset}], {line}"),
             };
             assert!(body.contains(&stamp), "{name}: {function} lacks construction line {line}\n{body}");
         }
