@@ -56,7 +56,7 @@ pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
 pub use core_functions::CORE_FUNCTION_NAMES;
 pub use core_constants::core_environment_constant;
-pub use core_attributes::core_attribute_flags;
+pub use core_attributes::{core_attribute_flags, CORE_ATTRIBUTE_CONSTANTS, CORE_ATTRIBUTE_IS_REPEATABLE, CORE_ATTRIBUTE_TARGET_ALL};
 pub use module::PhpModule;
 pub use object_operators::{ClassOperators, ObjectArithmetic, ObjectOrdering, BCMATH_NUMBER_OPERATORS};
 pub use php_version::PhpVersion;

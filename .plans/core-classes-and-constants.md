@@ -407,3 +407,27 @@ cases pass. Both prelude registrations remain active. Generated docs and
 registry/site/EIR audits pass; the comparison page reports Core40/40 classes and
 89/89 constants, with overall coverage163/329 classes. Compiler/clang syntax
 checks pass for all5 targets, and Rustdoc, assembly comments and whitespace pass.
+
+
+## Eighth independent review and eval callback correction
+
+Grok delegation `7ca6cc4a-e657-4a1a-9f8a-d8678caa3a3d` completed NOT CLEAN on
+`f5cb1cbab915d0b7eba6dc53f4eeec41d0ed5e7c` against main `4b5681d5fc`. The
+separate active eval-to-native descriptor wrappers still omitted the ARM caller
+gap. An all-target regression fails before the repair and passes after both
+instance/static wrappers adopt the shared ABI padding. A valid opaque-eval
+callback fixture matches PHP and passes with clean heaps on x86_64 and under
+Linux ARM64 QEMU, including ErrorException and a nine-argument static method.
+
+The review also identified repeated DelayedTargetValidation being accepted.
+Pinned PHP8.5.10 and its official Zend header establish the underlying layout:
+TARGET_CONSTANT=64, TARGET_ALL=127, IS_REPEATABLE=128. DelayedTargetValidation's
+flags127 are correct. The implementation retained the older repeatable bit64,
+so the constant target was mistaken for repeatability. The shared contract now
+owns the complete Attribute constant list and masks, consumed by the prelude,
+AOT/eval declaration validators, and both ReflectionAttribute factories. Native
+and interpreted regressions reject repeated DelayedTargetValidation and
+Deprecated; object/reflection tests assert the PHP8.5 values.
+
+The eighth verdict covers the older published head. A fresh independent Grok
+review, Greptile5/5 and CI acceptance are required on the final repair SHA.

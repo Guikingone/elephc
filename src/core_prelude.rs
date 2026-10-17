@@ -22,13 +22,9 @@ pub(crate) fn core_declarations() -> Program {
         let mut attribute = class("Attribute").final_()
             .prop("flags", TypeExpr::Int, None)
             .method(method("__construct")
-                .param_default("flags", TypeExpr::Int, e_int(63))
+                .param_default("flags", TypeExpr::Int, e_int(elephc_builtin_contract::CORE_ATTRIBUTE_TARGET_ALL))
                 .body(vec![s_prop_assign(crate::synthetic_class::e_this(), "flags", e_var("flags"))]));
-        for (name, value) in [
-            ("TARGET_CLASS", 1), ("TARGET_FUNCTION", 2), ("TARGET_METHOD", 4),
-            ("TARGET_PROPERTY", 8), ("TARGET_CLASS_CONSTANT", 16), ("TARGET_PARAMETER", 32),
-            ("TARGET_ALL", 63), ("IS_REPEATABLE", 64),
-        ] {
+        for &(name, value) in elephc_builtin_contract::CORE_ATTRIBUTE_CONSTANTS {
             attribute = attribute.constant(name, e_int(value));
         }
         let mut declarations = vec![as_attribute(attribute.build(), 1)];
@@ -39,7 +35,7 @@ pub(crate) fn core_declarations() -> Program {
             declarations.push(as_attribute(class(name).final_()
                 .method(method("__construct")).build(), targets));
         }
-        declarations.push(as_attribute(class("DelayedTargetValidation").final_().build(), 127));
+        declarations.push(as_attribute(class("DelayedTargetValidation").final_().build(), elephc_builtin_contract::CORE_ATTRIBUTE_TARGET_ALL));
         let nullable_string = t_nullable(TypeExpr::Str);
         declarations.push(as_attribute(class("Deprecated").final_()
             .readonly_prop("message", nullable_string.clone())

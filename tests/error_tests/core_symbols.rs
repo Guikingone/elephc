@@ -29,6 +29,8 @@ fn test_core_symbols_attribute_target_errors() {
     expect_error("<?php #[AllowDynamicProperties] function bad(): void {}", "cannot target function");
     expect_error("<?php #[NoDiscard] class Bad {}", "cannot target class");
     expect_error("<?php #[NoDiscard] #[NoDiscard] function bad(): int { return 1; }", "must not be repeated");
+    expect_error("<?php #[DelayedTargetValidation] #[DelayedTargetValidation] function bad(): void {}", "must not be repeated");
+    expect_error("<?php #[Deprecated] #[Deprecated] function bad(): int { return 1; }", "must not be repeated");
     expect_error("<?php #[NoDiscard] function bad(): void {}", "NoDiscard cannot apply to a void");
 }
 

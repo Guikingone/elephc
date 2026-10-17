@@ -61,7 +61,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                 if (flags as u64) & attribute_metadata.target() == 0 {
                     return eval_throw_error(&format!("Attribute \"{name}\" cannot target this declaration"), context, values);
                 }
-                if flags & 64 == 0 && attribute_metadata.is_repeated() {
+                if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 && attribute_metadata.is_repeated() {
                     return eval_throw_error(&format!("Attribute \"{name}\" must not be repeated"), context, values);
                 }
             }

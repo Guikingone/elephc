@@ -59,7 +59,7 @@ fn validate_names(names: &[String], target: i64, span: Span) -> Result<(), Compi
     let delayed = names.iter().any(|name| name.trim_start_matches('\\').eq_ignore_ascii_case("DelayedTargetValidation"));
     for (index, name) in names.iter().enumerate() {
         let Some(flags) = flags(name) else { continue };
-        if flags & 64 == 0 && names[..index].iter().any(|previous| previous.eq_ignore_ascii_case(name)) {
+        if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 && names[..index].iter().any(|previous| previous.eq_ignore_ascii_case(name)) {
             return Err(CompileError::new(span, &format!("Attribute \"{name}\" must not be repeated")));
         }
         if !delayed && flags & target == 0 {

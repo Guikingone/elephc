@@ -411,7 +411,8 @@ echo count((new ReflectionClass('BackedEnum'))->getMethods());
 fn test_core_classes_attribute_objects() {
     let out = compile_and_run(r#"<?php
 $attribute = new Attribute();
-echo $attribute->flags, ':', Attribute::TARGET_ALL, ':', Attribute::IS_REPEATABLE, ':';
+echo $attribute->flags, ':', Attribute::TARGET_ALL, ':', Attribute::TARGET_CONSTANT, ':', Attribute::IS_REPEATABLE, ':';
+echo (new ReflectionClass(DelayedTargetValidation::class))->getAttributes(Attribute::class)[0]->newInstance()->flags, ':';
 $deprecated = new Deprecated(since: '1.2', message: 'use replacement');
 echo $deprecated->message, ':', $deprecated->since, ':';
 $nodiscard = new NoDiscard('consume result');
@@ -422,10 +423,11 @@ echo (string)(new ReflectionMethod(WeakReference::class, 'create'))->getParamete
 $source = '$attribute = new Attribute(Attribute::TARGET_METHOD);
 $deprecated = new Deprecated(message: "eval", since: "2");
 echo $attribute->flags, ":", $deprecated->message, ":", $deprecated->since;
-echo ":", class_exists("DelayedTargetValidation") ? "delayed" : "bad";' . ' // ' . $argc;
+echo ":", class_exists("DelayedTargetValidation") ? "delayed" : "bad";
+echo ":", (new Attribute())->flags, ":", Attribute::TARGET_CONSTANT, ":", Attribute::IS_REPEATABLE;' . ' // ' . $argc;
 eval($source);
 "#);
-    assert_eq!(out, "63:63:64:use replacement:1.2:consume result:final:1:object:4:eval:2:delayed");
+    assert_eq!(out, "127:127:64:128:127:use replacement:1.2:consume result:final:1:object:4:eval:2:delayed:127:64:128");
 }
 
 /// Sensitive wrappers retain arbitrary values while excluding them from debug output.

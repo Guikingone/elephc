@@ -97,8 +97,9 @@ through the supported Reflection APIs.
 
 `Attribute` exposes mutable `int $flags`, defaulting to `Attribute::TARGET_ALL`,
 and the `TARGET_CLASS`, `TARGET_FUNCTION`, `TARGET_METHOD`, `TARGET_PROPERTY`,
-`TARGET_CLASS_CONSTANT`, `TARGET_PARAMETER`, `TARGET_ALL`, and `IS_REPEATABLE`
-constants. `Deprecated` exposes readonly nullable `message` and `since`
+`TARGET_CLASS_CONSTANT`, `TARGET_PARAMETER`, `TARGET_CONSTANT`, `TARGET_ALL`, and
+`IS_REPEATABLE` constants. The PHP 8.5 target mask is 127; repeatability uses the
+separate bit 128. `Deprecated` exposes readonly nullable `message` and `since`
 properties; `NoDiscard` exposes a readonly nullable `message` property.
 
 `SensitiveParameterValue(mixed $value)` stores a private readonly value.

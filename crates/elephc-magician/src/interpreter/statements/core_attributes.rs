@@ -10,12 +10,27 @@
 
 use super::*;
 
+#[cfg(test)]
+mod repeatability_tests {
+    use super::*;
+
+    /// The global-constant target bit never permits repeated predefined attributes.
+    #[test]
+    fn php85_constant_target_does_not_make_core_attributes_repeatable() {
+        for name in ["DelayedTargetValidation", "Deprecated"] {
+            let attributes = [EvalAttribute::new(name, None), EvalAttribute::new(name, None)];
+            assert_eq!(validate_eval_core_attribute_targets(&attributes, 2), Err(EvalStatus::RuntimeFatal));
+            assert!(validate_eval_core_attribute_targets(&attributes[..1], 2).is_ok());
+        }
+    }
+}
+
 /// Validates predefined attribute targets using the same masks as the native checker.
 pub(super) fn validate_eval_core_attribute_targets(attributes: &[EvalAttribute], target: i64) -> Result<(), EvalStatus> {
     let delayed = eval_attributes_have_global_builtin_attribute(attributes, "DelayedTargetValidation");
     for (index, attribute) in attributes.iter().enumerate() {
         let Some(flags) = elephc_builtin_contract::core_attribute_flags(attribute.name()) else { continue };
-        if flags & 64 == 0 && attributes[..index].iter().any(|other| other.name().eq_ignore_ascii_case(attribute.name())) {
+        if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 && attributes[..index].iter().any(|other| other.name().eq_ignore_ascii_case(attribute.name())) {
             return Err(EvalStatus::RuntimeFatal);
         }
         if !delayed && flags & target == 0 { return Err(EvalStatus::RuntimeFatal); }

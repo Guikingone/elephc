@@ -226,7 +226,7 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
             use crate::synthetic_class::{e_binop, e_int, e_new_fq, e_str, e_this_prop, s_if, s_throw};
             then_body.push(s_if(e_binop(e_binop(e_this_prop("__target"), BinOp::BitAnd, e_int(flags)), BinOp::StrictEq, e_int(0)),
                 vec![s_throw(e_new_fq("Error", vec![e_str(&format!("Attribute \"{}\" cannot target this declaration", factory.class_name))]))], vec![], None));
-            if flags & 64 == 0 {
+            if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 {
                 then_body.push(s_if(e_this_prop("__is_repeated"),
                     vec![s_throw(e_new_fq("Error", vec![e_str(&format!("Attribute \"{}\" must not be repeated", factory.class_name))]))], vec![], None));
             }
