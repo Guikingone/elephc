@@ -9,6 +9,8 @@
 
 use crate::support::*;
 
+mod review;
+
 /// Property markers accept inherited native and interpreted class and interface contracts.
 #[test]
 fn test_core_classes_property_override_in_opaque_eval() {

@@ -2022,7 +2022,7 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         StmtKind::ConstDecl { value, .. } => audit_expr(value, out),
         // A namespace body is just declarations, and the audit has to reach them: the PDO
         // driver subclasses all live inside one, and stopping here would exempt them.
-        StmtKind::NamespaceBlock { body, .. } => {
+        StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
             for inner in body {
                 audit_stmt(inner, out);
             }

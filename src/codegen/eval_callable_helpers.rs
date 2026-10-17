@@ -331,8 +331,8 @@ fn emit_aarch64_eval_dynamic_callable_invoker(
     emit_aarch64_eval_dynamic_callable_fatal(emitter, data);
     emitter.label(throwable_label);
     emitter.instruction("ldr x0, [sp, #32]");                                   // load the boxed Throwable returned by magician
-    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the Throwable object payload
-    abi::emit_store_reg_to_symbol(emitter, "x1", "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
     emitter.instruction("bl __rt_throw_current");                               // enter the native Throwable unwinder
     emitter.label(done_label);
     emitter.instruction("ldr x0, [sp, #24]");                                   // return the boxed Mixed callback result
@@ -381,8 +381,8 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
     emit_x86_64_eval_dynamic_callable_fatal(emitter, data);
     emitter.label(throwable_label);
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the boxed Throwable returned by magician
-    emitter.instruction("call __rt_mixed_unbox");                               // expose the Throwable object payload
-    abi::emit_store_reg_to_symbol(emitter, "rdi", "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
     emitter.instruction("call __rt_throw_current");                             // enter the native Throwable unwinder
     emitter.label(done_label);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the boxed Mixed callback result

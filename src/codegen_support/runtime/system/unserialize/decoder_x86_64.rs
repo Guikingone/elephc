@@ -27,6 +27,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub rsp, {}", boundary_bytes));               // reserve the handler record plus source/result spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve source pointer across setjmp
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve source length across setjmp
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_legacy_active", 0);
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // checkpoint legacy sharing before a hydration hook can throw
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", previous_handler_offset)); // handler.next = previous exception-handler head
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
@@ -54,6 +56,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.label("__rt_unserialize_mixed_invalid_x");
     emitter.instruction("xor eax, eax");                                        // null result signals a bounded parse failure
     emitter.label("__rt_unserialize_mixed_parsed_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // restore the entry's sharing mode after successful hydration
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_unser_legacy_active", 0);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the parsed box while popping the boundary
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", previous_handler_offset)); // reload the previous exception-handler head
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
@@ -63,6 +67,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("leave");                                               // release the exception boundary and restore the caller frame
     emitter.instruction("ret");                                                 // return the parsed box to the lowering's normal end path
     emitter.label("__rt_unserialize_mixed_throw_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // restore sharing skipped by a callback's nonlocal throw
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_unser_legacy_active", 0);
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", previous_handler_offset)); // reload the handler preceding this internal boundary
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", boundary_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp

@@ -52,6 +52,7 @@ mod preg_split;
 mod preg_strip;
 mod regex_locale;
 mod serialize;
+mod serialization_hooks;
 mod shell_exec;
 mod stack_guard;
 mod unserialize;

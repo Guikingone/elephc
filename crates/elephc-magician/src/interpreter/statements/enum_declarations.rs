@@ -144,7 +144,7 @@ pub(super) fn validate_eval_enum_decl(
     validate_declared_class_builtin_interface_members(&enum_class, context)?;
     validate_declared_class_aot_interface_members(&enum_class, context, values)?;
     validate_concrete_class_builtin_interface_requirements(&enum_class, context)?;
-    validate_concrete_class_aot_interface_requirements(&enum_class, context, values)?;
+    validate_concrete_class_aot_interface_requirements(&enum_class, context, values, true)?;
     validate_concrete_class_requirements(&enum_class, context)
 }
 

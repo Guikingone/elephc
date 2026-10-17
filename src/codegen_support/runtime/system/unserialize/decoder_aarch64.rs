@@ -14,10 +14,11 @@ use crate::codegen_support::try_handlers::{
 
 /// Emits the AArch64 public unserialize entry and its exception-cleanup boundary.
 pub(super) fn emit_entry(emitter: &mut Emitter) {
-    let boundary_bytes = TRY_HANDLER_SLOT_SIZE + 32;
+    let boundary_bytes = TRY_HANDLER_SLOT_SIZE + 48;
     let frame_link_offset = boundary_bytes - 16;
     let source_offset = TRY_HANDLER_SLOT_SIZE;
     let source_len_offset = source_offset + 8;
+    let legacy_offset = source_offset + 16;
 
     // -- entry wrapper: protect begin/end cleanup across hydration-hook throws --
     emitter.blank();
@@ -28,6 +29,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", frame_link_offset));       // establish the protected unserialize wrapper frame
     emitter.instruction(&format!("str x1, [sp, #{}]", source_offset));          // preserve source pointer across setjmp
     emitter.instruction(&format!("str x2, [sp, #{}]", source_len_offset));      // preserve source length across setjmp
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_unser_legacy_active", 0);
+    emitter.instruction(&format!("str x10, [sp, #{legacy_offset}]"));           // checkpoint sharing before any hydration callback runs
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction("str x10, [sp]");                                       // handler.next = previous exception-handler head
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
@@ -53,6 +56,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.label("__rt_unserialize_mixed_invalid");
     emitter.instruction("mov x0, #0");                                          // null result signals a bounded parse failure
     emitter.label("__rt_unserialize_mixed_parsed");
+    emitter.instruction(&format!("ldr x10, [sp, #{legacy_offset}]"));           // recover the entry's sharing mode after hydration
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_unser_legacy_active", 0);
     emitter.instruction(&format!("str x0, [sp, #{}]", source_offset));          // preserve the parsed box while popping the boundary
     emitter.instruction("ldr x10, [sp]");                                       // reload the previous exception-handler head
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
@@ -63,6 +68,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("add sp, sp, #{}", boundary_bytes));           // release the exception boundary frame
     emitter.instruction("ret");                                                 // return the parsed box to the lowering's normal end path
     emitter.label("__rt_unserialize_mixed_throw");
+    emitter.instruction(&format!("ldr x10, [sp, #{legacy_offset}]"));           // recover sharing skipped by a callback's nonlocal throw
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_unser_legacy_active", 0);
     emitter.instruction("ldr x10, [sp]");                                       // reload the handler preceding this internal boundary
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp

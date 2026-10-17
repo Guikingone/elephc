@@ -1,0 +1,209 @@
+//! Purpose:
+//! Regressions for Core declaration and runtime behavior identified during PR review.
+//!
+//! Called from:
+//! - The core_classes codegen integration module.
+//!
+//! Key details:
+//! - Opaque source fragments force runtime eval, including receiver side effects and diagnostics.
+
+use crate::support::*;
+
+/// A throwing warning handler does not strand the already produced instance-method result.
+#[test]
+fn test_core_review_no_discard_throwing_warning() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$source = 'class EvalWarningResult {
+    #[NoDiscard] public function result(): string { return str_repeat("v", 30); }
+}
+set_error_handler(function () { throw new Exception("warning"); });
+$object = new EvalWarningResult();
+try { $object->result(); } catch (Exception $error) { echo $error->getMessage(); }
+restore_error_handler();' . ' // ' . $argc;
+eval($source);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "warning");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Legacy hydration ignores and releases strings or boxed values returned without a void hint.
+#[test]
+fn test_core_review_serializable_hydration_return_cleanup() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StringPacket implements Serializable {
+    public function serialize() { return "x"; }
+    public function unserialize($data) { return str_repeat($data, 30); }
+}
+class MixedPacket implements Serializable {
+    public function serialize() { return "x"; }
+    public function unserialize($data): mixed { return [str_repeat($data, 30)]; }
+}
+unserialize(serialize(new StringPacket()));
+unserialize(serialize(new MixedPacket()));
+echo "clean";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "clean");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Tentative legacy returns are checked at runtime and rejected heap values release their owners.
+#[test]
+fn test_core_review_serializable_result_validation() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ScalarBad implements Serializable {
+    public function serialize(): int { return 7; }
+    public function unserialize($data) {}
+}
+class HeapBad implements Serializable {
+    public function serialize(): array { return [str_repeat("x", 30)]; }
+    public function unserialize($data) {}
+}
+class DynamicBad implements Serializable {
+    public mixed $value = 7;
+    public function serialize(): mixed { return $this->value; }
+    public function unserialize($data) {}
+}
+class EmptyPacket implements Serializable {
+    public function serialize() {}
+    public function unserialize($data) {}
+}
+class NullablePacket implements Serializable {
+    public function serialize(): ?int { return null; }
+    public function unserialize($data): ?int { return null; }
+}
+foreach ([new ScalarBad(), new HeapBad(), new DynamicBad()] as $packet) {
+    try { serialize($packet); }
+    catch (Exception $error) { echo $error->getMessage(), "|"; }
+}
+echo serialize(new EmptyPacket()), serialize(new NullablePacket());
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ScalarBad::serialize() must return a string or NULL|HeapBad::serialize() must return a string or NULL|DynamicBad::serialize() must return a string or NULL|N;N;");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Failed legacy callbacks restore sharing modes before later ordinary wire operations.
+#[test]
+fn test_core_review_serializable_throw_recovery() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowPacket implements Serializable {
+    public function serialize(): ?string { serialize(7); throw new Exception("serialize"); }
+    public function unserialize(string $data): void { unserialize("i:7;"); throw new Exception("hydrate"); }
+}
+try { serialize([new ThrowPacket()]); } catch (Exception $error) { echo $error->getMessage(), ":"; }
+try { unserialize('C:11:"ThrowPacket":1:{x}'); } catch (Exception $error) { echo $error->getMessage(), ":"; }
+$object = new stdClass();
+$wire = serialize([$object, $object]);
+echo $wire, ":";
+$copy = unserialize($wire);
+echo $copy[0] === $copy[1] ? "same" : "bad";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "serialize:hydrate:a:2:{i:0;O:8:\"stdClass\":0:{}i:1;r:2;}:same");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested legacy wire calls share reference indices and retain the outer object identity.
+#[test]
+fn test_core_review_serializable_nested_references() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Packet implements Serializable {
+    public function serialize(): ?string { return serialize(7); }
+    public function unserialize(string $data): void { unserialize($data); }
+}
+$packet = new Packet(); $object = new stdClass();
+$wire = serialize([$packet, $object, $object]);
+echo $wire, ":";
+$copy = unserialize($wire);
+echo $copy[1] === $copy[2] && $copy[1] instanceof stdClass ? "same" : "bad";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "a:3:{i:0;C:6:\"Packet\":4:{i:7;}i:1;O:8:\"stdClass\":0:{}i:2;r:4;}:same");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Legacy callbacks share both existing object identities and newly hydrated reference owners.
+#[test]
+fn test_core_review_serializable_nested_object_identity() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ObjectPacket implements Serializable {
+    public mixed $value;
+    public function serialize(): ?string { return serialize($this->value); }
+    public function unserialize(string $data): void { $this->value = unserialize($data); }
+}
+$object = new stdClass(); $packet = new ObjectPacket(); $packet->value = $object;
+$wire = serialize([$object, $packet, $object, $packet]);
+echo $wire, ":";
+$copy = unserialize($wire);
+echo $copy[0] === $copy[1]->value && $copy[0] === $copy[2] && $copy[1] === $copy[3] ? "same|" : "bad|";
+$wire = serialize([$packet, $object, $packet]);
+echo $wire, ":";
+$copy = unserialize($wire);
+echo $copy[0]->value === $copy[1] && $copy[0] === $copy[2] ? "same" : "bad";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "a:4:{i:0;O:8:\"stdClass\":0:{}i:1;C:12:\"ObjectPacket\":4:{r:2;}i:2;r:2;i:3;r:3;}:same|a:3:{i:0;C:12:\"ObjectPacket\":19:{O:8:\"stdClass\":0:{}}i:1;r:3;i:2;r:2;}:same");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Modern hooks isolate nested wire calls from the enclosing reference registry.
+#[test]
+fn test_core_review_modern_nested_references() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ModernPacket { public function __serialize(): array { serialize(7); return []; } }
+class SleepPacket { public function __sleep(): array { serialize(7); return []; } }
+$object = new stdClass();
+echo serialize([new ModernPacket(), $object, $object]), "\n";
+echo serialize([new SleepPacket(), $object, $object]);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "a:3:{i:0;O:12:\"ModernPacket\":0:{}i:1;O:8:\"stdClass\":0:{}i:2;r:3;}\na:3:{i:0;O:11:\"SleepPacket\":0:{}i:1;O:8:\"stdClass\":0:{}i:2;r:3;}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Instance and dynamic NoDiscard calls warn once without repeating receiver expressions.
+#[test]
+fn test_core_review_no_discard_instance_methods() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$source = 'class EvalDiscarded {
+    #[NoDiscard] public function result(): string { return str_repeat("v", 30); }
+}
+function receiver(): EvalDiscarded { echo "receiver:"; return new EvalDiscarded(); }
+$object = new EvalDiscarded();
+$object->result();
+$_ = $object->result();
+receiver()->result();
+$method = "result";
+$object->$method();
+$null = null; $null?->result();
+echo strlen($_);' . ' // ' . $argc;
+eval($source);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "receiver:30");
+    assert_eq!(out.stderr.matches("The return value of EvalDiscarded::result()").count(), 3, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Legacy Serializable implementations may omit tentative returns with or without the marker.
+#[test]
+fn test_core_review_serializable_legacy_signatures() {
+    let out = compile_and_run(r#"<?php
+class LegacyPacket implements Serializable {
+    public $data = "before";
+    #[ReturnTypeWillChange] public function serialize() { return $this->data; }
+    #[ReturnTypeWillChange] public function unserialize($data) { $this->data = $data; }
+}
+$packet = unserialize(serialize(new LegacyPacket()));
+echo $packet->data, ":";
+$source = 'class EvalLegacyPacket implements Serializable {
+    public function serialize() { return "payload"; }
+    public function unserialize($data) {}
+}
+echo class_exists("EvalLegacyPacket") ? "legacy" : "bad";' . ' // ' . $argc;
+eval($source);
+"#);
+    assert_eq!(out, "before:legacy");
+}

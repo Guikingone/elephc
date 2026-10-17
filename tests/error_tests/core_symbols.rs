@@ -9,6 +9,12 @@
 
 use super::*;
 
+/// Tentative builtin returns do not weaken a user interface's explicitly redeclared contract.
+#[test]
+fn test_core_symbols_serializable_user_return_contract() {
+    expect_error("<?php interface StrictPacket extends Serializable { public function serialize(): ?string; } class Bad implements StrictPacket { public function serialize() { return 'x'; } public function unserialize($data) {} }", "without declaring a compatible return type");
+}
+
 /// Enum engine interfaces reject ordinary classes and explicit implementation by enums.
 #[test]
 fn test_core_symbols_enum_interface_misuse() {

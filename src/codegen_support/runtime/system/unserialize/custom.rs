@@ -9,6 +9,7 @@
 //! - Blocked and unknown classes remain incomplete objects without running user hooks.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::runtime::data::SerializableReturnAbi;
 
 /// Emits C payload dispatch while leaving O property parsing on its existing path.
 pub(super) fn emit_body(emitter: &mut Emitter) {
@@ -64,14 +65,19 @@ pub(super) fn emit_body(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, arg0, object);
     abi::load_at_offset(emitter, arg1, pointer);
     abi::load_at_offset(emitter, scratch, method);
-    abi::emit_call_reg(emitter, scratch);
-    abi::emit_jump(emitter, "__rt_unser_custom_done");
+    abi::emit_load_int_immediate(emitter, arg2, 0);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 3), scratch);
+    abi::emit_call_label(emitter, "__rt_unserialize_invoke_legacy");
+    abi::emit_jump(emitter, "__rt_unser_custom_retire_result");
     emitter.label("__rt_unser_custom_raw");
     abi::load_at_offset(emitter, arg0, object);
     abi::load_at_offset(emitter, arg1, pointer);
     abi::load_at_offset(emitter, arg2, length);
     abi::load_at_offset(emitter, scratch, method);
-    abi::emit_call_reg(emitter, scratch);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 3), scratch);
+    abi::emit_call_label(emitter, "__rt_unserialize_invoke_legacy");
+    emitter.label("__rt_unser_custom_retire_result");
+    emit_retire_result(emitter, object, pointer, method);
     abi::emit_jump(emitter, "__rt_unser_custom_done");
     emitter.label("__rt_unser_custom_incomplete");
     abi::emit_load_int_immediate(emitter, arg0, 0);
@@ -82,6 +88,41 @@ pub(super) fn emit_body(emitter: &mut Emitter) {
     emitter.label("__rt_unser_custom_done");
     abi::emit_jump(emitter, "__rt_unser_at_obj_box");
     emitter.label("__rt_unser_custom_ordinary");
+}
+
+/// Retires ignored legacy hydration returns according to their checked native ownership ABI.
+fn emit_retire_result(emitter: &mut Emitter, object: usize, pointer: usize, value: usize) {
+    let result = abi::int_result_reg(emitter);
+    let string_pointer = abi::string_result_regs(emitter).0;
+    abi::store_at_offset(emitter, result, value);
+    abi::store_at_offset(emitter, string_pointer, pointer);
+    load_class_entry(emitter, object, "_class_serializable_unserialize_return_abi");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp x0, #{}", SerializableReturnAbi::Null as u8)); // void hydration has no returned owner
+            emitter.instruction("b.eq __rt_unser_custom_return_retired");       // ignore an ordinary void return
+            emitter.instruction(&format!("cmp x0, #{}", SerializableReturnAbi::Scalar as u8)); // scalar returns carry no lifetime state
+            emitter.instruction("b.eq __rt_unser_custom_return_retired");       // ignore a tentative scalar return
+            emitter.instruction(&format!("cmp x0, #{}", SerializableReturnAbi::TaggedScalar as u8)); // nullable integers carry no heap ownership
+            emitter.instruction("b.eq __rt_unser_custom_return_retired");       // ignore either inline scalar arm
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp rax, {}", SerializableReturnAbi::Null as u8)); // void hydration has no returned owner
+            emitter.instruction("je __rt_unser_custom_return_retired");         // ignore an ordinary void return
+            emitter.instruction(&format!("cmp rax, {}", SerializableReturnAbi::Scalar as u8)); // scalar returns carry no lifetime state
+            emitter.instruction("je __rt_unser_custom_return_retired");         // ignore a tentative scalar return
+            emitter.instruction(&format!("cmp rax, {}", SerializableReturnAbi::TaggedScalar as u8)); // nullable integers carry no heap ownership
+            emitter.instruction("je __rt_unser_custom_return_retired");         // ignore either inline scalar arm
+        }
+    }
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_unser_custom_return_string");
+    abi::load_at_offset(emitter, result, value);
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_jump(emitter, "__rt_unser_custom_return_retired");
+    emitter.label("__rt_unser_custom_return_string");
+    abi::load_at_offset(emitter, result, pointer);
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    emitter.label("__rt_unser_custom_return_retired");
 }
 
 /// Loads a class-indexed entry using the parser's live raw receiver.

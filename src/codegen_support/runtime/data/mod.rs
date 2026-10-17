@@ -15,6 +15,9 @@ mod fixed;
 pub(crate) mod instanceof;
 mod user;
 mod throwable_previous;
+mod serialization;
+
+pub(crate) use serialization::SerializableReturnAbi;
 
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
@@ -175,6 +178,9 @@ pub(crate) const SERIALIZATION_DENIED_PREFIX: &str = "Serialization of '";
 /// Suffix for PHP's catchable Exception when an object's class forbids serialization, shared by
 /// the `unserialize()` direction.
 pub(crate) const SERIALIZATION_DENIED_SUFFIX: &str = "' is not allowed";
+
+/// PHP's runtime contract for legacy Serializable hook results.
+pub(crate) const SERIALIZABLE_RESULT_SUFFIX: &str = "::serialize() must return a string or NULL";
 /// Prefix for PHP's catchable Exception when `unserialize()` meets a class that forbids it.
 ///
 /// php-src refuses a `ZEND_ACC_NOT_SERIALIZABLE` class right after looking it up, before it

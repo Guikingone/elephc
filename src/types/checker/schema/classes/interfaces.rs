@@ -523,6 +523,9 @@ fn validate_interface_method(
         .methods
         .iter()
         .find(|m| php_symbol_key(&m.name) == method_name);
+    let required_owner = interface_info.method_declaring_interfaces
+        .get(method_name).map(String::as_str).unwrap_or(interface_name);
+    let tentative_return = php_symbol_key(required_owner) == "serializable";
     validate_signature_compatibility(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
@@ -543,7 +546,7 @@ fn validate_interface_method(
                     |owner| declaration_is_source(checker, owner),
                 ),
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return {
+    if required_sig.declared_return && !actual_sig.declared_return && !tentative_return {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -592,8 +595,6 @@ fn validate_interface_method(
         .unwrap_or(&class.name);
     // Only Throwable's original contract has PDO's internal SQLSTATE exception.
     // A user interface can inherit that contract, but its own getCode declaration cannot.
-    let required_owner = interface_info.method_declaring_interfaces
-        .get(method_name).map(String::as_str).unwrap_or(interface_name);
     let pdo_throwable_exemption = php_symbol_key(required_owner) == "throwable"
         && [contract_owner, implementing_class, class.name.as_str()]
         .into_iter()
@@ -612,7 +613,7 @@ fn validate_interface_method(
                 &actual_sig.return_type,
             )
         });
-    if required_sig.declared_return && !return_compatible {
+    if required_sig.declared_return && !return_compatible && !tentative_return {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

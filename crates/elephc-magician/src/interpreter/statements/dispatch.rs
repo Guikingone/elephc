@@ -332,7 +332,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Expr(expr) => {
-            let result = eval_expr(expr, context, scope, values)?;
+            let result = eval_discarded_core_expr(expr, context, scope, values)?;
             let warned = warn_eval_discarded_call(expr, context, values);
             let released = release_expr_result(result, context, values);
             warned?;

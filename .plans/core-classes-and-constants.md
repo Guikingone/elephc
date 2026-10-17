@@ -63,7 +63,7 @@ the symbol registries and compatibility documentation through
 ## Completed verification
 
 - Shared baseline contract gate: Core functions 62/62, class-likes 40/40, constants 89/89.
-- Focused Core tests: 24 class tests, 5 constant tests, and 6 diagnostic tests.
+- Focused Core tests: 24 class tests, 9 review regressions, 5 constant tests, and 7 diagnostic tests.
 - Native and opaque eval cover weak object and closure keys, identity, cloning, live iteration,
   sensitive traces, deferred attributes, executable-path aliases, and serialization hooks.
 - Heap-debug regressions cover cycles, key resurrection, throwing value destructors, and
@@ -79,3 +79,17 @@ the symbol registries and compatibility documentation through
 Existing eval restrictions on the standard stream constants and Reflection metadata retention
 remain documented separately. The general property replacement ordering issue found during
 WeakMap work is tracked as Code Journal task `21f22b33`.
+
+## PR 1870 review corrections
+
+- [x] Fix and verify every distinct failure in the initial CI matrix.
+- [x] Preserve nested serialization reference state and validate legacy hook results.
+- [x] Accept tentative Serializable method signatures without mandatory return hints.
+- [x] Warn for discarded eval instance method results without reevaluating receivers.
+- [x] Regenerate builtin docs and run focused regression and target checks.
+
+The follow-up also protects the eval error-handler C boundary, consumes thrown callable
+boxes, and tests callback exceptions with heap debugging. Local verification includes
+all 95 serialization regressions, the example corpus, the initial CI failures, and
+six focused ARM64 executables. CI and Greptile outcomes for the published commit
+are recorded on PR #1870 and in the shared Code Journal.

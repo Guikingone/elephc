@@ -61,12 +61,21 @@ interfaces, including through user-defined marker interfaces.
 
 ## Legacy serialization
 
-`Serializable` provides `serialize(): ?string` and `unserialize(string $data): void`.
+`Serializable` provides tentative `serialize(): ?string` and
+`unserialize(string $data): void` signatures. Legacy implementations may omit return
+hints, including methods marked `ReturnTypeWillChange`.
 A string result produces PHP's `C:<name-length>:"<class>":<payload-length>:{<bytes>}`
 wire form; null produces `N;`. Payloads can contain braces and NUL bytes.
 Unserialization skips the constructor, preserves repeated object references, and
 honors `allowed_classes`. `__serialize()` takes precedence for writing, while
-`__unserialize()` handles modern `O:` payloads.
+`__unserialize()` handles modern `O:` payloads. A legacy serialize hook returning
+a value other than string or null throws a catchable `Exception`. Results returned
+by a legacy unserialize hook are ignored and released.
+
+Nested wire operations inside legacy hooks share reference indices and object
+identities with the enclosing operation, matching PHP. Calls made by modern
+`__serialize()`, `__sleep()`, `__unserialize()`, or `__wakeup()` hooks use separate
+reference state; the enclosing state is restored even when a hook throws.
 
 ## Attribute objects
 
@@ -85,7 +94,9 @@ properties; `NoDiscard` exposes a readonly nullable `message` property.
 `getValue(): mixed` returns it, while `__debugInfo(): array` hides it from debug
 output. Serialization is refused. `SensitiveParameter` wraps fixed and variadic backtrace
 arguments without changing values read by `func_get_args()`. `NoDiscard` diagnoses
-ignored direct calls; assign to `$_` to consume a deliberately ignored result.
+ignored function and method calls, including direct and dynamic instance calls in
+eval. Warning masks and user handlers apply; assign to `$_` to consume a
+deliberately ignored result.
 `DelayedTargetValidation` defers Core target errors until `newInstance()`.
 Attribute execution and Reflection limits
 are documented in [Classes](classes.md#attributes).

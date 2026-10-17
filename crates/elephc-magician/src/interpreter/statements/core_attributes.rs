@@ -63,6 +63,70 @@ pub(super) fn validate_eval_property_override(
     Err(EvalStatus::RuntimeFatal)
 }
 
+/// Evaluates discarded instance calls once while retaining their receiver through diagnostics.
+pub(super) fn eval_discarded_core_expr(
+    expression: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match expression {
+        EvalExpr::MethodCall { object, method, args }
+        | EvalExpr::NullsafeMethodCall { object, method, args } => {
+            with_eval_operands(&[object], context, scope, values, |receiver, context, scope, values| {
+                if matches!(expression, EvalExpr::NullsafeMethodCall { .. }) && values.is_null(receiver[0])? {
+                    return values.null();
+                }
+                with_eval_method_arguments(args, context, scope, values, |arguments, context, _, values| {
+                    let result = eval_method_call_result_with_evaluated_args(receiver[0], method, arguments, context, values)?;
+                    warn_eval_discarded_instance_result(receiver[0], method, result, context, values)
+                })
+            })
+        }
+        EvalExpr::DynamicMethodCall { object, method, args }
+        | EvalExpr::NullsafeDynamicMethodCall { object, method, args } => {
+            with_eval_operands(&[object], context, scope, values, |receiver, context, scope, values| {
+                if matches!(expression, EvalExpr::NullsafeDynamicMethodCall { .. }) && values.is_null(receiver[0])? {
+                    return values.null();
+                }
+                let method = eval_dynamic_member_name(method, context, scope, values)?;
+                with_eval_method_arguments(args, context, scope, values, |arguments, context, _, values| {
+                    let result = eval_method_call_result_with_evaluated_args(receiver[0], &method, arguments, context, values)?;
+                    warn_eval_discarded_instance_result(receiver[0], &method, result, context, values)
+                })
+            })
+        }
+        _ => eval_expr(expression, context, scope, values),
+    }
+}
+
+/// Warns for an eval method's discarded result and releases it if a warning handler throws.
+fn warn_eval_discarded_instance_result(
+    object: RuntimeCellHandle,
+    method: &str,
+    result: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let warned = (|| {
+        if values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(()); }
+        let identity = values.object_identity(object)?;
+        let Some(class) = context.dynamic_object_class(identity) else { return Ok(()); };
+        let Some((_, method)) = context.class_method(class.name(), method) else { return Ok(()); };
+        if !eval_attributes_have_global_builtin_attribute(method.attributes(), "NoDiscard") { return Ok(()); }
+        let name = format!("{}::{}", class.name(), method.name());
+        eval_dispatch_php_error(
+            &format!("The return value of {name}() should either be used or explicitly ignored"),
+            E_WARNING, context, values,
+        ).map(|_| ())
+    })();
+    if let Err(status) = warned {
+        release_expr_result(result, context, values)?;
+        return Err(status);
+    }
+    Ok(result)
+}
+
 /// Emits the PHP warning for an ignored result from an interpreted marked declaration.
 pub(super) fn warn_eval_discarded_call(
     expression: &EvalExpr,
@@ -79,7 +143,10 @@ pub(super) fn warn_eval_discarded_call(
     };
     if let Some((name, attributes)) = selected {
         if eval_attributes_have_global_builtin_attribute(&attributes, "NoDiscard") {
-            values.warning(&format!("Warning: The return value of {name}() should either be used or explicitly ignored"))?;
+            eval_dispatch_php_error(
+                &format!("The return value of {name}() should either be used or explicitly ignored"),
+                E_WARNING, context, values,
+            )?;
         }
     }
     Ok(())

@@ -649,13 +649,15 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
-    out.push_str(".globl _class_serializable_serialize_boxed\n_class_serializable_serialize_boxed:\n");
-    if let Some(max_class_id) = max_class_id {
-        for class_id in 0..=max_class_id {
-            let boxed = class_info_by_id.get(&class_id)
-                .and_then(|class| class.methods.get("serialize"))
-                .is_some_and(|signature| matches!(signature.return_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)));
-            out.push_str(&format!("    .quad {}\n", u8::from(boxed)));
+    for method in ["serialize", "unserialize"] {
+        out.push_str(&format!(".globl _class_serializable_{method}_return_abi\n_class_serializable_{method}_return_abi:\n"));
+        if let Some(max_class_id) = max_class_id {
+            for class_id in 0..=max_class_id {
+                let representation = class_info_by_id.get(&class_id)
+                    .and_then(|class| class.methods.get(method))
+                    .map_or(super::SerializableReturnAbi::Null, |signature| super::SerializableReturnAbi::of(&signature.return_type));
+                out.push_str(&format!("    .quad {}\n", representation as u8));
+            }
         }
     }
     out.push_str(".globl _class_serializable_unserialize_boxed\n_class_serializable_unserialize_boxed:\n");
