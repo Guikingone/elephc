@@ -9,9 +9,10 @@
 //! - Both internal and C unary argument registers receive the payload on x86_64.
 //! - The caller's handler and active exception are restored before ordinary cleanup resumes.
 //! - The integer result reports a newly caught throw, independently of the pending owner slot.
-//! - Validated scalar Mixed releases keep the original dispatcher without a new handler.
+//! - Validated scalar Mixed and empty typed-array releases keep the original dispatcher without a new handler.
 
 mod scalar_mixed;
+mod empty_array;
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{
@@ -87,6 +88,7 @@ pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, CAUGHT);
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
+    empty_array::emit_candidate(emitter, scalar_mixed::PROTECTED, scalar_mixed::DIRECT);
 }
 
 /// Passes one unary cleanup through the bounded helper, accumulating throws in a caller frame slot.
@@ -133,7 +135,7 @@ mod tests {
         }
     }
 
-    /// Only validated scalar cells bypass handlers, with identical proof gates in direct and PIC code.
+    /// Validated scalar cells bypass handlers with identical proof gates in direct and PIC code.
     #[test]
     fn scalar_mixed_cleanup_gate_covers_all_targets_and_pic_modes() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -164,9 +166,41 @@ mod tests {
                     let value = crate::codegen_support::value_boxing::runtime_value_tag(&ty);
                     assert!(fast.contains(&format!("{tag}{value}")), "{name}, pic={pic}: {ty:?}");
                 }
-                assert_eq!(fast.matches(&format!("{branch} __rt_cleanup_invoke_scalar")).count(), 4,
+                assert_eq!(fast.matches(&format!("{branch} __rt_cleanup_invoke_direct")).count(), 4,
                     "{name}, pic={pic}: only four scalar tags qualify");
             }
         }
     }
+    /// Typed empty arrays qualify by live storage and length, even with reserved capacity.
+    #[test]
+    fn empty_array_cleanup_gate_covers_all_targets_and_pic_modes() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for pic in [false, true] {
+                let target = Target::parse(name).unwrap();
+                let mut emitter = Emitter::new(target);
+                emitter.pic_data_refs = pic;
+                emit_cleanup_invoke(&mut emitter);
+                let asm = emitter.output();
+                let (_, probe) = asm.split_once(&format!("{}:", empty_array::CANDIDATE)).unwrap();
+                assert!(probe.contains("__rt_decref_array"), "{name}, pic={pic}");
+                assert!(probe.contains("_heap_buf") && probe.contains("_heap_off"), "{name}, pic={pic}");
+                assert!(!probe.contains("_exc_value") && !probe.contains("setjmp"), "{name}, pic={pic}");
+                assert!(probe.contains(scalar_mixed::PROTECTED) && probe.contains(scalar_mixed::DIRECT),
+                    "{name}, pic={pic}");
+                let required: &[&str] = if target.arch == Arch::AArch64 {
+                    &["ldr w10, [x1, #-12]", "cmp w10, #24", "cmp x10, #2",
+                        "ldr x10, [x1]", "cbnz x10, __rt_cleanup_invoke_protected"]
+                } else {
+                    &["cmp DWORD PTR [rsi - 12], 0", "cmp DWORD PTR [rsi - 16], 24",
+                        "cmp r10d, 2", "cmp QWORD PTR [rsi], 0", "jne __rt_cleanup_invoke_protected"]
+                };
+                for instruction in required {
+                    assert!(probe.contains(instruction), "{name}, pic={pic}: {instruction}");
+                }
+                assert!(!probe.contains("[x1, #8]") && !probe.contains("[rsi + 8]"),
+                    "{name}, pic={pic}: reserved capacity is not logical child ownership");
+            }
+        }
+    }
+
 }

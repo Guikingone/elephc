@@ -126,3 +126,61 @@ gc_collect_cycles();
 echo ScalarCleanupCycle::$freed;
 "#, "1");
 }
+
+/// Empty typed array arguments, aliases and reference cells retain their ordinary owner counts.
+#[test]
+fn test_scalar_mixed_cleanup_empty_array_aliases_and_arguments() {
+    check_scalar_cleanup(r#"<?php
+function emptyCount(array $value): int { return count($value); }
+$empty = [];
+$copy = $empty;
+echo emptyCount($empty), ':';
+unset($empty);
+echo count($copy), ':';
+$reference =& $copy;
+unset($copy);
+echo count($reference);
+unset($reference);
+"#, "0:0:0");
+}
+
+/// Empty release preserves an outer throw while nonempty arrays still catch child exceptions.
+#[test]
+fn test_scalar_mixed_cleanup_empty_array_pending_and_nonempty_fallback() {
+    check_scalar_cleanup(r#"<?php
+class EmptyCleanupBomb {
+    public function __destruct() { echo 'drop:'; throw new RuntimeException('cleanup'); }
+}
+try {
+    try { throw new RuntimeException('outer'); }
+    finally { $empty = []; $alias = $empty; unset($empty); unset($alias); }
+} catch (RuntimeException $outerError) { echo $outerError->getMessage(), '|'; }
+$values = [new EmptyCleanupBomb()];
+try { unset($values); }
+catch (RuntimeException $cleanupError) { echo $cleanupError->getMessage(); }
+gc_collect_cycles();
+"#, "outer|drop:cleanup");
+}
+
+/// Empty arrays created during a cycle destructor preserve the collector's suppression state.
+#[test]
+fn test_scalar_mixed_cleanup_empty_array_during_cycle_destructor() {
+    check_scalar_cleanup(r#"<?php
+class EmptyCleanupCycle {
+    public mixed $next = null;
+    public static int $freed = 0;
+    public function __destruct() {
+        $empty = [];
+        $alias = $empty;
+        unset($empty);
+        unset($alias);
+        self::$freed++;
+    }
+}
+$value = new EmptyCleanupCycle();
+$value->next = $value;
+unset($value);
+gc_collect_cycles();
+echo EmptyCleanupCycle::$freed;
+"#, "1");
+}

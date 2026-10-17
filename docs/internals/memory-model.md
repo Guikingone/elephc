@@ -363,8 +363,11 @@ managed heap storage, a live owner count, the Mixed heap kind, and an int, float
 bool, or null runtime tag. It invokes that same callback pointer, so ordinary
 refcounting and collector sweep suppression remain authoritative. This path
 reports no new exception and preserves the enclosing pending exception state.
-Strings, containers, objects, resources, reference cells, unknown tags, and
-other callbacks use the protected cleanup boundary.
+A separate proof authenticates the exact `__rt_decref_array` callback and a
+live indexed array with logical length zero. Reserved capacity owns no child
+slots, so the original dispatcher can release that array without a new handler.
+Hash-promoted storage, nonempty arrays, strings, objects, resources, reference
+cells, unknown tags, and other callbacks use the protected cleanup boundary.
 
 Interpreter value releases and native-call argument cleanup use a versioned
 release boundary with an owned Throwable accumulator. Releasing a group finishes

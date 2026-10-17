@@ -16,8 +16,8 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::value_boxing::runtime_value_tag;
 use crate::types::PhpType;
 
-const PROTECTED: &str = "__rt_cleanup_invoke_protected";
-const SCALAR: &str = "__rt_cleanup_invoke_scalar";
+pub(super) const PROTECTED: &str = "__rt_cleanup_invoke_protected";
+pub(super) const DIRECT: &str = "__rt_cleanup_invoke_direct";
 
 /// Emits a conservative scalar gate, then resumes the existing protected path on rejection.
 pub(super) fn emit_fast_path(emitter: &mut Emitter) {
@@ -26,8 +26,8 @@ pub(super) fn emit_fast_path(emitter: &mut Emitter) {
         Arch::X86_64 => emit_x86_gate(emitter),
     }
 
-    // -- scalar cells cannot call PHP, so retain the original exception state --
-    emitter.label(SCALAR);
+    // -- proved values cannot call PHP, so retain the original exception state --
+    emitter.label(DIRECT);
     abi::emit_frame_prologue(emitter, 16);
     let result = abi::int_result_reg(emitter);
     let callback = if emitter.target.arch == Arch::AArch64 { "x9" } else { "r11" };
@@ -49,7 +49,7 @@ fn emit_aarch64_gate(emitter: &mut Emitter) {
     // -- authenticate the only release entry with a proven scalar path --
     abi::emit_symbol_address(emitter, "x9", "__rt_decref_any");
     emitter.instruction("cmp x0, x9");                                          // arbitrary cleanup callbacks retain their exception boundary
-    emitter.instruction(&format!("b.ne {PROTECTED}"));                          // reject every other callback before inspecting its payload
+    emitter.instruction(&format!("b.ne {}", super::empty_array::CANDIDATE));    // other callbacks need their own proof before any header read
 
     // -- require a live managed Mixed cell before reading its runtime tag --
     abi::emit_symbol_address(emitter, "x9", "_heap_buf");
@@ -72,7 +72,7 @@ fn emit_aarch64_gate(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x1]");                                       // borrow the canonical runtime value tag
     for ty in [PhpType::Int, PhpType::Float, PhpType::Bool, PhpType::Void] {
         emitter.instruction(&format!("cmp x10, #{}", runtime_value_tag(&ty)));  // admit only PHP scalar tags with no child ownership
-        emitter.instruction(&format!("b.eq {SCALAR}"));                         // the original decref dispatcher can release this cell without PHP callbacks
+        emitter.instruction(&format!("b.eq {DIRECT}"));                         // the original decref dispatcher can release this cell without PHP callbacks
     }
     emitter.instruction(&format!("b {PROTECTED}"));                             // unknown and heap-backed tags keep full exception protection
 }
@@ -82,7 +82,7 @@ fn emit_x86_gate(emitter: &mut Emitter) {
     // -- authenticate the exact native release callback --
     abi::emit_symbol_address(emitter, "r9", "__rt_decref_any");
     emitter.instruction("cmp rdi, r9");                                         // arbitrary callbacks cannot inherit the scalar release proof
-    emitter.instruction(&format!("jne {PROTECTED}"));                           // preserve protection for every other unary cleanup
+    emitter.instruction(&format!("jne {}", super::empty_array::CANDIDATE));     // other callbacks need their own proof before any header read
 
     // -- validate the payload header without changing the incoming arguments --
     abi::emit_symbol_address(emitter, "r9", "_heap_buf");
@@ -108,7 +108,7 @@ fn emit_x86_gate(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // borrow the current runtime tag before releasing the cell
     for ty in [PhpType::Int, PhpType::Float, PhpType::Bool, PhpType::Void] {
         emitter.instruction(&format!("cmp r10, {}", runtime_value_tag(&ty)));   // admit only scalars that cannot own a throwing child
-        emitter.instruction(&format!("je {SCALAR}"));                           // use the same decref semantics without a fresh jump buffer
+        emitter.instruction(&format!("je {DIRECT}"));                           // use the same decref semantics without a fresh jump buffer
     }
     emitter.instruction(&format!("jmp {PROTECTED}"));                           // strings, resources, containers and unknown tags stay protected
 }
