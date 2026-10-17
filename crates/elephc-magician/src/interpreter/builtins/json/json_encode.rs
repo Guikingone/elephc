@@ -11,6 +11,9 @@
 //!   `json_decode` instead of a separate area-level helper module.
 
 use super::super::super::*;
+
+mod objects;
+use objects::eval_json_encode_append_object;
 eval_builtin! {
     contract: "json_encode",
     area: Json,
@@ -342,86 +345,6 @@ fn eval_json_encode_append_assoc(
         )?;
         eval_json_encode_append_colon(flags, output);
         let element = values.array_iter_value(value, position)?;
-        eval_json_encode_append(
-            element,
-            context,
-            values,
-            flags,
-            depth_limit,
-            depth + 1,
-            arrays_seen,
-            error,
-            output,
-        )?;
-    }
-    if pretty && len > 0 {
-        output.push(b'\n');
-        eval_json_encode_pretty_indent(output, depth);
-    }
-    output.push(b'}');
-    arrays_seen.pop();
-    Ok(())
-}
-
-/// Appends one eval runtime object as a JSON object.
-fn eval_json_encode_append_object(
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-    flags: i64,
-    depth_limit: usize,
-    depth: usize,
-    arrays_seen: &mut Vec<usize>,
-    error: &mut Option<EvalJsonEncodeError>,
-    output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
-    let is_enum = dynamic_object_is_a(value, "UnitEnum", false, context, values)?
-        .map_or_else(|| values.object_is_a(value, "UnitEnum", false), Ok)?;
-    if is_enum {
-        let is_serializable = dynamic_object_is_a(value, "JsonSerializable", false, context, values)?
-            .map_or_else(|| values.object_is_a(value, "JsonSerializable", false), Ok)?;
-        if !is_serializable {
-            let is_backed = dynamic_object_is_a(value, "BackedEnum", false, context, values)?
-                .map_or_else(|| values.object_is_a(value, "BackedEnum", false), Ok)?;
-            if !is_backed {
-                *error = Some(EvalJsonEncodeError {
-                    code: EVAL_JSON_ERROR_NON_BACKED_ENUM,
-                    message: "Non-backed enums have no default serialization",
-                });
-                output.push(b'0');
-                return Ok(());
-            }
-        }
-    }
-    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
-    let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
-    output.push(b'{');
-    let len = values.object_property_len(value)?;
-    if pretty && len > 0 {
-        output.push(b'\n');
-    }
-    for position in 0..len {
-        if position > 0 {
-            output.push(b',');
-            if pretty {
-                output.push(b'\n');
-            }
-        }
-        if pretty {
-            eval_json_encode_pretty_indent(output, depth + 1);
-        }
-        let key = values.object_property_iter_key(value, position)?;
-        let key_bytes = values.string_bytes(key)?;
-        eval_json_encode_append_string(
-            &key_bytes,
-            flags & !EVAL_JSON_NUMERIC_CHECK,
-            EvalJsonStringPosition::Key,
-            error,
-            output,
-        )?;
-        eval_json_encode_append_colon(flags, output);
-        let property = std::str::from_utf8(&key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let element = values.property_get(value, property)?;
         eval_json_encode_append(
             element,
             context,

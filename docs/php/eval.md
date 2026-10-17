@@ -1151,9 +1151,12 @@ ignore/substitute modes where applicable, `JSON_BIGINT_AS_STRING` for
 overflowing integer tokens in `json_decode()`, and `JsonException` through
 `JSON_THROW_ON_ERROR`.
 
-Both unescaped flags are required to keep U+2028 and U+2029 literal. Unit enums
-without custom serialization fail with `JSON_ERROR_NON_BACKED_ENUM` (11), or
-encode as `0` when partial output is requested.
+Both unescaped flags are required to keep U+2028 and U+2029 literal. Backed enum
+cases encode as their integer or string value. Enum `JsonSerializable` callbacks
+run before either default enum rule, and their returned value is encoded
+recursively with the outer flags. Unit enums without custom serialization fail
+with `JSON_ERROR_NON_BACKED_ENUM` (11), or encode as `0` when partial output is
+requested.
 
 Eval local filesystem calls operate on host filesystem paths and support the
 implemented stream-wrapper paths, including `file://`, `php://memory`,

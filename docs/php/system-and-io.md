@@ -338,6 +338,10 @@ The full PHP `JSON_*` family is exposed and can be combined with the bitwise OR 
 Without both flags, those characters use `\u2028` and `\u2029` escapes,
 including in object keys and nested values.
 
+Backed enum cases encode as their integer or string backing value, including in
+nested containers. An enum implementing `JsonSerializable` uses `jsonSerialize()`
+instead, for both unit and backed cases.
+
 Encoding a unit enum without `JsonSerializable` fails with
 `JSON_ERROR_NON_BACKED_ENUM` (11) and the message
 `"Non-backed enums have no default serialization"`.

@@ -386,3 +386,100 @@ echo json_encode("ok") . ":" . json_last_error();
     execute_program(&program, &mut scope, &mut values).expect("execute JSON enum");
     assert_eq!(values.output, "false:11:Non-backed enums have no default serialization\n[0]:11\n{\"state\":0}\n11:Non-backed enums have no default serialization\n\"ok\":0");
 }
+
+/// Eval encodes int-backed and string-backed enum cases as scalars in all container shapes.
+#[test]
+fn execute_program_json_backed_enum_scalar_values() {
+    let program = parse_fragment(br#"
+enum EvalJsonIntCase: int { case N = 7; case Zero = 0; case Negative = -3; }
+enum EvalJsonStringCase: string { case Hi = "hi"; case Numeric = "12"; case Escaped = "a/b"; }
+echo json_encode(EvalJsonIntCase::N) . ":" . json_encode(EvalJsonIntCase::Zero) . ":" . json_encode(EvalJsonIntCase::Negative) . "\n";
+echo json_encode(EvalJsonStringCase::Hi) . ":" . json_encode(EvalJsonStringCase::Numeric) . "\n";
+echo json_encode([EvalJsonIntCase::N, EvalJsonStringCase::Hi, ["case" => EvalJsonIntCase::Zero]]) . "\n";
+echo json_encode(["case" => EvalJsonStringCase::Escaped], JSON_UNESCAPED_SLASHES) . "\n";
+echo json_encode(EvalJsonStringCase::Numeric, JSON_NUMERIC_CHECK) . ":" . json_last_error() . "\n";
+echo json_encode([EvalJsonIntCase::N, EvalJsonStringCase::Hi], 0, 1) . ":" . json_last_error();
+"#).expect("parse JSON backed enum fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute JSON backed enum");
+    assert_eq!(values.output, "7:0:-3\n\"hi\":\"12\"\n[7,\"hi\",{\"case\":0}]\n{\"case\":\"a/b\"}\n12:0\n[7,\"hi\"]:0");
+}
+
+/// Eval invokes custom enum serializers before the unit/backed default and preserves outer flags.
+#[test]
+fn execute_program_json_enum_custom_serialization() {
+    let program = parse_fragment(br#"
+enum EvalJsonCustomUnit implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { echo "called:"; json_encode(INF); return "ready"; }
+}
+enum EvalJsonCustomInt: int implements JsonSerializable {
+    case N = 7;
+    public function jsonSerialize(): mixed { return ["state" => "a/b"]; }
+}
+echo json_encode(EvalJsonCustomUnit::Ready) . ":" . json_last_error() . "\n";
+echo json_encode(["unit" => EvalJsonCustomUnit::Ready, "backed" => EvalJsonCustomInt::N], JSON_UNESCAPED_SLASHES) . ":" . json_last_error();
+"#).expect("parse JSON custom enum fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute JSON custom enum");
+    assert_eq!(values.output, "called:\"ready\":0\ncalled:{\"unit\":\"ready\",\"backed\":{\"state\":\"a/b\"}}:0");
+}
+
+/// Custom enum callbacks support self returns, reject recursion, and propagate user exceptions.
+#[test]
+fn execute_program_json_enum_serializer_self_recursion_and_throw() {
+    let program = parse_fragment(br#"
+enum EvalJsonSelf implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { return $this; }
+}
+enum EvalJsonRecursive implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { return [$this]; }
+}
+enum EvalJsonThrowing implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { throw new Exception("serializer"); }
+}
+echo json_encode(EvalJsonSelf::Ready) . ":" . json_last_error() . "\n";
+echo json_encode(EvalJsonRecursive::Ready, JSON_PARTIAL_OUTPUT_ON_ERROR) . ":" . json_last_error() . "\n";
+try { json_encode(EvalJsonRecursive::Ready, JSON_THROW_ON_ERROR); }
+catch (JsonException $e) { echo $e->getCode() . ":" . $e->getMessage() . "\n"; }
+try { json_encode(EvalJsonThrowing::Ready, JSON_PARTIAL_OUTPUT_ON_ERROR); }
+catch (Exception $e) { echo "caught:"; }
+echo json_encode(EvalJsonSelf::Ready) . ":" . json_last_error();
+"#).expect("parse enum serializer control flow");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute enum serializer control flow");
+    assert_eq!(values.output, "{\"name\":\"Ready\"}:0\n[null]:6\n6:Recursion detected\ncaught:{\"name\":\"Ready\"}:0");
+}
+
+/// Serializer return owners are retired after successful encoding and a nested depth failure.
+#[test]
+fn execute_program_json_enum_serializer_releases_return_owner() {
+    for (body, fail) in [("[1]", false), ("[[1]]", true)] {
+        let source = format!(r#"
+enum EvalJsonOwned implements JsonSerializable {{
+    case Ready;
+    public function jsonSerialize(): mixed {{ return {body}; }}
+}}
+return json_encode(EvalJsonOwned::Ready, 0, 1);
+"#);
+        let program = parse_fragment(source.as_bytes()).expect("parse owned serializer result");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values);
+        assert_eq!(result.is_err(), fail);
+        let returned = values.values.iter().filter_map(|(id, value)| {
+            let FakeValue::Array(children) = value else { return None; };
+            let first = children.first()?;
+            let nested = matches!(values.get(*first), FakeValue::Array(_));
+            (nested == fail).then_some(*id)
+        }).collect::<Vec<_>>();
+        assert_eq!(returned.len(), 1);
+        assert_eq!(values.cell_owners[&returned[0]], 0, "{source}");
+    }
+}

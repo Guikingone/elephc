@@ -1,5 +1,5 @@
 //! Purpose:
-//! Cross-assembles JSON Unicode flag and unit enum handling on every supported target.
+//! Cross-assembles JSON Unicode flag and enum handling on every supported target.
 //!
 //! Called from:
 //! - Focused `cargo test --lib json_compatibility` runs and target CI.

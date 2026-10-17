@@ -98,3 +98,33 @@ echo json_encode(JsonCustomUnit::Ready, JSON_THROW_ON_ERROR) . ":" . json_last_e
     );
     assert_eq!(out, "\"ready\":0");
 }
+
+/// Backed enums encode as their scalar values, including boxed values nested in containers.
+#[test]
+fn test_json_backed_enum_scalar_values() {
+    let out = compile_and_run(r#"<?php
+enum JsonIntCase: int { case N = 7; case Zero = 0; case Negative = -3; }
+enum JsonStringCase: string { case Hi = "hi"; case Numeric = "12"; case Escaped = "a/b"; }
+echo json_encode(JsonIntCase::N) . ":" . json_encode(JsonIntCase::Zero) . ":" . json_encode(JsonIntCase::Negative) . "\n";
+echo json_encode(JsonStringCase::Hi) . ":" . json_encode(JsonStringCase::Numeric) . "\n";
+echo json_encode([JsonIntCase::N, JsonStringCase::Hi, ["case" => JsonIntCase::Zero]]) . "\n";
+echo json_encode(["case" => JsonStringCase::Escaped], JSON_UNESCAPED_SLASHES) . "\n";
+echo json_encode(JsonStringCase::Numeric, JSON_NUMERIC_CHECK) . ":" . json_last_error() . "\n";
+echo json_encode([JsonIntCase::N, JsonStringCase::Hi], 0, 1) . ":" . json_last_error();
+"#);
+    assert_eq!(out, "7:0:-3\n\"hi\":\"12\"\n[7,\"hi\",{\"case\":0}]\n{\"case\":\"a/b\"}\n12:0\n[7,\"hi\"]:0");
+}
+
+/// JsonSerializable overrides a backed enum's stored scalar value.
+#[test]
+fn test_json_backed_enum_custom_serialization() {
+    let out = compile_and_run(r#"<?php
+enum JsonCustomIntCase: int implements JsonSerializable {
+    case N = 7;
+    public function jsonSerialize(): mixed { return "ready"; }
+}
+echo json_encode(JsonCustomIntCase::N) . "\n";
+echo json_encode(["case" => JsonCustomIntCase::N], JSON_THROW_ON_ERROR) . ":" . json_last_error();
+"#);
+    assert_eq!(out, "\"ready\"\n{\"case\":\"ready\"}:0");
+}

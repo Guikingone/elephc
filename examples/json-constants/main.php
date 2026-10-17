@@ -15,5 +15,15 @@ if ($result === false && json_last_error() === JSON_ERROR_NON_BACKED_ENUM) {
     echo "Export failed: " . json_last_error_msg() . "\n";
 }
 
-// Choose a stable wire value for the public API.
-echo json_encode(["state" => "pending"]) . "\n";
+// A backed enum provides a stable scalar wire value for the public API.
+enum ExportWireState: string {
+    case Pending = "pending";
+}
+echo json_encode(["state" => ExportWireState::Pending]) . "\n";
+
+// Custom serialization overrides the default for either enum kind.
+enum ExportMessage implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { return "ready"; }
+}
+echo json_encode(ExportMessage::Ready) . "\n";
