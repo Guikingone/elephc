@@ -72,6 +72,10 @@ mod literal_builtin_elements;
 mod mixed_receiver_property_writes;
 #[path = "runtime_gc/assoc_literal_spreads.rs"]
 mod assoc_literal_spreads;
+mod nested_nullable_property_compound;
+#[path = "runtime_gc/nullable_property_writes.rs"]
+mod nullable_property_writes;
+mod property_source_destructor_owners;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
 #[path = "runtime_gc/boxed_property_defaults.rs"]
