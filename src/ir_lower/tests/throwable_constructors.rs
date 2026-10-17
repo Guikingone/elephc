@@ -10,6 +10,25 @@
 use super::*;
 use crate::ir::{Effects, Immediate, IrHeapKind, IrType, RuntimeCallTarget};
 
+/// A lexical parent call alone keeps its builtin constructor dependency on every target.
+#[test]
+fn parent_static_calls_retain_builtin_throwable_constructors_on_all_targets() {
+    let source = r#"<?php
+class ParentDependency extends Exception {
+    public function reset(): void { parent::__construct('fresh'); }
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        assert!(module.class_methods.iter().any(|method| method.name == "Exception::__construct"), "{name}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let symbol = crate::names::method_symbol("Exception", "__construct");
+        assert!(assembly.contains(&format!("{symbol}:")), "{name}: missing referenced parent symbol");
+    }
+}
+
 /// Fixed and dynamic ordinary Throwable allocation retain the new-expression line on every target.
 #[test]
 fn ordinary_throwable_creation_lines_are_stamped_on_all_targets() {

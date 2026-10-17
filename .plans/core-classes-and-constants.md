@@ -63,7 +63,7 @@ the symbol registries and compatibility documentation through
 ## Completed verification
 
 - Shared baseline contract gate: Core functions 62/62, class-likes 40/40, constants 89/89.
-- Focused Core tests: 24 class tests, 21 review regressions, 5 constant tests, and 7 diagnostic tests.
+- Focused Core tests: 24 class tests, 23 review regressions, 5 constant tests, and 7 diagnostic tests.
 - Native and opaque eval cover weak object and closure keys, identity, cloning, live iteration,
   sensitive traces, deferred attributes, executable-path aliases, and serialization hooks.
 - Heap-debug regressions cover cycles, key resurrection, throwing value destructors, and
@@ -209,3 +209,50 @@ ErrorException/inherited-constructor cases and three argument-capture unit tests
 pass. The new native and opaque-eval regressions agree with PHP and leave clean
 heaps, including previous-object aliasing and the six-argument limit. The compiler
 build, complete all-target assembly, documentation audits, and diff hygiene pass.
+
+
+## Fifth independent Grok and CI correction
+
+- [x] Reproduce dynamic associative constructor unpacks failing EIR arity.
+- [x] Reproduce a later named argument losing an explicitly supplied message.
+- [x] Preserve keyed reads and compute supplied optional positions for compiler collectors.
+- [x] Discover builtin method dependencies from lexical and explicit static calls.
+- [x] Reproduce the CI parent-symbol failure locally and verify all five dependency paths.
+- [x] Complete focused native/eval and CI failure regressions and target checks.
+- [ ] Obtain fresh Grok and Greptile reviews on the replacement published head.
+
+Grok delegation `1a49c824-40d3-4777-b56b-b5787d6dd4d5` returned NOT CLEAN on
+`8ce1067919`. A hidden variadic had excluded the ordinary associative binding path;
+`new ErrorException(...$args)` forwarded one array instead of seven physical
+arguments. The dynamic prefix plus later named path also supplied count zero,
+restoring the old message despite an explicit replacement. The shared EIR helpers
+now bind the visible parameters and derive the count from present keys and
+explicitly supplied parameter positions.
+
+CI run `39062619662` exposed a second integration defect: after removing the
+constructor bypass, static parent calls needed their builtin method dependencies
+emitted even when no parent object was instantiated. Curl-free literal eval and
+web/profile fixtures linked an ErrorException body without Exception's parent
+constructor. All 19 failed jobs inspected before cancellation shared this one
+undefined symbol. The dependency scan now includes static calls. The all-target
+EIR/assembly regression passes, as do all three previously failing CLI profile
+cases and the curl-free eval regression.
+
+The heterogeneous dynamic-prefix checker limit reproduces with a plain user
+class on unchanged planner/checker paths and remains task `1edb64c8`. It is
+separate from the confirmed count-zero case, whose typed previous prefix compiles
+and printed `kept:7` instead of PHP's `fresh:7` before the repair.
+
+Final focused verification passes all24 ErrorException, inherited-constructor,
+optional-frame, curl-free eval, and literal-eval codegen regressions in84.538s.
+The two associative native/eval cases also pass independently with clean heaps.
+Three CLI web/profile regressions pass. Complete runtime and representative
+associative constructor programs assemble for all five targets, including an
+array returned by a function and a later named-argument prefix. The final compiler
+build is warning-free; builtin docs generation and all documentation, site, EIR
+boundary, Rustdoc, and whitespace checks pass without generated registry changes.
+
+An exploratory plain-function argument collector reaches an existing Iterable
+representation diagnostic and is tracked separately as task `e93eafd7`; it is not
+claimed as covered by the constructor repair. Final review and CI results are
+recorded against the immutable published SHA in Code Journal and on PR1870.

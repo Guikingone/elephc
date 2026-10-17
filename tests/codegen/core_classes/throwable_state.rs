@@ -40,6 +40,29 @@ unset($error, $previous, $replacement);
 
 const EXPECTED: &str = "kept:7:same:a.php:3:1;:7:same:a.php:3:1;again:7:same:a.php:3:1;changed:9:same:a.php:3:1;alias:9:same:a.php:3:1;extra;ErrorException::__construct() expects at most 6 arguments, 7 given";
 
+const ASSOC_SOURCE: &str = r#"
+function coreAssocArguments() { echo 'args;'; return ['message' => 'factory', 'code' => 8]; }
+$values = ['message' => 'fresh', 'code' => 4];
+$error = new ErrorException(...$values);
+echo $error->getMessage(), ':', $error->getCode(), ';';
+$values = ['filename' => 'named.php'];
+$error->__construct(...$values);
+echo $error->getMessage(), ':', $error->getCode(), ':', $error->getFile(), ':', $error->getLine(), ';';
+$error->__construct(message: 'kept');
+unset($values['filename']);
+$error->__construct(...$values);
+echo $error->getMessage(), ':', $error->getCode(), ';';
+$previous = new Exception('cause');
+$previousValues = ['previous' => $previous];
+$error->__construct(...$previousValues, message: 'named', code: 0, severity: 1, filename: 'later.php', line: 9);
+echo $error->getMessage(), ':', $error->getCode(), ':', $error->getPrevious() === $previous ? 'same;' : 'bad;';
+$factory = new ErrorException(...coreAssocArguments());
+echo $factory->getMessage(), ':', $factory->getCode();
+unset($error, $factory, $values, $previousValues, $previous);
+"#;
+
+const ASSOC_EXPECTED: &str = "fresh:4;:4:named.php:0;kept:4;named:4:same;args;factory:8";
+
 /// Native constructor calls distinguish omitted messages and preserve zero/null field arguments.
 #[test]
 fn test_core_review_error_exception_reinitialization_preserves_state() {
@@ -56,5 +79,24 @@ fn test_core_review_error_exception_reinitialization_preserves_state_eval() {
     let out = compile_and_run_with_heap_debug(&format!("<?php $source = '{encoded}' . ' // ' . $argc; eval($source);"));
     assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
     assert_eq!(out.stdout, EXPECTED);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Dynamic associative unpacks bind by key and count supplied optional positions once.
+#[test]
+fn test_core_review_error_exception_assoc_spread_count() {
+    let out = compile_and_run_with_heap_debug(&format!("<?php\n{ASSOC_SOURCE}"));
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, ASSOC_EXPECTED);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Opaque eval agrees on associative constructor unpacks, omitted messages, and empty maps.
+#[test]
+fn test_core_review_error_exception_assoc_spread_count_eval() {
+    let encoded = ASSOC_SOURCE.replace('\\', "\\\\").replace('\'', "\\'");
+    let out = compile_and_run_with_heap_debug(&format!("<?php $source = '{encoded}' . ' // ' . $argc; eval($source);"));
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, ASSOC_EXPECTED);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
