@@ -84,3 +84,6 @@ mod warning_globals;
 mod loop_optimization;
 mod rematerialization;
 mod machine_peepholes;
+
+#[path = "optimizer/tail_call.rs"]
+mod tail_call;
