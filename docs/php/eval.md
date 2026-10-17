@@ -1141,7 +1141,8 @@ fatals. Native non-eval regex codegen remains PCRE2-backed as documented in
 Eval JSON support covers null, booleans, integers, floats, strings, indexed
 arrays, associative arrays, and `stdClass` dynamic properties. `json_encode()`
 supports zero flags plus the documented `JSON_HEX_*`,
-`JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`, `JSON_FORCE_OBJECT`,
+`JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`,
+`JSON_UNESCAPED_LINE_TERMINATORS`, `JSON_FORCE_OBJECT`,
 `JSON_NUMERIC_CHECK`, `JSON_PARTIAL_OUTPUT_ON_ERROR`, `JSON_PRETTY_PRINT`,
 `JSON_PRESERVE_ZERO_FRACTION`, `JSON_INVALID_UTF8_IGNORE`,
 `JSON_INVALID_UTF8_SUBSTITUTE`, and `JSON_THROW_ON_ERROR` flags. `json_decode()`
@@ -1149,6 +1150,10 @@ and `json_validate()` support PHP-compatible depth handling, malformed UTF-8
 ignore/substitute modes where applicable, `JSON_BIGINT_AS_STRING` for
 overflowing integer tokens in `json_decode()`, and `JsonException` through
 `JSON_THROW_ON_ERROR`.
+
+Both unescaped flags are required to keep U+2028 and U+2029 literal. Unit enums
+without custom serialization fail with `JSON_ERROR_NON_BACKED_ENUM` (11), or
+encode as `0` when partial output is requested.
 
 Eval local filesystem calls operate on host filesystem paths and support the
 implemented stream-wrapper paths, including `file://`, `php://memory`,

@@ -77,6 +77,7 @@ fn eval_json_encode_result(
         | EVAL_JSON_HEX_QUOT
         | EVAL_JSON_UNESCAPED_SLASHES
         | EVAL_JSON_UNESCAPED_UNICODE
+        | EVAL_JSON_UNESCAPED_LINE_TERMINATORS
         | EVAL_JSON_FORCE_OBJECT
         | EVAL_JSON_PRETTY_PRINT
         | EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR
@@ -100,6 +101,7 @@ fn eval_json_encode_result(
     let mut error = None;
     eval_json_encode_append(
         value,
+        context,
         values,
         flags,
         depth as usize,
@@ -125,6 +127,7 @@ fn eval_json_encode_result(
 /// Appends one JSON value to the output buffer.
 fn eval_json_encode_append(
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
@@ -155,6 +158,7 @@ fn eval_json_encode_append(
         EVAL_TAG_ARRAY => {
             eval_json_encode_append_indexed_array(
                 value,
+                context,
                 values,
                 flags,
                 depth_limit,
@@ -167,6 +171,7 @@ fn eval_json_encode_append(
         EVAL_TAG_ASSOC => {
             eval_json_encode_append_assoc(
                 value,
+                context,
                 values,
                 flags,
                 depth_limit,
@@ -179,6 +184,7 @@ fn eval_json_encode_append(
         EVAL_TAG_OBJECT => {
             eval_json_encode_append_object(
                 value,
+                context,
                 values,
                 flags,
                 depth_limit,
@@ -237,6 +243,7 @@ fn eval_json_encode_append_float(
 /// Appends one indexed eval array as a JSON array or forced JSON object.
 fn eval_json_encode_append_indexed_array(
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
@@ -277,6 +284,7 @@ fn eval_json_encode_append_indexed_array(
         let element = values.array_iter_value(value, position)?;
         eval_json_encode_append(
             element,
+            context,
             values,
             flags,
             depth_limit,
@@ -298,6 +306,7 @@ fn eval_json_encode_append_indexed_array(
 /// Appends one associative eval array as a JSON object.
 fn eval_json_encode_append_assoc(
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
@@ -335,6 +344,7 @@ fn eval_json_encode_append_assoc(
         let element = values.array_iter_value(value, position)?;
         eval_json_encode_append(
             element,
+            context,
             values,
             flags,
             depth_limit,
@@ -356,6 +366,7 @@ fn eval_json_encode_append_assoc(
 /// Appends one eval runtime object as a JSON object.
 fn eval_json_encode_append_object(
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
@@ -364,6 +375,24 @@ fn eval_json_encode_append_object(
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
+    let is_enum = dynamic_object_is_a(value, "UnitEnum", false, context, values)?
+        .map_or_else(|| values.object_is_a(value, "UnitEnum", false), Ok)?;
+    if is_enum {
+        let is_serializable = dynamic_object_is_a(value, "JsonSerializable", false, context, values)?
+            .map_or_else(|| values.object_is_a(value, "JsonSerializable", false), Ok)?;
+        if !is_serializable {
+            let is_backed = dynamic_object_is_a(value, "BackedEnum", false, context, values)?
+                .map_or_else(|| values.object_is_a(value, "BackedEnum", false), Ok)?;
+            if !is_backed {
+                *error = Some(EvalJsonEncodeError {
+                    code: EVAL_JSON_ERROR_NON_BACKED_ENUM,
+                    message: "Non-backed enums have no default serialization",
+                });
+                output.push(b'0');
+                return Ok(());
+            }
+        }
+    }
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
     let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
     output.push(b'{');
@@ -395,6 +424,7 @@ fn eval_json_encode_append_object(
         let element = values.property_get(value, property)?;
         eval_json_encode_append(
             element,
+            context,
             values,
             flags,
             depth_limit,
@@ -489,7 +519,10 @@ fn eval_json_encode_append_string(
 fn eval_json_encode_append_char(character: char, flags: i64, output: &mut Vec<u8>) {
     if character.is_ascii() {
         eval_json_encode_append_ascii_byte(character as u8, flags, output);
-    } else if flags & EVAL_JSON_UNESCAPED_UNICODE != 0 {
+    } else if flags & EVAL_JSON_UNESCAPED_UNICODE != 0
+        && (!matches!(character, '\u{2028}' | '\u{2029}')
+            || flags & EVAL_JSON_UNESCAPED_LINE_TERMINATORS != 0)
+    {
         let mut buffer = [0_u8; 4];
         output.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
     } else {

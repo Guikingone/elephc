@@ -329,3 +329,60 @@ return round(precision: 1, num: 3.14);"#,
     assert_eq!(values.output, "4:Y:Y");
     assert_eq!(values.get(result), FakeValue::Float(3.1));
 }
+
+/// Both JSON compatibility constants are available through eval's lookup APIs.
+#[test]
+fn execute_program_json_compatibility_constants() {
+    let program = parse_fragment(br#"
+echo JSON_UNESCAPED_LINE_TERMINATORS . ":" . JSON_ERROR_NON_BACKED_ENUM . ":";
+echo constant("JSON_UNESCAPED_LINE_TERMINATORS") . ":" . constant("JSON_ERROR_NON_BACKED_ENUM") . ":";
+return defined("JSON_UNESCAPED_LINE_TERMINATORS") && defined("JSON_ERROR_NON_BACKED_ENUM");
+"#).expect("parse JSON constants fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute JSON constants");
+    assert_eq!(values.output, "2048:11:2048:11:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Eval preserves separators only when both unescaped flags are enabled, including keys.
+#[test]
+fn execute_program_json_compatibility_line_terminators() {
+    let program = parse_fragment(br#"
+$text = "\u{00e9}\u{2028}\u{2029}\u{1f600}";
+foreach ([0, JSON_UNESCAPED_LINE_TERMINATORS, JSON_UNESCAPED_UNICODE,
+          JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_LINE_TERMINATORS] as $flags) {
+    echo json_encode($text, $flags) . "\n";
+    echo json_encode([$text => [$text]], $flags) . "\n";
+}
+"#).expect("parse JSON Unicode fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute JSON Unicode");
+    let escaped = r#""\u00e9\u2028\u2029\ud83d\ude00""#;
+    let unicode = "\"é\\u2028\\u2029😀\"";
+    let literal = "\"é\u{2028}\u{2029}😀\"";
+    let expected: String = [escaped, escaped, unicode, literal].iter()
+        .map(|text| format!("{text}\n{{{text}:[{text}]}}\n"))
+        .collect();
+    assert_eq!(values.output, expected);
+}
+
+/// Eval reports unit enum errors, including nested partial output and exception codes.
+#[test]
+fn execute_program_json_compatibility_non_backed_enum() {
+    let program = parse_fragment(br#"
+enum EvalJsonUnit { case Ready; }
+echo json_encode(EvalJsonUnit::Ready) === false ? "false:" : "bad:";
+echo json_last_error() . ":" . json_last_error_msg() . "\n";
+echo json_encode([EvalJsonUnit::Ready], JSON_PARTIAL_OUTPUT_ON_ERROR) . ":" . json_last_error() . "\n";
+echo json_encode(["state" => EvalJsonUnit::Ready], JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_THROW_ON_ERROR) . "\n";
+try { json_encode(EvalJsonUnit::Ready, JSON_THROW_ON_ERROR); }
+catch (JsonException $e) { echo $e->getCode() . ":" . $e->getMessage() . "\n"; }
+echo json_encode("ok") . ":" . json_last_error();
+"#).expect("parse JSON enum fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute JSON enum");
+    assert_eq!(values.output, "false:11:Non-backed enums have no default serialization\n[0]:11\n{\"state\":0}\n11:Non-backed enums have no default serialization\n\"ok\":0");
+}

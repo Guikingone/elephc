@@ -36,6 +36,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_object ---");
     emitter.label_global("__rt_json_encode_object");
+    super::json_encode_enum::emit_dispatch(emitter);
 
     // -- set up stack frame --
     // Stack layout (128 bytes):
@@ -423,6 +424,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_object ---");
     emitter.label_global("__rt_json_encode_object");
+    super::json_encode_enum::emit_dispatch(emitter);
 
     // Stack layout (rbp-relative, 96 bytes reserved):
     //   [rbp - 8]  = object pointer
