@@ -13,7 +13,7 @@ use super::*;
 /// Captures a by-value left operand before later source expressions can replace its storage.
 pub(super) fn capture_left_operand(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span,
-) -> LoweredValue {
+) -> (LoweredValue, Vec<super::call_operand_owners::PinnedInFlightOwner>) {
     if ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())) {
         let ty = ctx.builder.value_php_type(value.value);
         let captured = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
@@ -25,8 +25,9 @@ pub(super) fn capture_left_operand(
         if captured.value != value.value && ctx.value_is_owning_temporary(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         }
-        captured
-    } else { value }
+        let pins = pin_in_flight_owners(ctx, &[captured.value], span);
+        (captured, pins)
+    } else { (value, Vec::new()) }
 }
 
 /// Dispatches a boxed operand through available class contracts before scalar lowering.

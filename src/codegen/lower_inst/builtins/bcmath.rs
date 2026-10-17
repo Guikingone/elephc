@@ -581,10 +581,12 @@ pub(crate) fn lower_bcnumber_round(ctx: &mut FunctionContext<'_>, inst: &Instruc
     load_optional_int(ctx, inst.operands.get(2).copied(), 1, "bcround mode")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- Place mode and saved precision after the AArch64 string pair --
             ctx.emitter.instruction("mov x4, x0");                              // pass the rounding mode in the helper's fourth value register
             abi::emit_pop_reg(ctx.emitter, "x3");
         }
         Arch::X86_64 => {
+            // -- Place mode and saved precision in the x86_64 integer arguments --
             ctx.emitter.instruction("mov rsi, rax");                            // pass the rounding mode in the helper's secondary integer register
             abi::emit_pop_reg(ctx.emitter, "rdi");
         }

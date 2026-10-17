@@ -353,6 +353,7 @@ pub(super) fn lower_closure_with_context(
         captures: captured_values,
         return_alias,
         loop_guarded: false,
+        numeric_loop_guarded: false,
     });
     let closure = ctx.emit_value(
         Op::ClosureNew,

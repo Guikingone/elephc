@@ -9,6 +9,45 @@
 
 use crate::support::*;
 
+/// Keeping Number available must not strand checked scalar boxes consumed by bitwise operators.
+#[test]
+fn test_bcmath_number_scalar_checked_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$number = new BcMath\Number('1.20');
+for ($i = 0; $i < 16; $i++) {
+    $p = ($i + 1) & 1;
+    $q = ($i - 1) & 1;
+    $r = ($i * 2) & 3;
+}
+echo $p, '|', $q, '|', $r;
+unset($number);
+"#);
+    assert_eq!(out.stdout, "0|0|2", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Mixed unary operators return independent Numbers and retire temporary operands exactly once.
+#[test]
+fn test_bcmath_number_mixed_unary_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function negate_decimal(mixed $n): mixed { return -$n; }
+function positive_decimal(mixed $n): mixed { return +$n; }
+$n = new BcMath\Number('1.20');
+$negative = negate_decimal($n);
+$positive = positive_decimal($n);
+echo $negative->value, '|', $positive->value, '|';
+var_dump($negative === $n, $positive === $n);
+var_dump(negate_decimal(3), negate_decimal(1.5), negate_decimal('2.5'));
+for ($i = 0; $i < 8; $i++) {
+    $temporary = negate_decimal(new BcMath\Number('0.00'));
+    unset($temporary);
+}
+unset($n, $negative, $positive);
+"#);
+    assert_eq!(out.stdout, "-1.20|1.20|bool(false)\nbool(false)\nint(-3)\nfloat(-1.5)\nfloat(-2.5)\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Repeatedly constructs and replaces native and boxed Numbers without retaining temporaries.
 #[test]
 fn test_bcmath_number_heap_owners() {

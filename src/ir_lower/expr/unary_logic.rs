@@ -43,6 +43,15 @@ pub(super) fn lower_numeric_unary(
         }
         _ if int_op == Op::INeg => {
             let zero = lower_int_literal(ctx, 0, expr);
+            if let Some(result) = object_operators::lower_dynamic_object_binary(
+                ctx, zero, &BinOp::Sub, value, expr, true, |ctx| {
+                    let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
+                    release_binary_operand_temporary(ctx, value, expr.span);
+                    result
+                },
+            ) {
+                return result;
+            }
             let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
             // Mirror the binary mixed-op path: an owning boxed operand (e.g.
             // `-($i * 7 + 1)`, issue #500) must be released once consumed.

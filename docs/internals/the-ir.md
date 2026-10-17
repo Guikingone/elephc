@@ -1331,16 +1331,22 @@ over each function-like body (functions, methods, closures, trampolines,
 invokers) repeatedly until a full sweep reports no change, capped at a fixed
 iteration budget. Candidate-driven passes can cheaply declare themselves
 inapplicable to a function; skipped passes perform neither analysis nor the
-debug-build post-pass validation.
+debug-build post-pass validation. A pass that opts into `run_after_fixed_point`
+is removed from this sweep.
 
-The whole pipeline runs to a **module-level fixed point**: `optimize_module`
-interleaves the cross-function [small-function inliner](#small-function-inlining)
-with these per-function passes and repeats the round until neither layer changes
-anything (capped by a separate module-iteration budget). Interleaving lets the two
-feed each other — inlined bodies expose new constants and dead code for the
+The representation-changing pipeline runs to a **module-level fixed point**:
+`optimize_module` partitions those post-fixed-point passes out, then
+`optimize_module_to_fixed_point` interleaves the cross-function
+[small-function inliner](#small-function-inlining) with the remaining
+per-function passes and repeats the round until neither layer changes anything
+(capped by a separate module-iteration budget). Interleaving lets the two feed
+each other — inlined bodies expose new constants and dead code for the
 per-function passes, and the simplified functions expose new (smaller) inline
 candidates. The first round reproduces the prior "inline once, then optimize"
 behavior, so later rounds only optimize further and never change semantics.
+After `optimize_module_to_fixed_point` returns, the partitioned ownership
+finalizer runs on its own. See
+[Fresh Mixed Assignment Transfer](#fresh-mixed-assignment-transfer).
 
 In debug and test builds (`debug_assertions`), the driver re-validates the
 function with `validate_function` after every pass that runs and panics — naming
@@ -1467,6 +1473,9 @@ Codegen keeps the in-range path in scalar registers. On signed overflow it
 recomputes the operation as a double and applies the shared PHP float-to-int
 conversion, so removing the box does not change PHP's overflow semantics. The
 typed opcode is implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
+`FreshMixedTransfer` runs only after this specialization has finished, so a later
+ownership rewrite cannot hand the sink a new integer-only use graph. See
+[Fresh Mixed Assignment Transfer](#fresh-mixed-assignment-transfer).
 
 ### Boxed Numeric Chain Fusion
 
@@ -1763,6 +1772,39 @@ statement-boundary concat-buffer reset in the host frame and would otherwise fre
 in-flight scratch string argument. Call-site name resolution (`call` Data immediates
 and `function_variant_call` include-variant refs) uses snapshots taken before
 mutation, so the rewrite loop never aliases the module while holding a function.
+
+### Fresh Mixed Assignment Transfer
+
+`FreshMixedTransfer` (`src/ir_passes/fresh_mixed_transfer.rs`) is the ownership
+finalizer. It implements `IrPass`, and `run_after_fixed_point` makes
+`optimize_module` partition it out of `optimize_module_to_fixed_point`. The
+inliner and the per-function passes, including
+[checked integer sink specialization](#checked-integer-sink-specialization),
+run to the module fixed point first. `optimize_module` then runs the finalizer
+phase once, through the ordinary per-function sweep. A change inside that phase
+repeats the finalizer until a sweep reports no change. The repetition stays
+inside the finalizer: the inliner and the checked-integer sink have already
+finished. `--ir-opt=off` skips `optimize_module`, so the copy lowered for the
+assignment stays in the module.
+
+The rewrite removes a `MixedClone` of a fresh owned `ICheckedAdd`,
+`ICheckedSub`, or `ICheckedMul` result when that source is an owned
+`Heap(Mixed)` value with exactly two uses: the clone, and the next non-`nop`
+instruction in the same block, which must be a `Release` of the source with no
+immediate. The producer has to precede the clone in that block. The clone result
+is also an owned `Heap(Mixed)` value. Uses of the clone result are redirected to
+the source, and the clone and that release become `nop`. The checked operation
+stays in place, so an overflow still promotes through the boxed result. Borrowed
+sources, acquired sources, shared sources, any other extra observation, and a
+release in another block keep the copy.
+
+That order is required. While the clone is present it is a `Mixed` use, so the
+sink leaves the producer boxed. Removing the clone earlier would make the
+remaining integer cast or store look like an integer-only use graph, and the
+next sink sweep would rewrite `ICheckedAdd` / `ICheckedSub` / `ICheckedMul` to
+the corresponding `IChecked*ToInt` result. The transfer therefore runs where
+that rewrite can no longer see it. The same split is summarized in
+[Optimization and codegen controls](../compiling/optimization.md#fresh-mixed-assignment-transfer).
 
 ### Identical Lowered-Body Folding
 
