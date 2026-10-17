@@ -91,7 +91,7 @@ pub(super) fn declarations() -> Program {
     vec![
         function("__elephc_bcnumber_float_fits").param("_bcfloat", TypeExpr::Float)
             .returns(TypeExpr::Bool).returning(e_binop(
-                e_binop(e_var("_bcfloat"), BinOp::GtEq, e_float(-9223372036854775808.0)), BinOp::And,
+                e_binop(e_var("_bcfloat"), BinOp::GtEq, e_neg(e_float(9223372036854775808.0))), BinOp::And,
                 e_binop(e_var("_bcfloat"), BinOp::Lt, e_float(9223372036854775808.0)),
             )).build(),
         function("__elephc_bcnumber_parameter").param("_bcparameter", t_mixed()).returns(TypeExpr::Str)

@@ -151,14 +151,19 @@ pub(super) fn lower_dynamic_switch_dispatch(
             let matched = if use_loose_eq {
                 // Loose equality handles string/string, string/scalar, float/numeric,
                 // and mixed cases exactly as PHP's `==` would inside an if/elseif chain.
-                ctx.emit_value(
+                let expression = Expr::new(ExprKind::Null, case_expr.span);
+                let compare = |ctx: &mut LoweringContext<'_, '_>| ctx.emit_value(
                     Op::LooseEq,
                     vec![subject.value, case_value.value],
                     None,
                     PhpType::Bool,
                     Op::LooseEq.default_effects(),
                     Some(case_expr.span),
-                )
+                );
+                crate::ir_lower::expr::object_operators::lower_dynamic_object_binary(
+                    ctx, subject, &crate::parser::ast::BinOp::Eq, case_value,
+                    &expression, false, compare,
+                ).unwrap_or_else(|| compare(ctx))
             } else {
                 let case_value = coerce_to_int(ctx, case_value, Some(case_expr.span));
                 ctx.emit_value(

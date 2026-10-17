@@ -56,7 +56,6 @@ pub(super) fn comparison(
     let Some(class) = class else { return Ok(None) };
     let left_tag = values.type_tag(left)?;
     let right_tag = values.type_tag(right)?;
-    if left_tag == EVAL_TAG_NULL || right_tag == EVAL_TAG_NULL { return Ok(None); }
     if left_tag == EVAL_TAG_BOOL || right_tag == EVAL_TAG_BOOL {
         let lhs = i64::from(values.truthy(left)?);
         let rhs = i64::from(values.truthy(right)?);

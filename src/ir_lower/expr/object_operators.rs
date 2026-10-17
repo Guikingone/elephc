@@ -31,7 +31,7 @@ pub(super) fn capture_left_operand(
 }
 
 /// Dispatches a boxed operand through available class contracts before scalar lowering.
-pub(super) fn lower_dynamic_object_binary(
+pub(crate) fn lower_dynamic_object_binary(
     ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
     expr: &Expr, consume: bool, scalar: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
 ) -> Option<LoweredValue> {

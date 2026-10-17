@@ -9,6 +9,32 @@
 
 use crate::support::*;
 
+/// Preserved switches dispatch boxed Number labels and keep ordinary scalar comparisons intact.
+#[test]
+fn test_bcmath_number_switch_mixed_numeric() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+use BcMath\Number;
+function switch_numeric(mixed $n): void {
+    switch ($n) { case 9: echo '-'; break; case 5: echo 'I'; break; default: echo '-'; }
+    switch ($n) { case 9.0: echo '-'; break; case 5.0: echo 'F'; break; default: echo '-'; }
+    switch (5) { case $n: echo 'R'; break; default: echo '-'; }
+    switch (5.0) { case $n: echo 'S'; break; default: echo '-'; }
+    echo '|';
+}
+function switch_boolean(bool $flag, mixed $n): void {
+    switch ($flag) { case $n: echo 'B'; break; case false: echo 'F'; break; default: echo '-'; }
+}
+foreach ([new Number('5.00'), new Number('6.00'), 5, 6, 5.0, 6.0, '5.0', 'bad', true, false, null, []] as $value) {
+    switch_numeric($value);
+}
+switch_boolean(false, new Number('0.00'));
+switch_boolean(true, new Number('2.50'));
+switch_boolean(true, new Number('0.00'));
+"#);
+    assert_eq!(out.stdout, "IFRS|----|IFRS|----|IFRS|----|IFRS|----|--RS|----|----|----|BB-", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Runtime equality and internal scalar adapters retire both successful and exceptional owners.
 #[test]
 fn test_bcmath_number_review_owners() {
@@ -165,16 +191,29 @@ echo 'caught';
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Dynamic eval releases native operator results and hidden argument collectors after errors.
+/// Dynamic eval releases operator results and compares null through the Number contract.
 #[test]
 fn test_bcmath_number_eval_heap_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 $n = new BcMath\Number('1.20');
-$source = $argc > 1 ? 'echo "unexpected";' : 'for ($i = 0; $i < 8; $i++) { $result = ($n + "0.30") * 2; $result++; try { $result / new \\BcMath\\Number(0); } catch (DivisionByZeroError $e) { unset($e); } unset($result); } echo "eval";';
+$source = $argc > 1 ? 'echo "unexpected";' : '
+for ($i = 0; $i < 8; $i++) {
+    $result = ($n + "0.30") * 2;
+    $result++;
+    try { $result / new \\BcMath\\Number(0); } catch (DivisionByZeroError $e) { unset($e); }
+    unset($result);
+}
+$zero = new \\BcMath\\Number("0.00");
+echo (int)($zero == null), (int)(null == $zero), (int)($zero != null), (int)(null != $zero);
+echo (int)($zero < null), (int)(null < $zero), "|", $zero <=> null, "|", null <=> $zero, ";";
+echo (int)($n == null), (int)(null == $n), (int)($n != null), (int)(null != $n);
+echo (int)($n < null), (int)(null < $n), "|", $n <=> null, "|", null <=> $n;
+unset($zero);
+echo "eval";';
 eval($source);
 unset($n, $source);
 "#);
-    assert_eq!(out.stdout, "eval", "{}", out.stderr);
+    assert_eq!(out.stdout, "001101|1|-1;001101|1|-1eval", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

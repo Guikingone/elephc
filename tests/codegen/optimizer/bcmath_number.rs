@@ -64,6 +64,12 @@ var_dump(empty($n), $n <=> 2);
 $text = str_repeat('1', $argc);
 echo $text % 2;
 switch ($n) { case new Decimal('3.200'): echo 'equal'; }
+function decimal_switch(mixed $label): void {
+    switch (3) { case $label: echo 'integer'; break; default: break; }
+    switch (3.0) { case $label: echo 'float'; break; default: break; }
+    switch ($label) { case 8: break; case 3: echo 'mixed'; break; }
+}
+decimal_switch(new Decimal('3.00'));
 var_dump(in_array($n, ['3.200']));
 echo (new Decimal(1.5))->add(1.5)->value;
 try { $n + INF; } catch (TypeError $e) { echo 'range'; }
