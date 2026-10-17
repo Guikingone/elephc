@@ -569,7 +569,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // does the class define __wakeup?
     emitter.instruction("jz __rt_unser_at_obj_box");                            // no → box the object directly
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver
-    emitter.instruction("call r10");                                            // call __wakeup($this)
+    emitter.instruction("mov rsi, r10");                                        // pass the wakeup target to the scoped modern adapter
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_invoke_wakeup");
     emitter.label("__rt_unser_at_obj_box");
     emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // return the stable box published before body parsing
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload position (at the closing '}')

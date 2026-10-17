@@ -63,7 +63,7 @@ the symbol registries and compatibility documentation through
 ## Completed verification
 
 - Shared baseline contract gate: Core functions 62/62, class-likes 40/40, constants 89/89.
-- Focused Core tests: 24 class tests, 9 review regressions, 5 constant tests, and 7 diagnostic tests.
+- Focused Core tests: 24 class tests, 10 review regressions, 5 constant tests, and 7 diagnostic tests.
 - Native and opaque eval cover weak object and closure keys, identity, cloning, live iteration,
   sensitive traces, deferred attributes, executable-path aliases, and serialization hooks.
 - Heap-debug regressions cover cycles, key resurrection, throwing value destructors, and
@@ -91,5 +91,13 @@ WeakMap work is tracked as Code Journal task `21f22b33`.
 The follow-up also protects the eval error-handler C boundary, consumes thrown callable
 boxes, and tests callback exceptions with heap debugging. Local verification includes
 all 95 serialization regressions, the example corpus, the initial CI failures, and
-six focused ARM64 executables. CI and Greptile outcomes for the published commit
+seven focused ARM64 executables. CI and Greptile outcomes for the published commit
 are recorded on PR #1870 and in the shared Code Journal.
+
+The follow-up ARM64 review found an ABI scratch-register clobber in nested hydration.
+Load the sharing mode before taking the reference-counter address; both modern
+hydration hooks now have a heap-debug regression that also executes on ARM64.
+
+The separate nonempty modern hydration-data owner issue is tracked as Code Journal
+task `a1321652`; its parse/insert path is unchanged from main. The focused nested
+reference regression uses explicit empty modern payloads to isolate reference state.

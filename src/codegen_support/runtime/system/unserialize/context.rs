@@ -93,8 +93,8 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x9]");                                       // this call starts without an owned allow-list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_allowed_list_mixed");
     emitter.instruction("str xzr, [x9]");                                       // default to direct-string list representation
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_unser_legacy_active", 0);
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
     emitter.instruction("cbnz x10, __rt_unserialize_begin_keep_count");         // nested legacy payloads consume the enclosing reference indices
     emitter.instruction("str xzr, [x9]");                                       // reset this call's reference-registry count
     emitter.label("__rt_unserialize_begin_keep_count");

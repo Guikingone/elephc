@@ -148,6 +148,45 @@ echo $copy[0]->value === $copy[1] && $copy[0] === $copy[2] ? "same" : "bad";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Modern hydration hooks isolate nested reference registries and restore the outer identities.
+#[test]
+fn test_core_review_modern_hydration_nested_references() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nested_identity(): bool {
+    $objects = unserialize('a:2:{i:0;O:8:"stdClass":0:{}i:1;r:2;}');
+    return $objects[0] === $objects[1];
+}
+class ModernHydration {
+    public bool $same = false;
+    public function __serialize(): array { return []; }
+    public function __unserialize(array $data): void { $this->same = nested_identity(); }
+}
+class WakeHydration {
+    public bool $same = false;
+    public function __sleep(): array { return []; }
+    public function __wakeup(): void { $this->same = nested_identity(); }
+}
+class HydrationEnvelope implements Serializable {
+    public mixed $value;
+    public function serialize(): ?string { return serialize($this->value); }
+    public function unserialize(string $data): void { $this->value = unserialize($data); }
+}
+$object = new stdClass();
+$modern = unserialize(serialize([new ModernHydration(), $object, $object]));
+echo $modern[0]->same ? "same:" : "bad:";
+echo $modern[1] === $modern[2] ? "same;" : "bad;";
+$wake = unserialize(serialize([new WakeHydration(), $object, $object]));
+echo $wake[0]->same ? "same:" : "bad:";
+echo $wake[1] === $wake[2] ? "same;" : "bad;";
+$packet = new HydrationEnvelope(); $packet->value = new WakeHydration();
+$legacy = unserialize(serialize($packet));
+echo $legacy->value->same ? "legacy:same" : "legacy:bad";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "same:same;same:same;legacy:same");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Modern hooks isolate nested wire calls from the enclosing reference registry.
 #[test]
 fn test_core_review_modern_nested_references() {

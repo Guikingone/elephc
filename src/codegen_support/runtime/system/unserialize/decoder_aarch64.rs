@@ -585,7 +585,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // __wakeup method symbol (0 if none)
     emitter.instruction("cbz x10, __rt_unser_at_obj_box");                      // no __wakeup → box the object directly
     emitter.instruction("ldr x0, [sp, #24]");                                   // $this receiver
-    emitter.instruction("blr x10");                                             // call __wakeup($this)
+    emitter.instruction("mov x1, x10");                                         // pass the wakeup target to the scoped modern adapter
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_invoke_wakeup");
     emitter.label("__rt_unser_at_obj_box");
     emitter.instruction("ldr x0, [sp, #96]");                                   // return the stable box published before body parsing
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload position (at the closing '}')

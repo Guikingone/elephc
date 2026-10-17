@@ -17,6 +17,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         ("__rt_serialize_invoke_modern", "_ser_legacy_active", 0, 1),
         ("__rt_unserialize_invoke_legacy", "_unser_legacy_active", 1, 3),
         ("__rt_unserialize_invoke_modern", "_unser_legacy_active", 0, 2),
+        ("__rt_unserialize_invoke_wakeup", "_unser_legacy_active", 0, 1),
     ] {
         emit_hook(emitter, name, symbol, mode, params);
     }
