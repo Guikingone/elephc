@@ -322,3 +322,25 @@ message-context change. The extended native/eval callable cases also pass with
 PHP-equivalent call-array diagnostics and clean heaps. Build, generated docs,
 registry/site/EIR audits, Rustdoc and whitespace checks pass. Final exact-head CI
 and review results remain recorded externally on PR1870 and in Code Journal.
+
+
+## Nullable reference-marker owner correction
+
+Greptile's review of `120e062efc` rated it 3/5 for a temporary-box leak that also
+applied to `260cf07cb6`. Reference markers read into by-value nullable integer
+arguments materialize owned Mixed cells. The converter already produced the
+two-word TaggedScalar ABI, but its support predicate still rejected that target,
+so the caller skipped cleanup. Six supported variadic-reference forwarding calls
+printed the correct result while retaining six 40-byte boxes.
+
+The support predicate now agrees with the nullable converter, enabling the existing
+conversion root and release path. The same six-call probe has 112 allocations and
+112 frees after the repair. The new GC regression also covers string and null
+reference sources, positional and named forwarding, and a clean final heap.
+
+All six focused callable/ownership regressions pass in 27.337 seconds. All 33
+focused library checks pass, including all 29 invoker cases, owned-marker cleanup
+on every target, the existing constructor/boxed/parent target checks, and full
+x86 runtime call alignment. The reference-marker program compiles and assembles
+for all five targets. Compiler/exporter build, generated documentation, registry,
+site/EIR boundary, Rustdoc, assembly-comment and whitespace checks pass.

@@ -78,12 +78,29 @@ mod tests {
                 let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
                 let mut ctx = InvokerEmitContext::new("nullable_argument", owners, false, false, Vec::new(), emitter.target);
                 let target_type = PhpType::Union(vec![PhpType::Int, PhpType::Void]);
+                assert!(super::super::can_coerce_result_to_type(&source, &target_type), "{target}: {source:?}");
                 let result = super::super::coerce_current_value_to_target(
                     &mut emitter, &mut ctx, &mut DataSection::new(), &source, Some(&target_type),
                 );
                 assert_eq!(result, (PhpType::TaggedScalar, false), "{target}: {source:?}");
                 assert_eq!(result.0.stack_size(), 16, "{target}: {source:?}");
             }
+        }
+    }
+
+    /// Reference-marker boxes acquire conversion cleanup before nullable arguments are pushed.
+    #[test]
+    fn nullable_owned_marker_boxes_are_retired_on_every_target() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut ctx = InvokerEmitContext::new("nullable_owned_marker", owners, false, false, Vec::new(), emitter.target);
+            let target_type = PhpType::Union(vec![PhpType::Int, PhpType::Void]);
+            let result = super::super::push_materialized_mixed_hash_value_arg(
+                Some(&target_type), true, &mut emitter, &mut ctx, &mut DataSection::new(),
+            );
+            assert_eq!(result, PhpType::TaggedScalar, "{target}");
+            assert_eq!(emitter.output().matches("__rt_decref_mixed").count(), 1, "{target}");
         }
     }
 }

@@ -2713,7 +2713,7 @@ fn coerce_result_to_type(
 
 /// Returns true if the invoker can coerce this source/target pair.
 fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
-    if target_ty.codegen_repr() == PhpType::Callable {
+    if matches!(target_ty.codegen_repr(), PhpType::Callable | PhpType::TaggedScalar) {
         return true;
     }
     if source_ty == target_ty {
