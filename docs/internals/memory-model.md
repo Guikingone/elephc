@@ -1199,3 +1199,11 @@ chooses between in-place reuse and a copy:
 The retained result is one block whose capacity follows the final length. Blocks
 released by a growth copy return to the free list; the bump allocator supplies
 a block when the free list cannot.
+
+Native mbstring string identity belongs to the allocation containing the string
+bytes. A kind-5 Mixed wrapper holding a string owns a separate byte buffer; the
+identity belongs to that child, never to the wrapper. Its final heap release
+skips the string-registry lookup; the child's release still retires its own
+identity before allocator reuse. Eval array-reference observers retire before
+this skip, including when a Mixed cell no longer contains its former array
+value. Other allocation kinds retain their existing identity retirement path.
