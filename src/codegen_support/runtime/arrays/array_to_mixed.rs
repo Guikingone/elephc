@@ -34,7 +34,7 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_to_mixed_entry");                         // share conversion and metadata normalization
     emitter.label_global("__rt_array_to_mixed_shared");
     emitter.instruction("mov x9, #1");                                          // pending append owns selection and mutates the surviving payload
-    emitter.label("__rt_array_to_mixed_entry");
+    emitter.label_shared("__rt_array_to_mixed_entry");
 
     emitter.instruction("sub sp, sp, #80");                                     // reserve conversion frame slots and saved return state
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address

@@ -43,7 +43,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_entry");                               // share insertion and update machinery
     emitter.label_global("__rt_hash_set_shared");
     emitter.instruction("mov x9, #1");                                          // pending append mutates its pre-callback selected payload
-    emitter.label("__rt_hash_set_entry");
+    emitter.label_shared("__rt_hash_set_entry");
 
     // -- set up stack frame, save all inputs --
     // Stack layout:
