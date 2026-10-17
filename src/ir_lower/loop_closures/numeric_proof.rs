@@ -130,10 +130,11 @@ fn numeric_target<'a>(
     let StaticCallableBinding::Closure { name, signature, captures, .. } = binding else {
         return None;
     };
+    let arity = super::argument_transport::visible_arity(signature)?;
     if signature.declared_return
         || signature.return_type.codegen_repr() != PhpType::Mixed
-        || signature.declared_params.iter().any(|declared| *declared)
-        || signature.params.iter().any(|(_, ty)| ty.codegen_repr() != PhpType::Mixed)
+        || signature.declared_params.iter().take(arity).any(|declared| *declared)
+        || signature.params.iter().take(arity).any(|(_, ty)| ty.codegen_repr() != PhpType::Mixed)
     {
         return None;
     }
@@ -259,7 +260,7 @@ fn eval_expr(
             Ok(Domain::Unknown)
         }
         ExprKind::ClosureCall { var, args } => {
-            if var != closure_local || args.len() != function_visible_params(function, capture_domains) {
+            if var != closure_local || Some(args.len()) != function_visible_params(function, capture_domains) {
                 return Err(());
             }
             let mut arg_domains = Vec::with_capacity(args.len());
@@ -368,9 +369,11 @@ fn is_numeric(domain: Domain) -> bool {
     matches!(domain, Domain::Int | Domain::Float | Domain::Numeric)
 }
 
-/// Visible parameter count is the function's parameters minus its capture parameters.
-fn function_visible_params(function: &Function, capture_domains: &[Domain]) -> usize {
-    function.params.len().saturating_sub(capture_domains.len())
+/// Uses public signature arity while checking the complete physical capture/transport layout.
+fn function_visible_params(function: &Function, capture_domains: &[Domain]) -> Option<usize> {
+    let signature = function.signature.as_ref()?;
+    let arity = super::argument_transport::visible_arity(signature)?;
+    (function.params.len() == signature.params.len() + capture_domains.len()).then_some(arity)
 }
 
 /// Interprets the lowered closure once under the current argument and capture domains.
@@ -379,13 +382,19 @@ fn closure_result(
     arg_domains: &[Domain],
     capture_domains: &[Domain],
 ) -> Option<Domain> {
-    if function.blocks.len() != 1 || arg_domains.len() + capture_domains.len() != function.params.len() {
+    if function.blocks.len() != 1
+        || Some(arg_domains.len()) != function_visible_params(function, capture_domains)
+    {
         return None;
     }
     let mut slots: HashMap<u32, Domain> = HashMap::new();
     let mut domains = arg_domains.iter().chain(capture_domains.iter());
     for param in &function.params {
-        let domain = *domains.next()?;
+        let domain = if param.name == crate::func_args::HIDDEN_ARGS_PARAM {
+            Domain::Unknown
+        } else {
+            *domains.next()?
+        };
         let slot = function.locals.iter().find(|local| local.name.as_deref() == Some(param.name.as_str()))?;
         slots.insert(slot.id.as_raw(), domain);
     }

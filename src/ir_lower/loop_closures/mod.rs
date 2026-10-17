@@ -13,8 +13,10 @@
 //! - The existing unwritten raw-scalar path is unchanged. Do/while never takes the new path.
 //! - An incomplete numeric proof keeps the ordinary descriptor invoke.
 //! - A numeric-proof binding cannot authorize other calls through the raw-scalar gate.
+//! - Compiler-only argument transport needs its own prologue proof and never seeds numeric facts.
 
 mod numeric_proof;
+mod argument_transport;
 
 use crate::ir::{Effects, Immediate, IrType, Op, Terminator};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
@@ -131,7 +133,7 @@ pub(crate) fn direct_call_is_eligible(
         return ctx.numeric_closure_sites.contains(&span);
     }
     scalar_nothrow_target(ctx, binding)
-        && args.len() == signature.params.len()
+        && Some(args.len()) == argument_transport::visible_arity(signature)
         && args.iter().zip(&signature.params).all(|(arg, (_, parameter))| {
             scalar_argument_type(ctx, arg).is_some_and(|actual| {
                 *parameter == PhpType::Mixed || *parameter == actual
@@ -158,13 +160,18 @@ fn scalar_nothrow_target(ctx: &LoweringContext<'_, '_>, binding: &StaticCallable
     let Some(function) = ctx.closure_function(name) else { return false };
     if function.flags.is_generator || function.flags.by_ref_return || function.blocks.len() != 1
         || function.return_type == IrType::Void
+        || function.params.len() != signature.params.len() + captures.len()
     {
         return false;
     }
+    let Some(transport) = argument_transport::prologue_values(function, signature) else {
+        return false;
+    };
     let fallible = Effects::MAY_THROW | Effects::MAY_FATAL | Effects::MAY_WARN;
     function.instructions.iter().all(|inst| {
         !inst.effects.intersects(fallible)
-            && (scalar_type(&inst.result_php_type) || inst.result_php_type == PhpType::Mixed)
+            && (scalar_type(&inst.result_php_type) || inst.result_php_type == PhpType::Mixed
+                || inst.result.is_some_and(|value| transport.contains(&value)))
             && (inst.op == Op::ConcatReset
                 || !inst.effects.intersects(Effects::READS_GLOBAL | Effects::WRITES_GLOBAL))
             && scalar_body_primitive(inst.op)
@@ -188,11 +195,12 @@ fn scalar_body_primitive(op: Op) -> bool {
         | Move | Borrow | EnsureOwned | ConcatReset | Nop)
 }
 
-/// Allows exact positional scalar calls without coercion, defaults, references, or generators.
+/// Allows exact scalar calls without coercion, omitted arguments, source variadics or references.
 fn scalar_signature(signature: &FunctionSig) -> bool {
-    signature.variadic.is_none() && !signature.by_ref_return && !signature.is_generator
+    let Some(arity) = argument_transport::visible_arity(signature) else { return false };
+    !signature.by_ref_return && !signature.is_generator
         && signature.deprecation.is_none() && !signature.ref_params.iter().any(|by_ref| *by_ref)
-        && signature.params.iter().all(|(_, ty)| scalar_type(ty) || *ty == PhpType::Mixed)
+        && signature.params.iter().take(arity).all(|(_, ty)| scalar_type(ty) || *ty == PhpType::Mixed)
         && (scalar_type(&signature.return_type) || signature.return_type == PhpType::Mixed)
 }
 

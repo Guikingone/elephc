@@ -334,3 +334,68 @@ fn test_known_closure_loop_numeric_admission_is_per_call_site() {
         }
     }
 }
+
+/// Numeric loops retain argument order and capture snapshots when eval elsewhere requests frame metadata.
+#[test]
+fn test_known_closure_loop_transport_numeric_arguments_and_captures() {
+    let source = r#"<?php
+$transportBacktraceName='debug_backtrace';
+function transportFor(int $n): int {
+    $k = 3;
+    $f = function($x, $y) use ($k) { return $x + $y + $k; };
+    $k = 100;
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) { $sum += $f($i, 1); }
+    return (int)$sum;
+}
+function transportWhile(int $n): int {
+    $f = function($x) { return $x + 1; };
+    $sum = 0;
+    $i = 0;
+    while ($i < $n) { $sum += $f($i); $i++; }
+    return (int)$sum;
+}
+function transportFloatCapture(int $n): void {
+    $k = 1.5;
+    $f = function($x) use ($k) { return $x + $k; };
+    $sum = 0.0;
+    for ($i = 0; $i < $n; $i++) { $sum += $f($i); }
+    echo $sum;
+}
+echo transportFor(0), '|', transportFor($argc + 3), '|', transportWhile($argc + 3), '|';
+transportFloatCapture($argc + 1);
+"#;
+    check_closure_loop(source, "0|22|10|4");
+}
+
+/// Hidden frame metadata cannot let one numeric call reinterpret null or bool at a different call.
+#[test]
+fn test_known_closure_loop_transport_preserves_non_numeric_sites() {
+    let mut source = "<?php $transportBacktraceName='debug_backtrace';".to_string();
+    for (name, replacement, loop_body) in [
+        ("transportNullFor", "null", "for($i=0;$i<$n;$i++){BODY}"),
+        ("transportTrueFor", "true", "for($i=0;$i<$n;$i++){BODY}"),
+        ("transportNullWhile", "null", "$i=0;while($i<$n){BODY$i++;}"),
+        ("transportTrueWhile", "true", "$i=0;while($i<$n){BODY$i++;}"),
+    ] {
+        let body = format!("$result=$f($value);$value={replacement};$sink=$f($i);");
+        let loop_body = loop_body.replace("BODY", &body);
+        source.push_str(&format!("function {name}(int $n):void{{$f=function($x){{return$x;}};$value=10;$result=0;$sink=0;{loop_body}echo gettype($result),':',$result,'|';}}"));
+    }
+    source.push_str("transportNullFor($argc+1);transportTrueFor($argc+1);transportNullWhile($argc+1);transportTrueWhile($argc+1);");
+    check_closure_loop(&source, "NULL:|boolean:1|NULL:|boolean:1|");
+}
+
+/// Float backedges and both integer overflow directions retain boxed PHP types with hidden transport.
+#[test]
+fn test_known_closure_loop_transport_preserves_numeric_promotions() {
+    let mut source = "<?php $transportBacktraceName='debug_backtrace';".to_string();
+    for (name, start, operation) in [
+        ("transportMax", "PHP_INT_MAX", "+1"),
+        ("transportMin", "PHP_INT_MIN", "-1"),
+    ] {
+        source.push_str(&format!("function {name}(int $n):void{{$f=function($x){{return$x{operation};}};$value={start};$result=0;for($i=0;$i<$n;$i++){{$result=$f($value);$value=$result;}}echo gettype($result),':',gettype($value),'|';}}"));
+    }
+    source.push_str("function transportFloat(int $n):void{$f=function($x){return$x+1;};$value=10;$result=0;for($i=0;$i<$n;$i++){$result=$f($value);$value=1.5;}echo$result;}transportMax($argc+1);transportMin($argc+1);transportFloat($argc+1);");
+    check_closure_loop(&source, "double:double|double:double|2.5");
+}

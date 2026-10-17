@@ -822,7 +822,7 @@ numeric domain are separate proofs. Both apply with EIR optimization enabled or 
 
 The existing direct path in `for` and `while` still requires an invariant local
 identity, by-value scalar captures, an exact positional argument list, and a
-scalar-or-Mixed signature without references or variadics. Its arguments are
+scalar-or-Mixed signature without references or source variadics. Its arguments are
 literals or locals that the condition, update, and body never write, and those
 locals must already have physical `I64` or `F64` storage. Declared parameter
 types must match without coercion. Nested loops, assignment expressions,
@@ -845,7 +845,18 @@ local. Bindings retained by the numeric proof carry a separate marker, including
 during final-storage replay. An unadmitted call on such a binding keeps descriptor
 invocation instead of falling back to the unwritten-scalar gate.
 
-The numeric path requires an untyped Mixed signature, no references, variadics,
+Both paths can retain the compiler-generated `func_args::HIDDEN_ARGS_PARAM`
+collector used by frame metadata, including eval-originated backtraces. This
+parameter does not count toward public arity. Its generated name, physical
+parameter position, array representation, and spanless ownership prologue must
+match the compiler contract. The collector may only be loaded into its owning
+parameter shadow; any other read, write, or escape rejects the target. The
+ordinary call binder still creates and passes the array with its normal
+ownership. User variadics, argument introspection, and other array values do
+not qualify. The collector seeds no numeric fact and does not broaden another
+call's admission.
+
+The numeric path requires an untyped Mixed signature, no references, source variadics,
 generators, named arguments, spreads, or omitted defaults, and captures that are
 absent or by-value int or float. The lowered body must be one block whose
 opcodes are in the closed primitive allowlist and have no throw, fatal, or
