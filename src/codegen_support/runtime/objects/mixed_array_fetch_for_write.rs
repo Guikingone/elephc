@@ -207,8 +207,8 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.hi __rt_mixed_array_gfw_mode_ready");                // a stored cell owner keeps ordinary write-through semantics
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the selected array or hash payload
     emitter.instruction("ldr w9, [x9, #-12]");                                  // count independent payload owners
-    emitter.instruction("cmp w9, #1");                                          // the selected cell owns one payload reference
-    emitter.instruction("cset x9, hi");                                         // another owner is the callback-retained child copy
+    emitter.instruction("cmp w9, #2");                                          // one selected-cell lease and exactly one PHP payload owner
+    emitter.instruction("cset x9, eq");                                         // multiple independent copies must never share the detached write
     emitter.instruction("str x9, [sp, #48]");                                   // preserve it through conversion, lookup, and insertion
     emitter.label("__rt_mixed_array_gfw_mode_ready");
 
@@ -571,8 +571,8 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp DWORD PTR [rdi - 12], 1");                         // the compiler lease is the one expected cell owner
     emitter.instruction("ja __rt_mixed_array_gfw_mode_ready");                  // a stored cell owner keeps ordinary write-through semantics
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the selected array or hash payload
-    emitter.instruction("cmp DWORD PTR [r10 - 12], 1");                         // does another boxed value retain that payload?
-    emitter.instruction("seta r10b");                                           // one extra owner is the callback-retained child copy
+    emitter.instruction("cmp DWORD PTR [r10 - 12], 2");                         // one selected-cell lease and exactly one PHP payload owner
+    emitter.instruction("sete r10b");                                           // multiple independent copies must never share the detached write
     emitter.instruction("movzx r10, r10b");                                     // materialize a complete mode word
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // preserve it through conversion, lookup, and insertion
     emitter.label("__rt_mixed_array_gfw_mode_ready");
@@ -820,6 +820,13 @@ mod tests {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_mixed_array_fetch_for_write(&mut emitter);
             let asm = emitter.output();
+            let exact_owner_count = if name == "linux-x86_64" {
+                "cmp DWORD PTR [r10 - 12], 2"
+            } else {
+                "cmp w9, #2"
+            };
+            assert!(asm.contains(exact_owner_count),
+                "{name}: detached writes may bypass COW only for one surviving PHP payload owner");
             let indexed = asm.split("__rt_mixed_array_gfw_indexed:\n").nth(1).unwrap()
                 .split("__rt_mixed_array_gfw_replace_null:\n").next().unwrap();
             assert!(indexed.contains("__rt_array_to_mixed"), "{name}");

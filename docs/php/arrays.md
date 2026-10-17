@@ -52,9 +52,12 @@ then yields null without inserting the leaf or evaluating the operator, includin
 division by zero. Appending an unrelated root sibling does not cancel the operation.
 A saved root-array copy can keep the old target live and receive its pending write.
 If a root mutation detaches the selected cell while a separately boxed child copy
-keeps its payload alive, that child copy receives the pending write and remains safe
-for later appends. When the original cell and an independent payload copy both survive,
-PHP instead cancels the stale target. A cancelled prefix increment still returns `1`.
+is the only remaining payload owner, that child copy receives the pending write and
+remains safe for later appends. Two or more independent child copies cancel the write
+instead, leaving every copy unchanged. Multiple copies of the same root array can
+still share a single selected child slot and keep the operation active. When the
+original cell and an independent payload copy both survive, PHP also cancels the
+stale target. A cancelled prefix increment still returns `1`.
 Each missing intermediate key emits its own warning before it is autovivified.
 
 ## String arrays

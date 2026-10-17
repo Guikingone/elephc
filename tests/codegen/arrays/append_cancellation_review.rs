@@ -209,6 +209,74 @@ fn test_append_ninth_review_retained_root_and_child_copies_no_ir_opt() {
     without_ir_opt(test_append_ninth_review_retained_root_and_child_copies);
 }
 
+/// Multiple independent payload owners cancel rather than jointly receiving a detached write.
+fn assert_multiple_child_copies(dimension: &str) {
+    for copies in [2, 3] {
+        let source = format!(r#"<?php
+$items = []; $first = []; $second = []; $third = [];
+set_error_handler(function(int $level, string $message) use (&$items, &$first, &$second, &$third): bool {{
+    echo 'W:';
+    $first = $items[0];
+    $second = $items[0];
+    if ({copies} === 3) {{ $third = $items[0]; }}
+    $items[0] = ['other' => 2];
+    return true;
+}});
+$result = ($items[][{dimension}] += 1);
+restore_error_handler();
+echo json_encode($result), ':', json_encode($items), ':', json_encode($first), ':', json_encode($second), ':', json_encode($third);
+unset($items, $first, $second, $third, $result);
+"#);
+        assert_output(&source, r#"W:null:[{"other":2}]:[]:[]:[]"#);
+    }
+}
+
+/// Two and three copies must remain unchanged when a detached string-key append cancels.
+#[test]
+fn test_append_grok_review_multiple_child_copies() {
+    assert_multiple_child_copies("'k'");
+}
+
+/// String-key cancellation counts every owner even without EIR optimization.
+#[test]
+fn test_append_grok_review_multiple_child_copies_no_ir_opt() {
+    without_ir_opt(test_append_grok_review_multiple_child_copies);
+}
+
+/// Integer-key append cancellation observes the same exact owner-count requirement.
+#[test]
+fn test_append_grok_review_multiple_indexed_child_copies() {
+    assert_multiple_child_copies("0");
+}
+
+/// Integer-key cancellation counts every owner even without EIR optimization.
+#[test]
+fn test_append_grok_review_multiple_indexed_child_copies_no_ir_opt() {
+    without_ir_opt(test_append_grok_review_multiple_indexed_child_copies);
+}
+
+/// Shared root copies retain one child slot, not two independent child payload owners.
+#[test]
+fn test_append_grok_review_multiple_root_copies_control() {
+    assert_output(r#"<?php
+$items = []; $first = []; $second = [];
+set_error_handler(function(int $level, string $message) use (&$items, &$first, &$second): bool {
+    echo 'W:'; $first = $items; $second = $items;
+    $items[0] = ['other' => 2]; return true;
+});
+$result = ($items[][0] += 1);
+restore_error_handler();
+echo json_encode($result), ':', json_encode($items), ':', json_encode($first), ':', json_encode($second);
+unset($items, $first, $second, $result);
+"#, r#"W:1:[{"other":2}]:[[1]]:[[1]]"#);
+}
+
+/// Shared root storage still keeps the selected child writable without EIR optimization.
+#[test]
+fn test_append_grok_review_multiple_root_copies_control_no_ir_opt() {
+    without_ir_opt(test_append_grok_review_multiple_root_copies_control);
+}
+
 /// Prefix increment returns the written scalar when its pending append is cancelled.
 #[test]
 fn test_append_ninth_review_separated_prefix_increment() {

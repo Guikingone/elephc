@@ -597,7 +597,7 @@ Linked executables are stripped of their symbol table, which is about a quarter 
 elephc --keep-symbols hello.php
 ```
 
-If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, declaration reachability, runtime-cache preparation, code generation, assembling, and linking.
+If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, declaration reachability, runtime-cache preparation, code generation, assembling, and linking. For a program that uses generics, `--report-generics` instead prints how its monomorphized instantiations are distributed across templates, one line per template.
 
 ### Current optimization passes
 
@@ -688,6 +688,7 @@ src/
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
 ├── monitor/             # Exact, sampled, local, remote, service, and export profiling
+├── repl/                # Interactive eval session: parsing, cached native host, and history
 ├── call_graph.rs        # Profiling call-graph aggregation and DOT/HTML rendering
 ├── pprof_encode.rs      # Profiling export in pprof protobuf form
 ├── probe_key.rs         # Monitoring build-key creation and validation

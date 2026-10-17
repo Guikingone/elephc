@@ -6,8 +6,8 @@
 //!
 //! Key details:
 //! - The operand borrows one ordinary cell lease, not a PHP reference wrapper.
-//! - Exactly one surviving storage route keeps the operation active. A stored cell plus an
-//!   independently boxed payload means COW already invalidated the pending target.
+//! - Exactly one surviving PHP owner keeps the operation active. Cell and payload
+//!   counts each include one compiler-held owner, so their sum must be three.
 //! - Compiler-only ancestor leases must be retired before this non-retaining query.
 
 use crate::codegen::context::FunctionContext;
@@ -30,14 +30,12 @@ pub(super) fn lower(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
             ctx.emitter.instruction("cmp x9, #5");                              // tag five owns an associative array payload
             ctx.emitter.instruction(&format!("b.ne {live}"));                   // do not cancel object or scalar offset behavior here
             ctx.emitter.label(&payload);
-            ctx.emitter.instruction("ldr w9, [x0, #-12]");                      // one cell owner is the pending compiler lease
-            ctx.emitter.instruction("cmp w9, #1");                              // detect a stored or copied owner of that exact cell
-            ctx.emitter.instruction("cset x10, hi");                            // remember whether the cell itself survives elsewhere
+            ctx.emitter.instruction("ldr w10, [x0, #-12]");                     // one cell owner is the pending compiler lease
             ctx.emitter.instruction("ldr x9, [x0, #8]");                        // separately boxed copies can retain this array payload
             ctx.emitter.instruction("ldr w9, [x9, #-12]");                      // inspect the payload independent owner count
-            ctx.emitter.instruction("cmp w9, #1");                              // the pending cell itself owns one payload reference
-            ctx.emitter.instruction("cset x11, hi");                            // remember whether the payload survives through another box
-            ctx.emitter.instruction("eor x0, x10, x11");                        // exactly one survivor identifies PHP's still-selected storage
+            ctx.emitter.instruction("add x9, x9, x10");                         // count every cell and independently boxed payload owner
+            ctx.emitter.instruction("cmp x9, #3");                              // discount two compiler-held references and require one PHP owner
+            ctx.emitter.instruction("cset x0, eq");                             // multiple payload copies must cancel rather than share the write
             ctx.emitter.instruction(&format!("b {done}"));                      // keep the complete liveness result
             ctx.emitter.label(&live);
             ctx.emitter.instruction("mov x0, #1");                              // preserve live arrays and non-array update semantics
@@ -50,15 +48,13 @@ pub(super) fn lower(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
             ctx.emitter.instruction("cmp QWORD PTR [rax], 5");                  // tag five owns an associative array payload
             ctx.emitter.instruction(&format!("jne {live}"));                    // do not cancel object or scalar offset behavior here
             ctx.emitter.label(&payload);
-            ctx.emitter.instruction("cmp DWORD PTR [rax - 12], 1");             // one cell owner is the pending compiler lease
-            ctx.emitter.instruction("seta r11b");                               // detect a stored or copied owner of that exact cell
-            ctx.emitter.instruction("movzx r11, r11b");                         // materialize the complete cell-survivor predicate
+            ctx.emitter.instruction("mov r11d, DWORD PTR [rax - 12]");          // one cell owner is the pending compiler lease
             ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");            // a separately boxed copy can own the same payload
-            ctx.emitter.instruction("cmp DWORD PTR [r10 - 12], 1");             // discount the payload reference owned by the pending cell
-            ctx.emitter.instruction("seta r10b");                               // detect an independently boxed payload survivor
-            ctx.emitter.instruction("movzx r10, r10b");                         // materialize the complete payload-survivor predicate
-            ctx.emitter.instruction("xor r11, r10");                            // exactly one survivor identifies PHP's still-selected storage
-            ctx.emitter.instruction("mov rax, r11");                            // return the complete boolean result
+            ctx.emitter.instruction("mov r10d, DWORD PTR [r10 - 12]");          // count every independently boxed payload owner
+            ctx.emitter.instruction("add r11, r10");                            // include both compiler-held references without 32-bit overflow
+            ctx.emitter.instruction("cmp r11, 3");                              // require exactly one surviving PHP owner after discounting leases
+            ctx.emitter.instruction("sete al");                                 // multiple payload copies must cancel rather than share the write
+            ctx.emitter.instruction("movzx rax, al");                           // return the complete boolean result
             ctx.emitter.instruction(&format!("jmp {done}"));                    // keep the complete liveness result
             ctx.emitter.label(&live);
             ctx.emitter.instruction("mov eax, 1");                              // preserve live arrays and non-array update semantics
