@@ -9,6 +9,9 @@
 //! - Both internal and C unary argument registers receive the payload on x86_64.
 //! - The caller's handler and active exception are restored before ordinary cleanup resumes.
 //! - The integer result reports a newly caught throw, independently of the pending owner slot.
+//! - Validated scalar Mixed releases keep the original dispatcher without a new handler.
+
+mod scalar_mixed;
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{
@@ -31,6 +34,7 @@ pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
     let scratch = abi::secondary_scratch_reg(emitter);
     emitter.blank();
     emitter.label_global("__rt_cleanup_invoke");
+    scalar_mixed::emit_fast_path(emitter);
     // -- save the callback and install a handler whose lifetime ends before returning --
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [ENTRY, PAYLOAD, OUTPUT].into_iter().enumerate() {
@@ -126,6 +130,43 @@ mod tests {
                 Arch::X86_64 => "mov rax, QWORD PTR [rbp - 40]",
             };
             assert!(asm.contains(caught_flag), "{name}: return a separate new-throw flag");
+        }
+    }
+
+    /// Only validated scalar cells bypass handlers, with identical proof gates in direct and PIC code.
+    #[test]
+    fn scalar_mixed_cleanup_gate_covers_all_targets_and_pic_modes() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for pic in [false, true] {
+                let target = Target::parse(name).unwrap();
+                let mut emitter = Emitter::new(target);
+                emitter.pic_data_refs = pic;
+                emit_cleanup_invoke(&mut emitter);
+                let asm = emitter.output();
+                let (fast, protected) = asm.split_once("__rt_cleanup_invoke_protected:").unwrap();
+                assert!(fast.contains("__rt_decref_any"), "{name}, pic={pic}");
+                assert!(fast.contains("_heap_buf") && fast.contains("_heap_off"), "{name}, pic={pic}");
+                assert!(!fast.contains("_exc_value") && !fast.contains("_exc_handler_top"), "{name}, pic={pic}");
+                assert!(!fast.contains("setjmp"), "{name}, pic={pic}");
+                let callback = if target.arch == Arch::AArch64 {
+                    ("mov x9, x0", "blr x9")
+                } else {
+                    ("mov r11, rdi", "call r11")
+                };
+                assert!(fast.contains(callback.0) && fast.contains(callback.1),
+                    "{name}, pic={pic}: invoke the authenticated callback pointer unchanged");
+                assert!(protected.contains(&target.extern_symbol("setjmp")), "{name}, pic={pic}");
+                assert!(protected.contains("__rt_cleanup_invoke_caught"), "{name}, pic={pic}");
+                let (tag, branch) = if target.arch == Arch::AArch64 { ("cmp x10, #", "b.eq") }
+                    else { ("cmp r10, ", "je") };
+                for ty in [crate::types::PhpType::Int, crate::types::PhpType::Float,
+                    crate::types::PhpType::Bool, crate::types::PhpType::Void] {
+                    let value = crate::codegen_support::value_boxing::runtime_value_tag(&ty);
+                    assert!(fast.contains(&format!("{tag}{value}")), "{name}, pic={pic}: {ty:?}");
+                }
+                assert_eq!(fast.matches(&format!("{branch} __rt_cleanup_invoke_scalar")).count(), 4,
+                    "{name}, pic={pic}: only four scalar tags qualify");
+            }
         }
     }
 }
