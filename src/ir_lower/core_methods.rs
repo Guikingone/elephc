@@ -14,15 +14,6 @@ use super::context::LoweringContext;
 
 /// Replaces native Core method bodies with typed operations and the normal return cleanup.
 pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, body: &[crate::parser::ast::Stmt]) -> bool {
-    if ctx.owner_name() == "ErrorException::__construct" {
-        let operands = ["this", "message", "code", "previous"].into_iter()
-            .map(|name| ctx.load_local(name, None).value).collect();
-        ctx.emit_void(Op::RuntimeCall, operands,
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::ThrowableInitialize)), Effects::all(), None);
-        for statement in &body[1..] { super::stmt::lower_stmt(ctx, statement); }
-        super::stmt::terminate_return(ctx, None);
-        return true;
-    }
     if matches!(ctx.owner_name(), "WeakMap::__elephc_key" | "WeakMap::__elephc_array") {
         let array = ctx.owner_name().ends_with("__elephc_array");
         crate::ir_lower::stmt::lower_stmt(ctx, &body[0]);

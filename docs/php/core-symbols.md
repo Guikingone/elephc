@@ -54,7 +54,12 @@ Filename and line overrides remain visible through an `Exception` parameter and
 inside `eval()` and in the fatal uncaught report. A filename supplied without a
 line uses line zero. Null location arguments keep the existing location, initially
 the creation site. Explicit line zero and an empty filename remain visible.
-These constructor rules follow [PHP 8.5.10](https://github.com/php/php-src/blob/php-8.5.10/Zend/zend_exceptions.c#L393-L412).
+Calling `__construct()` again preserves the existing message when no arguments
+are supplied. A zero code and null previous exception preserve their existing
+values; severity resets to its default unless supplied. Named arguments in later
+positions still fill earlier defaults, so `__construct(filename: null)` resets
+the message to an empty string.
+These constructor rules follow [PHP 8.5.10](https://github.com/php/php-src/blob/php-8.5.10/Zend/zend_exceptions.c#L309-L413).
 Native construction records the line of `new`, including inherited constructors
 and runtime class names, before invoking the constructor. The line remains the
 construction line when the exception is thrown later.

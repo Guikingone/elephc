@@ -10,6 +10,7 @@
 use crate::support::*;
 
 mod review;
+mod throwable_state;
 
 /// Property markers accept inherited native and interpreted class and interface contracts.
 #[test]

@@ -63,7 +63,7 @@ the symbol registries and compatibility documentation through
 ## Completed verification
 
 - Shared baseline contract gate: Core functions 62/62, class-likes 40/40, constants 89/89.
-- Focused Core tests: 24 class tests, 19 review regressions, 5 constant tests, and 7 diagnostic tests.
+- Focused Core tests: 24 class tests, 21 review regressions, 5 constant tests, and 7 diagnostic tests.
 - Native and opaque eval cover weak object and closure keys, identity, cloning, live iteration,
   sensitive traces, deferred attributes, executable-path aliases, and serialization hooks.
 - Heap-debug regressions cover cycles, key resurrection, throwing value destructors, and
@@ -185,3 +185,27 @@ reinitialization regression passes with a clean heap after that shared binding
 repair. Final focused validation passes 12 Core cases, 7 existing uncaught-report
 cases, 6 Magician argument/ownership cases, 4 report-emitter checks, the x86 runtime
 stack audit, and complete runtime/program assembly for all five targets.
+
+## Fourth independent Grok correction
+
+- [x] Reproduce ErrorException reinitialization clearing code and previous state.
+- [x] Preserve omitted messages, zero code, and null previous arguments with PHP's actual argument-count rules.
+- [x] Reuse the ordinary constructor body and parent initializer instead of bypassing its state logic.
+- [x] Keep compiler-provided argument collectors stable when opaque eval captures frames.
+- [x] Verify native and opaque-eval state, previous-object identity, excess arguments, and clean heaps.
+- [x] Assemble the repaired constructor and complete runtime for all five supported targets.
+
+Grok delegation `bac13ecc-a309-4c75-8049-b6ba5cfd4965` found that repeated
+constructor calls unconditionally replaced the inherited message, code, and
+previous exception. PHP preserves the message only with no supplied arguments,
+the code when zero, and the previous exception when null. Supplying a later named
+argument fills earlier defaults, so the message then becomes empty. The injected
+body now resolves those values before calling the existing parent initializer.
+
+The compiler-owned collector records the actual supplied argument count without
+being exposed as a PHP variadic. A desugaring regression prevents eval frame
+capture from snapshotting that collector a second time. All 14 focused
+ErrorException/inherited-constructor cases and three argument-capture unit tests
+pass. The new native and opaque-eval regressions agree with PHP and leave clean
+heaps, including previous-object aliasing and the six-argument limit. The compiler
+build, complete all-target assembly, documentation audits, and diff hygiene pass.

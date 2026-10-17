@@ -9,11 +9,11 @@
 //! - Real method bodies follow the shared AST to EIR path on every supported target.
 //! - Introspection and opaque eval retain the complete Core class surface.
 
-use crate::parser::ast::{BinOp, Program, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, Program, Stmt, StmtKind, TypeExpr};
 mod weak_map;
 use crate::synthetic_class::{
-    attr, class, e_array, e_array_assoc, e_binop, e_int, e_method_call, e_new_fq, e_null, e_parent_call, e_str, e_this_prop, e_var,
-    internal_declarations, method, s_expr, s_if, s_prop_assign, s_throw, t_class, t_mixed, t_nullable,
+    attr, class, e_array, e_array_assoc, e_binop, e_cast, e_index, e_int, e_method_call, e_new_fq, e_null, e_parent_call, e_str, e_this_prop, e_var,
+    internal_declarations, method, s_assign, s_expr, s_if, s_prop_assign, s_throw, t_class, t_mixed, t_nullable,
 };
 
 /// Builds Core's predefined attributes and the value wrapper used in sensitive traces.
@@ -103,7 +103,33 @@ pub(crate) fn core_declarations() -> Program {
                 .param_default("filename", t_nullable(TypeExpr::Str), e_null())
                 .param_default("line", t_nullable(TypeExpr::Int), e_null())
                 .param_default("previous", t_nullable(t_class("Throwable")), e_null())
+                .variadic(crate::func_args::HIDDEN_ARGS_PARAM, Some(t_mixed()))
                 .body(vec![
+                    s_assign("__elephc_error_argc#gen", e_cast(CastType::Int,
+                        e_index(e_var(crate::func_args::HIDDEN_ARGS_PARAM), e_int(0)))),
+                    s_if(
+                        e_binop(e_var("__elephc_error_argc#gen"), BinOp::Gt, e_int(6)),
+                        vec![s_throw(e_new_fq("ArgumentCountError", vec![e_binop(
+                            e_str("ErrorException::__construct() expects at most 6 arguments, "),
+                            BinOp::Concat,
+                            e_binop(e_var("__elephc_error_argc#gen"), BinOp::Concat, e_str(" given")),
+                        )]))], vec![], None,
+                    ),
+                    s_if(
+                        e_binop(e_var("__elephc_error_argc#gen"), BinOp::StrictEq, e_int(0)),
+                        vec![s_assign("message", e_method_call(crate::synthetic_class::e_this(), "getMessage", vec![]))],
+                        vec![], None,
+                    ),
+                    s_if(
+                        e_binop(e_var("code"), BinOp::StrictEq, e_int(0)),
+                        vec![s_assign("code", e_method_call(crate::synthetic_class::e_this(), "getCode", vec![]))],
+                        vec![], None,
+                    ),
+                    s_if(
+                        e_binop(e_var("previous"), BinOp::StrictEq, e_null()),
+                        vec![s_assign("previous", e_method_call(crate::synthetic_class::e_this(), "getPrevious", vec![]))],
+                        vec![], None,
+                    ),
                     s_expr(e_parent_call("__construct", vec![e_var("message"), e_var("code"), e_var("previous")])),
                     s_prop_assign(crate::synthetic_class::e_this(), "severity", e_var("severity")),
                     s_if(
