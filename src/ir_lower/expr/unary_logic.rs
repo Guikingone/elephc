@@ -18,6 +18,12 @@ pub(super) fn lower_numeric_unary(
     expr: &Expr,
 ) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    if int_op == Op::INeg && crate::types::object_operators::operator_class(&ctx.builder.value_php_type(value.value)).is_some() {
+        let zero = lower_int_literal(ctx, 0, expr);
+        if let Some(result) = object_operators::lower_object_binary_values(ctx, zero, &BinOp::Sub, value, expr) {
+            return result;
+        }
+    }
     match value.ir_type {
         IrType::F64 => ctx.emit_value(float_op, vec![value.value], None, PhpType::Float, float_op.default_effects(), Some(expr.span)),
         IrType::I64 => {
