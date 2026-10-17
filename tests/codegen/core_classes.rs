@@ -9,6 +9,25 @@
 
 use crate::support::*;
 
+/// Nested WeakMap writes are read back from the stored entry rather than a discarded temporary.
+#[test]
+fn test_core_classes_weak_map_nested_writes() {
+    let source = r#"<?php
+class NestedWeakKey {}
+$key = new NestedWeakKey();
+$map = new WeakMap();
+$map[$key] = ['count' => 0];
+$map[$key]['count'] = 1;
+$map[$key]['count'] += 2;
+echo $map[$key]['count'];
+unset($map, $key);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "3", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 mod review;
 mod throwable_state;
 
