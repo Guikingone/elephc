@@ -63,7 +63,7 @@ the symbol registries and compatibility documentation through
 ## Completed verification
 
 - Shared baseline contract gate: Core functions 62/62, class-likes 40/40, constants 89/89.
-- Focused Core tests: 24 class tests, 16 review regressions, 5 constant tests, and 7 diagnostic tests.
+- Focused Core tests: 24 class tests, 19 review regressions, 5 constant tests, and 7 diagnostic tests.
 - Native and opaque eval cover weak object and closure keys, identity, cloning, live iteration,
   sensitive traces, deferred attributes, executable-path aliases, and serialization hooks.
 - Heap-debug regressions cover cycles, key resurrection, throwing value destructors, and
@@ -157,3 +157,31 @@ boxing-owner leak even for a plain user class (Code Journal task `0a0ba2ab`), an
 Reflection metadata retention remains task `7215b48c`. Those functional probes
 check line preservation; the native scalar/compound and native-to-eval location
 probes separately require a clean heap.
+
+
+## Third independent Grok correction
+
+- [x] Reproduce explicit ErrorException locations diverging between getters and fatal reports.
+- [x] Share a borrowed effective-location reader between getters and uncaught reporting.
+- [x] Preserve explicit line zero and empty filenames without inventing synthesized locations.
+- [x] Correct stale stdout and location-storage documentation.
+- [x] Validate regressions, stack alignment, and all-target runtime assembly.
+- [ ] Obtain clean Grok and Greptile 5/5 on the next published head.
+
+Grok delegation `903c8eeb-8a94-49e9-856b-2e7cbb21ac81` confirmed the metadata
+tail repair and one further medium-severity fatal-report mismatch. PHP reports
+`custom.php:73` for explicit constructor arguments, while the old report used
+the construction path and line. The effective-location reader returns a borrowed
+filename, line, and a distinct known-origin flag, so getters and reports agree.
+
+PHP 8.5.10 source and PHP-oracle controls also confirm that a supplied filename
+with an omitted/null line records zero, and null constructor arguments preserve
+previous location overrides. The injected constructor now follows those rules;
+native and opaque-eval regressions cover defaults, reinitialization, and ownership.
+
+Explicit eval `__construct` calls now fall back to the existing constructor
+signature when no ordinary method signature is registered. The named-argument
+reinitialization regression passes with a clean heap after that shared binding
+repair. Final focused validation passes 12 Core cases, 7 existing uncaught-report
+cases, 6 Magician argument/ownership cases, 4 report-emitter checks, the x86 runtime
+stack audit, and complete runtime/program assembly for all five targets.

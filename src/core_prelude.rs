@@ -1,5 +1,6 @@
 //! Purpose:
-//! Builds PHP Core attribute and sensitive-value classes as ordinary internal declarations.
+//! Builds internal declarations for Core attributes, Throwable constructors,
+//! sensitive-value wrappers, and weak collections.
 //!
 //! Called from:
 //! - The compilation pipeline and integration-test frontend before name resolution.
@@ -8,11 +9,11 @@
 //! - Real method bodies follow the shared AST to EIR path on every supported target.
 //! - Introspection and opaque eval retain the complete Core class surface.
 
-use crate::parser::ast::{Program, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{BinOp, Program, Stmt, StmtKind, TypeExpr};
 mod weak_map;
 use crate::synthetic_class::{
-    attr, class, e_array, e_array_assoc, e_int, e_method_call, e_new_fq, e_null, e_parent_call, e_str, e_this_prop, e_var,
-    internal_declarations, method, s_expr, s_prop_assign, s_throw, t_class, t_mixed, t_nullable,
+    attr, class, e_array, e_array_assoc, e_binop, e_int, e_method_call, e_new_fq, e_null, e_parent_call, e_str, e_this_prop, e_var,
+    internal_declarations, method, s_expr, s_if, s_prop_assign, s_throw, t_class, t_mixed, t_nullable,
 };
 
 /// Builds Core's predefined attributes and the value wrapper used in sensitive traces.
@@ -105,8 +106,19 @@ pub(crate) fn core_declarations() -> Program {
                 .body(vec![
                     s_expr(e_parent_call("__construct", vec![e_var("message"), e_var("code"), e_var("previous")])),
                     s_prop_assign(crate::synthetic_class::e_this(), "severity", e_var("severity")),
-                    s_prop_assign(crate::synthetic_class::e_this(), "__elephc_filename", e_var("filename")),
-                    s_prop_assign(crate::synthetic_class::e_this(), "__elephc_line", e_var("line")),
+                    s_if(
+                        e_binop(e_var("filename"), BinOp::StrictNotEq, e_null()),
+                        vec![s_prop_assign(crate::synthetic_class::e_this(), "__elephc_filename", e_var("filename"))],
+                        vec![], None,
+                    ),
+                    s_if(
+                        e_binop(e_var("line"), BinOp::StrictNotEq, e_null()),
+                        vec![s_prop_assign(crate::synthetic_class::e_this(), "__elephc_line", e_var("line"))],
+                        vec![(
+                            e_binop(e_var("filename"), BinOp::StrictNotEq, e_null()),
+                            vec![s_prop_assign(crate::synthetic_class::e_this(), "__elephc_line", e_int(0))],
+                        )], None,
+                    ),
                 ]))
             .method(method("getSeverity").final_().returns(TypeExpr::Int).returning(e_this_prop("severity")))
             .build());

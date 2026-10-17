@@ -112,6 +112,61 @@ fn test_core_review_error_exception_uncaught_creation_line() {
     assert!(out.stdout.ends_with(&format!(":{line}\n")), "{}", out.stdout);
 }
 
+/// Fatal locations match getters for independent overrides, explicit zero, and an empty filename.
+#[test]
+fn test_core_review_error_exception_uncaught_location_overrides() {
+    for (arguments, oracle_suffix) in [
+        ("filename: 'custom.php', line: 73", Some("custom.php:73")),
+        ("filename: '', line: 0", Some(":0")),
+        ("filename: null, line: 0", None),
+        ("filename: 'custom.php', line: null", Some("custom.php:0")),
+    ] {
+        let source = format!("<?php\nclass LocatedReport extends ErrorException {{}}\n$error = new LocatedReport('located', {arguments});\necho 'expected:', $error->getFile(), ':', $error->getLine(), \"\\n\";\nthrow $error;");
+        let out = compile_and_run_capture(&source);
+        assert!(!out.success);
+        let expected = out.stdout.lines().next().unwrap().strip_prefix("expected:").unwrap();
+        if let Some(suffix) = oracle_suffix { assert_eq!(expected, suffix, "{arguments}"); }
+        assert!(out.stdout.contains("Fatal error: Uncaught LocatedReport: located in "), "{arguments}: {}", out.stdout);
+        assert!(out.stdout.ends_with(&format!(" in {expected}\n")), "{arguments}: {}", out.stdout);
+    }
+}
+
+/// Null location arguments preserve existing state; a new filename defaults its line to zero.
+#[test]
+fn test_core_review_error_exception_constructor_location_defaults() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$error = new ErrorException(filename: 'first.php');
+echo $error->getFile(), ':', $error->getLine(), ';';
+$error->__construct(filename: null, line: null);
+echo $error->getFile(), ':', $error->getLine(), ';';
+$error->__construct(line: 41);
+echo $error->getFile(), ':', $error->getLine(), ';';
+$error->__construct(filename: 'second.php');
+echo $error->getFile(), ':', $error->getLine();
+unset($error);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "first.php:0;first.php:0;first.php:41;second.php:0");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Opaque eval uses the same constructor location defaults and reinitialization rules.
+#[test]
+fn test_core_review_error_exception_constructor_location_defaults_eval() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$source = '$error = new ErrorException(filename: "eval.php");
+echo $error->getFile(), ":", $error->getLine(), ";";
+$error->__construct(line: 17);
+$error->__construct(filename: null, line: null);
+echo $error->getFile(), ":", $error->getLine();
+unset($error);' . ' // ' . $argc;
+eval($source);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "eval.php:0;eval.php:17");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Runtime property-name dispatch preserves construction metadata independently of the code slot.
 #[test]
 fn test_core_review_error_exception_dynamic_code_write_preserves_line() {

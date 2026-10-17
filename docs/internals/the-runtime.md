@@ -1057,7 +1057,18 @@ elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
 
-The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes `Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stderr before exiting with status 255. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, the line from the payload's creation-line slot (`THROWABLE_CREATION_LINE_OFFSET`, formatted through `__rt_itoa`), and the file from `_script_source_file`. An empty message drops the `": "` separator, and a zero line drops the whole ` in <file>:<line>` suffix, both matching reference PHP.
+The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`,
+which reads the published `_exc_value` and writes
+`Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stdout before exiting
+with status 255. The class name comes from `_class_name_entries` and the message
+from payload offsets 8/16. The report and public getters share
+`__rt_throwable_location_borrowed`, which resolves creation metadata and independent
+`ErrorException` filename/line overrides without allocating. Getter strings are
+persisted by their public adapter; the report borrows bytes from the published
+receiver and saves pointer, length, and line across syscalls. An explicit zero
+line or empty filename remains visible. A separate known-origin flag omits the
+suffix for synthesized errors with no source location. An empty message drops
+the `": "` separator.
 
 Ordinary Throwable objects, including `ErrorException` and subclasses with extra
 properties, reserve a creation-line word after declared properties and the optional
@@ -1067,7 +1078,9 @@ includes it, while `_class_object_payload_sizes` keeps the property and GC layou
 unchanged. Fixed and dynamic EIR allocation stamp the allocating expression's line
 before the constructor runs. Location readers and uncaught reporting distinguish
 ordinary metadata from the existing compact Throwable prefix. `ErrorException`
-location getters use an explicit constructor override when present, including line zero.
+location getters use an explicit constructor override when present, including line zero. Explicit eval calls to
+`__construct` reuse the constructor signature registration when ordinary method
+metadata is absent, so named arguments and defaults use the same binding as `new`.
 
 Codegen guards in `codegen::lower_inst::exceptions` have their OWN uncaught path: they write a fatal message baked at emit time and exit before the throwable is ever allocated, so they never reach this helper. They share `UNCAUGHT_EXIT_STATUS` with it so the status a script observes does not depend on which kind of exception escaped.
 
