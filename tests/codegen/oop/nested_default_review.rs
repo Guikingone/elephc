@@ -350,6 +350,39 @@ fn test_nested_default_grok_review_global_parent_class_default_no_ir_opt() {
     without_ir_opt(test_nested_default_grok_review_global_parent_class_default);
 }
 
+/// Relative object defaults keep declaration errors instead of borrowing the caller's scope.
+#[test]
+fn test_nested_default_grok_second_review_unbound_new_scope() {
+    check(r#"<?php
+class Orphan {
+    public static function value(object $object = new parent): string { return get_class($object); }
+}
+class Base {}
+class Caller extends Base {
+    public function runClosure(Closure $closure): void { $closure(); }
+    public function run(): void {
+        echo Orphan::value(new stdClass()), '|';
+        try { Orphan::value(); } catch (Error $error) { echo $error->getMessage(), '|'; unset($error); }
+    }
+}
+$closure = function (object $object = new self): string { return get_class($object); };
+$caller = new Caller();
+$caller->run();
+echo $closure(new stdClass()), '|';
+try { $caller->runClosure($closure); } catch (Error $error) { echo $error->getMessage(); unset($error); }
+unset($caller, $closure);
+"#,
+        "stdClass|Cannot access \"parent\" when current class scope has no parent|stdClass|Cannot access \"self\" when no class scope is active",
+        true,
+    );
+}
+
+/// Unbound relative object defaults are independent of EIR optimization.
+#[test]
+fn test_nested_default_grok_second_review_unbound_new_scope_no_ir_opt() {
+    without_ir_opt(test_nested_default_grok_second_review_unbound_new_scope);
+}
+
 /// A trait's native default helpers preserve each consuming class's constructor scope.
 #[test]
 fn test_nested_default_ninth_review_trait_helper_scope() {

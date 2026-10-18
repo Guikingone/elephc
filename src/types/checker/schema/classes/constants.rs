@@ -445,7 +445,39 @@ fn rewrite_expr(
             let args = rewrite_expr_list(args, class_name, parent_name)?;
             let bound = match (receiver, parent_name) {
                 (StaticReceiver::Self_, _) if !class_name.is_empty() => Some(class_name),
+                (StaticReceiver::Self_, ParentScope::ValidateLazyConstants
+                    | ParentScope::ValidateLazyCallableDefaults) => None,
+                (StaticReceiver::Self_, _) => {
+                    let error = CompileError::new(
+                        expr.span,
+                        "Cannot access \"self\" when no class scope is active",
+                    );
+                    if callable_receiver_error_is_lazy(parent_name, &error) {
+                        return Ok(deferred_default_error(error.message, expr.span));
+                    }
+                    return Err(error);
+                }
                 (StaticReceiver::Parent, ParentScope::Bound(parent)) => Some(parent),
+                (StaticReceiver::Parent, ParentScope::ValidateLazyConstants
+                    | ParentScope::ValidateLazyCallableDefaults) => None,
+                (StaticReceiver::Parent, _) => {
+                    let message = if matches!(parent_name, ParentScope::NoClass) {
+                        "Cannot access \"parent\" when no class scope is active"
+                    } else {
+                        "Cannot access \"parent\" when current class scope has no parent"
+                    };
+                    let error = CompileError::new(expr.span, message);
+                    if callable_receiver_error_is_lazy(parent_name, &error) {
+                        return Ok(deferred_default_error(error.message, expr.span));
+                    }
+                    return Err(error);
+                }
+                (StaticReceiver::Static, _) => {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "\"static\" is not allowed in compile-time constants",
+                    ));
+                }
                 _ => None,
             };
             if let Some(class) = bound {

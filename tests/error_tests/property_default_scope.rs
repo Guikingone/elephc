@@ -101,6 +101,18 @@ fn test_property_default_second_review_method_late_static() {
     }
 }
 
+/// Late-static object factories are forbidden in callable defaults at declaration time.
+#[test]
+fn test_property_default_grok_second_review_new_static() {
+    for source in [
+        "<?php class Probe { public function value($object = new static) {} }",
+        "<?php $closure = function ($object = new static) {};",
+        "<?php $arrow = fn($object = new static) => $object;",
+    ] {
+        expect_error(source, "\"static\" is not allowed in compile-time constants");
+    }
+}
+
 /// Direct interface and enum defaults cannot bind a nonexistent parent class.
 #[test]
 fn test_property_default_oct9_classlike_method_parent() {

@@ -216,6 +216,11 @@ trait Unbound { public string $name = parent::class; }
 class UnboundConsumer { use Unbound; public static string $valid = 'ok'; }
 trait Promoted { public function __construct(public string $name = parent::class) {} }
 class PromotedConsumer { use Promoted; }
+class DefaultScopeOrphan {
+    public static function selfValue(object $value = new self): object { return $value; }
+    public static function parentValue(object $value = new parent): object { return $value; }
+}
+$defaultScopeClosure = function(object $value = new self): object { return $value; };
 $consumer = new Consumer();
 echo $consumer->name, Consumer::$owner, $consumer->promoted;
 try { new UnboundConsumer(); } catch (Error $e) { echo $e->getMessage(); }
@@ -223,11 +228,22 @@ try { echo UnboundConsumer::$valid; } catch (Error $e) { echo $e->getMessage(); 
 try { new PromotedConsumer(); } catch (Error $e) { echo $e->getMessage(); }
 $explicit = new PromotedConsumer('explicit');
 echo $explicit->name;
+echo get_class(DefaultScopeOrphan::selfValue());
+try { DefaultScopeOrphan::parentValue(); } catch (Error $e) { echo $e->getMessage(); }
+try { $defaultScopeClosure(); } catch (Error $e) { echo $e->getMessage(); }
+unset($defaultScopeClosure);
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
+        let orphan = &module.class_infos["DefaultScopeOrphan"];
+        assert!(matches!(orphan.static_methods["selfvalue"].defaults[0].as_ref().unwrap().kind,
+            crate::parser::ast::ExprKind::NewObject { .. }),
+            "{name}: new self binds to its declaring class");
+        assert!(matches!(orphan.static_methods["parentvalue"].defaults[0].as_ref().unwrap().kind,
+            crate::parser::ast::ExprKind::Throw(_)),
+            "{name}: missing new parent scope stays a lazy Error");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
