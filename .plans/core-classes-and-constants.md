@@ -502,3 +502,17 @@ tests,8 SysV audits,5 reference-cell emitter tests and the five-target WeakMap
 lowering regression pass. The updated example matches pinned PHP8.5.10 and
 leaves a clean heap. Compiler/library/exporter builds and generated documentation,
 registry/site/EIR, Rustdoc, assembly comments and whitespace audits pass.
+
+
+## Synthetic reference parity follow-up
+
+CI's curl contract gate exercises all injected preludes and exposed missing
+RefAssign cases in the synthetic PHP printer and call audit. Both now traverse
+and render reference sources; the parameter-read walker also records their
+reads and targets. A property/nested-entry reference round-trip test verifies
+that calls in index expressions remain visible to the audit. The executable
+WeakMap semantics and target ABI repair are unchanged.
+
+All7 prelude parity tests pass with curl enabled, and all5 printer tests pass.
+The compiler/library/exporter build is warning-free. Regenerated documentation
+has no drift; registry/site/EIR and whitespace audits pass.
