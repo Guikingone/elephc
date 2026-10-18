@@ -158,6 +158,16 @@ python3 benchmark/run.py --internal script-cache
 python3 benchmark/run.py --internal null-representation
 ```
 
+For an mbstring bridge footprint probe, compile
+`benchmark/diagnostics/mbstring.php` with matching release-built archives and
+compare its output with real PHP with mbstring enabled. It exercises encoding
+enumeration, lookup and multiple codec consumers in one executable. Compare
+executable bytes and ELF/Mach-O section sizes separately from execution time;
+`--keep-symbols` and the default stripped mode are different measurements.
+Use a separate `CARGO_TARGET_DIR` for each revision when building bridge archives.
+An older worktree sharing a target directory can otherwise reuse another
+revision's artifacts based on their timestamps.
+
 These manual measurements have different scopes (including parse/deserialize or
 compile/link time). They do not join the process-execution histories or run in
 the trend CI job.

@@ -406,6 +406,12 @@ reader invocation. Rust does not interpret native array layouts. The target-awar
 reader owns indexed strides, hash iteration, Mixed unboxing, and nullable-container
 normalization.
 
+The Rust encoding catalog is one immutable static slice. Codec selection and
+encoding lookup share its metadata and embedded byte tables, rather than
+instantiating the complete `const` catalog at multiple use sites. Regenerating
+the catalog preserves that storage policy; the encoding order and payload bytes
+still come from the PHP fixtures.
+
 AOT and production eval calls use the shared invocation coordinator for argument
 preparation and delayed array snapshots. AOT supplies stack-local borrowed invoker
 descriptors containing each value's concrete tag and raw payload. The separate
