@@ -11,6 +11,215 @@
 
 use crate::support::*;
 
+/// Consumer-bound magic constants compare equal before class or enum trait redeclarations merge.
+#[test]
+fn test_enum_greptile_current_consumer_constants() {
+    assert_eq!(compile_and_run(r#"<?php
+trait Origin { const OWNER = __CLASS__; }
+trait Wrapped { use Origin; }
+class C { use Wrapped; const OWNER = __CLASS__; }
+enum E { use Wrapped; const OWNER = __CLASS__; case A; }
+echo C::OWNER, '|', E::OWNER;
+"#), "C|E");
+}
+
+/// An optional parameter before a required one does not reduce the source contract's arity.
+#[test]
+fn test_enum_greptile_current_required_positions() {
+    assert_eq!(compile_and_run(r#"<?php
+interface Contract { public function f(int $a = 1, int $b): int; }
+enum E implements Contract { case A; public function f(int $a, int $b): int { return $a + $b; } }
+trait Requirement { abstract public function f(int $a = 1, int $b): int; }
+enum F { use Requirement; case A; public function f(int $a, int $b): int { return $a + $b; } }
+function invoke(Contract $value): int { return $value->f(1, 2); }
+echo invoke(E::A), '|', F::A->f(3, 4);
+"#), "3|7");
+}
+
+/// Runtime enum unpacks preserve exact union members before applying PHP weak scalar priority.
+#[test]
+fn test_enum_greptile_current_scalar_union_binding() {
+    assert_eq!(compile_and_run(r#"<?php
+interface Numeric { public function f(int|float $value): mixed; }
+enum N implements Numeric { case A; public function f(int|float $value): mixed { return $value; } }
+interface Textual { public function f(int|float|string $value): mixed; }
+enum T implements Textual { case A; public function f(int|float|string $value): mixed { return $value; } }
+interface BooleanText { public function f(string|bool $value): mixed; }
+enum B implements BooleanText { case A; public function f(string|bool $value): mixed { return $value; } }
+function numeric(Numeric $value, array $args): mixed { return $value->f(...$args); }
+function textual(Textual $value, array $args): mixed { return $value->f(...$args); }
+function booleanText(BooleanText $value, array $args): mixed { return $value->f(...$args); }
+function show(mixed $value): void { echo gettype($value), ':', json_encode($value), '|'; }
+show(numeric(N::A, [true])); show(numeric(N::A, [false]));
+show(numeric(N::A, ['3'])); show(numeric(N::A, ['3.5'])); show(numeric(N::A, ['2e1']));
+show(textual(T::A, ['3'])); show(textual(T::A, [true]));
+show(booleanText(B::A, [3])); show(booleanText(B::A, [true]));
+$zero = numeric(N::A, ['-0.0']); echo (int)(fdiv(1.0, (float)$zero) < 0.0), '|';
+"#), "integer:1|integer:0|integer:3|double:3.5|double:20|string:\"3\"|integer:1|string:\"3\"|boolean:true|1|");
+}
+
+/// Consumer constant comparison is independent of EIR optimization.
+#[test]
+fn test_enum_greptile_current_consumer_constants_no_ir_opt() {
+    without_ir_opt(test_enum_greptile_current_consumer_constants);
+}
+
+/// Source-required positions are independent of EIR optimization.
+#[test]
+fn test_enum_greptile_current_required_positions_no_ir_opt() {
+    without_ir_opt(test_enum_greptile_current_required_positions);
+}
+
+/// Weak union binding is independent of EIR optimization.
+#[test]
+fn test_enum_greptile_current_scalar_union_binding_no_ir_opt() {
+    without_ir_opt(test_enum_greptile_current_scalar_union_binding);
+}
+
+/// Every variadic union element uses the same binding rules, including named surplus values.
+#[test]
+fn test_enum_greptile_current_variadic_union_binding() {
+    assert_eq!(compile_and_run(r#"<?php
+interface Contract { public function f(int|float ...$values): array; }
+enum E implements Contract { case A; public function f(int|float ...$values): array { return $values; } }
+function invoke(Contract $value, array $args): array { return $value->f(...$args); }
+echo json_encode(invoke(E::A, [true, 'extra' => '3.5'])), '|';
+echo json_encode(invoke(E::A, ['extra' => '3.5'])), '|';
+echo json_encode(invoke(E::A, [3.5])), '|';
+echo json_encode(invoke(E::A, [true, 3.5])), '|';
+echo json_encode(invoke(E::A, ['extra' => 3.5]));
+"#), "{\"0\":1,\"extra\":3.5}|{\"extra\":3.5}|[3.5]|[1,3.5]|{\"extra\":3.5}");
+}
+
+/// A strict runtime unpack rejects weak union coercion but still widens int to float.
+#[test]
+fn test_enum_greptile_current_strict_union_binding() {
+    assert_eq!(compile_and_run(r#"<?php
+declare(strict_types=1);
+interface Contract { public function f(float|string $value): mixed; }
+enum E implements Contract { case A; public function f(float|string $value): mixed { return $value; } }
+function invoke(Contract $value, array $args): mixed { return $value->f(...$args); }
+try { invoke(E::A, [true]); } catch (TypeError $error) { echo 'T|'; }
+$value = invoke(E::A, [3]); echo gettype($value), ':', json_encode($value);
+"#), "T|double:3");
+}
+
+/// Variadic union binding keeps its value types without EIR optimization.
+#[test]
+fn test_enum_greptile_current_variadic_union_binding_no_ir_opt() {
+    without_ir_opt(test_enum_greptile_current_variadic_union_binding);
+}
+
+/// Converted variadic boxes stay live through insertion and retire after repeated calls.
+#[test]
+fn test_enum_greptile_current_variadic_union_owners() {
+    let mut baseline = None;
+    for iterations in [1, 16] {
+        let out = compile_and_run_with_heap_debug(&format!(r#"<?php
+interface Contract {{ public function f(int|float ...$values): array; }}
+enum E implements Contract {{ case A; public function f(int|float ...$values): array {{ return $values; }} }}
+function invoke(Contract $value, array $args): array {{ return $value->f(...$args); }}
+for ($i = 0; $i < {iterations}; $i++) {{
+    $result = invoke(E::A, [true, 'extra' => '3.5']);
+    echo json_encode($result), '|'; unset($result);
+}}
+"#));
+        assert!(out.success, "{}\n{}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, "{\"0\":1,\"extra\":3.5}|".repeat(iterations));
+        let retained = ["live_blocks=", "live_bytes="].map(|metric| {
+            out.stderr.lines().next().unwrap().split_whitespace()
+                .find_map(|field| field.strip_prefix(metric)).unwrap().parse::<usize>().unwrap()
+        });
+        if let Some(baseline) = baseline { assert_eq!(retained, baseline, "{}", out.stderr); }
+        else { baseline = Some(retained); }
+    }
+}
+
+/// Variadic box ownership is independent of EIR optimization.
+#[test]
+fn test_enum_greptile_current_variadic_union_owners_no_ir_opt() {
+    without_ir_opt(test_enum_greptile_current_variadic_union_owners);
+}
+
+/// Strict call-site binding is independent of EIR optimization.
+#[test]
+fn test_enum_greptile_current_strict_union_binding_no_ir_opt() {
+    without_ir_opt(test_enum_greptile_current_strict_union_binding);
+}
+
+/// Repeated scalar union conversion retires numeric boxes and owned string results.
+#[test]
+fn test_enum_greptile_current_union_owners() {
+    let mut baseline = None;
+    for iterations in [1, 16] {
+        let out = compile_and_run_with_heap_debug(&format!(r#"<?php
+interface Numeric {{ public function f(int|float $value): mixed; }}
+enum N implements Numeric {{ case A; public function f(int|float $value): mixed {{ return $value; }} }}
+interface Textual {{ public function f(string|bool $value): mixed; }}
+enum T implements Textual {{ case A; public function f(string|bool $value): mixed {{ return $value; }} }}
+function numeric(Numeric $value, array $args): mixed {{ return $value->f(...$args); }}
+function textual(Textual $value, array $args): mixed {{ return $value->f(...$args); }}
+for ($i = 0; $i < {iterations}; $i++) {{
+    $number = numeric(N::A, [true]); $text = textual(T::A, [123]);
+    echo $number, ':', $text, '|'; unset($number, $text);
+}}
+"#));
+        assert!(out.success, "{}\n{}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, "1:123|".repeat(iterations));
+        let retained = ["live_blocks=", "live_bytes="].map(|metric| {
+            out.stderr.lines().next().unwrap().split_whitespace()
+                .find_map(|field| field.strip_prefix(metric)).unwrap().parse::<usize>().unwrap()
+        });
+        if let Some(baseline) = baseline {
+            assert_eq!(retained, baseline, "repeated union conversions retain extra owners: {}", out.stderr);
+        } else { baseline = Some(retained); }
+    }
+}
+
+/// Runtime union owner retirement does not rely on EIR optimization.
+#[test]
+fn test_enum_greptile_current_union_owners_no_ir_opt() {
+    without_ir_opt(test_enum_greptile_current_union_owners);
+}
+
+/// Source interfaces compare synthesized factories against their PHP-visible int|string input.
+#[test]
+fn test_enum_grok_current_source_factory_contracts() {
+    assert_eq!(compile_and_run(r#"<?php
+interface Factory extends BackedEnum { public static function from(int|string $value): static; }
+enum Text: string implements Factory { case A = 'a'; }
+interface NarrowFactory { public static function from(int $value): static; }
+enum OtherText: string implements NarrowFactory { case A = 'a'; }
+interface TryFactory { public static function tryFrom(string $value): ?static; }
+enum Number: int implements TryFactory { case Seven = 7; }
+echo Text::from('a')->name, '|', OtherText::from('a')->name, '|', Number::tryFrom('7')->name;
+"#), "A|A|Seven");
+}
+
+/// Builtin backed factories satisfy compatible trait-imported abstract static requirements.
+#[test]
+fn test_enum_grok_current_trait_factory_requirements() {
+    assert_eq!(compile_and_run(r#"<?php
+trait Factory { abstract public static function from(int|string $value): static; }
+enum Text: string { use Factory; case A = 'a'; }
+trait NarrowFactory { abstract public static function from(int $value): static; }
+enum OtherText: string { use NarrowFactory; case A = 'a'; }
+echo Text::from('a')->name, '|', OtherText::from('a')->name;
+"#), "A|A");
+}
+
+/// PHP-visible factory contracts are independent of EIR optimization.
+#[test]
+fn test_enum_grok_current_source_factory_contracts_no_ir_opt() {
+    without_ir_opt(test_enum_grok_current_source_factory_contracts);
+}
+
+/// Trait factory requirements keep the synthesized implementation without EIR optimization.
+#[test]
+fn test_enum_grok_current_trait_factory_requirements_no_ir_opt() {
+    without_ir_opt(test_enum_grok_current_trait_factory_requirements);
+}
+
 /// Static unpack elements are evaluated once and type-checked before a later missing parameter.
 #[test]
 fn test_enum_seventh_review_static_spread_shortage() {

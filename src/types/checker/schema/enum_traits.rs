@@ -37,11 +37,16 @@ pub(crate) fn validate_enum_trait_requirements(
     collect_trait_members(program, &mut traits);
     if let Some(uses) = enum_trait_uses(program, &enum_unit.name) {
         for required in adapted_requirements(uses, &traits, &mut HashSet::new()) {
-            let Some(actual) = enum_unit.methods.iter().find(|method| {
+            if let Some(actual) = enum_unit.methods.iter().find(|method| {
                 !method.is_abstract && method.is_static == required.is_static
                     && php_symbol_key(&method.name) == php_symbol_key(&required.name)
-            }) else { continue; };
-            validate_requirement(checker, enum_unit, &required, actual)?;
+            }) {
+                validate_requirement(checker, enum_unit, &required, actual)?;
+            } else if required.is_static {
+                if let Some(actual) = super::enum_factories::public_signature(checker, &enum_unit.name, &required.name) {
+                    super::enum_factories::validate_trait_requirement(checker, &enum_unit.name, &required, &actual)?;
+                }
+            }
         }
     }
     Ok(())

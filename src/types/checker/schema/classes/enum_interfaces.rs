@@ -67,18 +67,11 @@ pub(crate) fn validate_enum_interface_contracts(
             (true, &required.static_methods, &state.static_sigs),
         ] {
             for (name, contract) in methods {
-                // Generated factories use the backing type for their internal ABI, while
-                // BackedEnum exposes int|string. The shared validator already checked that
-                // builtin bridge; only source contracts need this additional narrowing check.
-                let owner = required.static_method_declaring_interfaces.get(name)
-                    .map(String::as_str).unwrap_or(interface_name);
-                if is_static && matches!(name.as_str(), "from" | "tryfrom")
-                    && owner.eq_ignore_ascii_case("BackedEnum")
-                {
-                    continue;
-                }
                 let implementation = actual.get(name).expect("validated implementation");
-                let actual = SourceVisibleShape::of(implementation);
+                let public_factory = is_static.then(||
+                    super::super::enum_factories::public_signature(checker, &enum_unit.name, name)
+                ).flatten();
+                let actual = SourceVisibleShape::of(public_factory.as_ref().unwrap_or(implementation));
                 let required = SourceVisibleShape::of(contract);
                 for index in 0..actual.param_count.max(required.param_count) {
                     let Some(((actual_ty, _), (required_ty, _))) =

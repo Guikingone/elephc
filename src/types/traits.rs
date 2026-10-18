@@ -204,6 +204,9 @@ pub fn flatten_classes(
                         continue;
                     }
                 };
+                let imported_constants = crate::magic_constants::bind_trait_constant_values(
+                    imported_constants, name,
+                );
                 let merged_constants = match merge::merge_constants(
                     &imported_constants,
                     constants,
@@ -233,7 +236,7 @@ pub fn flatten_classes(
                     properties: merged_props,
                     methods: merged_methods,
                     attributes: stmt.attributes.clone(),
-                    constants: crate::magic_constants::bind_trait_constant_values(merged_constants, name),
+                    constants: merged_constants,
                     used_traits: used_trait_names(trait_uses),
                     trait_aliases: used_trait_aliases(trait_uses, &trait_map),
                 });
@@ -286,6 +289,9 @@ pub fn flatten_classes(
                         continue;
                     }
                 };
+                let imported_constants = crate::magic_constants::bind_trait_constant_values(
+                    imported_constants, name,
+                );
                 let merged_constants = match merge::merge_constants(
                     &imported_constants,
                     constants,
@@ -320,7 +326,7 @@ pub fn flatten_classes(
                         properties: Vec::new(),
                         methods: merged_methods,
                         attributes: stmt.attributes.clone(),
-                        constants: crate::magic_constants::bind_trait_constant_values(merged_constants, name),
+                        constants: merged_constants,
                         used_traits: used_trait_names(trait_uses),
                         trait_aliases: used_trait_aliases(trait_uses, &trait_map),
                     },

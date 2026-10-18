@@ -104,6 +104,8 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `name`: enum identifier
 /// - `backing_type`: optional `TypeExpr` for backed enums
 /// - `cases`: parsed enum case declarations
+/// - `user_methods`: flattened methods and imported trait requirements
+/// - `declared_methods`: raw enum declarations, excluding imported trait requirements
 /// - `user_constants`: flattened constants, including trait imports
 /// - `declared_constants`: constants written directly in the enum, for reflection order
 /// - `span`: source location for error reporting
@@ -126,6 +128,7 @@ pub(crate) fn build_enum_info(
     cases: &[crate::parser::ast::EnumCaseDecl],
     implements: &[crate::names::Name],
     user_methods: &[crate::parser::ast::ClassMethod],
+    declared_methods: &[crate::parser::ast::ClassMethod],
     user_constants: &[crate::parser::ast::ClassConst],
     declared_constants: &[crate::parser::ast::ClassConst],
     used_traits: &[String],
@@ -159,7 +162,11 @@ pub(crate) fn build_enum_info(
     for method in user_methods {
         validate_method_shape(name, method)?;
     }
-    if let Some(method) = user_methods.iter().find(|method| method.is_abstract) {
+    if let Some(method) = declared_methods.iter().find(|method| method.is_abstract)
+        .or_else(|| user_methods.iter().find(|method| method.is_abstract
+            && !(backing_type.is_some() && method.is_static
+                && matches!(php_symbol_key(&method.name).as_str(), "from" | "tryfrom"))))
+    {
         return Err(CompileError::new(
             method.span,
             &format!("Enum method {}::{} cannot be abstract", name, method.name),
@@ -454,6 +461,11 @@ pub(crate) fn insert_enum_metadata(
     let mut method_attribute_names = HashMap::new();
     let mut method_attribute_args = HashMap::new();
     for method in user_methods {
+        // An imported abstract factory is validated against the synthesized implementation
+        // after enum metadata is complete; it must never replace that implementation.
+        if method.is_abstract {
+            continue;
+        }
         // A generic method is a template with no signature of its own, exactly as on a class
         // (`schema::classes::methods`): its instantiations are ordinary methods of this enum.
         if !method.type_params.is_empty() {

@@ -78,6 +78,13 @@ pub(super) fn lower_arguments(
         branch(ctx, value_ready);
         ctx.builder.position_at_end(value_ready);
         guard_parameter(ctx, signature, index, &variable(&slot, span), class, method, span);
+        let binding = signature.declared_params.get(index).copied().unwrap_or(false)
+            .then(|| crate::types::param_binding::runtime_scalar_union_binding(
+                &signature.params[index].1, &variable(&slot, span),
+            )).flatten();
+        if let Some(binding) = binding {
+            store_expr_into_temp(ctx, &slot, PhpType::Mixed, &binding, span);
+        }
         branch(ctx, ready);
         ctx.builder.position_at_end(omitted);
         if index < required {
@@ -242,11 +249,15 @@ fn collect_tail(
             op: BinOp::Add, right: Box::new(literal_int(1, span)),
         }, span);
         guard_variadic_element(ctx, &element_signature, parameter, &value, &position, class, method, span);
+        let binding = element_signature.declared_params.get(parameter).copied().unwrap_or(false)
+            .then(|| crate::types::param_binding::runtime_scalar_union_binding(
+                &element_signature.params[parameter].1, &value,
+            )).flatten();
+        let value_expr = binding.unwrap_or(value);
         let hash = ctx.load_local(&tail, Some(span));
-        let value_expr = value;
         let value = lower_arg_with_signature(ctx, &element_signature, parameter, &value_expr);
         let value = lowered_value_from_id(ctx, value);
-        let value = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span));
+        let value = coerce_value_for_temp(ctx, value, &PhpType::Mixed, span);
         let name = lower_expr(ctx, &is_name);
         let named = ctx.builder.create_named_block("enum.unpack.tail.named", Vec::new());
         let positional = ctx.builder.create_named_block("enum.unpack.tail.positional", Vec::new());

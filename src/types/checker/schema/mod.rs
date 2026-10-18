@@ -16,6 +16,7 @@ mod interfaces;
 mod classes;
 mod enums;
 mod enum_traits;
+mod enum_factories;
 
 pub(crate) use attribute_refs::drop_unresolvable_attribute_arg_refs;
 pub(crate) use class_constants::validate_deferred_class_constants;

@@ -17,6 +17,11 @@ interface BuiltinFactory extends \BackedEnum {}
 enum BuiltinText: string implements BuiltinFactory { case Word = 'word'; }
 enum BuiltinNumber: int implements BuiltinFactory { case Seven = 7; }
 echo BuiltinText::from('word')->value, BuiltinNumber::from(7)->value;
+interface RedeclaredFactory extends \BackedEnum { public static function from(int|string $value): static; }
+enum RedeclaredText: string implements RedeclaredFactory { case Word = 'word'; }
+trait FactoryRequirement { abstract public static function from(int|string $value): static; }
+enum TraitFactoryText: string { use FactoryRequirement; case Word = 'word'; }
+echo RedeclaredText::from('word')->value, TraitFactoryText::from('word')->value;
 trait Requirement {
     const OWNER = __CLASS__;
     const TRAIT_NAME = __TRAIT__;
@@ -195,6 +200,20 @@ try { keyed_shortage(LaterRequiredValue::A); } catch (\TypeError $error) { echo 
 try { named_shortage(LaterRequiredValue::A); } catch (\TypeError $error) { echo $error->getMessage(); }
 try { named_gap(LaterRequiredValue::A); } catch (\ArgumentCountError $error) { echo $error->getMessage(); }
 try { fractional_shortage(LaterRequiredValue::A); } catch (\TypeError $error) { echo $error->getMessage(); }
+trait SameOwner { const OWNER = __CLASS__; }
+class SameClass { use SameOwner; const OWNER = __CLASS__; }
+enum SameEnum { use SameOwner; const OWNER = __CLASS__; case A; }
+echo SameClass::OWNER, SameEnum::OWNER;
+interface RequiredPositionContract { public function f(int $a = 1, int $b): int; }
+enum RequiredPositionValue implements RequiredPositionContract {
+    case A; public function f(int $a, int $b): int { return $a + $b; }
+}
+interface ScalarUnionContract { public function f(int|float $value): mixed; }
+enum ScalarUnionValue implements ScalarUnionContract {
+    case A; public function f(int|float $value): mixed { return $value; }
+}
+function scalar_union_unpack(ScalarUnionContract $value, array $args): mixed { return $value->f(...$args); }
+echo scalar_union_unpack(ScalarUnionValue::A, [true]);
 debug_print_backtrace();
 "#;
     let module = super::lower_source_at_for_target(
@@ -202,6 +221,11 @@ debug_print_backtrace();
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
     let variadic = &module.class_infos["EnumReview\\VariadicValue"].methods["f"];
+    let factory = &module.class_infos["EnumReview\\TraitFactoryText"];
+    assert_eq!(factory.static_methods["from"].params[0].1, crate::types::PhpType::Str,
+        "{target}: public contract validation must not widen the concrete factory ABI");
+    assert!(!factory.method_decls.iter().any(|method| method.name.eq_ignore_ascii_case("from")),
+        "{target}: a trait requirement must not replace the synthesized factory");
     assert_eq!(crate::types::signatures::variadic_source_element_type_expr(variadic),
         Some(&crate::parser::ast::TypeExpr::Int));
     assert_eq!(variadic.params.last().unwrap().1,
@@ -230,6 +254,12 @@ debug_print_backtrace();
     assert!(!unpack.blocks.iter().flat_map(|block| &block.instructions)
         .any(|id| unpack.instruction(*id).is_some_and(|inst| inst.op == crate::ir::Op::CallableDescriptorInvoke)),
         "{target}: selected method calls must not use call_user_func_array semantics");
+    let union = module.functions.iter().find(|function| function.name == "EnumReview\\scalar_union_unpack")
+        .expect("missing scalar-union fixture");
+    assert!(union.instructions.iter().any(|instruction|
+        instruction.op == crate::ir::Op::MixedNumericBinop
+            && instruction.immediate == Some(crate::ir::Immediate::MixedNumericOp(crate::ir::MixedNumericOp::Add))),
+        "{target}: weak numeric union binding uses PHP numeric kind selection");
     crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
 }

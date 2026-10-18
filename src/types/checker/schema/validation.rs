@@ -277,21 +277,16 @@ impl SourceVisibleShape {
         }
     }
 
-    /// Counts the declared parameters a caller must supply.
+    /// Returns the last required source position, including earlier optional positions.
     ///
     /// A variadic parameter is never required, even without a default, which is why the shape
     /// keeps the variadic name rather than folding it into the default flags.
     fn required_param_count(&self) -> usize {
         self.has_defaults
             .iter()
-            .enumerate()
-            .filter(|(index, has_default)| {
-                if self.variadic.is_some() && *index + 1 == self.has_defaults.len() {
-                    return false;
-                }
-                !**has_default
-            })
-            .count()
+            .take(self.regular_param_count())
+            .rposition(|has_default| !has_default)
+            .map_or(0, |index| index + 1)
     }
 
     /// Accepts calls admitted by `required`, permitting extra optional parameters and defaults.

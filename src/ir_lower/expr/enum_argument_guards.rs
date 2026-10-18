@@ -34,7 +34,12 @@ fn guard_parameter_at(
 ) {
     let Some((name, ty)) = signature.params.get(index) else { return; };
     if !signature.declared_params.get(index).copied().unwrap_or(false) { return; }
-    let Some(accepted) = accepts_type(ty, variable, span) else { return; };
+    let accepted = if crate::source::current_strict_types() {
+        crate::types::param_binding::runtime_strict_param_acceptance(ty, variable)
+    } else {
+        accepts_type(ty, variable, span)
+    };
+    let Some(accepted) = accepted else { return; };
     let accepted = lower_expr(ctx, &accepted);
     let ok = ctx.builder.create_named_block("enum.argument.type.ok", Vec::new());
     let bad = ctx.builder.create_named_block("enum.argument.type.bad", Vec::new());

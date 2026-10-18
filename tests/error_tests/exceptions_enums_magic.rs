@@ -9,6 +9,32 @@
 
 use super::*;
 
+/// Public builtin factory inputs widen compatible source contracts, not arbitrary declarations.
+#[test]
+fn test_error_enum_grok_current_factory_contract_rejections() {
+    for method in [
+        "public static function from(bool $value): static;",
+        "public static function from(mixed $value): static;",
+        "public static function from(int|bool $value): static;",
+        "public static function from(int|string $value, int $extra): static;",
+        "public static function from(int|string $value): bool;",
+        "public function from(int|string $value): static;",
+        "public static function &from(int|string $value): static;",
+    ] {
+        expect_error(&format!("<?php interface I {{ {method} }} enum E: string implements I {{ case A = 'a'; }}"), "interface");
+    }
+    for method in [
+        "abstract public static function from(bool $value): static;",
+        "abstract public static function from(mixed $value): static;",
+        "abstract public static function from(int|string $value): bool;",
+        "abstract public static function &from(int|string $value): static;",
+    ] {
+        expect_error(&format!("<?php trait T {{ {method} }} enum E: string {{ use T; case A = 'a'; }}"), "trait method");
+    }
+    expect_error("<?php enum E: string { case A = 'a'; abstract public static function from(int|string $value): static; }",
+        "cannot be abstract");
+}
+
 /// Runtime omission deferral is restricted to enum-only interface dispatch.
 #[test]
 fn test_enum_keyed_review_preserves_ordinary_missing_argument_errors() {

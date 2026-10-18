@@ -374,6 +374,7 @@ pub(super) fn check_types_impl(
                 cases,
                 implements,
                 enum_methods,
+                methods,
                 enum_constants,
                 constants,
                 enum_used_traits,
