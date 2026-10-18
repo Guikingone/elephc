@@ -17,6 +17,10 @@ pub(super) fn lower_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    let receiver = Expr::new(ExprKind::PropertyAccess {
+        object: Box::new(object.clone()), property: property.into(),
+    }, span);
+    if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let object = lower_expr(ctx, object);
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
         lower_php_array_property_write(ctx, object, property, None, value, span, false);

@@ -36,6 +36,10 @@ pub(super) fn declarations() -> Program {
             ], vec![], None),
             s_return(e_array(vec![])),
         ]));
+    map = map.method(method("__elephc_append").private().param("value", t_mixed())
+        .returns(TypeExpr::Void).body(vec![s_throw(e_new_fq("Error", vec![
+            e_str("Cannot append to WeakMap"),
+        ]))]));
     map = map.method(method("offsetSet").param("object", t_mixed()).param("value", t_mixed())
         .returns(TypeExpr::Void).body(vec![
             validate_key(), key_id(),

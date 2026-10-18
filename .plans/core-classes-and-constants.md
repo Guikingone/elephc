@@ -570,3 +570,9 @@ parenthesized-call, literal-closure and container-element receiver test matches
 PHP2:3:4:5 on native x86_64 and ARM64. The full five-target EIR fixture passes.
 The final compiler/library/exporter build is warning-free, and generated docs,
 registry/site/EIR, Rustdoc and whitespace audits pass without generated drift.
+
+The final WeakMap append audit preserves PHP's missing-offset distinction: `$map[]`
+evaluates the RHS and throws `Error: Cannot append to WeakMap`, while an explicit
+null offset or `offsetSet(null, ...)` throws `TypeError`. A private append helper
+uses ordinary EIR method-call ownership on every target. Local, instance-property,
+and static-property forms have native and opaque-eval heap-debug regressions.

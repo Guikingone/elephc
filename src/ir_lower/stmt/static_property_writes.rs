@@ -159,6 +159,10 @@ pub(super) fn lower_static_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    let source = Expr::new(ExprKind::StaticPropertyAccess {
+        receiver: receiver.clone(), property: property.into(),
+    }, span);
+    if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &source, value, span) { return; }
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
         let value = lower_expr(ctx, value);
         ctx.emit_void(

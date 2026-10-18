@@ -11,6 +11,27 @@
 
 use super::*;
 
+/// Routes a missing WeakMap key through its private catchable append error.
+pub(crate) fn lower_weak_map_denied_append(
+    ctx: &mut LoweringContext<'_, '_>, receiver: &Expr, value: &Expr, span: Span,
+) -> bool {
+    if !instance_object_class_for_ir(ctx, receiver)
+        .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap"))
+    { return false; }
+    begin_call_argument_evaluation(ctx);
+    let receiver = stage_update_operand(ctx, receiver);
+    let call = Expr::new(ExprKind::MethodCall {
+        object: Box::new(receiver), method: "__elephc_append".into(),
+        args: vec![value.clone()],
+    }, span);
+    let result = lower_expr(ctx, &call);
+    if ctx.value_needs_release_after_use(result) {
+        crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
+    }
+    finish_entry_update(ctx);
+    true
+}
+
 /// Updates a parser-generated increment through its managed entry cell.
 pub(crate) fn lower_weak_map_incdec_stmt(
     ctx: &mut LoweringContext<'_, '_>,

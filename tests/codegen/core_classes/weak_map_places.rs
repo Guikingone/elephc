@@ -10,6 +10,69 @@
 
 use crate::support::*;
 
+/// Opaque eval keeps absent WeakMap offsets distinct from explicit null offsets.
+#[test]
+fn test_core_weak_map_denied_append_opaque_eval() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class EvalDeniedAppendHolder {
+    public WeakMap $map;
+    public static WeakMap $shared;
+}
+function evalDeniedAppendValue(): array { echo 'rhs;'; return ['v' => 1]; }
+$source = '$map = new WeakMap();
+$holder = new EvalDeniedAppendHolder();
+$holder->map = $map;
+EvalDeniedAppendHolder::$shared = $map;
+try { $map[] = evalDeniedAppendValue(); }
+catch (Error $e) { echo get_class($e), ":", $e->getMessage(), ";"; }
+try { $holder->map[] = evalDeniedAppendValue(); }
+catch (Error $e) { echo get_class($e), ":", $e->getMessage(), ";"; }
+try { EvalDeniedAppendHolder::$shared[] = evalDeniedAppendValue(); }
+catch (Error $e) { echo get_class($e), ":", $e->getMessage(), ";"; }
+try { $map[null] = 1; }
+catch (TypeError $e) { echo get_class($e), ";"; }
+try { $map->offsetSet(null, 1); }
+catch (TypeError $e) { echo get_class($e), ";"; }
+echo count($map);
+unset($holder, $map);';
+eval($source . ' // ' . $argc);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "rhs;Error:Cannot append to WeakMap;rhs;Error:Cannot append to WeakMap;rhs;Error:Cannot append to WeakMap;TypeError;TypeError;0", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Missing keys evaluate their RHS and throw Error for every native receiver form.
+#[test]
+fn test_core_weak_map_denied_append() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class DeniedAppendHolder {
+    public WeakMap $map;
+    public static WeakMap $shared;
+}
+function deniedAppendValue(): array { echo 'rhs;'; return ['v' => 1]; }
+$map = new WeakMap();
+$holder = new DeniedAppendHolder();
+$holder->map = $map;
+DeniedAppendHolder::$shared = $map;
+try { $map[] = deniedAppendValue(); }
+catch (Error $e) { echo $e->getMessage(), ';'; }
+try { $holder->map[] = deniedAppendValue(); }
+catch (Error $e) { echo $e->getMessage(), ';'; }
+try { DeniedAppendHolder::$shared[] = deniedAppendValue(); }
+catch (Error $e) { echo $e->getMessage(), ';'; }
+try { $map[null] = 1; }
+catch (TypeError $e) { echo get_class($e), ';'; }
+try { $map->offsetSet(null, 1); }
+catch (TypeError $e) { echo get_class($e), ';'; }
+echo count($map);
+unset($holder, $map);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "rhs;Cannot append to WeakMap;rhs;Cannot append to WeakMap;rhs;Cannot append to WeakMap;TypeError;TypeError;0", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Entry increments reuse ordinary PHP string increment and postfix snapshot semantics.
 #[test]
 fn test_core_weak_map_string_increment_reference() {

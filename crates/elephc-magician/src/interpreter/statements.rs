@@ -76,7 +76,7 @@ pub(in crate::interpreter) use instance_property_access::*;
 use interface_contracts::*;
 use interface_member_validation::*;
 pub(in crate::interpreter) use loop_statements::*;
-use local_offset_writes::{eval_array_append_var_stmt, eval_array_set_var_stmt};
+use local_offset_writes::{eval_array_append_var_stmt, eval_array_set_var_stmt, reject_weak_map_append};
 pub(in crate::interpreter) use method_dispatch::*;
 pub(in crate::interpreter) use native_argument_binding::*;
 pub(in crate::interpreter) use native_constructor_defaults::*;

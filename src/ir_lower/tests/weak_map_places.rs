@@ -60,6 +60,9 @@ fn weak_map_reference_places_preserve_private_cell_abi_on_all_targets() {
         $arrayReference = &$map[$key];
         $map[$key][] = 2;
         echo count($arrayReference);
+        try { $map[] = ['v' => 1]; } catch (Error $e) { echo $e->getMessage(); }
+        try { $holder->map[] = ['v' => 1]; } catch (Error $e) { echo $e->getMessage(); }
+        try { WeakMapHolder::$shared[] = ['v' => 1]; } catch (Error $e) { echo $e->getMessage(); }
     "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source,

@@ -388,8 +388,15 @@ impl Scanner<'_> {
         match &stmt.kind {
             StmtKind::Echo(e) | StmtKind::Throw(e) | StmtKind::ExprStmt(e)
             | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e))
-            | StmtKind::Include { path: e, .. }
-            | StmtKind::StaticPropertyArrayPush { value: e, .. } => self.scan_expr(e),
+            | StmtKind::Include { path: e, .. } => self.scan_expr(e),
+            StmtKind::StaticPropertyArrayPush { receiver, property, value } => {
+                let source = Expr::new(ExprKind::StaticPropertyAccess {
+                    receiver: receiver.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["offsetSet", "__elephc_append"]);
+                self.scan_receiver(receiver);
+                self.scan_expr(value);
+            }
             StmtKind::Assign { name, value } => {
                 self.scan_expr(value);
                 self.remember_assignment(name, value);
@@ -436,7 +443,7 @@ impl Scanner<'_> {
                 if array == "GLOBALS" {
                     self.usage.dynamic_global_alias = true;
                 } else {
-                    self.record_variable_protocol_methods(array, &["offsetSet"]);
+                    self.record_variable_protocol_methods(array, &["offsetSet", "__elephc_append"]);
                 }
                 self.scan_expr(value);
             }
@@ -467,6 +474,10 @@ impl Scanner<'_> {
                 property,
                 value,
             } => {
+                let source = Expr::new(ExprKind::PropertyAccess {
+                    object: object.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["offsetSet", "__elephc_append"]);
                 self.record_instance_method(object, &property_hook_get_method(property));
                 self.record_instance_method(object, &property_hook_set_method(property));
                 self.scan_expr(object);
