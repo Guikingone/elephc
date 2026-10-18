@@ -28,13 +28,12 @@ pub(super) fn lower_nested_array_assign(
     span: Span,
 ) {
     let update = desugared_element_update(value, span, |read| read == target);
-    if matches!(&update, Some(ElementUpdate::Compound))
-        && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
+    let compound = matches!(&update, Some(ElementUpdate::Compound));
+    if compound && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
     {
         return;
     }
     if nested_target_has_static_root(target) {
-        let compound = matches!(&update, Some(ElementUpdate::Compound));
         let mut captured = Vec::new();
         let target = capture_static_write_keys(ctx, target, &mut captured);
         let value = if compound {

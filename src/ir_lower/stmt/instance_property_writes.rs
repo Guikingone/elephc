@@ -286,13 +286,13 @@ fn lower_property_assign_value(
     // jump to __rt_throw_current with the assigned temporary still pure SSA, so pin it in the
     // unwind chain for the store and retire the pin without releasing once the store returns.
     //
-    // The receiver is still owned by this statement if a guard throws. An unknown runtime
-    // slot can also reject a value before adopting its box, so protect that source as well.
-    // Independent stores keep the existing source pin; a known transferring slot needs none.
-    // Pins acquire no reference. Keep the receiver protected until source cleanup completes:
-    // retiring a fresh Stringable source can invoke a destructor that throws after publication.
+    // `PropertyWriteReceiver` already keeps every independent receiver lease visible to unwind.
+    // Do not publish a second pin for the same SSA owner here: pins acquire no reference, so two
+    // records would both release that one lease if the store throws. An unknown runtime slot can
+    // also reject a value before adopting its box, so protect that source independently. Keep the
+    // outer receiver lease until source cleanup completes because retiring a fresh Stringable
+    // source can invoke a destructor that throws after publication.
     let stored_property_ty = object_property_type(ctx, object.value, property);
-    let receiver_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span);
     let source_pins = if value.value != object.value
         && (retained_abstract_setter || stored_property_ty.as_ref().is_none_or(|property_ty| {
             property_store_keeps_independent_ref(property_ty, &ctx.builder.value_php_type(value.value))
@@ -340,7 +340,10 @@ fn lower_property_assign_value(
     } else {
         release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
     }
-    crate::ir_lower::expr::unpin_in_flight_owners(ctx, receiver_pins, span);
+    // `PropertyWriteReceiver` owns every independent receiver lease, including a narrowed
+    // object extracted from a boxed nullable static property. Its caller retires those leases
+    // after this store returns. Releasing `object` here as well would free that narrowed object
+    // twice and leave any freshly published property payload dangling.
 }
 
 /// Returns whether this receiver can dispatch the write through an inherited abstract setter.
@@ -609,9 +612,12 @@ pub(super) fn lower_magic_property_set(
         Op::ConstStr.default_effects(),
         Some(span),
     );
+    // The caller's `PropertyWriteReceiver` already publishes any independent receiver lease.
+    // Only the additional call operands need records here; a duplicate object record would
+    // release the same lease twice when `__set` throws.
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,
-        &[object, property_name.value, value.value],
+        &[property_name.value, value.value],
         span,
     );
     ctx.emit_void(
