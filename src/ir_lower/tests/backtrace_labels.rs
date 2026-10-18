@@ -28,8 +28,9 @@ fn backtrace_reader_entries_have_real_local_symbols_on_all_targets() {
         for entry in entries {
             assert!(!entry.starts_with(target.platform.local_label_prefix()), "{name}: {entry}");
             assert!(!asm.contains(&format!(".globl {entry}\n")), "{name}: {entry}");
-            #[cfg(target_os = "macos")]
-            if target.platform == crate::codegen::platform::Platform::MacOS {
+            if cfg!(target_os = "macos")
+                && target.platform == crate::codegen::platform::Platform::MacOS
+            {
                 assemble_distant_reader(entry);
             }
         }
@@ -37,17 +38,18 @@ fn backtrace_reader_entries_have_real_local_symbols_on_all_targets() {
 }
 
 /// The Apple assembler must address a generated reader more than eight MiB into its caller.
-#[cfg(target_os = "macos")]
 fn assemble_distant_reader(entry: &str) {
-    let dir = tempfile::tempdir().unwrap();
-    let source = dir.path().join("distant_reader.s");
-    let object = dir.path().join("distant_reader.o");
-    std::fs::write(&source, format!(
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let source = format!(
         ".text\n.globl _large_reader_test\n_large_reader_test:\n.space 9000000\n\
          adrp x0, {entry}@PAGE\nadd x0, x0, {entry}@PAGEOFF\n\
          b Lreader_done\n{entry}:\nret\nLreader_done:\nret\n"
-    )).unwrap();
-    let result = std::process::Command::new("as").args(["-arch", "arm64", "-o"])
-        .arg(object).arg(source).output().unwrap();
+    );
+    let mut child = Command::new("as").args(["-arch", "arm64", "-o", "/dev/null", "-"])
+        .stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
+    let result = child.wait_with_output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
 }
