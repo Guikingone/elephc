@@ -74,8 +74,11 @@ def execute(command: list[str], cwd: Path, timeout: float, env: dict | None = No
 
 def file_hash(path: Path) -> str:
     """Fingerprint an exact input or executable independently of its mutable name."""
+    digest = hashlib.sha256()
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def bridge_environment(environment: dict, directory: Path) -> dict:
@@ -155,6 +158,10 @@ def main() -> None:
         bridges = assignments(args.bridge_dir)
         if "php" in compilers or (revisions.keys() | bridges.keys()) - compilers.keys():
             raise ValueError("php is reserved; revision and bridge labels must name a compiler")
+        missing_revisions = compilers.keys() - revisions.keys()
+        if missing_revisions:
+            raise ValueError("every compiler requires --revision; missing: " +
+                             ", ".join(sorted(missing_revisions)))
         if any(not path.is_file() for path in compilers.values()):
             raise ValueError("every selected compiler must be a file")
         bridges = {label: Path(path).resolve() for label, path in bridges.items()}
@@ -224,7 +231,7 @@ def main() -> None:
                    "eval_count": args.eval_count, "heap_size": args.heap_size,
                    "fixture_sha256": file_hash(source), "document_sha256": file_hash(document),
                    "fixture_source": source.read_text(), "noise_limit": args.noise_limit,
-                   "variants": {label: {"compiler": str(path), "revision": revisions.get(label),
+                   "variants": {label: {"compiler": str(path), "revision": revisions[label],
                                         "compiler_sha256": fingerprints[label], "binary_sha256": binaries[label],
                                         "bridge_directory": str(bridges[label]) if label in bridges else None,
                                         "bridge_sha256": bridge_hashes.get(label)}

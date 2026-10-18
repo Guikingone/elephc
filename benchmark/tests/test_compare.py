@@ -1,15 +1,49 @@
 """Verify mixed-workload checksums, phase accounting, sample ordering and noise rejection."""
 
 import unittest
+import hashlib
+from contextlib import redirect_stderr
+from io import StringIO
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import support  # Bootstrap the benchmark import path for the workflow's unittest discovery command.
-from compare import FIELDS, assignments, assert_no_builds, bridge_environment, bridge_fingerprints, measure_commands, parse_sample, summarize
+from compare import FIELDS, assignments, assert_no_builds, file_hash, main, bridge_environment, bridge_fingerprints, measure_commands, parse_sample, summarize
 
 
 class CompareTests(unittest.TestCase):
+    def test_file_hash_works_without_python_311_file_digest(self):
+        with tempfile.TemporaryDirectory(prefix="elephc-compare-hash-") as temporary:
+            source = Path(temporary) / "input"
+            for data in (b"", b"short", b"abc12345" * (256 * 1024) + b"tail"):
+                source.write_bytes(data)
+                with patch("compare.hashlib.file_digest", create=True,
+                           side_effect=AssertionError("Python 3.11-only hashing API")):
+                    self.assertEqual(file_hash(source), hashlib.sha256(data).hexdigest())
+
+    def test_every_compiler_requires_a_revision_before_any_subprocess(self):
+        with tempfile.TemporaryDirectory(prefix="elephc-compare-revisions-") as temporary:
+            compiler = Path(temporary) / "compiler"
+            compiler.write_bytes(b"compiler")
+            output = Path(temporary) / "results.json"
+            cases = [([], ["a"], "a"), (["a=main-sha"], ["a", "b"], "b")]
+            for revisions, labels, missing in cases:
+                argv = ["compare.py", "--json", str(output)]
+                for label in labels:
+                    argv.extend(["--compiler", f"{label}={compiler}"])
+                for revision in revisions:
+                    argv.extend(["--revision", revision])
+                error = StringIO()
+                with self.subTest(revisions=revisions), patch("sys.argv", argv), \
+                        patch("compare.subprocess.run") as run, redirect_stderr(error):
+                    with self.assertRaises(SystemExit) as raised:
+                        main()
+                    self.assertEqual(raised.exception.code, 2)
+                    self.assertIn(f"missing: {missing}", error.getvalue())
+                    run.assert_not_called()
+                    self.assertFalse(output.exists())
+
     @patch("compare.execute", return_value="python3\n/usr/bin/rustc\nas\n")
     def test_idle_guard_rejects_builders_even_when_timing_dispersion_would_be_low(self, execute):
         with self.assertRaisesRegex(RuntimeError, "concurrent compilation detected"):

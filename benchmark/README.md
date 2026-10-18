@@ -177,7 +177,9 @@ is prepared before timing, and the eval phase includes its first activation.
 Use `--size`, `--rows`, `--columns` and `--eval-count` to investigate scaling;
 changes to these parameters describe different workloads. Compiler/binary/input
 hashes, supplied revisions, the exact PHP version and all raw samples are saved.
-The source revision is explicit because a compiler can come from another checkout.
+Every compiler label requires a matching `--revision`; missing revisions are
+rejected before compilation because a compiler can come from another checkout.
+SHA-256 fingerprints use streaming reads without Python 3.11-only hashing APIs.
 
 Every warmup and measured run must produce the expected checksum and consistent
 phase clocks. A phase whose median absolute deviation exceeds 5% of its median
