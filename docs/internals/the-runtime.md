@@ -780,13 +780,14 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (205 top-level files plus 7 nested target/debug helpers)
+**Source:** `src/codegen_support/runtime/arrays/` (206 top-level files plus 7 nested target/debug helpers)
 
 ### Core allocation
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_heap_alloc` | Free-list + bump allocator with a 16-byte `[size:4][refcount:4][kind:8]` header | `x0` = size | `x0` = pointer |
+| `__rt_heap_grow_tail` | Extend a live bump-tail allocation in place, updating its payload size and live/peak byte counters without counting a new allocation | `x0` = pointer, `x1` = requested payload bytes | unchanged pointer on success, null when the caller must fall back |
 | `__rt_heap_free` | Return block to free list (bump reset if last block) | `x0` = pointer | — |
 | `__rt_heap_free_safe` | Free only if pointer is in heap range | `x0` = pointer | — |
 | `__rt_heap_debug_fail` | Print a heap-debug fatal error and terminate immediately | `x1` = msg ptr, `x2` = msg len | — |
@@ -798,7 +799,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_array_clone_shallow` | Clone indexed array storage for copy-on-write splitting, retaining nested heap children as needed | `x0` = array | `x0` = new array |
 | `__rt_array_to_mixed` | Convert an indexed array's live slots to boxed Mixed cells and stamp the array metadata as mixed | `x0` = array | `x0` = same array |
 | `__rt_array_ensure_unique` | Split a shared indexed array before mutation | `x0` = array | `x0` = unique array |
-| `__rt_array_grow` | Ensure uniqueness, double array capacity, copy elements, free old unique storage | `x0` = array | `x0` = new array |
+| `__rt_array_grow` | Ensure uniqueness and double array capacity, extending a unique bump-tail allocation in place when possible or falling back to allocate-copy-free growth | `x0` = array | `x0` = grown array |
 | `__rt_array_free_deep` | Free array storage and release nested heap-backed elements | `x0` = array | — |
 | `__rt_array_union` | Build PHP indexed-array union: left numeric keys win, only missing right suffix keys are appended | `x0` = left array, `x1` = right array | `x0` = result array |
 | `__rt_array_hash_union` | Build PHP indexed+associative union by converting left indexes to integer hash keys before appending missing right entries | `x0` = left array, `x1` = right hash | `x0` = result hash |
