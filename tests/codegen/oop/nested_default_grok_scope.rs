@@ -331,6 +331,27 @@ fn test_nested_default_greptile_integer_arithmetic_callable_eval_no_ir_opt() {
     without_ir_opt(test_nested_default_greptile_integer_arithmetic_callable_eval);
 }
 
+/// Integer-preserving division may feed MIN_INT to remainder without panicking the compiler.
+#[test]
+fn test_nested_default_greptile_remainder_overflow() {
+    check(r#"<?php
+class Numbers { const MIN = -9223372036854775807 - 1; }
+function values(array $items = [(Numbers::MIN / 1) % -1]): array { return $items; }
+function other(array $items = []): array { return $items; }
+$callbacks = [values(...), other(...)]; $callback = $callbacks[$argc - 1];
+echo (int)($callback() === [0]), '|';
+function run(string $source): mixed { return eval($source); }
+echo (int)run('return values() === [0];');
+unset($callback, $callbacks);
+"#, "1|1");
+}
+
+/// Safe default remainder folding is independent of EIR optimization.
+#[test]
+fn test_nested_default_greptile_remainder_overflow_no_ir_opt() {
+    without_ir_opt(test_nested_default_greptile_remainder_overflow);
+}
+
 /// Property defaults apply int-to-float coercion without changing parameter or array value types.
 #[test]
 fn test_nested_default_grok_float_property_metadata() {

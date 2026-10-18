@@ -200,13 +200,8 @@ fn resolve_binary_expression_default(
     depth: usize,
 ) -> Option<ConstDefaultValue> {
     match op {
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
             resolve_numeric_binary_default(left, op, right, context, depth + 1)
-        }
-        BinOp::Mod => {
-            let left = const_default_int(left, context, depth + 1)?;
-            let right = const_default_int(right, context, depth + 1)?;
-            (right != 0).then(|| const_default_int_value(left % right))
         }
         BinOp::Concat => {
             let left = const_default_string(left, context, depth + 1)?;

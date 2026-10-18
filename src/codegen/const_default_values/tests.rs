@@ -53,3 +53,17 @@ fn numeric_defaults_preserve_float_and_error_boundaries_on_all_targets() {
     }
     assert_arithmetic(BinOp::Div, ExprKind::IntLiteral(1), ExprKind::IntLiteral(0), None);
 }
+
+/// PHP's MIN_INT remainder by negative one is zero, including after exact integer division.
+#[test]
+fn numeric_defaults_remainder_overflow_on_all_targets() {
+    let divided = ExprKind::BinaryOp {
+        left: Box::new(Expr::new(ExprKind::IntLiteral(i64::MIN), Span::dummy())),
+        op: BinOp::Div,
+        right: Box::new(Expr::new(ExprKind::IntLiteral(1), Span::dummy())),
+    };
+    for left in [ExprKind::IntLiteral(i64::MIN), divided] {
+        assert_arithmetic(BinOp::Mod, left, ExprKind::IntLiteral(-1), Some(const_default_int_value(0)));
+    }
+    assert_arithmetic(BinOp::Mod, ExprKind::IntLiteral(1), ExprKind::IntLiteral(0), None);
+}
