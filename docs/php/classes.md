@@ -262,6 +262,11 @@ Statically-known access violations, such as calling a `private`/`protected` meth
 
 A typed readonly property without an explicit setter has an implicit `protected(set)` setter. Its declaring class or a subclass can initialize it once, including outside a constructor. An explicit `public(set)` setter also permits a first assignment from global scope. A denied first assignment reports the setter-access error; an assignment to an initialized readonly property instead reports `Cannot modify readonly property Class::$property` when read visibility permits access. The same rules apply to eval-declared classes and native objects accessed from `eval()`, including writes through factory-style object unions before narrowing. A `??=` write keeps a non-null initialized value without evaluating its fallback; an initialized `null` value still rejects the fallback overwrite.
 
+The right-hand side is evaluated before that initialized-property error, even if
+its type is incompatible. An authorized first write still checks the declared
+type at runtime: an incompatible value raises `TypeError` without initializing
+the slot. Nullable inline storage follows the same ordering and cleanup rules.
+
 elephc also accepts untyped readonly declarations as a legacy extension that PHP rejects. Their implicitly initialized `null` slots retain the declaring constructor's write exemption, rather than the typed one-shot initialization rules above.
 
 ```php
@@ -357,6 +362,11 @@ without a redeclaration is legal; writes through that setter still leave the slo
 uninitialized, so reading it throws the typed-property initialization `Error`.
 `ReflectionProperty::setValue()` also invokes that retained setter, validates its
 original parameter type and leaves the backing slot uninitialized.
+Setter `self` and `parent` types bind to the original declaring class, not the
+caller's scope. A class setter type may use an implemented interface as broader
+storage, including inherited interfaces and classes declared later. Reflected
+`getHooks()['set']` parameters retain the original setter type rather than the
+broader backing-storage type.
 
 Private parent properties are different: they are not overridden. A child may
 declare a same-named property, and elephc keeps a separate storage slot for each

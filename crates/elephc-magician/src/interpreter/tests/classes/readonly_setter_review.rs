@@ -11,6 +11,33 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Relative retained setters restore caller scopes on both successful and rejected arguments.
+#[test]
+fn execute_program_readonly_setter_greptile_current_scope_restoration() {
+    for hint in ["self", "parent"] {
+        let storage = if hint == "self" { "Base" } else { "Root" };
+        let source = format!("class Root {{}} abstract class Base extends Root {{ abstract public {hint} $x {{ set; }} }} abstract class Child extends Base {{ public public(set) readonly {storage} $x; }} class Grandchild extends Child {{}} return new Grandchild();");
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let object = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        context.push_class_scope("CallerScope");
+        context.push_called_class_scope("LateScope");
+        eval_inherited_abstract_setter_write("Child", "x", object, &mut context, &mut values).unwrap();
+        let invalid = values.int(7).unwrap();
+        assert_eq!(eval_inherited_abstract_setter_write("Child", "x", invalid, &mut context, &mut values),
+            Err(EvalStatus::UncaughtThrowable));
+        let throwable = context.take_pending_throw().unwrap();
+        eval_release_value(&mut context, &mut values, throwable).unwrap();
+        eval_release_value(&mut context, &mut values, invalid).unwrap();
+        assert_eq!(context.current_class_scope(), Some("CallerScope"));
+        assert_eq!(context.current_called_class_scope(), Some("LateScope"));
+        context.pop_called_class_scope(); context.pop_class_scope();
+        eval_release_value(&mut context, &mut values, object).unwrap();
+    }
+}
+
 /// Executes one declaration-only fixture through the real class validation path.
 fn verify(parent_prelude: &str, required: &str, storage: &str) {
     let source = format!("{parent_prelude} abstract class Base {{ abstract public {required} $x {{ set; }} }} abstract class Child extends Base {{ public public(set) readonly {storage} $x; }} class Grandchild extends Child {{}} return true;");

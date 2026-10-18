@@ -785,11 +785,12 @@ fn abstract_setter_storage_type_accepts(
     let (PhpType::Object(storage_name), PhpType::Object(setter_name)) = (storage, setter) else {
         return false;
     };
-    declared_class_is_a(class_map, setter_name, storage_name)
+    declared_class_is_a(checker, class_map, setter_name, storage_name)
 }
 
 /// Walks the complete flattened declaration map instead of the partially built class table.
 fn declared_class_is_a(
+    checker: &Checker,
     class_map: &HashMap<String, FlattenedClass>,
     class_name: &str,
     ancestor_name: &str,
@@ -807,6 +808,11 @@ fn declared_class_is_a(
         else {
             return false;
         };
+        if class.implements.iter().any(|interface| {
+            canonical(interface) == ancestor || checker.interface_extends_interface(
+                interface.trim_start_matches('\\'), ancestor_name.trim_start_matches('\\'),
+            )
+        }) { return true; }
         let Some(parent) = class.extends.as_deref() else { return false };
         current = canonical(parent);
     }

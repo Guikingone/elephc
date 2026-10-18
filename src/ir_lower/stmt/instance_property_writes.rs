@@ -41,6 +41,13 @@ pub(super) fn lower_property_assign(
     let object = lower_expr(ctx, object);
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
+    // Preserve the original PHP tag until the initialization probe has chosen its branch.
+    // Only an authorized first write reaches the backend's weak typed-property guard.
+    let lowered_value = if readonly_write.is_some()
+        && !matches!(ctx.builder.value_php_type(lowered_value.value).codegen_repr(), PhpType::Mixed)
+    {
+        ctx.box_value_as_mixed(lowered_value, PhpType::Mixed, Some(span))
+    } else { lowered_value };
     if let Some((overwrite_message, initialization_error)) = readonly_write {
         super::readonly_receiver_guard::guard_readonly_write_receiver(
             ctx, object, lowered_value, property, span,

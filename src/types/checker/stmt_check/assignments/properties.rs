@@ -442,7 +442,10 @@ fn check_object_property_write(
         // PHP checks exactly this assignment at run time under weak-mode property typing. The
         // codegen guard raises the catchable `TypeError` there, so rejecting the write here
         // would forbid a program PHP accepts whenever the runtime value happens to fit.
-        let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed);
+        // An initialized readonly slot throws before PHP considers the replacement type.
+        // Its uninitialized branch still enforces that type at the runtime property store.
+        let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed)
+            || readonly_write_guard;
         if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
             checker.require_compatible_arg_type(
                 &expected_ty,

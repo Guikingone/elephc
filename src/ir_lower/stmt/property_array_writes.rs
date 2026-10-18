@@ -413,7 +413,7 @@ pub(super) fn property_store_keeps_independent_ref(property_ty: &PhpType, value_
         return false;
     }
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_))
-        && matches!(property_ty, PhpType::Int | PhpType::Bool | PhpType::Float)
+        && matches!(property_ty, PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::TaggedScalar)
     {
         return true;
     }

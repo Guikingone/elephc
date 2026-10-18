@@ -9,6 +9,17 @@
 
 use super::*;
 
+/// Complete declaration checks still reject unrelated interfaces and ordinary invalid writes.
+#[test]
+fn test_asymmetric_greptile_current_type_controls() {
+    for implementation in ["Other", "I"] {
+        expect_error(&format!("<?php interface I {{}} interface J extends I {{}} interface Other {{}} class Z implements {implementation} {{}} abstract class A {{ abstract public Z $x {{ set; }} }} abstract class B extends A {{ public public(set) readonly J $x; }}"),
+            "Type of B::$x must accept set property contract Z from A");
+    }
+    expect_error("<?php class Box { public int $x; } $object = new Box(); $object->x = [];",
+        "Property Box::$x expects int");
+}
+
 /// Abstract readonly storage must still accept every value of the inherited setter type.
 #[test]
 fn test_asymmetric_eighth_review_readonly_set_type() {

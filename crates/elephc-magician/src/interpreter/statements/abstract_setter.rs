@@ -47,7 +47,23 @@ pub(in crate::interpreter) fn eval_inherited_abstract_setter_write(
         declaring_class, property_name, context,
     ).ok_or(EvalStatus::RuntimeFatal)?;
     let Some(parameter_type) = parameter_type else { return Ok(()); };
-    match eval_method_parameter_value(&parameter_type, value, context, values) {
+    // Runtime error messages use the resolved lexical name, while reflection retains self/parent.
+    let variants = parameter_type.variants().iter().map(|variant| match variant {
+        EvalParameterTypeVariant::Class(name) if name.eq_ignore_ascii_case("self") =>
+            EvalParameterTypeVariant::Class(owner.clone()),
+        EvalParameterTypeVariant::Class(name) if name.eq_ignore_ascii_case("parent") =>
+            EvalParameterTypeVariant::Class(context.class(&owner).and_then(EvalClass::parent)
+                .or_else(|| context.native_class_parent(&owner)).unwrap_or(name).to_string()),
+        _ => variant.clone(),
+    }).collect();
+    let parameter_type = if parameter_type.is_intersection() {
+        EvalParameterType::intersection(variants)
+    } else { EvalParameterType::new(variants, parameter_type.allows_null()) };
+    context.push_class_scope(owner.clone());
+    let bound = eval_method_parameter_value(&parameter_type, value, context, values);
+    // Restore the caller even if binding failed or user coercion threw.
+    context.pop_class_scope();
+    match bound {
         Ok(coerced) => {
             if coerced != value { eval_release_value(context, values, coerced)?; }
             Ok(())

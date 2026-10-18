@@ -10,6 +10,126 @@
 
 use crate::support::*;
 
+/// An overwrite rejects before type conversion, while a first invalid write still throws TypeError.
+#[test]
+fn test_readonly_setter_greptile_current_overwrite_type_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box { public public(set) readonly int $x; }
+function replacement(): array { echo "R|"; return [str_repeat("q", 2)]; }
+$object = new Box(); $object->x = 1;
+try { $object->x = replacement(); }
+catch (Error $error) { echo get_class($error), ":", $error->getMessage(), "|"; unset($error); }
+$fresh = new Box();
+try { $fresh->x = replacement(); }
+catch (TypeError $error) { echo get_class($error), ":", $error->getMessage(), "|"; unset($error); }
+echo isset($fresh->x) ? "bad" : "U"; unset($object, $fresh);
+"#);
+    assert!(out.success, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "R|Error:Cannot modify readonly property Box::$x|R|TypeError:Cannot assign array to property Box::$x of type int|U");
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+/// Relative setter contracts bind to their original owner, not global or unrelated caller scope.
+#[test]
+fn test_readonly_setter_greptile_current_eval_relative_scope() {
+    for (hint, storage) in [("self", "Base"), ("parent", "Root")] {
+        for native_root in [false, true] {
+            let parent = format!("abstract class Base extends Root {{ abstract public {hint} $x {{ set; }} }}");
+            let child = format!("abstract class Child extends Base {{ public public(set) readonly {storage} $x; }} class Grandchild extends Child {{}}");
+            let body = r#"class Caller {
+    public static function write(Grandchild $value): void { $value->x = $value; }
+}
+$object = new Grandchild(); $object->x = $object;
+echo isset($object->x) ? "bad" : "U";
+Caller::write($object); echo isset($object->x) ? "bad" : "|U";
+try { $object->x = new stdClass(); } catch (TypeError $error) { echo "|", $error->getMessage(); }
+"#;
+            // Native property declarations do not yet parse relative hints; keep Base in eval.
+            let (native, dynamic_root) = if native_root { ("class Root {}", "") }
+                else { ("", "class Root {}") };
+            assert_eq!(compile_and_run(&format!("<?php {native} eval('{dynamic_root} {parent} {child} {body}');")),
+                format!("U|U|Base::$x::set(): Argument #1 ($value) must be of type {storage}, stdClass given"));
+        }
+    }
+}
+
+/// Storage accepts direct and inherited interfaces even before the setter's class is built.
+#[test]
+fn test_readonly_setter_greptile_current_interface_storage() {
+    for contract in ["I", "J"] {
+        assert_eq!(compile_and_run(&format!(r#"<?php
+interface I {{}} interface J extends I {{}}
+class Z implements {contract} {{}}
+abstract class A {{ abstract public Z $x {{ set; }} }}
+abstract class B extends A {{ public public(set) readonly I $x; }}
+class C extends B {{}}
+$object = new C(); $object->x = new Z(); echo isset($object->x) ? "bad" : "U";
+"#)), "U");
+    }
+}
+
+/// Reflected retained setters expose their original narrow argument type and declaring class.
+#[test]
+fn test_readonly_setter_greptile_current_reflected_contract() {
+    for native_parent in [false, true] {
+        let body = r#"$property = new ReflectionProperty(Grandchild::class, "x");
+$hooks = $property->getHooks(); $setter = $hooks["set"]; $parameters = $setter->getParameters();
+echo $parameters[0]->getType()->__toString(), ":", $setter->getDeclaringClass()->getName();"#;
+        assert_eq!(compile_and_run(&source(Some(native_parent), body)), "int:Base");
+    }
+}
+
+/// Readonly overwrite and first-write type order is independent of EIR optimization.
+#[test]
+fn test_readonly_setter_greptile_current_overwrite_type_order_no_ir_opt() {
+    without_ir_opt(test_readonly_setter_greptile_current_overwrite_type_order);
+}
+
+/// Inline nullable storage copies a boxed payload and must retire the source on every branch.
+#[test]
+fn test_readonly_setter_greptile_current_nullable_source_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NullableBox { public public(set) readonly ?int $x; }
+for ($i = 0; $i < 16; $i++) {
+    $value = new NullableBox(); $value->x = "7";
+    echo $value->x, ":";
+    try { $value->x = []; } catch (Error $error) { echo "E"; unset($error); }
+    $empty = new NullableBox(); $empty->x = null;
+    try { $empty->x = []; } catch (Error $error) { echo "E"; unset($error); }
+    $fresh = new NullableBox();
+    try { $fresh->x = []; } catch (TypeError $error) { echo "T|"; unset($error); }
+    unset($value, $empty, $fresh);
+}
+"#);
+    assert!(out.success, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7:EET|".repeat(16));
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nullable boxed-source ownership does not depend on EIR optimization.
+#[test]
+fn test_readonly_setter_greptile_current_nullable_source_owners_no_ir_opt() {
+    without_ir_opt(test_readonly_setter_greptile_current_nullable_source_owners);
+}
+
+/// Relative setter scopes are independent of EIR optimization.
+#[test]
+fn test_readonly_setter_greptile_current_eval_relative_scope_no_ir_opt() {
+    without_ir_opt(test_readonly_setter_greptile_current_eval_relative_scope);
+}
+
+/// Complete interface storage checks do not depend on EIR optimization.
+#[test]
+fn test_readonly_setter_greptile_current_interface_storage_no_ir_opt() {
+    without_ir_opt(test_readonly_setter_greptile_current_interface_storage);
+}
+
+/// Reflected retained contracts do not depend on EIR optimization.
+#[test]
+fn test_readonly_setter_greptile_current_reflected_contract_no_ir_opt() {
+    without_ir_opt(test_readonly_setter_greptile_current_reflected_contract);
+}
+
 /// Builds equivalent native, eval-only and native-parent programs without changing their body.
 fn source(native_parent: Option<bool>, body: &str) -> String {
     let parent = "abstract class Base { abstract public int $x { set; } }";

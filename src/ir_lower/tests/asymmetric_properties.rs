@@ -17,6 +17,7 @@ fn check_conditional_readonly_write(target: &str) {
     let source = r#"<?php
 class ConditionalReadonly {
     public(set) readonly int $explicit;
+    public(set) readonly ?int $explicitNullable;
     public readonly int $implicit;
     public readonly ?int $nullable;
 }
@@ -25,6 +26,13 @@ function update(ConditionalReadonly $box): void { $box->implicit ??= fallback();
 function updateNullable(ConditionalReadonly $box): void { $box->nullable ??= fallback(); }
 function overwrite(ConditionalReadonly $box): void { $box->implicit = fallback(); }
 function initializePublic(ConditionalReadonly $box): void { $box->explicit = fallback(); }
+function mixedFallback(): mixed { return "7"; }
+function initializeNullablePublic(ConditionalReadonly $box): void {
+    $box->explicitNullable = mixedFallback();
+}
+function overwriteIncompatible(ConditionalReadonly $box): void {
+    try { $box->explicit = []; } catch (Error $error) { echo $error->getMessage(); }
+}
 function initializeUnion(ConditionalReadonly|false $box): void { $box->explicit = fallback(); }
 function coalesceUnion(ConditionalReadonly|false $box): void { $box->explicit ??= fallback(); }
 function coalesceImplicitUnion(ConditionalReadonly|false $box): void { $box->implicit ??= fallback(); }
@@ -57,6 +65,11 @@ echo count((new ReflectionProperty(ReadonlyStorageDescendant::class, 'id'))->get
 abstract class AbstractStringSetter { abstract public string $text { set; } }
 abstract class AbstractReadonlyStringStorage extends AbstractStringSetter { public public(set) readonly string $text; }
 class ReadonlyStringStorageDescendant extends AbstractReadonlyStringStorage {}
+interface StorageInterface {} interface DerivedStorageInterface extends StorageInterface {}
+class ZStorageValue implements DerivedStorageInterface {}
+abstract class AStorageSetter { abstract public ZStorageValue $item { set; } }
+abstract class BInterfaceStorage extends AStorageSetter { public public(set) readonly StorageInterface $item; }
+class InterfaceStorageDescendant extends BInterfaceStorage {}
 function writeAbstractString(mixed $object, mixed $value, string $name): void {
     $object->text = $value;
     $object->{$name} = $value;
@@ -130,6 +143,15 @@ echo count($properties);
     let overwrite = module.functions.iter().find(|function| function.name == "overwrite").unwrap();
     assert!(overwrite.blocks.iter().any(|block| matches!(block.terminator,
         Some(Terminator::Throw { .. }))), "{target}: direct readonly writes remain catchable");
+    let incompatible = module.functions.iter().find(|function| function.name == "overwriteIncompatible").unwrap();
+    for op in [Op::MixedBox, Op::PropInitialized, Op::PropSet] {
+        assert!(incompatible.instructions.iter().any(|instruction| instruction.op == op),
+            "{target}: incompatible readonly writes preserve runtime initialization and type guards");
+    }
+    let nullable_store = module.functions.iter().find(|function| function.name == "initializeNullablePublic").unwrap();
+    let store_index = nullable_store.instructions.iter().position(|instruction| instruction.op == Op::PropSet).unwrap();
+    assert!(nullable_store.instructions[store_index + 1..].iter().any(|instruction| instruction.op == Op::Release),
+        "{target}: inline nullable storage releases the boxed source after copying its payload");
     let union = module.functions.iter().find(|function| function.name == "initializeUnion").unwrap();
     assert!(union.instructions.iter().any(|inst| inst.op == Op::TypePredicate
         && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object))),
