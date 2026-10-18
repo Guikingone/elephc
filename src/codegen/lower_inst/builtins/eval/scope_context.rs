@@ -40,7 +40,7 @@ pub(super) fn prepare_dynamic_eval_scope_access_mask(
     globals: &[EvalSyncGlobal],
 ) -> Result<()> {
     ctx.emitter
-        .comment("prepare dynamic eval scope access mask");
+        .comment("-- prepare the dynamic eval scope access mask --");
     load_eval_context_to_arg(ctx, 0);
     let code_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let code_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
@@ -114,8 +114,9 @@ fn emit_branch_if_mixed_numeric_scalar(
     emitter: &mut crate::codegen_support::emit::Emitter,
     label: &str,
 ) {
-    emitter
-        .comment("accept selected Mixed bindings only when they hold numeric scalars");
+    emitter.comment(
+        "-- accept selected Mixed bindings only when they hold numeric scalars --",
+    );
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
     let tag = abi::int_result_reg(emitter);
     match emitter.target.arch {
@@ -136,6 +137,8 @@ fn emit_branch_if_mixed_numeric_scalar(
 
 /// Branches to one scope-access label without changing the saved runtime mask.
 fn emit_branch_to_eval_scope_label(ctx: &mut FunctionContext<'_>, label: &str) {
+    ctx.emitter
+        .comment("-- continue at the shared eval scope access path --");
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction(&format!("b {label}")),        // continue at the shared scope-mask path
         Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {label}")),       // continue at the shared scope-mask path

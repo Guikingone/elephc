@@ -332,7 +332,7 @@ pub(super) fn emit_branch_if_eval_name_unaccessed(
 ) {
     let bit = eval_scope_name_mask(name).trailing_zeros();
     let scratch = abi::symbol_scratch_reg(emitter);
-    emitter.comment("guard dynamic eval scope synchronization by parsed name mask");
+    emitter.comment("-- guard eval scope synchronization by the parsed name mask --");
     abi::emit_load_temporary_stack_slot(emitter, scratch, access_mask_offset);
     match emitter.target.arch {
         Arch::AArch64 => {
