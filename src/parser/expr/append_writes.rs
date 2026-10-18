@@ -334,23 +334,26 @@ impl AppendLowerer {
             self.bind_slot_alias(target, false, associative)
         };
         for (position, dimension) in dimensions.iter().enumerate() {
+            let leaf = position + 1 == dimensions.len();
             let target = if let Some(index) = dimension {
                 let index = if matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
                     index.clone()
                 } else {
                     let captured = self.bind(index.clone());
-                    self.normalize_dimension_key(captured)?
+                    let index = self.normalize_dimension_key(captured)?;
+                    self.live_guard(&cell, leaf, true);
+                    index
                 };
                 Expr::new(ExprKind::ArrayAccess {
-                    array: Box::new(cell), index: Box::new(index),
+                    array: Box::new(cell.clone()), index: Box::new(index),
                 }, self.span)
             } else {
-                self.reserve_append_slot(cell)?
+                self.reserve_append_slot(cell.clone())?
             };
-            let leaf = position + 1 == dimensions.len();
             cell = if leaf {
                 // Diagnose before materializing a missing leaf, using the captured parent.
                 let current = self.bind(target.clone());
+                self.live_guard(&cell, true, false);
                 let alias = self.bind_slot_alias(target, true, false);
                 // Fetch-for-write installs a child container; restore the diagnosed leaf value
                 // before applying the scalar update through that attached cell.
@@ -361,6 +364,7 @@ impl AppendLowerer {
                 // Read first so every missing intermediate dimension emits its PHP warning.
                 // The following fetch-for-write materializes the stable stored child.
                 let current = self.bind(target.clone());
+                self.live_guard(&cell, false, false);
                 let associative = dimensions.get(position + 1).and_then(Option::as_ref)
                     .is_some_and(crate::types::empty_array_key_requires_hash_storage);
                 let alias = self.bind_slot_alias(target, false, associative);
@@ -372,6 +376,20 @@ impl AppendLowerer {
         let ExprKind::Variable(name) = cell.kind else { unreachable!("cell alias is a local") };
         self.prelude.push(Stmt::new(StmtKind::Assign { name, value }, self.span));
         Ok(())
+    }
+
+    /// Keeps the role of a probe explicit without adding an observable read or owner.
+    fn live_guard(&mut self, cell: &Expr, leaf: bool, before_read: bool) {
+        use crate::names::AppendLiveGuardRole;
+        let role = match (leaf, before_read) {
+            (false, true) => AppendLiveGuardRole::ParentPre,
+            (false, false) => AppendLiveGuardRole::ParentPost,
+            (true, true) => AppendLiveGuardRole::FinalPre,
+            (true, false) => AppendLiveGuardRole::FinalPost,
+        };
+        let name = crate::names::generated_append_live_guard(self.span, self.next_temp, role);
+        self.next_temp += 1;
+        self.prelude.push(Stmt::new(StmtKind::Assign { name, value: cell.clone() }, self.span));
     }
 
     /// Restores the diagnosed leaf value after a writable fetch autovivifies a null slot.
@@ -394,11 +412,7 @@ impl AppendLowerer {
                     index.clone()
                 } else {
                     let index = self.normalize_dimension_key(index.clone())?;
-                    let name = crate::names::generated_append_live_guard(self.span, self.next_temp);
-                    self.next_temp += 1;
-                    self.prelude.push(Stmt::new(StmtKind::Assign {
-                        name, value: cell.clone(),
-                    }, self.span));
+                    self.live_guard(&cell, position + 1 == dimensions.len(), true);
                     index
                 };
                 Expr::new(ExprKind::ArrayAccess {

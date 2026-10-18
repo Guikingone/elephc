@@ -6,6 +6,8 @@
 - [x] Integrate main through `9d76ca1c3cf49bda5349337601617fa54b41f1e6`.
 - [x] Publish plain nested-write parents before runtime key conversion, without missing-key reads.
 - [x] Validate the new plain-write callback regressions on the final candidate.
+- [x] Continue abandoned intermediate selections without changing saved PHP copies.
+- [x] Validate intermediate/final conversion and read loss, exceptions, ownership and all targets.
 - [ ] Obtain clean Grok, Greptile 5/5 and complete green CI on the same published head.
 
 ## Implementation and historical validation
@@ -54,12 +56,29 @@ The full test suite and complete CI matrix were not run locally.
 Plain nested writes with runtime-converted keys reserve their slot and publish each parent
 after the eager RHS, before converting the next key. A compiler-private unread guard probes
 the selected cell after conversion; EIR consumes the marker without creating another owner.
-An abandoned selection yields null, while a surviving PHP copy receives the write. Plain
+An abandoned final selection yields null, while a surviving PHP copy receives the write. Plain
 writes never read a missing child just to obtain this guard. Compound missing-key diagnostics
 and the existing property-suffix Error path keep their separate behavior.
 
-The current follow-up passed 118 focused append codegen tests, including plain callback
+The published `b2f4f131bfbc5c3af3882ed3264e3647a4fa0eab` passed 118 focused append codegen tests, including plain callback
 publication, throwing handlers, copy survival, cancellation and multilevel conversion with
 IR optimization on and off. Five expanded target fixtures preserve the private guard through
 AST optimization and emit valid assembly. Eight parser tests, a warning-free build and
 `git diff --check` also pass. Final independent reviews and CI are still required after push.
+
+## Intermediate continuation follow-up
+
+Independent Grok review found that the published head cancels too early when a callback
+abandons a non-final dimension. Six new regression tests fail on that head: the ordinary
+value and later key diagnostics are lost, while final conversion loss warns once too often.
+
+The local repair distinguishes unread pre-conversion probes from post-read probes, and
+intermediate from final places. A first intermediate loss publishes a fresh Mixed array or
+hash into the compiler lease before releasing the old box. A separate keeper protects that
+scratch across child selection. The remaining expression bypasses owner probes and continues
+on private storage. Conversion loss skips only the current intermediate read; final conversion
+loss cancels before the missing-leaf warning. The owner-count predicate and selected-payload
+runtime writers are unchanged. The new candidate passed all 128 append codegen tests,
+including ten new strict-heap controls with IR optimization on and off, nine parser tests,
+all five target fixtures, the macOS cross-atom dead-strip check, a warning-free build and
+diff hygiene. Fresh independent review and complete CI are still required after publication.

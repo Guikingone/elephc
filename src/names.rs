@@ -1040,12 +1040,40 @@ pub(crate) fn append_update_alias_prefers_hash(name: &str) -> bool {
         .is_some_and(|stem| stem.starts_with(APPEND_UPDATE_ALIAS_PREFIX) && stem.ends_with("_parent_hash"))
 }
 
-/// Constructs an unread marker that guards the selected parent after a key diagnostic.
-pub(crate) fn generated_append_live_guard(span: crate::span::Span, index: usize) -> String {
+/// Distinguishes continuation after an intermediate loss from final-place cancellation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppendLiveGuardRole { ParentPre, ParentPost, FinalPre, FinalPost }
+
+impl AppendLiveGuardRole {
+    /// Encodes the role in the existing unforgeable generated-local protocol.
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::ParentPre => "parent_pre", Self::ParentPost => "parent_post",
+            Self::FinalPre => "final_pre", Self::FinalPost => "final_post",
+        }
+    }
+
+    /// Only loss of the final selected place cancels the PHP expression.
+    pub(crate) fn is_final(self) -> bool { matches!(self, Self::FinalPre | Self::FinalPost) }
+}
+
+/// Constructs an unread marker around conversion or a diagnosed parent read.
+pub(crate) fn generated_append_live_guard(
+    span: crate::span::Span, index: usize, role: AppendLiveGuardRole,
+) -> String {
     generated_local_name(&format!(
-        "__elephc_append_live_guard_{}_{}_{}_{}",
-        span.source_id(), span.line, span.col, index,
+        "__elephc_append_live_guard_{}_{}_{}_{}_{}",
+        span.source_id(), span.line, span.col, index, role.suffix(),
     ))
+}
+
+/// Decodes only a compiler-generated marker whose complete role is known.
+pub(crate) fn append_live_guard_role(name: &str) -> Option<AppendLiveGuardRole> {
+    if !is_append_live_guard(name) { return None; }
+    let stem = name.strip_suffix(GENERATED_LOCAL_MARKER)?;
+    [AppendLiveGuardRole::ParentPre, AppendLiveGuardRole::ParentPost,
+        AppendLiveGuardRole::FinalPre, AppendLiveGuardRole::FinalPost]
+        .into_iter().find(|role| stem.ends_with(role.suffix()))
 }
 
 /// Recognizes only compiler-generated guards, never a PHP variable with a similar name.

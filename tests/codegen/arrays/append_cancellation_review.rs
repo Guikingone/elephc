@@ -1,5 +1,5 @@
 //! Purpose:
-//! Regressions for compound append cancellation after diagnostic callbacks separate a container.
+//! Regressions for append selection after diagnostic callbacks separate a container.
 //!
 //! Called from:
 //! - The array codegen integration suite.
@@ -7,8 +7,143 @@
 //! Key details:
 //! - Cancellation follows the selected nested container, not unrelated root mutations.
 //! - Retaining a by-value copy can preserve the old selected container for the update.
+//! - Abandoned intermediate paths still finish; final selected-cell loss cancels the operation.
 
 use crate::support::*;
+
+/// Checks diagnostics and ownership when the first key callback abandons an intermediate place.
+fn verify_intermediate_abandonment(callback: &str, root: &str, dimensions: &str, operation: &str) {
+    let source = format!(r#"<?php
+function rhs(): int {{ echo 'R|'; return 7; }}
+function run(array $items): void {{
+    $left = []; $right = []; $seen = 0;
+    set_error_handler(function(int $level, string $message) use (&$items, &$left, &$right, &$seen): bool {{
+        ++$seen; echo $level, ':', json_encode($items), '|';
+        if ($seen === 1) {{ {callback} }} return true;
+    }});
+    $result = ($items[][{dimensions}] {operation} rhs());
+    restore_error_handler();
+    echo json_encode($result), ':', json_encode($items), ':', json_encode($left), ':', json_encode($right);
+    unset($items, $left, $right, $result);
+}}
+run([]);
+"#);
+    let later_key = if dimensions.contains("2.5") { format!("8192:{root}|") } else { String::new() };
+    let missing_leaf = if operation == "+=" { format!("2:{root}|") } else { String::new() };
+    assert_output(&source, &format!("R|8192:[[]]|{later_key}{missing_leaf}7:{root}:[]:[]"));
+}
+
+/// A lost intermediate parent continues later key diagnostics and returns the normal value.
+#[test]
+fn test_append_grok_current_intermediate_abandonment() {
+    for operation in ["=", "+="] {
+        verify_intermediate_abandonment("$items = ['gone' => true];", "{\"gone\":true}", "1.5][2.5", operation);
+        verify_intermediate_abandonment(
+            "$left = $items[0]; $right = $items[0]; $items[0] = ['other' => 2];",
+            "[{\"other\":2}]", "1.5][2.5", operation,
+        );
+    }
+}
+
+/// Earlier cancellation still returns the ordinary value when the final key is a literal.
+#[test]
+fn test_append_grok_current_intermediate_then_literal() {
+    for operation in ["=", "+="] {
+        verify_intermediate_abandonment("$items = ['gone' => true];", "{\"gone\":true}", "1.5][2", operation);
+    }
+}
+
+/// Losing the final place during conversion cancels before any missing-leaf diagnostic.
+#[test]
+fn test_append_grok_current_final_key_abandonment() {
+    for operation in ["=", "+="] {
+        let source = format!(r#"<?php
+function rhs(): int {{ echo 'R|'; return 7; }}
+$items = [];
+set_error_handler(function(int $level, string $message) use (&$items): bool {{
+    echo $level, ':', json_encode($items), '|';
+    if (str_contains($message, '2.5')) {{ $items = ['gone' => true]; }} return true;
+}});
+$result = ($items[][1.5][2.5] {operation} rhs());
+restore_error_handler(); echo json_encode($result), ':', json_encode($items);
+unset($items, $result);
+"#);
+        let intermediate_read = if operation == "+=" { "2:[[]]|" } else { "" };
+        assert_output(&source, &format!(
+            "R|8192:[[]]|{intermediate_read}8192:[{{\"1\":[]}}]|null:{{\"gone\":true}}",
+        ));
+    }
+}
+
+/// Abandoned intermediate selections do not depend on EIR optimization.
+#[test]
+fn test_append_grok_current_intermediate_abandonment_no_ir_opt() {
+    without_ir_opt(test_append_grok_current_intermediate_abandonment);
+}
+
+/// A literal final key does not change unoptimized abandonment semantics.
+#[test]
+fn test_append_grok_current_intermediate_then_literal_no_ir_opt() {
+    without_ir_opt(test_append_grok_current_intermediate_then_literal);
+}
+
+/// Final conversion cancellation skips stale reads without EIR optimization too.
+#[test]
+fn test_append_grok_current_final_key_abandonment_no_ir_opt() {
+    without_ir_opt(test_append_grok_current_final_key_abandonment);
+}
+
+/// A missing intermediate read may detach, and a later throwing callback unwinds the scratch.
+#[test]
+fn test_append_grok_current_read_abandonment_and_throw() {
+    for throwing in [false, true] {
+        let source = r#"<?php
+function rhs(): int { echo 'R|'; return 7; }
+function run(array $items): void {
+    $seen = 0;
+    set_error_handler(function(int $level, string $message) use (&$items, &$seen): bool {
+        ++$seen; echo $level, ':', json_encode($items), '|';
+        if ($seen === 1) { $items = ['gone' => true]; }
+        else { THROW_ACTION } return true;
+    });
+    try { $result = ($items[]['first'][2.5] += rhs()); echo json_encode($result), ':'; }
+    catch (Error $error) { echo 'C:'; unset($error); }
+    restore_error_handler(); echo json_encode($items); unset($items, $result);
+}
+run([]);
+"#.replace("THROW_ACTION", if throwing { "throw new Error('stop');" } else { "" });
+        assert_output(&source, if throwing {
+            "R|2:[[]]|8192:{\"gone\":true}|C:{\"gone\":true}"
+        } else { "R|2:[[]]|8192:{\"gone\":true}|2:{\"gone\":true}|7:{\"gone\":true}" });
+    }
+}
+
+/// Intermediate-read loss and subsequent exceptions also retire unoptimized scratch owners.
+#[test]
+fn test_append_grok_current_read_abandonment_and_throw_no_ir_opt() {
+    without_ir_opt(test_append_grok_current_read_abandonment_and_throw);
+}
+
+/// Live dimensions still interleave key conversion, missing reads and parent publication.
+#[test]
+fn test_append_grok_current_live_dimension_order() {
+    assert_output(r#"<?php
+function rhs(): int { echo 'R|'; return 7; }
+$items = [];
+set_error_handler(function(int $level, string $message) use (&$items): bool {
+    echo $level, ':', json_encode($items), '|'; return true;
+});
+$result = ($items[][1.5][2.5][3.5] += rhs());
+restore_error_handler(); echo json_encode($result), ':', json_encode($items);
+unset($items, $result);
+"#, "R|8192:[[]]|2:[[]]|8192:[{\"1\":[]}]|2:[{\"1\":[]}]|8192:[{\"1\":{\"2\":[]}}]|2:[{\"1\":{\"2\":[]}}]|7:[{\"1\":{\"2\":{\"3\":7}}}]");
+}
+
+/// Normal diagnostic order does not depend on EIR optimization.
+#[test]
+fn test_append_grok_current_live_dimension_order_no_ir_opt() {
+    without_ir_opt(test_append_grok_current_live_dimension_order);
+}
 
 /// Plain nested append publishes its parent after the RHS but before key diagnostics.
 #[test]

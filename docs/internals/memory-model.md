@@ -1072,7 +1072,7 @@ Plain nested assigns with converted keys use the same leases after publishing ea
 Their generated live-guard Assign markers are consumed by EIR before statement lowering:
 the apparent copy never acquires another owner and never reads a missing child. Key
 conversion precedes the guard, so a throwing diagnostic retains the published parent,
-and a returning diagnostic can cancel a selection that no PHP owner preserves.
+and a returning diagnostic can invalidate a selection that no PHP owner preserves.
 
 Parser-generated append cell aliases are ordinary retained Mixed boxes, not persistent PHP
 reference sets. When a child lease replaces an older compiler parent, EIR pops the parent's
@@ -1080,12 +1080,18 @@ record, publishes the child, then releases the old parent slot. This keeps unwin
 without making dead compiler ancestors look like live PHP owners.
 
 A fresh parent is preallocated with the indexed or associative representation required by
-its next key before the missing-key callback runs. After the read, a typed, non-retaining
+its next key before the missing-key callback runs. Around conversion and reads, a typed, non-retaining
 EIR query counts both cell and payload owners. Their sum must be exactly three:
 one pending compiler cell lease, its payload reference, and one surviving PHP owner.
 A stored cell with an unshared payload remains writable, while a detached cell can
 continue through exactly one independently boxed payload copy. Zero or multiple PHP
-owners make the pending target stale and bypass the operator. Multiple root copies
+owners make the pending target stale. A final-place failure bypasses the operator and
+yields null (or 1 for prefix increment). A non-final failure instead rebinds only the
+compiler lease to a fresh empty Mixed array or hash, never to a saved PHP copy. A separate
+keeper owns that scratch across child-lease transitions; a detached flag bypasses later
+owner checks for this expression. Later keys, diagnostics, and the leaf operation still run.
+If conversion caused the first loss, only that dimension's missing-key read is skipped.
+A final conversion loss cancels before reading the missing leaf. Multiple root copies
 that share one child slot do not add independent child owners. The detached-payload
 case uses dedicated array conversion and hash insertion entries that preserve the already
 selected payload instead of crossing another COW boundary. Both normal and cancellation

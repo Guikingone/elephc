@@ -58,14 +58,23 @@ instead, leaving every copy unchanged. Multiple copies of the same root array ca
 still share a single selected child slot and keep the operation active. When the
 original cell and an independent payload copy both survive, PHP also cancels the
 stale target. A cancelled prefix increment still returns `1`.
-Each missing intermediate key emits its own warning before it is autovivified.
+Each missing intermediate key emits its own warning before it is autovivified, unless
+key conversion has already abandoned that dimension before its read.
+
+Losing an intermediate selection is different from losing the final place. For example,
+if the first key handler replaces `$items` during `$items[][1.5][2.5] += 7`, PHP still
+converts the second key, diagnoses its missing leaf, and returns `7` on private temporary
+storage. It does not change the replacement root or saved copies of the abandoned parent.
+If only the final `2.5` conversion loses the place, the expression instead yields null
+without reading the missing leaf or applying the operator.
 
 Plain nested writes with converted keys publish their parents before key diagnostics.
 For `$items[][1.5] = rhs()`, `rhs()` runs first, then a deprecation handler sees `[[]]`.
 A throwing handler leaves that published parent in place. A returning handler may preserve
-the selection through a saved child copy; if it instead abandons the selected parent, the
+the selection through a saved child copy; if it instead abandons the final selected parent, the
 assignment yields null and does not insert the leaf. Plain writes do not emit missing-key
-warnings while creating those parents.
+warnings while creating those parents. Abandoning only an intermediate plain-write parent
+still evaluates the remaining keys and returns the assigned value on private storage.
 
 ## String arrays
 ```php

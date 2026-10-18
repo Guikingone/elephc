@@ -101,6 +101,10 @@ function plainConvertedKey(array $items, float $key): array {
     $items[][$key] = 1; return $items;
 }
 echo json_encode(plainConvertedKey([], 1.5));
+function intermediateConvertedKeys(array $items, float $key): array {
+    $items[][$key][2.5] += 7; return $items;
+}
+echo json_encode(intermediateConvertedKeys([], 1.5));
 "#;
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),
@@ -125,6 +129,11 @@ echo json_encode(plainConvertedKey([], 1.5));
     }
     assert!(plain.blocks.iter().any(|block| block.name.starts_with("append.update.cancel")),
         "{target}: plain writes cancel without reading missing array keys");
+    let intermediate = module.functions.iter().find(|function| function.name == "intermediateConvertedKeys").unwrap();
+    for prefix in ["append.update.detach", "append.update.continue", "append.update.cancel"] {
+        assert!(intermediate.blocks.iter().any(|block| block.name.starts_with(prefix)),
+            "{target}: intermediate scratch continuation remains distinct from final cancellation");
+    }
     let returning = module.functions.iter().find(|function| function.name == "hashReturn")
         .expect("missing hash-return fixture");
     assert!(returning.blocks.iter().flat_map(|block| &block.instructions)

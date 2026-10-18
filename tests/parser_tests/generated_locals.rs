@@ -16,6 +16,29 @@ use elephc::names::is_generated_local_name;
 
 use super::*;
 
+/// Intermediate and final probes bracket compound reads without reading plain-write children.
+#[test]
+fn append_live_guard_roles_bracket_dimension_reads() {
+    for (operator, expected) in [
+        ("=", vec!["parent_pre", "final_pre"]),
+        ("+=", vec!["parent_pre", "read", "parent_post", "final_pre", "read", "final_post"]),
+    ] {
+        let statements = parse_source(&format!("<?php echo ($items[][1.5][2.5] {operator} 7);"));
+        let StmtKind::Echo(expression) = &statements[0].kind else { panic!("expected echo"); };
+        let ExprKind::Assignment { prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+        let order: Vec<_> = prelude.iter().filter_map(|stmt| {
+            let StmtKind::Assign { name, value } = &stmt.kind else { return None; };
+            if name.starts_with("__elephc_append_live_guard_") {
+                assert!(is_generated_local_name(name));
+                ["parent_pre", "parent_post", "final_pre", "final_post"].into_iter()
+                    .find(|role| name.ends_with(&format!("_{role}#gen")))
+            } else if matches!(value.kind, ExprKind::ArrayAccess { .. }) { Some("read") }
+            else { None }
+        }).collect();
+        assert_eq!(order, expected, "{operator}");
+    }
+}
+
 /// Plain converted-key appends publish their parent before an unread unforgeable live guard.
 #[test]
 fn append_plain_live_guard_preserves_rhs_publication_order() {
