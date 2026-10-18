@@ -39,6 +39,8 @@ pub(super) fn parameter_default_is_deferred(expression: &EvalExpr) -> bool {
             || default.as_deref().is_some_and(parameter_default_is_deferred),
         EvalExpr::NewObject { args, .. } =>
             args.iter().any(|arg| parameter_default_is_deferred(arg.value())),
+        EvalExpr::Call { name, args } if name == "\0elephc_native_default_array_spread" =>
+            args.iter().any(|arg| parameter_default_is_deferred(arg.value())),
         _ => false,
     }
 }
@@ -63,4 +65,21 @@ pub(super) fn attach_parameter_default_factory(
         |_| values.property_set(object, property, factory));
     let retired = eval_release_value(context, values, factory);
     installed.and(retired)
+}
+
+/// Reflection detects deferred errors inside normalized spreads, not ordinary function names.
+#[cfg(test)]
+#[test]
+fn native_default_spread_retains_reflection_error_detection() {
+    let args = vec![crate::eval_ir::EvalCallArg::positional(
+        EvalExpr::DeferredDefaultError("parent".into()),
+    )];
+    assert!(parameter_default_is_deferred(&EvalExpr::Array(vec![
+        EvalArrayElement::Value(EvalExpr::Call {
+            name: "\0elephc_native_default_array_spread".into(), args: args.clone(),
+        }),
+    ])));
+    assert!(!parameter_default_is_deferred(&EvalExpr::Call {
+        name: "__elephc_default_array_spread".into(), args,
+    }));
 }

@@ -10,6 +10,55 @@
 
 use super::*;
 
+/// Compiler spread markers normalize only array values and retain deferred-error structure.
+#[test]
+fn register_native_default_expression_normalizes_spread_markers() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"Known::value";
+    let source = b"return [10 => 'ten', __elephc_default_array_spread([__elephc_deferred_default_error('parent')])];";
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_method_param_default_expression(
+            &mut context, key.as_ptr(), key.len() as u64, 0, source.as_ptr(), source.len() as u64), 1);
+    }
+    let signature = context.native_method_signature("Known", "value").unwrap();
+    let Some(NativeCallableDefault::Expression { expression, .. }) = signature.param_default(0)
+        else { panic!("retain default expression"); };
+    let crate::eval_ir::EvalExpr::Array(entries) = expression.as_ref() else { panic!("array default"); };
+    let crate::eval_ir::EvalArrayElement::Value(crate::eval_ir::EvalExpr::Call { name, args }) = &entries[1]
+        else { panic!("private spread marker"); };
+    assert_eq!(name, "\0elephc_native_default_array_spread");
+    assert!(format!("{:?}", args[0].value()).contains("DeferredDefaultError"));
+    let before = signature.param_default(0).cloned();
+    for source in [
+        "return __elephc_default_array_spread([]);",
+        "return [__elephc_default_array_spread()];",
+        "return [__elephc_default_array_spread([], [])];",
+        "return [__elephc_default_array_spread(value: [])];",
+        "return [__elephc_default_array_spread(...[])];",
+        "return [__elephc_default_array_spread(strlen('x'))];",
+    ] {
+        assert_eq!(unsafe { __elephc_eval_register_native_method_param_default_expression(
+            &mut context, key.as_ptr(), key.len() as u64, 0, source.as_ptr(), source.len() as u64) }, 0, "{source}");
+        assert_eq!(context.native_method_signature("Known", "value").unwrap().param_default(0), before.as_ref());
+    }
+}
+
+/// Spread selectors retain keyed arrays and their unselected nested errors during registration.
+#[test]
+fn register_native_default_expression_normalizes_spread_selectors() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"SelectedSpread::value";
+    let source = br#"return __elephc_default_lexical_scope('SelectedSpread', [10 => 'ten', __elephc_default_array_spread((\SelectedSpread::ENABLED ? [4 => 'four', 'name' => 'old'] : [__elephc_deferred_default_error('parent')])), 'name' => 'new', 'tail']);"#;
+    let program = crate::parser::parse_fragment(source).unwrap();
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_static_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_static_method_param_default_expression(
+            &mut context, key.as_ptr(), key.len() as u64, 0, source.as_ptr(), source.len() as u64), 1,
+            "parsed tree: {program:?}");
+    }
+}
+
 /// Free-function deferred trees own their source, use no class scope and retain protected factories.
 #[test]
 fn register_native_free_function_deferred_defaults() {

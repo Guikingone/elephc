@@ -24,6 +24,7 @@ mod lexical_property_defaults;
 #[path = "oop/nested_default_review.rs"]
 mod nested_default_review;
 mod nested_default_grok_scope;
+mod nested_default_review_boundaries;
 #[path = "oop/callables/mod.rs"]
 mod callables;
 #[path = "oop/union_types.rs"]

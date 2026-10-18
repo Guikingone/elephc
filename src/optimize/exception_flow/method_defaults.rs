@@ -1,5 +1,5 @@
 //! Purpose:
-//! Tracks deferred callable-default errors separately from clean function and method bodies.
+//! Tracks callable-default exception effects separately from clean function and method bodies.
 //!
 //! Called from:
 //! - `ExceptionFlowAnalysis::from_program()` and function/method call exception queries.
@@ -49,7 +49,7 @@ pub(super) fn collect_unresolved(
 }
 
 /// Literal defaults need no binding metadata; other expressions may throw while being resolved.
-fn default_requires_metadata(default: &Expr) -> bool {
+pub(super) fn default_requires_metadata(default: &Expr) -> bool {
     match &default.kind {
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::StringLiteral(_)
         | ExprKind::BoolLiteral(_) | ExprKind::Null => false,
@@ -60,7 +60,7 @@ fn default_requires_metadata(default: &Expr) -> bool {
     }
 }
 
-/// Collects signatures whose deferred defaults can throw before the method body executes.
+/// Collects signatures whose nonliteral defaults can throw before the method body executes.
 pub(super) fn collect(
     classes: &HashMap<String, ClassInfo>,
     static_methods: bool,
@@ -69,18 +69,34 @@ pub(super) fn collect(
         let methods = if static_methods { &class.static_methods } else { &class.methods };
         methods.iter()
             .filter(|(_, signature)| signature.defaults.iter().flatten()
-                .any(crate::types::deferred_defaults::contains_deferred_error))
+                .any(default_requires_metadata))
             .map(move |(method, signature)| (method_effect_key(class_name, method), signature.clone()))
     }).collect()
 }
 
-/// Reports whether argument binding can select a deferred Error default at this call site.
+/// Reports whether argument binding can select a potentially throwing default at this call site.
 pub(super) fn can_throw(signature: &FunctionSig, args: &[Expr], span: crate::span::Span) -> bool {
+    !selected_default_throws(signature, args, span).is_empty()
+}
+
+/// Conservatively includes effects of selected nonliteral defaults before the callee body.
+pub(super) fn selected_default_throws(
+    signature: &FunctionSig, args: &[Expr], span: crate::span::Span,
+) -> ThrownTypes {
     let Ok(plan) = plan_call_args(signature, args, span, false, true) else {
-        return true;
+        return ThrownTypes::unknown();
     };
     plan.possible_default_argument_mask(signature).into_iter()
         .zip(&signature.defaults)
-        .any(|(possible, default)| possible && default.as_ref()
-            .is_some_and(crate::types::deferred_defaults::contains_deferred_error))
+        .filter_map(|(possible, default)| possible.then_some(default.as_ref()).flatten())
+        .filter(|default| default_requires_metadata(default))
+        .fold(ThrownTypes::default(), |thrown, default| {
+            let current = if crate::types::deferred_defaults::deferred_error_message(default).is_some() {
+                ThrownTypes::exact("Error")
+            } else {
+                // Constructors, conversions and cleanup in a preceding subtree may throw first.
+                ThrownTypes::unknown()
+            };
+            thrown.combined(current)
+        })
 }

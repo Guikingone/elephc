@@ -136,6 +136,30 @@ fn native_catalog_preserves_property_default_errors_across_activations() {
     assert_eq!(third.native_property_default_errors.get(&member).map(String::as_str), Some("missing constant"));
 }
 
+/// Class initialization errors survive cache reuse without changing individual reflected defaults.
+#[test]
+fn native_catalog_preserves_class_default_errors_across_activations() {
+    reset_cache();
+    let mut first = ElephcEvalContext::new();
+    seed(&mut first, 104);
+    assert!(first.define_native_class_default_error("Probe", "class initialization".into()));
+    assert!(first.define_native_property_default("Probe", "good", NativeCallableDefault::Int(7)));
+    assert!(first.publish_native_catalog());
+    let mut second = ElephcEvalContext::new();
+    second.use_native_catalog(104);
+    assert!(second.native_catalog_is_ready());
+    assert!(std::ptr::eq(&*first.native_class_default_errors, &*second.native_class_default_errors));
+    assert_eq!(second.native_class_default_error("\\PROBE"), Some("class initialization"));
+    assert_eq!(second.native_property_default("Probe", "good"), Some(NativeCallableDefault::Int(7)));
+    second.define_native_class_default_error("Probe", "activation-local replacement".into());
+    assert_eq!(second.native_class_default_error("Probe"), Some("activation-local replacement"));
+    drop(first);
+    drop(second);
+    let mut third = ElephcEvalContext::new();
+    third.use_native_catalog(104);
+    assert_eq!(third.native_class_default_error("probe"), Some("class initialization"));
+}
+
 /// Cache eviction bounds retained catalogs without invalidating a live activation.
 #[test]
 fn native_catalog_eviction_keeps_live_contexts_valid() {

@@ -89,6 +89,7 @@ pub(crate) fn validate_deferred_declaration_defaults(
     }
 
     normalize_method_default_receivers(checker);
+    super::property_default_selectors::normalize(checker, program);
 
     errors
 }

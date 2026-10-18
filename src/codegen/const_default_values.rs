@@ -121,6 +121,32 @@ pub(in crate::codegen) fn resolved_scalar_literal(value: ConstDefaultValue) -> O
     }
 }
 
+/// Restores resolved scalar and array trees for literal property storage without eager branches.
+pub(in crate::codegen) fn resolved_literal_default(value: ConstDefaultValue) -> Option<ExprKind> {
+    let elements = match value {
+        ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EMPTY_ARRAY, .. } =>
+            return Some(ExprKind::ArrayLiteral(Vec::new())),
+        ConstDefaultValue::Array(elements) => elements,
+        value => return resolved_scalar_literal(value),
+    };
+    let span = crate::span::Span::synthetic();
+    if elements.iter().all(|element| element.key.is_none()) {
+        let items = elements.into_iter().map(|element|
+            Some(Expr::new(resolved_literal_default(element.default)?, span)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExprKind::ArrayLiteral(items))
+    } else {
+        let items = elements.into_iter().map(|element| {
+            let key = match element.key? {
+                ConstDefaultArrayKey::Int(value) => ExprKind::IntLiteral(value),
+                ConstDefaultArrayKey::String(value) => ExprKind::StringLiteral(value),
+            };
+            Some((Expr::new(key, span), Expr::new(resolved_literal_default(element.default)?, span)))
+        }).collect::<Option<Vec<_>>>()?;
+        Some(ExprKind::ArrayLiteralAssoc(items))
+    }
+}
+
 /// Resolves one PHP default expression while preserving the constant recursion limit.
 pub(in crate::codegen) fn resolve_const_default_at(
     expr: &Expr,

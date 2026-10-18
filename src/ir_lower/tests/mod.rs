@@ -36,6 +36,7 @@ mod effects;
 mod string_append;
 mod eval_ownership;
 mod eval_default_helpers;
+mod default_review_boundaries;
 mod exhaustive;
 mod ownership;
 mod weak_map_places;

@@ -73,7 +73,13 @@ fn expression(expr: &Expr, context: &EvalNativeDefaultContext<'_>) -> Option<Str
             let message = crate::types::deferred_defaults::deferred_error_message(expr)?;
             format!("__elephc_deferred_default_error({})", quoted(message))
         }
-        ExprKind::ArrayLiteral(values) => format!("[{}]", arguments(values, context)?),
+        ExprKind::ArrayLiteral(values) => {
+            let values = values.iter().map(|value| match &value.kind {
+                ExprKind::Spread(value) => Some(format!("__elephc_default_array_spread({})", expression(value, context)?)),
+                _ => expression(value, context),
+            }).collect::<Option<Vec<_>>>()?;
+            format!("[{}]", values.join(", "))
+        }
         ExprKind::ArrayLiteralAssoc(entries) => {
             let values = entries.iter().map(|(key, value)| Some(format!("{} => {}",
                 expression(key, context)?, expression(value, context)?)))
@@ -83,7 +89,11 @@ fn expression(expr: &Expr, context: &EvalNativeDefaultContext<'_>) -> Option<Str
         ExprKind::ArrayLiteralMixed(entries) => {
             let values = entries.iter().map(|entry| Some(match entry {
                 ArrayEntry::Value(value) => expression(value, context)?,
-                ArrayEntry::Spread(value) => format!("...{}", expression(value, context)?),
+                ArrayEntry::Spread(value) => {
+                    // Mixed literals retain the parser's Spread wrapper inside the entry too.
+                    let value = match &value.kind { ExprKind::Spread(value) => value.as_ref(), _ => value };
+                    format!("__elephc_default_array_spread({})", expression(value, context)?)
+                }
                 ArrayEntry::Keyed(key, value) => format!("{} => {}",
                     expression(key, context)?, expression(value, context)?),
             })).collect::<Option<Vec<_>>>()?;
@@ -139,4 +149,25 @@ fn binary_operator(op: &BinOp) -> &'static str {
         BinOp::BitXor => "^", BinOp::ShiftLeft => "<<", BinOp::ShiftRight => ">>",
         BinOp::Spaceship => "<=>", BinOp::NullCoalesce => "??",
     }
+}
+
+/// The encoder and decoder agree on nested spread selectors with explicit keys.
+#[cfg(test)]
+#[test]
+fn native_default_spread_selector_source_round_trips() {
+    let tokens = crate::lexer::tokenize(r#"<?php
+class SelectedSpread {
+    const ENABLED = true;
+    public static function value(array $items = [10 => 'ten', ...(self::ENABLED ? [4 => 'four', 'name' => 'old'] : [parent::A]), 'name' => 'new', 'tail']): array { return $items; }
+}
+"#).unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    let checked = crate::types::check(&program).unwrap();
+    let module = Module::new(crate::codegen::platform::Target::parse("linux-x86_64").unwrap());
+    let context = EvalNativeDefaultContext::for_class(&module, "SelectedSpread");
+    let default = checked.classes["SelectedSpread"].static_methods["value"].defaults[0].as_ref().unwrap();
+    let source = default_expression_source(default, &context).unwrap();
+    let parsed = elephc_magician::parser::parse_fragment(source.as_bytes())
+        .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    assert!(!source.contains("__elephc_default_array_spread(..."), "{source}: {parsed:?}");
 }

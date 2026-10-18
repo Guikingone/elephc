@@ -162,7 +162,7 @@ fn normalize_expression(expression: &mut crate::eval_ir::EvalExpr) -> bool {
         EvalExpr::Const(_) | EvalExpr::ConstFetch(_) | EvalExpr::ClassConstantFetch { .. }
         | EvalExpr::ClassNameFetch { .. } | EvalExpr::NamespacedConstFetch { .. } => true,
         EvalExpr::Array(entries) => entries.iter_mut().all(|entry| match entry {
-            EvalArrayElement::Value(value) => normalize_expression(value),
+            EvalArrayElement::Value(value) => normalize_array_value(value),
             EvalArrayElement::KeyValue { key, value } =>
                 normalize_expression(key) && normalize_expression(value),
             EvalArrayElement::Reference(_) | EvalArrayElement::KeyReference { .. } => false,
@@ -191,4 +191,22 @@ fn normalize_expression(expression: &mut crate::eval_ir::EvalExpr) -> bool {
         }),
         _ => false,
     }
+}
+
+/// Decodes a compiler-only spread marker without adding public eval grammar or a callable hook.
+fn normalize_array_value(value: &mut crate::eval_ir::EvalExpr) -> bool {
+    use crate::eval_ir::{EvalCallArg, EvalExpr};
+    if let EvalExpr::Call { name, args } = value {
+        if name == "__elephc_default_array_spread" {
+            let [arg] = args.as_slice() else { return false; };
+            if arg.name().is_some() || arg.is_spread() { return false; }
+            let mut source = arg.value().clone();
+            if !normalize_expression(&mut source) { return false; }
+            // A PHP identifier cannot spell this sentinel. Only the array builder consumes it.
+            *name = "\0elephc_native_default_array_spread".into();
+            *args = vec![EvalCallArg::positional(source)];
+            return true;
+        }
+    }
+    normalize_expression(value)
 }

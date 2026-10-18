@@ -65,7 +65,7 @@ fn eval_expr_with_result_ownership(
             if elements
                 .iter()
                 .any(|element| {
-                    matches!(
+                    native_default_array_spread(element).is_some() || matches!(
                         element,
                         EvalArrayElement::KeyValue { .. }
                             | EvalArrayElement::KeyReference { .. }

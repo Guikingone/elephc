@@ -380,6 +380,14 @@ member annotations discarded after uppercase or mixed-case native class-like key
 Earlier format changes also invalidated stored parse errors for valid comparisons after class references.
 The format guard covers the combined serialized IR and its corresponding type sources.
 
+Native callable defaults retain array-unpack operands through a private array-element marker.
+Registration validates and normalizes that marker before execution; it is not public PHP syntax.
+The interpreter evaluates each unpack operand once, appends numeric entries, overwrites string
+keys, and releases partial results if evaluation fails. Generated code checks registration results
+before installing a default factory. Native class-initialization errors have a separate catalog
+entry from reflected property defaults: static access checks visibility first, then initialization,
+without invalidating an independently readable `ReflectionProperty` default.
+
 ## Parsing and cache
 
 Dynamic source is parsed into Magician's immutable EvalIR. The process-wide

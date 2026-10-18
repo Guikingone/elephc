@@ -10,6 +10,18 @@
 use super::*;
 
 impl ElephcEvalContext {
+    /// Records the first class-initialization Error separately from individual reflected defaults.
+    pub fn define_native_class_default_error(&mut self, class_name: &str, message: String) -> bool {
+        let key = normalize_class_name(class_name);
+        if key.is_empty() || message.is_empty() { return false; }
+        self.native_class_default_errors.insert(key, message).is_none()
+    }
+
+    /// Returns a native class's initialization failure without evaluating a native callback.
+    pub fn native_class_default_error(&self, class_name: &str) -> Option<&str> {
+        self.native_class_default_errors.get(&normalize_class_name(class_name)).map(String::as_str)
+    }
+
     /// Defines generated AOT parent metadata for eval `parent::` resolution.
     pub fn define_native_class_parent(&mut self, class_name: &str, parent_name: &str) -> bool {
         let class_key = normalize_class_name(class_name);

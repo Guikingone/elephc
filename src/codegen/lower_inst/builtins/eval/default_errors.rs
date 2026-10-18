@@ -35,6 +35,10 @@ pub(super) fn register_eval_native_param_default_error(
     }
     let symbol = ctx.emitter.target.extern_symbol(&symbol);
     abi::emit_call_label(ctx.emitter, &symbol);
+    let registered = ctx.next_label("eval_native_default_registered");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &registered);
+    super::status::emit_eval_fatal_message(ctx, "Fatal error: eval() native default registration failed\n");
+    ctx.emitter.label(&registered);
     if !matches!(default.kind, ExprKind::Throw(_)) {
         register_native_reflection_factory(ctx, context_offset, key, index, default,
             default_context, if symbol.contains("_constructor_") { 2 }

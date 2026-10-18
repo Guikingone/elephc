@@ -59,7 +59,7 @@ pub(super) struct ExceptionFlowAnalysis {
     function_object_ref_checks: HashSet<String>,
     static_method_object_ref_checks: HashMap<String, bool>,
     instance_method_object_ref_checks: HashMap<String, bool>,
-    /// Class initialization or an omitted trait constructor default can raise Error before its body.
+    /// Class property initialization can raise Error independently of constructor argument omission.
     constructor_default_errors: HashSet<String>,
     function_error_defaults: HashMap<String, FunctionSig>,
     function_unresolved_defaults: HashSet<String>,
@@ -374,7 +374,7 @@ impl ExceptionFlowAnalysis {
             instance_method_object_ref_checks,
             function_error_defaults: type_metadata.map(|(functions, _, _)| functions.iter()
                 .filter(|(_, signature)| signature.defaults.iter().flatten()
-                    .any(crate::types::deferred_defaults::contains_deferred_error))
+                    .any(method_defaults::default_requires_metadata))
                 .map(|(name, signature)| (name.clone(), signature.clone()))
                 .collect()).unwrap_or_default(),
             function_unresolved_defaults,
@@ -389,10 +389,6 @@ impl ExceptionFlowAnalysis {
                     class.deferred_property_default_error.is_some()
                         || class.defaults.iter().flatten()
                             .any(crate::types::deferred_defaults::contains_deferred_error)
-                        || class.methods.get("__construct").is_some_and(|signature| {
-                            signature.defaults.iter().flatten()
-                                .any(crate::types::deferred_defaults::contains_deferred_error)
-                        })
                 }).map(|(name, _)| php_symbol_key(name)).collect()
             }).unwrap_or_else(|| property_defaults::imported_default_errors(program)),
             function_returns,
@@ -826,13 +822,13 @@ impl ExceptionFlowAnalysis {
             ExprKind::NewObject { class_name, args } => self
                 .expr_list_throws(args, bindings, class_context)
                 .combined(self.operand_cleanup_throws(args, class_context))
-                .combined(self.constructor_throws(class_name.as_str())),
+                .combined(self.constructor_throws(class_name.as_str(), args, expr.span)),
             ExprKind::NewScopedObject { receiver, args } => {
                 let mut thrown = self
                     .expr_list_throws(args, bindings, class_context)
                     .combined(self.operand_cleanup_throws(args, class_context));
                 if let Some(class_name) = resolve_exception_receiver(receiver, class_context) {
-                    thrown = thrown.combined(self.constructor_throws(&class_name));
+                    thrown = thrown.combined(self.constructor_throws(&class_name, args, expr.span));
                 } else {
                     thrown = thrown.combined(ThrownTypes::unknown());
                 }
@@ -850,10 +846,10 @@ impl ExceptionFlowAnalysis {
                     if self.resolve_method_value(&class_name, method, &self.static_method_unresolved_defaults) == Some(true) {
                         thrown = thrown.combined(ThrownTypes::unknown());
                     }
-                    if self.resolve_method_value(&class_name, method, &self.static_method_error_defaults)
-                        .is_some_and(|signature| method_defaults::can_throw(&signature, args, expr.span))
-                    {
-                        thrown = thrown.combined(ThrownTypes::exact("Error"));
+                    if let Some(signature) = self.resolve_method_value(
+                        &class_name, method, &self.static_method_error_defaults,
+                    ) {
+                        thrown = thrown.combined(method_defaults::selected_default_throws(&signature, args, expr.span));
                     }
                     if self.resolve_method_value(
                         &class_name,
@@ -895,10 +891,10 @@ impl ExceptionFlowAnalysis {
                     if self.resolve_method_value(&class_name, method, &self.instance_method_unresolved_defaults) == Some(true) {
                         thrown = thrown.combined(ThrownTypes::unknown());
                     }
-                    if self.resolve_method_value(&class_name, method, &self.instance_method_error_defaults)
-                        .is_some_and(|signature| method_defaults::can_throw(&signature, args, expr.span))
-                    {
-                        thrown = thrown.combined(ThrownTypes::exact("Error"));
+                    if let Some(signature) = self.resolve_method_value(
+                        &class_name, method, &self.instance_method_error_defaults,
+                    ) {
+                        thrown = thrown.combined(method_defaults::selected_default_throws(&signature, args, expr.span));
                     }
                     if self.resolve_method_value(
                         &class_name,
@@ -1070,7 +1066,7 @@ impl ExceptionFlowAnalysis {
     }
 
     /// Resolves constructor-body throws or conservatively classifies external builtin constructors.
-    fn constructor_throws(&self, class_name: &str) -> ThrownTypes {
+    fn constructor_throws(&self, class_name: &str, args: &[Expr], span: crate::span::Span) -> ThrownTypes {
         let entry_check = if self.resolve_method_value(
             class_name,
             "__construct",
@@ -1080,17 +1076,19 @@ impl ExceptionFlowAnalysis {
         } else {
             ThrownTypes::default()
         };
-        let entry_check = if self.constructor_default_errors.contains(&php_symbol_key(class_name))
-            || self.resolve_method_value(
-                class_name,
-                "__construct",
-                &self.instance_method_unresolved_defaults,
-            ) == Some(true)
-        {
+        let mut entry_check = if self.constructor_default_errors.contains(&php_symbol_key(class_name)) {
             entry_check.combined(ThrownTypes::exact("Error"))
         } else {
             entry_check
         };
+        if self.resolve_method_value(class_name, "__construct", &self.instance_method_unresolved_defaults) == Some(true) {
+            entry_check = entry_check.combined(ThrownTypes::unknown());
+        }
+        if let Some(signature) = self.resolve_method_value(
+            class_name, "__construct", &self.instance_method_error_defaults,
+        ) {
+            entry_check = entry_check.combined(method_defaults::selected_default_throws(&signature, args, span));
+        }
         if let Some(summary) = self.resolve_method_value(
             class_name,
             "__construct",

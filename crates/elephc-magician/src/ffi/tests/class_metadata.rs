@@ -10,6 +10,36 @@
 
 use super::*;
 
+/// Native class errors copy borrowed bytes and reject invalid registrations without replacement.
+#[test]
+fn register_native_class_default_error_owns_metadata() {
+    let mut context = ElephcEvalContext::new();
+    let mut class = b"\\Probe".to_vec();
+    let mut message = b"class initialization".to_vec();
+    assert_eq!(unsafe { __elephc_eval_register_native_class_default_error(
+        &mut context, class.as_ptr(), class.len() as u64, message.as_ptr(), message.len() as u64,
+    ) }, 1);
+    class.fill(0);
+    message.fill(0);
+    assert_eq!(context.native_class_default_error("pRoBe"), Some("class initialization"));
+    assert_eq!(context.native_property_default_error("Probe", "good"), None);
+    let class = b"Probe";
+    for (name, name_len, error, error_len) in [
+        (class.as_ptr(), 0, b"error".as_ptr(), 5),
+        (std::ptr::null(), 1, b"error".as_ptr(), 5),
+        (class.as_ptr(), 5, std::ptr::null(), 1),
+        (class.as_ptr(), 5, b"".as_ptr(), 0),
+    ] {
+        assert_eq!(unsafe { __elephc_eval_register_native_class_default_error(
+            &mut context, name, name_len, error, error_len,
+        ) }, 0);
+        assert_eq!(context.native_class_default_error("Probe"), Some("class initialization"));
+    }
+    assert_eq!(unsafe { __elephc_eval_register_native_class_default_error(
+        std::ptr::null_mut(), class.as_ptr(), 5, b"error".as_ptr(), 5,
+    ) }, 0);
+}
+
 /// Verifies native AOT parent metadata is available for eval static-scope resolution.
 #[test]
 fn register_native_class_parent_records_metadata() {

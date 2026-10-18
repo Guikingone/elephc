@@ -12,6 +12,7 @@ pub(crate) mod validation;
 mod attribute_refs;
 mod class_constants;
 mod defaults;
+mod property_default_selectors;
 mod interfaces;
 mod classes;
 mod enums;
