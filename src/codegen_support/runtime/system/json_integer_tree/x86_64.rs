@@ -58,12 +58,14 @@ pub(super) fn emit_entry(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction("call __rt_json_integer_tree_try");                     // return rax/rdx on success or rax=0 when unsupported
     emitter.instruction("test rax, rax");                                       // did the bounded encoder accept the complete tree?
     emitter.instruction(&format!("jz {unsupported}"));                          // restore the source and continue through the old encoder on rejection
-    abi::emit_frame_restore(emitter, 32);
+    emitter.instruction("mov rsp, rbp");                                        // release the attempt frame through its stable frame pointer
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the exact heap-backed JSON slice
 
     emitter.label(&unsupported);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the original array pointer for the existing encoder
-    abi::emit_frame_restore(emitter, 32);
+    emitter.instruction("mov rsp, rbp");                                        // release the rejected attempt frame before the fallback path
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer at the original stack depth
     emitter.label(&fallback);
 }
 
