@@ -27,6 +27,7 @@ pub fn emit_array_set_int(emitter: &mut Emitter) {
 
     emitter.instruction("cmp x1, #0");                                          // reject negative offsets before mutating indexed-array storage
     emitter.instruction("b.lt __rt_array_set_int_return");                      // leave the array unchanged for unsupported negative indexed writes
+    // -- overwrite a unique in-bounds scalar slot without entering the slow path --
     emitter.comment("-- overwrite a unique in-bounds scalar slot without entering the slow path --");
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current array refcount from the uniform heap header
     emitter.instruction("cmp w9, #1");                                          // can this owner mutate the current payload without a COW split?
@@ -102,6 +103,7 @@ fn emit_array_set_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // default the return value to the incoming indexed-array pointer
     emitter.instruction("cmp rsi, 0");                                          // reject negative offsets before mutating indexed-array storage
     emitter.instruction("jl __rt_array_set_int_return");                        // leave the array unchanged for unsupported negative indexed writes
+    // -- overwrite a unique in-bounds scalar slot without entering the slow path --
     emitter.comment("-- overwrite a unique in-bounds scalar slot without entering the slow path --");
     emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the current indexed-array refcount from the uniform heap header
     emitter.instruction("cmp r10d, 1");                                         // can this owner mutate the current payload without a COW split?

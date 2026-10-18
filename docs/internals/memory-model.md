@@ -766,6 +766,20 @@ When `array_push` finds that `length >= capacity`, the array grows automatically
 
 The caller updates its stored pointer to the new array. This means arrays are truly dynamic — you can push unlimited elements (limited only by heap size). Direct indexed writes into empty arrays now also grow the backing storage and extend `length` to cover the highest written index.
 
+### Scalar indexed-array overwrites
+
+`__rt_array_set_int` stores the eight-byte payload used by typed integer, float,
+and boolean indexed arrays. After rejecting a negative index, it writes directly
+and returns the same owner when the unsigned refcount is at most one and the
+index is below the logical length. This leaf path needs no frame, allocation,
+or copy-on-write helper call.
+
+Shared arrays and writes at or beyond the logical length use the existing slow
+path: establish a unique owner, normalize an empty array's scalar shape, grow
+capacity when necessary, initialize gaps, and publish the new length. Callers
+must still store the returned owner because separation or growth can relocate
+the array. The same conditions apply on AArch64 and x86_64.
+
 ### Copy-on-write containers
 
 Indexed arrays and associative arrays now follow **shared-until-modified** semantics:

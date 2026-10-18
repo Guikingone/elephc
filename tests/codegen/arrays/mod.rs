@@ -45,4 +45,3 @@ mod float_key_diagnostics;
 mod float_key_compound_receivers;
 mod literal_element_types;
 mod mixed_receiver_builtins;
-mod scalar_set_fast_path;
