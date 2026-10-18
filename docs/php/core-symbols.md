@@ -23,6 +23,10 @@ iterator uses it.
 Native entry references (`$value = &$map[$object]`) remain valid after the key
 or map is destroyed. Replacing the entry leaves the old referenced value intact.
 Cloning separates ordinary array values while preserving live PHP reference sets.
+Native reference parameters and `settype()` use the entry's reference set.
+Increment/decrement and appending to an entry array update connected references.
+Plain and compound assignments replace the entry and detach its old references,
+as does `??=` when it assigns a value.
 Opaque eval supports the map API and cloning; its parser still rejects
 array-element reference assignment for both ordinary arrays and WeakMap entries.
 

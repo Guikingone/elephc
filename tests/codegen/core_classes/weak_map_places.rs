@@ -10,6 +10,211 @@
 
 use crate::support::*;
 
+/// Entry increments reuse ordinary PHP string increment and postfix snapshot semantics.
+#[test]
+fn test_core_weak_map_string_increment_reference() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$key = new stdClass();
+$map = new WeakMap();
+$map[$key] = 'az';
+$reference = &$map[$key];
+$before = $map[$key]++;
+echo $before, ':', $reference, ':', $map[$key];
+unset($before, $reference, $map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "az:ba:ba", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Appending through an entry preserves a reference to its array value.
+#[test]
+fn test_core_weak_map_append_preserves_reference() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$key = new stdClass();
+$map = new WeakMap();
+$map[$key] = [1];
+$reference = &$map[$key];
+$map[$key][] = 2;
+echo json_encode($reference), json_encode($map[$key]);
+unset($reference, $map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[1,2][1,2]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Entry argument leases outlive removal during a later argument's evaluation.
+#[test]
+fn test_core_weak_map_entry_argument_lease_survives_removal() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function replaceRemovedWeakEntry(mixed &$value, int $guard): void { $value = 9 + $guard; }
+function removeWeakEntry(WeakMap $map, object $key): int { unset($map[$key]); return 0; }
+$key = new stdClass();
+$map = new WeakMap();
+$map[$key] = ['n' => 0];
+replaceRemovedWeakEntry($map[$key], removeWeakEntry($map, $key));
+echo count($map);
+unset($map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "0", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A closure's declared WeakMap result remains an addressable entry receiver.
+#[test]
+fn test_core_weak_map_closure_result_reference() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$map = new WeakMap();
+$key = new stdClass();
+$map[$key] = 1;
+$get = fn(): WeakMap => $map;
+$reference = &$get()[$key];
+$reference = 2;
+echo $map[$key], ':';
+$maps = [$map];
+$arrayReference = &$maps[0][$key];
+$arrayReference = 3;
+echo $map[$key], ':';
+$expressionReference = &($get)()[$key];
+$expressionReference = 4;
+echo $map[$key], ':';
+$literalReference = &(fn(): WeakMap => $map)()[$key];
+$literalReference = 5;
+echo $map[$key];
+unset($reference, $arrayReference, $expressionReference, $literalReference, $maps, $get, $map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:3:4:5", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Mutating builtins receive the same reference set as a direct user call.
+#[test]
+fn test_core_weak_map_mutating_builtin_reference() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$key = new stdClass();
+$map = new WeakMap();
+$map[$key] = 1;
+$reference = &$map[$key];
+settype($map[$key], 'string');
+echo gettype($reference), ':', $map[$key];
+unset($reference, $map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "string:1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Prefix and postfix expression results snapshot the old/new value while retaining aliases.
+#[test]
+fn test_core_weak_map_incdec_expression_results() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$key = new stdClass();
+$map = new WeakMap();
+$map[$key] = 1;
+$reference = &$map[$key];
+$before = $map[$key]++;
+$after = ++$map[$key];
+echo $before, ':', $after, ':', $reference, ':', $map[$key];
+unset($before, $after, $reference, $map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1:3:3:3", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Direct reference parameters borrow the actual managed entry cell.
+#[test]
+fn test_core_weak_map_entry_by_ref_call() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function replaceWeakMapValue(mixed &$value): void { $value = 9; }
+class ByRefWeakMapHolder {
+    public WeakMap $map;
+    public function __construct(WeakMap $map) { $this->map = $map; }
+    public function take(): WeakMap { return $this->map; }
+}
+$key = new stdClass();
+$map = new WeakMap();
+$map[$key] = 1;
+replaceWeakMapValue($map[$key]);
+$holder = new ByRefWeakMapHolder($map);
+replaceWeakMapValue($holder->map[$key]);
+replaceWeakMapValue($holder->take()[$key]);
+echo $map[$key];
+unset($holder, $map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "9", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Increment preserves live references while compound and plain assignments detach them.
+#[test]
+fn test_core_weak_map_compound_reference_sets() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function compoundWeakKey(object $key): object { echo 'key;'; return $key; }
+function compoundWeakValue(): int { echo 'right;'; return 3; }
+$key = new stdClass();
+$map = new WeakMap();
+$map[$key] = 1;
+$reference = &$map[$key];
+$map[$key] += 1;
+echo $reference, ':', $map[$key], ';';
+$map[$key] = 1;
+$reference = &$map[$key];
+$map[compoundWeakKey($key)] += compoundWeakValue();
+echo $reference, ':', $map[$key], ';';
+$reference = &$map[$key];
+$map[$key]++;
+echo $reference, ':', $map[$key], ';';
+$map[$key] = 7;
+echo $reference, ':', $map[$key];
+unset($reference, $map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1:2;key;right;1:4;5:5;5:7", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing RHS preserves the value and retires ordinary write operands.
+#[test]
+fn test_core_weak_map_compound_throw_cleanup() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function failedWeakMapUpdate(): int { throw new Exception('rhs'); }
+$key = new stdClass();
+$map = new WeakMap();
+$map[$key] = 1;
+try { $map[$key] += failedWeakMapUpdate(); }
+catch (Exception $error) { echo 'caught;'; }
+echo $map[$key];
+unset($map, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught;1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Static WeakMap properties expose the same managed entry storage as local receivers.
+#[test]
+fn test_core_weak_map_static_property_reference() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticWeakMapHolder { public static WeakMap $map; }
+StaticWeakMapHolder::$map = new WeakMap();
+$key = new stdClass();
+StaticWeakMapHolder::$map[$key] = 1;
+$reference = &StaticWeakMapHolder::$map[$key];
+$reference = 2;
+StaticWeakMapHolder::$map[$key]++;
+echo $reference, ':', StaticWeakMapHolder::$map[$key];
+unset($reference, $key);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "3:3", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Property writes retire fresh keys and values when operand evaluation or offsetSet throws.
 #[test]
 fn test_core_weak_map_property_write_throwing_operands() {

@@ -32,6 +32,17 @@ pub(super) fn lower_arg_with_signature(
     arg: &Expr,
 ) -> crate::ir::ValueId {
     if sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(&arg.kind, ExprKind::ArrayAccess { array, .. }
+            if instance_object_class_for_ir(ctx, array)
+                .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))
+    {
+        let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+        lower_ref_assign_array_elem(ctx, &alias, arg, arg.span);
+        publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
+        let variable = Expr::new(ExprKind::Variable(alias), arg.span);
+        return lower_arg_with_signature(ctx, sig, index, &variable);
+    }
+    if sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(
             &arg.kind,
             ExprKind::ArrayAccess { array, .. }

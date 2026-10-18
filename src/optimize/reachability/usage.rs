@@ -427,7 +427,7 @@ impl Scanner<'_> {
                 if array == "GLOBALS" {
                     self.record_globals_index(index);
                 } else {
-                    self.record_variable_protocol_methods(array, &["offsetSet"]);
+                    self.record_variable_protocol_methods(array, &["offsetSet", "__elephc_reference"]);
                 }
                 self.scan_expr(index);
                 self.scan_expr(value);
@@ -440,7 +440,11 @@ impl Scanner<'_> {
                 }
                 self.scan_expr(value);
             }
-            StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            StmtKind::StaticPropertyArrayAssign { receiver, property, index, value } => {
+                let source = Expr::new(ExprKind::StaticPropertyAccess {
+                    receiver: receiver.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["__elephc_reference"]);
                 self.scan_expr(index);
                 self.scan_expr(value);
             }
@@ -474,6 +478,10 @@ impl Scanner<'_> {
                 index,
                 value,
             } => {
+                let source = Expr::new(ExprKind::PropertyAccess {
+                    object: object.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["__elephc_reference"]);
                 self.record_instance_method(object, &property_hook_get_method(property));
                 self.record_instance_method(object, &property_hook_set_method(property));
                 self.scan_expr(object);

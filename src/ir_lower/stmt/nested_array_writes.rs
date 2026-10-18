@@ -16,6 +16,12 @@ pub(super) fn lower_nested_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let update = desugared_element_update(value, span, |read| read == target);
+    if matches!(&update, Some(ElementUpdate::Compound))
+        && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
+    {
+        return;
+    }
     // Lowering the FULL target as an expression routes the write through the
     // read helper (`__rt_mixed_array_get`), which returns a detached fresh box
     // whenever the slot storage is not already a boxed Mixed cell; the

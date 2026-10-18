@@ -538,3 +538,35 @@ All6 WeakMap regressions pass with clean native heaps. The five-target EIR
 fixture and all7 prelude parity tests pass. The compiler/library/exporter build
 is warning-free and generated docs, registry/site/EIR, Rustdoc and whitespace
 audits pass without generated drift.
+
+
+## Native WeakMap write-context completion
+
+Grok10 confirmed three further native gaps on462a8cc962: direct by-reference
+arguments, increments with active entry references, and static property entry
+references. Adjacent review added closure-returned receivers, settype and append.
+The shared receiver resolver now handles static properties and known closure
+signatures. Direct reference arguments bind and lease the private managed cell
+through the existing call planner and evaluation ledger.
+
+Pinned PHP8.5.10 distinguishes these writes: ++/-- and array append preserve
+connected references; plain assignment, += and assigning ??= detach them. Missing
+entry reference reads and increments throw Error. Increment lowering recognizes
+the parser's implicit one and old/new expression snapshots, then uses ordinary
+local increment semantics through a scoped entry alias, including string values.
+Append and literal settype use the same alias. Typed EIR casts update Mixed
+reference cells for settype instead of overwriting a local value slot directly.
+
+Receiver and key snapshots use ordinary synthetic locals, with slot-only owners
+in the existing evaluation ledger. This keeps their loads borrowed while the
+ledger owns the slots, preventing call cleanup from consuming an OwnedTemp load
+a second time. All paths retire the entry alias before its key and receiver.
+
+Final focused checks pass16 WeakMap cases with clean native heaps, all24
+reference-cell ownership cases, all7 prelude parity tests and the parser origin
+regression. Fourteen native ARM64 cases pass; all4 increment/static/string cases
+pass again after ordinary increment lowering is reused. The expanded closure,
+parenthesized-call, literal-closure and container-element receiver test matches
+PHP2:3:4:5 on native x86_64 and ARM64. The full five-target EIR fixture passes.
+The final compiler/library/exporter build is warning-free, and generated docs,
+registry/site/EIR, Rustdoc and whitespace audits pass without generated drift.

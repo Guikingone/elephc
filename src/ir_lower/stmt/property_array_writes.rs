@@ -87,6 +87,11 @@ pub(super) fn lower_property_array_assign(
     let update = desugared_element_update(value, span, |read| {
         reads_property_array_element(read, object, property, index)
     });
+    if matches!(&update, Some(ElementUpdate::Compound))
+        && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
+    {
+        return;
+    }
     if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
         crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
         return;
