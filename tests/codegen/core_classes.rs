@@ -30,6 +30,7 @@ unset($map, $key);
 
 mod review;
 mod throwable_state;
+mod weak_map_places;
 
 /// Property markers accept inherited native and interpreted class and interface contracts.
 #[test]

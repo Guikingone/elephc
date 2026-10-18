@@ -405,6 +405,9 @@ impl Scanner<'_> {
             }
             StmtKind::RefAssign { target, source } => {
                 self.scan_expr(source);
+                if let ExprKind::ArrayAccess { array, .. } = &source.kind {
+                    self.record_protocol_methods(array, &["__elephc_reference"]);
+                }
                 self.forget_variable(target);
                 if let ExprKind::Variable(source) = &source.kind {
                     self.forget_variable(source);

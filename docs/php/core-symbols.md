@@ -20,6 +20,12 @@ fail `isset()`. Cloning gives the copy an independent value table with the same
 weak keys. Iteration yields object keys and pins the current key while the
 iterator uses it.
 
+Native entry references (`$value = &$map[$object]`) remain valid after the key
+or map is destroyed. Replacing the entry leaves the old referenced value intact.
+Cloning separates ordinary array values while preserving live PHP reference sets.
+Opaque eval supports the map API and cloning; its parser still rejects
+array-element reference assignment for both ordinary arrays and WeakMap entries.
+
 ```php
 $cache = new WeakMap();
 $object = new stdClass();

@@ -38,6 +38,7 @@ mod eval_ownership;
 mod eval_default_helpers;
 mod exhaustive;
 mod ownership;
+mod weak_map_places;
 mod preg_match_all_review;
 mod object_mixed_return_owners;
 mod boxed_array_write_owners;

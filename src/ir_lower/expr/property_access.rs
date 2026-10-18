@@ -165,6 +165,15 @@ pub(crate) fn lower_ref_assign_array_elem(
     let ExprKind::ArrayAccess { array, index } = &source.kind else {
         return;
     };
+    if super::native_isset::isset_object_expr_class(ctx, array)
+        .is_some_and(|(class, _)| class.eq_ignore_ascii_case("WeakMap"))
+    {
+        let call = Expr::new(ExprKind::MethodCall {
+            object: array.clone(), method: "__elephc_reference".into(), args: vec![(**index).clone()],
+        }, source.span);
+        lower_ref_assign_call(ctx, target, &call, span);
+        return;
+    }
     let prepared_array = prepare_addressable_ref_array_receiver(ctx, array);
     let array = prepared_array.as_ref().unwrap_or(array);
     crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, array, true);

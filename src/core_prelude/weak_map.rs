@@ -63,6 +63,13 @@ pub(super) fn declarations() -> Program {
         )]))], vec![], None),
         s_assign("__entry", entry()), s_return(e_index(e_var("__entry"), e_int(1))),
     ]));
+    map = map.method(method("__elephc_reference").private().param("object", t_mixed())
+        .returns(t_mixed()).body(vec![
+            s_expr(e_method_call(e_this(), "offsetGet", vec![e_var("object")])),
+            key_id(),
+            entry_value_reference("__value"),
+            s_return(e_var("__value")),
+        ]));
     map = map.method(method("offsetExists").param("object", t_mixed()).returns(TypeExpr::Bool).body(vec![
         validate_key(), key_id(),
         s_if(e_not(present(entry())), vec![s_return(e_bool(false))], vec![], None),
@@ -115,6 +122,7 @@ pub(super) fn declarations() -> Program {
     map = map.method(method("__clone").body(vec![
         s_assign("__entries", e_this_prop("__elephc_entries")),
         s_foreach(e_var("__entries"), Some("__id"), "__entry", vec![
+            entry_value_reference("__value"),
             s_typed_assign(t_array(), "__maps", e_static_call("WeakMap", "__elephc_array", vec![e_null_coalesce(registry(), e_array(vec![]))])),
             s_array_assign("__maps", object_id(e_this()), e_static_call("WeakReference", "create", vec![e_this()])),
             s_static_prop_array_assign("WeakMap", "__elephc_maps", e_var("__id"), e_var("__maps")),
@@ -139,8 +147,26 @@ pub(super) fn declarations() -> Program {
         if let Some(method) = methods.iter_mut().find(|method| method.name == "__elephc_array") {
             method.span.line = 1;
         }
+        if let Some(method) = methods.iter_mut().find(|method| method.name == "__elephc_reference") {
+            method.by_ref_return = true;
+        }
     }
     vec![map, iterator()]
+}
+
+/// Separates the entry's storage and binds its value through the shared managed array cell.
+fn entry_value_reference(target: &str) -> Stmt {
+    let span = crate::span::Span::dummy();
+    Stmt::new(StmtKind::Synthetic(vec![
+        Stmt::new(StmtKind::RefAssign {
+            target: "__entries_reference".into(),
+            source: e_this_prop("__elephc_entries"),
+        }, span),
+        Stmt::new(StmtKind::RefAssign {
+            target: target.into(),
+            source: e_index(e_index(e_var("__entries_reference"), e_var("__id")), e_int(1)),
+        }, span),
+    ]), span)
 }
 
 /// Rejects scalar and null WeakMap keys before object identity lookup.

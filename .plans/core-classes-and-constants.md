@@ -473,3 +473,32 @@ registry/site/EIR audits pass without generated drift. Publication gates are
 recorded in Code Journal against the immutable published SHA.
 A fresh clean Grok verdict, Greptile5/5, and green CI on that same SHA remain
 required before this plan is complete.
+
+
+## WeakMap clone and entry reference validation
+
+Pinned PHP8.5.10 exposed shared nested array values across WeakMap clones and
+confirmed that native entry references must remain valid after their weak key
+or map is destroyed. A private managed-reference helper now lowers entry
+references without changing offsetGet reflection. Clone separates ordinary
+entry zvals and preserves live reference sets. Singleton managed Mixed reference
+cells clone their boxed value storage. Replacing an entry retains PHP's
+detachment of the old external reference.
+
+The opaque-eval clone regression also exposed an x86_64 stack alignment defect
+while replacing a refcounted static symbol. Its cleanup now preserves the new
+value in the shared aligned stack slot before releasing the previous value.
+The regression exercises the actual Rust release callback.
+
+Grok9's proposed ErrorException message-preservation change was rejected after
+three exact PHP8.5.10 counterexamples: a later named filename, named code, or
+filename-only unpack fills the earlier message default and clears it. Existing
+constructor behavior matches the oracle. A new independent review must cover
+the repaired published SHA, alongside Greptile5/5 and green CI.
+
+The four new WeakMap regressions pass with clean heaps on native Linux x86_64
+and actual Linux ARM64. All24 reference-cell ownership tests,13 symbol ABI
+tests,8 SysV audits,5 reference-cell emitter tests and the five-target WeakMap
+lowering regression pass. The updated example matches pinned PHP8.5.10 and
+leaves a clean heap. Compiler/library/exporter builds and generated documentation,
+registry/site/EIR, Rustdoc, assembly comments and whitespace audits pass.
