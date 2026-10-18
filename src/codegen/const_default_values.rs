@@ -5,6 +5,7 @@
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::eval` default registration.
 //! - `crate::codegen::runtime_callable_invoker::defaults` descriptor invoker metadata.
+//! - Reflection property-default metadata folding.
 //!
 //! Key details:
 //! - Resolution is PURE. Global constants come from `Module::global_constants`, which already
@@ -15,11 +16,15 @@
 //!   the eval registration path encodes it, and the descriptor invoker materializes it.
 //! - Constant recursion is bounded by `MAX_CONST_DEFAULT_DEPTH`, so a self-referential constant
 //!   declines instead of recursing forever.
+//! - Numeric values reuse the PHP-equivalent AST arithmetic folder, including integer division and power.
 
 use crate::names::php_symbol_key;
 use crate::ir::Module;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver};
 use crate::types::{is_php_integer_array_key, ClassInfo, InterfaceInfo};
+
+#[cfg(test)]
+mod tests;
 
 /// Compact scalar kind for PHP `null` in a resolved default.
 pub(in crate::codegen) const CONST_DEFAULT_NULL: i64 = 0;
@@ -247,34 +252,19 @@ fn resolve_numeric_binary_default(
     context: &ConstDefaultContext<'_>,
     depth: usize,
 ) -> Option<ConstDefaultValue> {
-    if let (Some(left), Some(right)) = (
-        const_default_int(left, context, depth + 1),
-        const_default_int(right, context, depth + 1),
-    ) {
-        return match op {
-            BinOp::Add => left.checked_add(right).map(const_default_int_value),
-            BinOp::Sub => left.checked_sub(right).map(const_default_int_value),
-            BinOp::Mul => left.checked_mul(right).map(const_default_int_value),
-            BinOp::Div if right != 0 => Some(const_default_float(left as f64 / right as f64)),
-            BinOp::Pow => {
-                let value = (left as f64).powf(right as f64);
-                value.is_finite().then(|| const_default_float(value))
-            }
-            _ => None,
+    let literal = |expr: &Expr| {
+        let kind = match resolve_const_default_at(expr, context, depth + 1)? {
+            ConstDefaultValue::Scalar { kind: CONST_DEFAULT_INT, payload } => ExprKind::IntLiteral(payload),
+            ConstDefaultValue::Scalar { kind: CONST_DEFAULT_FLOAT, payload } =>
+                ExprKind::FloatLiteral(f64::from_bits(payload as u64)),
+            _ => return None,
         };
-    }
-
-    let left = const_default_numeric(left, context, depth + 1)?;
-    let right = const_default_numeric(right, context, depth + 1)?;
-    let value = match op {
-        BinOp::Add => left + right,
-        BinOp::Sub => left - right,
-        BinOp::Mul => left * right,
-        BinOp::Div if right != 0.0 => left / right,
-        BinOp::Pow => left.powf(right),
-        _ => return None,
+        Some(Expr::new(kind, expr.span))
     };
-    value.is_finite().then(|| const_default_float(value))
+    let expression = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(literal(left)?), op: op.clone(), right: Box::new(literal(right)?),
+    }, left.span);
+    resolve_literal_const_default(&crate::optimize::fold_constant_expression(expression))
 }
 
 /// Builds one bool constant value.
@@ -360,25 +350,6 @@ fn const_default_int(
             kind: CONST_DEFAULT_INT,
             payload,
         } => Some(payload),
-        _ => None,
-    }
-}
-
-/// Extracts a numeric value from one resolvable default expression.
-fn const_default_numeric(
-    expr: &Expr,
-    context: &ConstDefaultContext<'_>,
-    depth: usize,
-) -> Option<f64> {
-    match resolve_const_default_at(expr, context, depth)? {
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_INT,
-            payload,
-        } => Some(payload as f64),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_FLOAT,
-            payload,
-        } => Some(f64::from_bits(payload as u64)),
         _ => None,
     }
 }

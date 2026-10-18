@@ -289,3 +289,44 @@ fn test_nested_default_grok_fourth_review_property_without_ir_opt() {
         test_nested_default_grok_fourth_review_property_conditional_reflection_error();
     });
 }
+
+/// Reflection preserves integer arithmetic results and distinguishes genuinely floating defaults.
+#[test]
+fn test_nested_default_greptile_integer_arithmetic_reflection() {
+    check_reflection(r#"<?php
+class Probe { const N = 6; public array $items = [self::N / 2, self::N ** 2, self::N / 4, 2 ** -2, 6.0 / 2, 2.0 ** 2]; }
+$property = new ReflectionProperty('Probe', 'items');
+$values = $property->getDefaultValue();
+echo (int)($values === [3, 36, 1.5, 0.25, 3.0, 4.0]), '|';
+$class = new ReflectionClass('Probe');
+$defaults = $class->getDefaultProperties();
+echo (int)($defaults['items'] === [3, 36, 1.5, 0.25, 3.0, 4.0]);
+"#, "1|1");
+}
+
+/// Reflection arithmetic keeps the same exact PHP types without EIR optimization.
+#[test]
+fn test_nested_default_greptile_integer_arithmetic_reflection_no_ir_opt() {
+    without_ir_opt(test_nested_default_greptile_integer_arithmetic_reflection);
+}
+
+/// Shared numeric default metadata agrees across runtime-selected callbacks and opaque eval.
+#[test]
+fn test_nested_default_greptile_integer_arithmetic_callable_eval() {
+    check(r#"<?php
+class Numbers { const N = 6; }
+function values(array $items = [Numbers::N / 2, Numbers::N ** 2]): array { return $items; }
+function other(array $items = []): array { return $items; }
+$callbacks = [values(...), other(...)]; $callback = $callbacks[$argc - 1];
+echo (int)($callback() === [3, 36]), '|';
+function run(string $source): mixed { return eval($source); }
+echo (int)run('return values() === [3, 36];');
+unset($callback, $callbacks);
+"#, "1|1");
+}
+
+/// Callback and eval arithmetic metadata preserve PHP types without EIR optimization.
+#[test]
+fn test_nested_default_greptile_integer_arithmetic_callable_eval_no_ir_opt() {
+    without_ir_opt(test_nested_default_greptile_integer_arithmetic_callable_eval);
+}
