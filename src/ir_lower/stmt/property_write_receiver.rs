@@ -92,6 +92,34 @@ impl PropertyWriteReceiver {
         }
     }
 
+    /// Publishes a selected child before retiring parent leases that may run throwing destructors.
+    pub(crate) fn handoff(
+        self, ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, span: Span,
+    ) -> Self {
+        // Detach parent records without releasing, then publish the child at the LIFO top.
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, self.pins, span);
+        let child = Self::new(ctx, child, span);
+        for value in self.owners.into_iter().rev() {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        child
+    }
+
+    /// Retires an earlier operand window without popping it through newer receiver records.
+    pub(crate) fn finish_operand_window(
+        &mut self, ctx: &mut LoweringContext<'_, '_>,
+        operands: Vec<crate::ir_lower::expr::PinnedInFlightOwner>, span: Span,
+    ) {
+        if operands.is_empty() { return; }
+        // Detach only records, not leases. No throwing operation runs while the receiver
+        // records are suspended, and the caller keeps owning all protected operands.
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, std::mem::take(&mut self.pins), span);
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, operands, span);
+        let owners = self.owners.iter().map(|owner| owner.value).collect::<Vec<_>>();
+        self.pins = ctx.with_independent_write_receiver(|ctx|
+            crate::ir_lower::expr::pin_in_flight_owners(ctx, &owners, span));
+    }
+
     /// Retires the unwind record and releases precisely the receiver's independent lease.
     pub(crate) fn finish(self, ctx: &mut LoweringContext<'_, '_>, span: Span) {
         crate::ir_lower::expr::unpin_in_flight_owners(ctx, self.pins, span);

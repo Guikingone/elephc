@@ -10,6 +10,87 @@
 
 use crate::support::*;
 
+/// A mixed selector stays unwind-visible while a delayed receiver getter throws.
+#[test]
+fn test_static_receiver_greptile_mixed_name_throwing_getter() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Leaf { public int $value = 0; }
+class Root { public Leaf $child { get { throw new Error('getter'); } } }
+class Holder { public static ?Root $root = null; }
+function write(mixed $name): void {
+    try { Holder::$root->child->{$name} = 1; }
+    catch (Error $error) { echo $error->getMessage(), '|'; unset($error); }
+}
+Holder::$root = new Root();
+for ($i = 0; $i < 16; $i++) { write(str_repeat('value', 1)); }
+Holder::$root = null;
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "getter|".repeat(16), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Getter unwind roots have the same lifetime without EIR optimization.
+#[test]
+fn test_static_receiver_greptile_mixed_name_throwing_getter_no_ir_opt() {
+    without_ir_opt(test_static_receiver_greptile_mixed_name_throwing_getter);
+}
+
+/// An already evaluated object RHS is retired before a receiver getter's same-frame catch.
+#[test]
+fn test_static_receiver_greptile_owned_rhs_throwing_getter() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Payload { public function __destruct() { echo 'D'; } }
+class Leaf { public mixed $value; }
+class Root { public Leaf $child { get { echo 'H'; throw new Error('getter'); } } }
+class Holder { public static ?Root $root = null; }
+function value(): Payload { echo 'R'; return new Payload(); }
+Holder::$root = new Root();
+for ($i = 0; $i < 8; $i++) {
+    try { Holder::$root->child->value = value(); }
+    catch (Error $error) { echo 'caught|'; unset($error); }
+}
+Holder::$root = null;
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "RHDcaught|".repeat(8), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Object RHS cleanup across a throwing getter is independent of EIR optimization.
+#[test]
+fn test_static_receiver_greptile_owned_rhs_throwing_getter_no_ir_opt() {
+    without_ir_opt(test_static_receiver_greptile_owned_rhs_throwing_getter);
+}
+
+/// Normal dynamic writes keep one string owner and preserve the target selected by a getter.
+#[test]
+fn test_static_receiver_greptile_mixed_name_present_getter() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Leaf { public int $value = 0; }
+class Root {
+    public Leaf $stored;
+    public Leaf $child { get { return $this->stored; } }
+    public function __construct() { $this->stored = new Leaf(); }
+}
+class Holder { public static ?Root $root = null; }
+function write(mixed $name): void { Holder::$root->child->{$name} = 1; }
+Holder::$root = new Root();
+for ($i = 0; $i < 16; $i++) { write(str_repeat('value', 1)); }
+echo Holder::$root->stored->value;
+Holder::$root = null;
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Normal getter/name cleanup does not depend on EIR optimization.
+#[test]
+fn test_static_receiver_greptile_mixed_name_present_getter_no_ir_opt() {
+    without_ir_opt(test_static_receiver_greptile_mixed_name_present_getter);
+}
+
 /// Repeats a null compound write whose mixed property selector requires an owned string cast.
 fn verify_nullable_mixed_name(write: &str, property: &str, verb: &str) {
     let source = format!(r#"<?php

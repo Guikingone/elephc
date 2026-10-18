@@ -448,10 +448,17 @@ pub(super) fn lower_dynamic_property_assign(
     let (mut receiver, property, value) = if is_static_property_write_chain(object) {
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
+        // The traversal must not pin this same lease again at a nullable hop. Its
+        // borrowed guard view remains protected by the earlier name record below it.
+        let guarded_property = ctx.emit_value(Op::Borrow, vec![property.value], None, PhpType::Str,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(guarded_property.value, Ownership::Borrowed);
         let value = lower_expr(ctx, value);
         let value = ctx.borrow_write_operand_if_needed(value, span);
-        let receiver = lower_static_property_write_chain_with_operands(
-            ctx, object, &[property.value, value.value], span);
+        let mut receiver = lower_static_property_write_chain_with_operands(
+            ctx, object, &[guarded_property.value, value.value], span);
+        receiver.finish_operand_window(ctx, property_pins, span);
         (receiver, property, value)
     } else {
         let object = lower_expr(ctx, object);
@@ -504,7 +511,9 @@ pub(super) fn lower_dynamic_property_assign(
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     if owns_value { crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span)); }
-    release_coerced_source_if_owned(ctx, property, Some(span));
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
+    }
     receiver.finish(ctx, span);
 }
 
