@@ -76,10 +76,16 @@ body. Legacy void elements include `frame` and `isindex` but exclude `embed`,
 `source`, `track`, and `wbr`, which can retain children
 under the libxml 2.9.14 compatibility behavior used here.
 
-Once ordinary content has implied a body, a later `body` start tag and its paired
-end tag are ignored, including the redundant attributes. Its contents stay in
-the existing implied body. A repeated `body` while an explicit body is open is
-also ignored; separate explicit bodies after a closed body remain separate.
+Ordinary content creates an implied body that an explicit `</body>` can close.
+While a body is open, an extra non-self-closing `body` and its paired structural
+end tag are ignored, including redundant attributes. Its contents stay in the
+existing body. An extra self-closing `<body/>` closes the current top element
+immediately (which can be a descendant of the body), then consumes the next
+`body`, `html`, or `head` end tag. Separate explicit bodies after a closed body
+remain separate and retain their attributes. The legacy `frame`, `frameset`,
+and `noframes` tags do not themselves imply a body; a later explicit body is
+kept, including when nested inside `frameset` or `noframes`. This follows the
+libxml 2.9.14 subset, not newer `noframes` CDATA or HTML5 tree repair.
 
 Only an immediate `/>` self-closes a start tag. A slash beginning a malformed
 attribute consumes that run through its next whitespace or closing `>`; slashes

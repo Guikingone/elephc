@@ -72,6 +72,12 @@ $doc->loadHTML('<html><head></head><div>B</div><body>C</body></html>');
 echo $doc->saveXML(), $doc->getElementsByTagName('body')->length;
 $doc->loadHTML('<body>A<body>B</body>C</body><div>D</div>');
 echo $doc->saveXML();
+$doc->loadHTML('<div>B</div></body><body id=x>C</body>');
+echo $doc->saveXML();
+$doc->loadHTML('<body>A<div>B<body/>C</div>D</body>E');
+echo $doc->saveXML();
+$doc->loadHTML('<frameset>F<body id=x>C</body></frameset>');
+echo $doc->saveXML();
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
@@ -89,6 +95,9 @@ echo $doc->saveXML();
     assert!(module.functions.iter().any(|function| {
         function.name == "__elephc_dom_is_head_element"
     }), "{target}: late-body repair uses ordinary target-aware PHP lowering");
+    assert!(module.functions.iter().any(|function| {
+        function.name == "__elephc_dom_is_frame_element"
+    }), "{target}: frame exclusions use ordinary target-aware PHP lowering");
 }
 
 /// Schedules every target independently without weakening the CI timeout.

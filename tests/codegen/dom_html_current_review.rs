@@ -9,6 +9,108 @@
 
 use crate::support::*;
 
+/// Closing an implied body preserves the boundary before a later explicit body or text.
+#[test]
+fn dom_html_body_boundary_review_closed_implied_body() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach (['<div>B</div></body><body id=x>C</body>', '<html><head></head><div>B</div></body><body id=x>C</body></html>', '<p>B</p></body><body class=z>C</body>', '<div>B</div></body>C'] as $source) {
+    $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), '|';
+}
+"#);
+    assert_eq!(out, "<html><body><div>B</div></body><body id=\"x\">C</body></html>|<html><head/><body><div>B</div></body><body id=\"x\">C</body></html>|<html><body><p>B</p></body><body class=\"z\">C</body></html>|<html><body><div>B</div></body>C</html>|");
+}
+
+/// A discarded self-closing body closes the current body without consuming a later end tag.
+#[test]
+fn dom_html_body_boundary_review_discarded_self_closing_body() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach (['<body>A<body/>B</body><div>C</div>', '<html><head></head><div>B</div><body/>C</html>', '<body>A<div>B<body/>C</div>D</body>E', '<html><div>B<body/>C</html>D', '<html><body>A<body>B</html>C</body>D', '<html><body>A<div>B<body/>C</head>D</body>E'] as $source) {
+    $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), '|';
+}
+"#);
+    assert_eq!(out, "<html><body>A</body>B<div>C</div></html>|<html><head/><body><div>B</div></body>C</html>|<html><body>A<div>B</div>CDE</body></html>|<html><body><div>B</div>CD</body></html>|<html><body>ABC</body>D</html>|<html><body>A<div>B</div>CD</body>E</html>|");
+}
+
+/// Legacy frame containers do not cause a later real body to be discarded as redundant.
+#[test]
+fn dom_html_body_boundary_review_frame_exclusions() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach (['<frame><body id=x>C</body>', '<frameset><body id=x>C</body></frameset>', '<frame>', '<frameset><div>B</div></frameset>', '<noframes><body id=x>C</body></noframes>', '<frameset>F<body id=x>C</body></frameset>', '<noframes>F<body id=x>C</body></noframes>'] as $source) {
+    $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), '|';
+}
+"#);
+    // The pinned libxml2.9.14 treats noframes as a normal element, unlike libxml2.15 CDATA.
+    assert_eq!(out, "<html><frame/><body id=\"x\">C</body></html>|<html><frameset><body id=\"x\">C</body></frameset></html>|<html><frame/></html>|<html><frameset><body><div>B</div></body></frameset></html>|<html><noframes><body id=\"x\">C</body></noframes></html>|<html><frameset>F<body id=\"x\">C</body></frameset></html>|<html><noframes>F<body id=\"x\">C</body></noframes></html>|");
+}
+
+/// Closed implied-body boundaries do not depend on EIR optimization.
+#[test]
+fn dom_html_body_boundary_review_closed_implied_body_no_ir_opt() {
+    without_ir_opt(dom_html_body_boundary_review_closed_implied_body);
+}
+
+/// Discarded self-closing body boundaries do not depend on EIR optimization.
+#[test]
+fn dom_html_body_boundary_review_discarded_self_closing_body_no_ir_opt() {
+    without_ir_opt(dom_html_body_boundary_review_discarded_self_closing_body);
+}
+
+/// Frame exclusions do not depend on EIR optimization.
+#[test]
+fn dom_html_body_boundary_review_frame_exclusions_no_ir_opt() {
+    without_ir_opt(dom_html_body_boundary_review_frame_exclusions);
+}
+
+/// Literal boundary recovery retires popped nodes and wrapper arrays without DOM cycles.
+#[test]
+fn dom_html_body_boundary_review_literal_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function enableDom(DOMDocument $doc): void {}
+for ($i = 0; $i < 16; $i++) {
+    $tokens = [
+        ['k' => 'start', 'n' => 'div', 'a' => [], 'void' => 0],
+        ['k' => 'text', 'v' => 'B'], ['k' => 'end', 'n' => 'div'],
+        ['k' => 'end', 'n' => 'body'],
+        ['k' => 'start', 'n' => 'body', 'a' => [['id', 'x']], 'void' => 0],
+        ['k' => 'text', 'v' => 'C'], ['k' => 'end', 'n' => 'body'],
+    ];
+    $forest = __elephc_dom_build_forest($tokens, 36);
+    $tree = __elephc_dom_document_from_roots($forest, 36);
+    $roots = $tree['children']; $html = $roots[0];
+    echo count($html['children']), ':', __elephc_dom_text_of($html), '|';
+    unset($html, $roots, $tree, $forest, $tokens);
+    $tokens = [
+        ['k' => 'start', 'n' => 'body', 'a' => [], 'void' => 0],
+        ['k' => 'text', 'v' => 'A'],
+        ['k' => 'start', 'n' => 'body', 'a' => [], 'void' => 1],
+        ['k' => 'text', 'v' => 'B'], ['k' => 'end', 'n' => 'body'],
+        ['k' => 'start', 'n' => 'div', 'a' => [], 'void' => 0],
+        ['k' => 'text', 'v' => 'C'], ['k' => 'end', 'n' => 'div'],
+    ];
+    $forest = __elephc_dom_build_forest($tokens, 36);
+    $tree = __elephc_dom_document_from_roots($forest, 36);
+    $roots = $tree['children']; $html = $roots[0];
+    echo count($html['children']), ':', __elephc_dom_text_of($html), '|';
+    unset($html, $roots, $tree, $forest, $tokens);
+}
+"#);
+    assert!(out.success, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:BC|3:ABC|".repeat(16));
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+/// Boundary recovery keeps the same owner balance without EIR optimization.
+#[test]
+fn dom_html_body_boundary_review_literal_owners_no_ir_opt() {
+    without_ir_opt(dom_html_body_boundary_review_literal_owners);
+}
+
 /// Body tags after implied content are ignored without nesting or displacing that content.
 #[test]
 fn dom_html_grok_current_late_body() {
@@ -81,13 +183,16 @@ for ($i = 0; $i < 16; $i++) {
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "2:BC|".repeat(16));
     if owned_names {
-        // Unchanged published 630c263 retains 128 string blocks / 3072 bytes in both modes.
-        // This bounds an inherited builder limitation, not a heap-clean parser claim.
+        // Unchanged 630c263 retains 128 strings, originally observed in minimum-size blocks.
+        // Small bins can reuse a <=64-byte payload without splitting, plus a 16-byte header.
+        // Bound owners and their actual kind, not a particular free-list capacity arrangement.
         let summary = out.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: allocs="))
             .expect("heap metrics");
         let metric = |name: &str| summary.split_once(name).unwrap().1
             .split_whitespace().next().unwrap().parse::<usize>().unwrap();
-        assert!(metric("live_blocks=") <= 128 && metric("live_bytes=") <= 3072, "{}", out.stderr);
+        assert!(metric("live_blocks=") <= 128 && metric("live_bytes=") <= 128 * (64 + 16), "{}", out.stderr);
+        assert!(out.stderr.lines().filter(|line| line.starts_with("HEAP DEBUG: live offset="))
+            .all(|line| line.contains("kind=1 refs=1")), "{}", out.stderr);
     } else {
         assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
     }

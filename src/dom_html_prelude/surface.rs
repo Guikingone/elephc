@@ -98,6 +98,10 @@ function __elephc_dom_is_head_element(string $name): bool {
         || $name === "title" || $name === "script" || $name === "style";
 }
 
+function __elephc_dom_is_frame_element(string $name): bool {
+    return $name === "frame" || $name === "frameset" || $name === "noframes";
+}
+
 function __elephc_dom_skip_ws(string $html, int $i): int {
     $_len = strlen($html);
     while ($i < $_len && __elephc_dom_is_ws(__elephc_dom_char($html, $i))) {
@@ -402,10 +406,12 @@ function __elephc_dom_append_child(array $stack, mixed $node): array {
 function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
     $_stack = [];
     $_roots = [];
-    $_body_started = false;
-    $_implied_body = false;
+    $_body_seen = false;
+    $_implied_root_body = false;
     $_ignored_body_ends = 0;
+    $_token_position = 0;
     foreach ($tokens as $_tok) {
+        $_token_position = $_token_position + 1;
         $_k = $_tok["k"];
         $_head_content = false;
         $_body_open = false;
@@ -419,15 +425,25 @@ function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
             }
         }
         if ($_k === "text" || $_k === "cdata") {
-            if (!$_body_started && !$_head_content && trim((string) $_tok["v"]) !== "") {
-                $_body_started = true;
-                $_implied_body = true;
+            if ($_k === "text" && !$_body_seen && !$_head_content
+                && (count($_stack) === 0 || $_stack[count($_stack) - 1]["name"] === "html")
+                && trim((string) $_tok["v"]) !== "") {
+                // A real stack entry lets an explicit end tag close an implied body.
+                $_implied_root_body = count($_stack) === 0;
+                $_node = __elephc_dom_new_node("element", "body", "", [], []);
+                $_stack[] = $_node;
+                $_body_seen = true;
             }
             if ($_k === "text" && ($flags & LIBXML_NOBLANKS) !== 0
                 && trim((string) $_tok["v"]) === "" && count($_stack) > 0) {
                 $_parent = $_stack[count($_stack) - 1];
                 // Html whitespace may enter an implied body; filter it after wrapper selection.
                 if ($_parent["name"] === "head") {
+                    continue;
+                }
+                if ($_implied_root_body && count($_stack) === 1
+                    && $_token_position === count($tokens)) {
+                    // Preserve fragment padding removal without trimming explicit-body spaces.
                     continue;
                 }
             }
@@ -456,20 +472,33 @@ function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
                 $_stack = __elephc_dom_append_child($_stack, $_node);
             }
         } elseif ($_k === "start") {
-            if ($_tok["n"] === "body") {
-                if ($_implied_body || $_body_open) {
-                    // A discarded body's matching end must not close the original body.
+            $_tag_name = (string) $_tok["n"];
+            if ($_tag_name === "body") {
+                if ($_body_open) {
+                    if ((int) $_tok["void"] === 1) {
+                        // Legacy empty-element recovery closes the current top, not the discarded tag.
+                        $_done = array_pop($_stack);
+                        if (count($_stack) === 0) {
+                            $_roots[] = $_done;
+                        } else {
+                            $_stack = __elephc_dom_append_child($_stack, $_done);
+                        }
+                    }
+                    // Even a discarded empty body consumes a later structural end tag.
                     $_ignored_body_ends = $_ignored_body_ends + 1;
                     continue;
                 }
-                $_body_started = true;
-            } elseif (!$_body_started && !$_head_content && $_tok["n"] !== "html"
-                && !__elephc_dom_is_head_element((string) $_tok["n"])) {
-                // Wrapper insertion happens later, but the implied body already owns content.
-                $_body_started = true;
-                $_implied_body = true;
+                $_body_seen = true;
+                $_implied_root_body = false;
+            } elseif (!$_body_seen && !$_head_content && $_tag_name !== "html"
+                && !__elephc_dom_is_head_element($_tag_name)
+                && !__elephc_dom_is_frame_element($_tag_name)) {
+                $_implied_root_body = count($_stack) === 0;
+                $_node = __elephc_dom_new_node("element", "body", "", [], []);
+                $_stack[] = $_node;
+                $_body_seen = true;
             }
-            if ($_tok["n"] === "html") {
+            if ($_tag_name === "html") {
                 $_html_open = false;
                 for ($_open_index = 0; $_open_index < count($_stack); $_open_index++) {
                     $_open = $_stack[$_open_index];
@@ -482,7 +511,7 @@ function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
                     continue;
                 }
             }
-            $_node = __elephc_dom_new_node("element", (string) $_tok["n"], "", $_tok["a"], []);
+            $_node = __elephc_dom_new_node("element", $_tag_name, "", $_tok["a"], []);
             if ((int) $_tok["void"] === 1) {
                 if (count($_stack) === 0) {
                     $_roots[] = $_node;
@@ -493,13 +522,15 @@ function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
                 $_stack[] = $_node;
             }
         } else {
-            if ($_tok["n"] === "body" && $_ignored_body_ends > 0) {
+            $_tag_name = (string) $_tok["n"];
+            if ($_ignored_body_ends > 0
+                && ($_tag_name === "body" || $_tag_name === "html" || $_tag_name === "head")) {
                 $_ignored_body_ends = $_ignored_body_ends - 1;
                 continue;
             }
             $_match = -1;
             for ($_pos = count($_stack) - 1; $_pos >= 0; $_pos--) {
-                if ($_stack[$_pos]["name"] === $_tok["n"]) {
+                if ($_stack[$_pos]["name"] === $_tag_name) {
                     $_match = $_pos;
                     break;
                 }
@@ -555,7 +586,8 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
                         && ($_child["name"] === "head" || $_child["name"] === "base"
                             || $_child["name"] === "link" || $_child["name"] === "meta"
                             || $_child["name"] === "title" || $_child["name"] === "script"
-                            || $_child["name"] === "style"));
+                            || $_child["name"] === "style" || $_child["name"] === "frame"
+                            || $_child["name"] === "frameset" || $_child["name"] === "noframes"));
                 if ($_child["kind"] === "text") {
                     $_text = (string) $_child["value"];
                     $_prefix = trim($_text) === "";
@@ -605,7 +637,8 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
                         && ($_child["name"] === "head" || $_child["name"] === "base"
                             || $_child["name"] === "link" || $_child["name"] === "meta"
                             || $_child["name"] === "title" || $_child["name"] === "script"
-                            || $_child["name"] === "style"));
+                            || $_child["name"] === "style" || $_child["name"] === "frame"
+                            || $_child["name"] === "frameset" || $_child["name"] === "noframes"));
                     if ($_child["kind"] === "text") {
                         $_prefix = trim((string) $_child["value"]) === "";
                     }
@@ -628,6 +661,30 @@ function __elephc_dom_wrap_html(mixed $roots): mixed {
         return $_html;
     }
     if (count($roots) > 0 && $roots[0]["kind"] === "element" && $roots[0]["name"] === "body") {
+        return __elephc_dom_new_node("element", "html", "", [], $roots);
+    }
+    $_has_body_root = false;
+    $_has_frame_root = false;
+    $_has_ordinary_root = false;
+    for ($_root_kind_index = 0; $_root_kind_index < count($roots); $_root_kind_index++) {
+        $_root_kind = $roots[$_root_kind_index];
+        if ($_root_kind["kind"] === "element") {
+            if ($_root_kind["name"] === "body") {
+                $_has_body_root = true;
+            } elseif ($_root_kind["name"] === "frame" || $_root_kind["name"] === "frameset"
+                || $_root_kind["name"] === "noframes") {
+                $_has_frame_root = true;
+            } elseif ($_root_kind["name"] !== "head" && $_root_kind["name"] !== "base"
+                && $_root_kind["name"] !== "link" && $_root_kind["name"] !== "meta"
+                && $_root_kind["name"] !== "title" && $_root_kind["name"] !== "script"
+                && $_root_kind["name"] !== "style") {
+                $_has_ordinary_root = true;
+            }
+        } elseif ($_root_kind["kind"] === "text" && trim((string) $_root_kind["value"]) !== "") {
+            $_has_ordinary_root = true;
+        }
+    }
+    if ($_has_body_root || ($_has_frame_root && !$_has_ordinary_root)) {
         return __elephc_dom_new_node("element", "html", "", [], $roots);
     }
     $_body = __elephc_dom_new_node("element", "body", "", [], $roots);
