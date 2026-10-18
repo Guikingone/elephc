@@ -68,6 +68,10 @@ $doc->loadHTML('<html><head></head></html><html><title>T</title><div>B</div></ht
 echo $doc->saveXML(), $doc->getElementsByTagName('body')->length;
 $doc->loadHTML('<html><html><head></head> <meta name=x><div /class=x>A<frame>B<isindex>C</div> </html></html>', LIBXML_NOBLANKS);
 echo $doc->saveXML(), $doc->getElementsByTagName('html')->length;
+$doc->loadHTML('<html><head></head><div>B</div><body>C</body></html>');
+echo $doc->saveXML(), $doc->getElementsByTagName('body')->length;
+$doc->loadHTML('<body>A<body>B</body>C</body><div>D</div>');
+echo $doc->saveXML();
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
@@ -82,6 +86,9 @@ echo $doc->saveXML(), $doc->getElementsByTagName('html')->length;
     assert!(module.functions.iter().any(|function| {
         function.name == "__elephc_dom_filter_html_children"
     }), "{target}: implied-body boundaries use the shared target-aware lowering path");
+    assert!(module.functions.iter().any(|function| {
+        function.name == "__elephc_dom_is_head_element"
+    }), "{target}: late-body repair uses ordinary target-aware PHP lowering");
 }
 
 /// Schedules every target independently without weakening the CI timeout.

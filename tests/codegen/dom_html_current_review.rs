@@ -9,6 +9,114 @@
 
 use crate::support::*;
 
+/// Body tags after implied content are ignored without nesting or displacing that content.
+#[test]
+fn dom_html_grok_current_late_body() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach (['<div>B</div><body id=x>C</body>', '<html><head></head><div>B</div><body>C</body></html>', '<div>B<body>C</body>D</div>', '<html><head></head>T<body>C</body></html>'] as $source) {
+    $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), ':', $doc->getElementsByTagName('body')->length, '|';
+}
+"#);
+    assert_eq!(out, "<html><body><div>B</div>C</body></html>:1|<html><head/><body><div>B</div>C</body></html>:1|<html><body><div>BCD</div></body></html>:1|<html><head/><body>TC</body></html>:1|");
+}
+
+/// Nested repeated body tags discard their paired end, while separate bodies remain separate.
+#[test]
+fn dom_html_grok_current_body_controls() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach (['<body>A<body id=x>B</body>C</body><div>D</div>', '<body>A</body><body>B</body>', '<html><head></head><script>X</script><body id=x>C</body></html>'] as $source) {
+    $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), '|';
+}
+"#);
+    assert_eq!(out, "<html><body>ABC</body><div>D</div></html>|<html><body>A</body><body>B</body></html>|<html><head/><script><![CDATA[X]]></script><body id=\"x\">C</body></html>|");
+}
+
+/// Late-body repair does not depend on EIR optimization.
+#[test]
+fn dom_html_grok_current_late_body_no_ir_opt() {
+    without_ir_opt(dom_html_grok_current_late_body);
+}
+
+/// Explicit-body boundaries remain distinct without EIR optimization.
+#[test]
+fn dom_html_grok_current_body_controls_no_ir_opt() {
+    without_ir_opt(dom_html_grok_current_body_controls);
+}
+
+/// Compares late-body ownership without tokenizer retention or cyclic DOM object graphs.
+fn verify_late_body_owners(owned_names: bool) {
+    let names = if owned_names {
+        "$html_name = str_repeat('html', $argc); $head_name = str_repeat('head', $argc); $div_name = str_repeat('div', $argc); $body_name = str_repeat('body', $argc);"
+    } else {
+        "$html_name = 'html'; $head_name = 'head'; $div_name = 'div'; $body_name = 'body';"
+    };
+    let source = r#"<?php
+function enableDom(DOMDocument $doc): void {}
+for ($i = 0; $i < 16; $i++) {
+    TAG_NAMES
+    $tokens = [
+        ['k' => 'start', 'n' => $html_name, 'a' => [], 'void' => 0],
+        ['k' => 'start', 'n' => $head_name, 'a' => [], 'void' => 0],
+        ['k' => 'end', 'n' => $head_name],
+        ['k' => 'start', 'n' => $div_name, 'a' => [], 'void' => 0],
+        ['k' => 'text', 'v' => 'B'], ['k' => 'end', 'n' => $div_name],
+        ['k' => 'start', 'n' => $body_name, 'a' => [], 'void' => 0],
+        ['k' => 'text', 'v' => 'C'], ['k' => 'end', 'n' => $body_name],
+        ['k' => 'end', 'n' => $html_name],
+    ];
+    $forest = __elephc_dom_build_forest($tokens, 36);
+    $tree = __elephc_dom_document_from_roots($forest, 36);
+    $roots = $tree['children']; $html = $roots[0];
+    $body = __elephc_dom_find_child($html, 'body');
+    echo count($body['children']), ':', __elephc_dom_text_of($body), '|';
+    unset($body, $html, $roots, $tree, $forest, $tokens);
+    unset($html_name, $head_name, $div_name, $body_name);
+}
+"#.replace("TAG_NAMES", names);
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:BC|".repeat(16));
+    if owned_names {
+        // Unchanged published 630c263 retains 128 string blocks / 3072 bytes in both modes.
+        // This bounds an inherited builder limitation, not a heap-clean parser claim.
+        let summary = out.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: allocs="))
+            .expect("heap metrics");
+        let metric = |name: &str| summary.split_once(name).unwrap().1
+            .split_whitespace().next().unwrap().parse::<usize>().unwrap();
+        assert!(metric("live_blocks=") <= 128 && metric("live_bytes=") <= 3072, "{}", out.stderr);
+    } else {
+        assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+    }
+}
+
+/// Literal tags keep the late-body builder and wrapper paths heap-clean.
+#[test]
+fn dom_html_grok_current_body_owners() {
+    verify_late_body_owners(false);
+}
+
+/// Runtime-owned tag names add no retention beyond the unchanged published builder baseline.
+#[test]
+fn dom_html_grok_current_owned_names_do_not_add_retention() {
+    verify_late_body_owners(true);
+}
+
+/// The inherited owned-name bound does not depend on EIR optimization.
+#[test]
+fn dom_html_grok_current_owned_names_do_not_add_retention_no_ir_opt() {
+    without_ir_opt(dom_html_grok_current_owned_names_do_not_add_retention);
+}
+
+/// Raw late-body forest ownership is independent of EIR optimization.
+#[test]
+fn dom_html_grok_current_body_owners_no_ir_opt() {
+    without_ir_opt(dom_html_grok_current_body_owners);
+}
+
 /// An implied body excludes head and roots following the closed outer html.
 #[test]
 fn dom_html_current_review_implied_body() {

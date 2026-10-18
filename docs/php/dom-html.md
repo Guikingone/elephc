@@ -76,6 +76,11 @@ body. Legacy void elements include `frame` and `isindex` but exclude `embed`,
 `source`, `track`, and `wbr`, which can retain children
 under the libxml 2.9.14 compatibility behavior used here.
 
+Once ordinary content has implied a body, a later `body` start tag and its paired
+end tag are ignored, including the redundant attributes. Its contents stay in
+the existing implied body. A repeated `body` while an explicit body is open is
+also ignored; separate explicit bodies after a closed body remain separate.
+
 Only an immediate `/>` self-closes a start tag. A slash beginning a malformed
 attribute consumes that run through its next whitespace or closing `>`; slashes
 inside unquoted attribute values remain part of the value.

@@ -93,6 +93,11 @@ function __elephc_dom_is_void(string $name): bool {
         || $name === "frame" || $name === "isindex";
 }
 
+function __elephc_dom_is_head_element(string $name): bool {
+    return $name === "head" || $name === "base" || $name === "link" || $name === "meta"
+        || $name === "title" || $name === "script" || $name === "style";
+}
+
 function __elephc_dom_skip_ws(string $html, int $i): int {
     $_len = strlen($html);
     while ($i < $_len && __elephc_dom_is_ws(__elephc_dom_char($html, $i))) {
@@ -397,9 +402,27 @@ function __elephc_dom_append_child(array $stack, mixed $node): array {
 function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
     $_stack = [];
     $_roots = [];
+    $_body_started = false;
+    $_implied_body = false;
+    $_ignored_body_ends = 0;
     foreach ($tokens as $_tok) {
         $_k = $_tok["k"];
+        $_head_content = false;
+        $_body_open = false;
+        for ($_scope_index = 0; $_scope_index < count($_stack); $_scope_index++) {
+            $_scope = $_stack[$_scope_index];
+            if (__elephc_dom_is_head_element((string) $_scope["name"])) {
+                $_head_content = true;
+            }
+            if ($_scope["name"] === "body") {
+                $_body_open = true;
+            }
+        }
         if ($_k === "text" || $_k === "cdata") {
+            if (!$_body_started && !$_head_content && trim((string) $_tok["v"]) !== "") {
+                $_body_started = true;
+                $_implied_body = true;
+            }
             if ($_k === "text" && ($flags & LIBXML_NOBLANKS) !== 0
                 && trim((string) $_tok["v"]) === "" && count($_stack) > 0) {
                 $_parent = $_stack[count($_stack) - 1];
@@ -433,6 +456,19 @@ function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
                 $_stack = __elephc_dom_append_child($_stack, $_node);
             }
         } elseif ($_k === "start") {
+            if ($_tok["n"] === "body") {
+                if ($_implied_body || $_body_open) {
+                    // A discarded body's matching end must not close the original body.
+                    $_ignored_body_ends = $_ignored_body_ends + 1;
+                    continue;
+                }
+                $_body_started = true;
+            } elseif (!$_body_started && !$_head_content && $_tok["n"] !== "html"
+                && !__elephc_dom_is_head_element((string) $_tok["n"])) {
+                // Wrapper insertion happens later, but the implied body already owns content.
+                $_body_started = true;
+                $_implied_body = true;
+            }
             if ($_tok["n"] === "html") {
                 $_html_open = false;
                 for ($_open_index = 0; $_open_index < count($_stack); $_open_index++) {
@@ -457,6 +493,10 @@ function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
                 $_stack[] = $_node;
             }
         } else {
+            if ($_tok["n"] === "body" && $_ignored_body_ends > 0) {
+                $_ignored_body_ends = $_ignored_body_ends - 1;
+                continue;
+            }
             $_match = -1;
             for ($_pos = count($_stack) - 1; $_pos >= 0; $_pos--) {
                 if ($_stack[$_pos]["name"] === $_tok["n"]) {
