@@ -13,6 +13,10 @@
 fn verify_enum_review_target(target: &str) {
     let source = r#"<?php
 namespace EnumReview;
+interface BuiltinFactory extends \BackedEnum {}
+enum BuiltinText: string implements BuiltinFactory { case Word = 'word'; }
+enum BuiltinNumber: int implements BuiltinFactory { case Seven = 7; }
+echo BuiltinText::from('word')->value, BuiltinNumber::from(7)->value;
 trait Requirement {
     const OWNER = __CLASS__;
     const TRAIT_NAME = __TRAIT__;

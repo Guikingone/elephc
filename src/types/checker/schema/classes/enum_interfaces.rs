@@ -7,6 +7,7 @@
 //! Key details:
 //! - Reuses class interface checks without treating enum methods as inherited.
 //! - Parameter contravariance and by-reference returns remain PHP contracts.
+//! - Builtin enum factory metadata is checked separately from source-declared contracts.
 
 use std::collections::{HashMap, HashSet};
 
@@ -59,13 +60,23 @@ pub(crate) fn validate_enum_interface_contracts(
         &mut state, enum_unit, &class_map, checker, &mut next_fn_id, &mut building,
     )?;
     let mut collected_variadics = Vec::new();
-    for name in &state.interfaces {
-        let required = checker.interfaces.get(name).expect("validated interface");
+    for interface_name in &state.interfaces {
+        let required = checker.interfaces.get(interface_name).expect("validated interface");
         for (is_static, methods, actual) in [
             (false, &required.methods, &state.method_sigs),
             (true, &required.static_methods, &state.static_sigs),
         ] {
             for (name, contract) in methods {
+                // Generated factories use the backing type for their internal ABI, while
+                // BackedEnum exposes int|string. The shared validator already checked that
+                // builtin bridge; only source contracts need this additional narrowing check.
+                let owner = required.static_method_declaring_interfaces.get(name)
+                    .map(String::as_str).unwrap_or(interface_name);
+                if is_static && matches!(name.as_str(), "from" | "tryfrom")
+                    && owner.eq_ignore_ascii_case("BackedEnum")
+                {
+                    continue;
+                }
                 let implementation = actual.get(name).expect("validated implementation");
                 let actual = SourceVisibleShape::of(implementation);
                 let required = SourceVisibleShape::of(contract);

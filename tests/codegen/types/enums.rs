@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Implicit builtin factories keep their backing ABI when an explicit interface inherits BackedEnum.
+#[test]
+fn test_enum_main_builtin_backed_factory_contracts() {
+    let out = compile_and_run(r#"<?php
+interface Factory extends BackedEnum {}
+enum TextValue: string implements Factory { case Word = 'word'; }
+enum NumberValue: int implements Factory { case Seven = 7; }
+echo TextValue::from('word')->value, ':', NumberValue::from(7)->value, ':',
+    (int)(TextValue::tryFrom('missing') === null);
+"#);
+    assert_eq!(out, "word:7:1");
+}
+
+/// Builtin backed-factory contract validation is independent of EIR optimization.
+#[test]
+fn test_enum_main_builtin_backed_factory_contracts_no_ir_opt() {
+    crate::support::without_ir_opt(test_enum_main_builtin_backed_factory_contracts);
+}
+
 /// Named partial calls check earlier supplied types but stop at the first missing slot.
 #[test]
 fn test_enum_sixth_review_named_shortage_precedence() {
