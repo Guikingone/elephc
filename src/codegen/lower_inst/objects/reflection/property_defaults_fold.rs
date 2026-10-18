@@ -9,7 +9,7 @@
 //! - Deferred Errors remain data and only a selected branch may become a root Error.
 
 use super::*;
-use crate::codegen::const_default_values::{self, ConstDefaultContext, ConstDefaultValue};
+use crate::codegen::const_default_values::{self, ConstDefaultContext};
 
 /// Folds known scalar constants before selecting a property's lazy value or Error metadata.
 pub(super) fn reflection_folded_property_default(
@@ -74,16 +74,9 @@ fn fold(expr: &mut Expr, context: &ConstDefaultContext<'_>) {
         | ExprKind::Spread(inner) | ExprKind::Cast { expr: inner, .. } => fold(inner, context),
         _ => {}
     }
-    let Some(value) = const_default_values::resolve_const_default(expr, context) else { return; };
-    expr.kind = match value {
-        ConstDefaultValue::String(value) => ExprKind::StringLiteral(value),
-        ConstDefaultValue::Scalar { kind, payload } => match kind {
-            const_default_values::CONST_DEFAULT_NULL => ExprKind::Null,
-            const_default_values::CONST_DEFAULT_BOOL => ExprKind::BoolLiteral(payload != 0),
-            const_default_values::CONST_DEFAULT_INT => ExprKind::IntLiteral(payload),
-            const_default_values::CONST_DEFAULT_FLOAT => ExprKind::FloatLiteral(f64::from_bits(payload as u64)),
-            _ => return,
-        },
-        _ => return,
-    };
+    if let Some(value) = const_default_values::resolve_const_default(expr, context)
+        .and_then(const_default_values::resolved_scalar_literal)
+    {
+        expr.kind = value;
+    }
 }

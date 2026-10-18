@@ -270,11 +270,12 @@ pub(super) fn reflection_property_default_value(
     info: &crate::types::ClassInfo,
     property_name: &str,
 ) -> Option<ReflectionParameterDefaultValue> {
-    if let Some((index, (name, _))) = info.visible_property(property_name) {
+    if let Some((index, (name, ty))) = info.visible_property(property_name) {
         return reflection_property_slot_default_value(
             ctx, reflection_property_declaring_class_name(info, property_name).as_deref(),
             info.property_slot_is_declared(index, name),
             info.defaults.get(index).and_then(Option::as_ref),
+            ty,
         );
     }
     info.static_properties
@@ -285,6 +286,7 @@ pub(super) fn reflection_property_default_value(
                 ctx, reflection_property_declaring_class_name(info, property_name).as_deref(),
                 info.declared_static_properties.contains(property_name),
                 info.static_defaults.get(index).and_then(Option::as_ref),
+                &info.static_properties[index].1,
             )
         })
 }
@@ -295,6 +297,7 @@ pub(super) fn reflection_property_slot_default_value(
     declaring_class: Option<&str>,
     is_declared: bool,
     default: Option<&Expr>,
+    php_type: &PhpType,
 ) -> Option<ReflectionParameterDefaultValue> {
     match default {
         Some(default) => reflection_deferred_default_value(default)
@@ -305,6 +308,12 @@ pub(super) fn reflection_property_slot_default_value(
         None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
         None => None,
     }
+    .map(|value| match value {
+        ReflectionParameterDefaultValue::Int(value) if php_type.coerces_integer_to_float() => {
+            ReflectionParameterDefaultValue::Float(value as f64)
+        }
+        value => value,
+    })
 }
 
 /// Formats retained generated property metadata for `ReflectionProperty::__toString()`.

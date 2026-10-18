@@ -330,3 +330,71 @@ unset($callback, $callbacks);
 fn test_nested_default_greptile_integer_arithmetic_callable_eval_no_ir_opt() {
     without_ir_opt(test_nested_default_greptile_integer_arithmetic_callable_eval);
 }
+
+/// Property defaults apply int-to-float coercion without changing parameter or array value types.
+#[test]
+fn test_nested_default_grok_float_property_metadata() {
+    check_reflection(r#"<?php
+class Numbers { const N = 6; }
+class Probe {
+    public float $div = Numbers::N / 2;
+    public ?float $pow = Numbers::N ** 2;
+    public float $bare = Numbers::N;
+    public float $literal = 3;
+    public float|int $exact = Numbers::N;
+    public float|string $coerced = Numbers::N;
+    public static ?float $nullable = Numbers::N;
+}
+echo (int)((new ReflectionProperty('Probe', 'div'))->getDefaultValue() === 3.0),
+    (int)((new ReflectionProperty('Probe', 'pow'))->getDefaultValue() === 36.0),
+    (int)((new ReflectionProperty('Probe', 'bare'))->getDefaultValue() === 6.0),
+    (int)((new ReflectionProperty('Probe', 'literal'))->getDefaultValue() === 3.0),
+    (int)((new ReflectionProperty('Probe', 'exact'))->getDefaultValue() === 6),
+    (int)((new ReflectionProperty('Probe', 'coerced'))->getDefaultValue() === 6.0),
+    (int)((new ReflectionProperty('Probe', 'nullable'))->getDefaultValue() === 6.0), '|';
+$defaults = (new ReflectionClass('Probe'))->getDefaultProperties();
+echo (int)($defaults['div'] === 3.0), (int)($defaults['pow'] === 36.0),
+    (int)($defaults['bare'] === 6.0), (int)($defaults['literal'] === 3.0),
+    (int)($defaults['exact'] === 6), (int)($defaults['coerced'] === 6.0),
+    (int)($defaults['nullable'] === 6.0), '|';
+function value(float $number = Numbers::N): float { return $number; }
+function expression(float $number = Numbers::N / 2): float { return $number; }
+echo (int)((new ReflectionParameter('value', 0))->getDefaultValue() === 6),
+    (int)((new ReflectionParameter('expression', 0))->getDefaultValue() === 3);
+"#, "1111111|1111111|11");
+}
+
+/// Property-only numeric coercion is independent of EIR optimization.
+#[test]
+fn test_nested_default_grok_float_property_metadata_no_ir_opt() {
+    without_ir_opt(test_nested_default_grok_float_property_metadata);
+}
+
+/// Numeric property defaults use the same PHP coercions in the initialized object and static slot.
+#[test]
+fn test_nested_default_grok_float_property_initialization() {
+    check(r#"<?php
+class Numbers { const N = 6; }
+class Probe {
+    public float $bare = Numbers::N;
+    public ?float $nullable = Numbers::N;
+    public float|string $coerced = Numbers::N;
+    public float|int $exact = Numbers::N;
+    public mixed $mixed = Numbers::N;
+    public array $values = [Numbers::N];
+    public static ?float $shared = Numbers::N / 2;
+}
+$probe = new Probe();
+echo (int)($probe->bare === 6.0), (int)($probe->nullable === 6.0),
+    (int)($probe->coerced === 6.0), (int)($probe->exact === 6),
+    (int)($probe->mixed === 6), (int)($probe->values[0] === 6),
+    (int)(Probe::$shared === 3.0);
+unset($probe);
+"#, "1111111");
+}
+
+/// Numeric initializer coercions are independent of EIR optimization.
+#[test]
+fn test_nested_default_grok_float_property_initialization_no_ir_opt() {
+    without_ir_opt(test_nested_default_grok_float_property_initialization);
+}

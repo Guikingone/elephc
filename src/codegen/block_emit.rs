@@ -1137,6 +1137,11 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
+    let resolved = super::const_default_values::resolve_const_default(
+        &crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic()),
+        &super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name),
+    ).and_then(super::const_default_values::resolved_scalar_literal);
+    let expr = resolved.as_ref().unwrap_or(expr);
     let value = literal_default_value(
         &format!("static property {}::${}", class_name, property),
         php_type,

@@ -106,6 +106,21 @@ pub(in crate::codegen) fn resolve_const_default(
     resolve_const_default_at(expr, context, 0)
 }
 
+/// Converts a resolved scalar to its PHP literal without changing its numeric type.
+pub(in crate::codegen) fn resolved_scalar_literal(value: ConstDefaultValue) -> Option<ExprKind> {
+    match value {
+        ConstDefaultValue::String(value) => Some(ExprKind::StringLiteral(value)),
+        ConstDefaultValue::Scalar { kind, payload } => match kind {
+            CONST_DEFAULT_NULL => Some(ExprKind::Null),
+            CONST_DEFAULT_BOOL => Some(ExprKind::BoolLiteral(payload != 0)),
+            CONST_DEFAULT_INT => Some(ExprKind::IntLiteral(payload)),
+            CONST_DEFAULT_FLOAT => Some(ExprKind::FloatLiteral(f64::from_bits(payload as u64))),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Resolves one PHP default expression while preserving the constant recursion limit.
 pub(in crate::codegen) fn resolve_const_default_at(
     expr: &Expr,

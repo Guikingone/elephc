@@ -38,6 +38,15 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_literal_parameter_default_value(default) {
         return Ok(Some(value));
     }
+    let context = crate::codegen::const_default_values::ConstDefaultContext {
+        module: ctx.module,
+        current_class: (!current_class.is_empty()).then_some(current_class),
+    };
+    if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
+        .and_then(crate::codegen::const_default_values::resolved_scalar_literal)
+    {
+        return Ok(reflection_literal_parameter_default_value(&Expr::new(kind, default.span)));
+    }
     match &default.kind {
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;

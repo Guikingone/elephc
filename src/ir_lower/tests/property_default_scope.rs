@@ -21,6 +21,18 @@ trait Invalid {
 class Consumer { use Invalid; public static array $names = [parent::A]; }
 class Promoted { public function __construct(public int $value = parent::A) {} }
 class Valid { public string $value = 'ok'; public function run($value = self::LABEL) {} const LABEL = 'value'; }
+class NumericDefaults {
+    const N = 6;
+    public float $bare = self::N;
+    public ?float $nullable = self::N;
+    public float|int $exact = self::N;
+    public float|string $coerced = self::N;
+    public static ?float $shared = self::N / 2;
+}
+$numbers = new NumericDefaults();
+echo $numbers->bare, $numbers->nullable, $numbers->exact, $numbers->coerced, NumericDefaults::$shared;
+echo (new ReflectionProperty('NumericDefaults', 'nullable'))->getDefaultValue();
+echo (new ReflectionClass('NumericDefaults'))->getDefaultProperties()['shared'];
 echo Consumer::class;
 $bad = new ReflectionProperty(Consumer::class, 'bad');
 echo $bad->hasDefaultValue();
@@ -164,6 +176,9 @@ echo (new MethodConsumer())->value(7), MethodConsumer::staticValue(value: 8);
     }).count(), 3, "{target_name}: native instance, static and constructor helpers");
     assert!(module.class_infos["ReflectionParameter"].visible_property_index("__default_factory").is_some(),
         "{target_name}: the native and eval paths share one lazy factory slot");
+    assert!(module.functions.iter().any(|function| function.instructions.iter().any(|inst|
+        inst.op == crate::ir::Op::IToF)),
+        "{target_name}: property initializer thunks widen integer values before float storage");
 }
 
 /// Separates target cases so each keeps CI's normal per-test timeout budget.
