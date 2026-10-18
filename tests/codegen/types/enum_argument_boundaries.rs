@@ -231,3 +231,69 @@ echo text_error(TextBoundaryValue::A, [[1]]);
 fn test_enum_argument_boundaries_canonical_type_errors_no_ir_opt() {
     without_ir_opt(test_enum_argument_boundaries_canonical_type_errors);
 }
+
+/// Typed staged arguments preserve coercion diagnostics before a missing-argument exception.
+#[test]
+fn test_enum_argument_boundaries_typed_missing_arguments() {
+    let source = r#"<?php
+interface MissingBoundary { public function value(int $first, int $second): int; }
+enum MissingBoundaryValue implements MissingBoundary {
+    case A;
+    public function value(int $first, int $second): int { return $first + $second; }
+}
+function good_int(): int { return 1; }
+function good_float(): float { return 1.5; }
+function good_string(): string { return str_repeat('2.75', 1); }
+function good_bool(): bool { return true; }
+function boundary_handler(int $code, string $message): bool { echo 'D'; return true; }
+set_error_handler('boundary_handler');
+function baseline_boundary(MissingBoundary $target): void { $target->value(1, 2); }
+function missing_boundary(MissingBoundary $target): void {
+    try { $target->value(good_int()); } catch (ArgumentCountError $error) { echo 'I|'; unset($error); }
+    try { $target->value(good_float()); } catch (ArgumentCountError $error) { echo 'F|'; unset($error); }
+    try { $target->value(good_string()); } catch (ArgumentCountError $error) { echo 'S|'; unset($error); }
+    try { $target->value(good_bool()); } catch (ArgumentCountError $error) { echo 'B'; unset($error); }
+}
+missing_boundary(MissingBoundaryValue::A);
+restore_error_handler();
+"#;
+    let mut baseline = None;
+    for iterations in [1, 16] {
+        let source = source.replace("missing_boundary(MissingBoundaryValue::A);", &format!(
+            "for ($i = 0; $i < {iterations}; $i++) {{ missing_boundary(MissingBoundaryValue::A); }}",
+        ));
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "{}\n{}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, "I|DF|DS|B".repeat(iterations), "{}", out.stderr);
+        // Ordinary successful enum-interface calls retain a singleton wrapper too. Compare
+        // its complete inventory at the same call count, without hiding extra argument leases.
+        let control = compile_and_run_with_heap_debug(&source.replace(
+            "missing_boundary(MissingBoundaryValue::A);", "baseline_boundary(MissingBoundaryValue::A);",
+        ));
+        assert!(control.success, "{}", control.stderr);
+        assert_eq!(control.stdout, "", "{}", control.stderr);
+        let inventory = |stderr: &str| {
+            let summary = stderr.lines().find(|line| line.contains("live_blocks=")).unwrap();
+            let retained = ["live_blocks=", "live_bytes="].map(|metric| summary.split_whitespace()
+                .find_map(|field| field.strip_prefix(metric)).unwrap().parse::<usize>().unwrap());
+            assert!(retained[0] <= 1, "{stderr}");
+            let blocks: Vec<_> = stderr.lines().filter(|line| line.starts_with("HEAP DEBUG: live offset="))
+                .map(|line| ["kind=", "refs="].map(|metric| line.split_whitespace()
+                    .find_map(|field| field.strip_prefix(metric)).unwrap().parse::<usize>().unwrap()))
+                .collect();
+            assert_eq!(blocks.len(), retained[0], "{stderr}");
+            assert!(blocks.iter().all(|block| block[0] == 4), "{stderr}");
+            (retained, blocks)
+        };
+        let (retained, blocks) = inventory(&out.stderr);
+        assert_eq!((retained, blocks), inventory(&control.stderr), "{}\n{}", out.stderr, control.stderr);
+        if let Some(baseline) = baseline { assert_eq!(retained, baseline, "{}", out.stderr); }
+        else { baseline = Some(retained); }
+    }
+}
+
+/// Unreachable conversion blocks must still be well-typed with EIR optimization disabled.
+#[test]
+fn test_enum_argument_boundaries_typed_missing_arguments_no_ir_opt() {
+    without_ir_opt(test_enum_argument_boundaries_typed_missing_arguments);
+}

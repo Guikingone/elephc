@@ -166,22 +166,19 @@ fn terminate_enum_argument_error(
         if let Some((class, method, signature)) = selected {
             let bindings = staged_argument_bindings(ctx, args, &staged, signature, span);
             for (index, value) in bindings {
-                let value = if args.iter().any(is_spread_arg) {
-                    // Array access can produce tagged nullable scalar storage. Snapshot it
-                    // into a rooted Mixed cell before shared PHP predicates inspect its type.
-                    let argument = lower_expr(ctx, &value);
-                    // Existing Mixed storage already owns the projected read. Boxing it is
-                    // a no-op at emission, so consuming its source would retire that owner.
-                    let argument = if matches!(argument.ir_type,
-                        IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
-                    {
-                        argument
-                    } else { ctx.box_value_as_mixed(argument, PhpType::Mixed, Some(span)) };
-                    let slot = ctx.declare_synthetic_php_local(PhpType::Mixed);
-                    store_value_into_temp(ctx, &slot, PhpType::Mixed, argument, span);
-                    register_owned_call_operand(ctx, ctx.local_slots[&slot], span);
-                    Expr::new(ExprKind::Variable(slot), span)
-                } else { value };
+                // Shared predicates and implicit casts require rooted Mixed storage even for
+                // directly supplied typed values, not only tagged reads projected from spreads.
+                let argument = lower_expr(ctx, &value);
+                // Identity boxing would consume the owner of an existing Mixed projection.
+                let argument = if matches!(argument.ir_type,
+                    IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+                {
+                    argument
+                } else { ctx.box_value_as_mixed(argument, PhpType::Mixed, Some(span)) };
+                let slot = ctx.declare_synthetic_php_local(PhpType::Mixed);
+                store_value_into_temp(ctx, &slot, PhpType::Mixed, argument, span);
+                register_owned_call_operand(ctx, ctx.local_slots[&slot], span);
+                let value = Expr::new(ExprKind::Variable(slot), span);
                 enum_argument_guards::guard_parameter(ctx, signature, index,
                     &value, class, method, span);
             }

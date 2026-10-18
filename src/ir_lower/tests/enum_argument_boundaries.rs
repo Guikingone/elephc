@@ -22,6 +22,16 @@ enum BoundValue implements BoundArguments {
 function bound_call(BoundArguments $target, array $args): string { return $target->describe(...$args); }
 function text_call(?BoundValue $target, array $args): ?string { return $target?->text(...$args); }
 echo bound_call(BoundValue::A, [1.5, '2.75']), text_call(BoundValue::A, ['ok']);
+interface MissingArguments { public function value(int $first, int $second): int; }
+enum MissingValue implements MissingArguments {
+    case A;
+    public function value(int $first, int $second): int { return $first + $second; }
+}
+function good_float(): float { return 1.5; }
+function missing_call(MissingArguments $target): void {
+    try { $target->value(good_float()); } catch (ArgumentCountError $error) { echo 'missing'; }
+}
+missing_call(MissingValue::A);
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     assert!(crate::ir::print_module(&module).contains("implicit_int_cast"), "{target}: diagnostic EIR cast");
