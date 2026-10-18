@@ -1,5 +1,5 @@
 //! Purpose:
-//! Describes PHP weak scalar binding for runtime values passed to declared unions.
+//! Describes PHP weak scalar binding for selected runtime parameters and union members.
 //!
 //! Called from:
 //! - Selected enum method runtime argument and variadic-element lowering.
@@ -13,8 +13,17 @@ use crate::parser::ast::{BinOp, InstanceOfTarget};
 use crate::span::Span;
 
 /// Builds a lazy binding expression over an already captured, validated runtime argument.
-pub(crate) fn runtime_scalar_union_binding(expected: &PhpType, value: &Expr) -> Option<Expr> {
-    let PhpType::Union(members) = expected else { return None; };
+pub(crate) fn runtime_scalar_param_binding(expected: &PhpType, value: &Expr) -> Option<Expr> {
+    let PhpType::Union(members) = expected else {
+        let target = match expected {
+            PhpType::Int => CastType::Int,
+            PhpType::Float => CastType::Float,
+            PhpType::Str => CastType::String,
+            PhpType::Bool => CastType::Bool,
+            _ => return None,
+        };
+        return Some(cast(target, value));
+    };
     if members.contains(&PhpType::Mixed) { return None; }
     let span = value.span;
     let exact = members.iter().map(|member| exact_member(member, value))
@@ -32,7 +41,7 @@ pub(crate) fn runtime_scalar_union_binding(expected: &PhpType, value: &Expr) -> 
             cast(CastType::Int, value), cast(CastType::Float, value), span);
         conversions.push((numeric, converted));
     } else if members.contains(&PhpType::Int) {
-        conversions.push((numeric, cast(CastType::Int, value)));
+        conversions.push((runtime_weak_int_param_acceptance(value), cast(CastType::Int, value)));
     } else if members.contains(&PhpType::Float) {
         conversions.push((numeric, cast(CastType::Float, value)));
     }
@@ -53,6 +62,49 @@ pub(crate) fn runtime_scalar_union_binding(expected: &PhpType, value: &Expr) -> 
         select(test, converted, fallback, span)
     });
     Some(select(exact, value.clone(), converted, span))
+}
+
+/// Accepts exact integers and bools before testing a parsed numeric value's float bounds.
+pub(crate) fn runtime_weak_int_param_acceptance(value: &Expr) -> Expr {
+    let span = value.span;
+    let number = numeric_value(value);
+    let finite = call("is_finite", &number);
+    let lower = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(number.clone()), op: BinOp::GtEq,
+        right: Box::new(Expr::new(ExprKind::FloatLiteral(-9223372036854775808.0), span)),
+    }, span);
+    let upper = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(number.clone()), op: BinOp::Lt,
+        right: Box::new(Expr::new(ExprKind::FloatLiteral(9223372036854775808.0), span)),
+    }, span);
+    let fits = either(call("is_int", &number), both(finite, both(lower, upper, span), span), span);
+    either(either(call("is_int", value), call("is_bool", value), span),
+        both(call("is_numeric", value), fits, span), span)
+}
+
+/// Selects only float-shaped numeric values that PHP binds to an integer union member.
+pub(crate) fn runtime_int_binding_needs_diagnostics(expected: &PhpType, value: &Expr) -> Option<Expr> {
+    let span = value.span;
+    let accepted = runtime_weak_int_param_acceptance(value);
+    let selected = match expected {
+        PhpType::Int => accepted,
+        PhpType::Union(members) if members.contains(&PhpType::Int)
+            && !members.contains(&PhpType::Float) && !members.contains(&PhpType::Mixed) => {
+            let exact = members.iter().map(|member| exact_member(member, value))
+                .collect::<Option<Vec<_>>>()?.into_iter().reduce(|a, b| either(a, b, span))?;
+            both(Expr::new(ExprKind::Not(Box::new(exact)), span), accepted, span)
+        }
+        _ => return None,
+    };
+    Some(both(selected, call("is_float", &numeric_value(value)), span))
+}
+
+/// Classifies numeric strings without rounding an already exact integer through a float.
+fn numeric_value(value: &Expr) -> Expr {
+    Expr::new(ExprKind::BinaryOp {
+        left: Box::new(value.clone()), op: BinOp::Add,
+        right: Box::new(Expr::new(ExprKind::IntLiteral(0), value.span)),
+    }, value.span)
 }
 
 /// Strict calls admit exact members, plus PHP's sole int-to-float widening exception.
@@ -107,6 +159,11 @@ fn instance_of(class: &str, value: &Expr) -> Expr {
 /// Combines predicates lazily so later runtime checks only run when needed.
 fn either(left: Expr, right: Expr, span: Span) -> Expr {
     Expr::new(ExprKind::BinaryOp { left: Box::new(left), op: BinOp::Or, right: Box::new(right) }, span)
+}
+
+/// Keeps numeric parsing behind the predicate that proves it cannot throw.
+fn both(left: Expr, right: Expr, span: Span) -> Expr {
+    Expr::new(ExprKind::BinaryOp { left: Box::new(left), op: BinOp::And, right: Box::new(right) }, span)
 }
 
 /// Delegates conversion to the compiler's existing target-independent cast semantics.

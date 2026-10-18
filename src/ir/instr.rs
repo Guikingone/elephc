@@ -126,6 +126,8 @@ pub enum Immediate {
     FloatKeyDiagnostic,
     /// Converts a string offset with runtime cast diagnostics for boxed values.
     StringOffsetCast,
+    /// Binds an already validated float-shaped runtime argument to int with precision diagnostics.
+    ImplicitIntCast,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {

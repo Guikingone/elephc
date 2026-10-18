@@ -19,6 +19,8 @@ pub(super) fn lower_arguments(
     class: &str, method: &str, span: Span,
 ) -> Option<Vec<ValueId>> {
     if signature.ref_params.iter().any(|by_ref| *by_ref)
+        || (signature.variadic.is_some()
+            && !crate::types::signatures::variadic_storage_accepts_named_entries(signature))
         || !args.iter().any(is_spread_arg)
         || crate::types::call_args::expand_planned_positional_spreads(args).is_some()
     { return None; }
@@ -79,7 +81,7 @@ pub(super) fn lower_arguments(
         ctx.builder.position_at_end(value_ready);
         guard_parameter(ctx, signature, index, &variable(&slot, span), class, method, span);
         let binding = signature.declared_params.get(index).copied().unwrap_or(false)
-            .then(|| crate::types::param_binding::runtime_scalar_union_binding(
+            .then(|| crate::types::param_binding::runtime_scalar_param_binding(
                 &signature.params[index].1, &variable(&slot, span),
             )).flatten();
         if let Some(binding) = binding {
@@ -250,7 +252,7 @@ fn collect_tail(
         }, span);
         guard_variadic_element(ctx, &element_signature, parameter, &value, &position, class, method, span);
         let binding = element_signature.declared_params.get(parameter).copied().unwrap_or(false)
-            .then(|| crate::types::param_binding::runtime_scalar_union_binding(
+            .then(|| crate::types::param_binding::runtime_scalar_param_binding(
                 &element_signature.params[parameter].1, &value,
             )).flatten();
         let value_expr = binding.unwrap_or(value);

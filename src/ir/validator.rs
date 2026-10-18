@@ -545,7 +545,7 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
-            matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast)
+            matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast | Imm::ImplicitIntCast)
         }),
         TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
             matches!(imm, Imm::TypePredicate(_))

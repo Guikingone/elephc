@@ -63,6 +63,33 @@ fn guard_parameter_at(
         Expr::new(ExprKind::StringLiteral(" given".to_string()), span), span), span);
     throw_message(ctx, "TypeError", message, span);
     ctx.builder.position_at_end(ok);
+    bind_implicit_integer(ctx, ty, variable, span);
+}
+
+/// Diagnoses and snapshots a selected integer conversion before a union erases its source tag.
+fn bind_implicit_integer(
+    ctx: &mut LoweringContext<'_, '_>, ty: &PhpType, variable: &Expr, span: Span,
+) {
+    if crate::source::current_strict_types() { return; }
+    let Some(condition) = crate::types::param_binding::runtime_int_binding_needs_diagnostics(ty, variable)
+        else { return; };
+    let ExprKind::Variable(name) = &variable.kind else {
+        unreachable!("enum argument guards only bind staged argument slots");
+    };
+    let condition = lower_expr(ctx, &condition);
+    let convert = ctx.builder.create_named_block("enum.argument.int.convert", Vec::new());
+    let done = ctx.builder.create_named_block("enum.argument.int.done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition.value, then_target: convert, then_args: Vec::new(),
+        else_target: done, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(convert);
+    let source = lower_expr(ctx, variable);
+    let converted = ctx.emit_value(Op::Cast, vec![source.value], Some(Immediate::ImplicitIntCast),
+        PhpType::Int, Op::Cast.default_effects(), Some(span));
+    store_value_into_temp(ctx, name, PhpType::Mixed, converted, span);
+    ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
+    ctx.builder.position_at_end(done);
 }
 
 /// Builds the runtime predicate for PHP weak scalar and class parameter acceptance.
@@ -72,7 +99,8 @@ fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
         left: Box::new(a), op: BinOp::Or, right: Box::new(b),
     }, span);
     Some(match ty {
-        PhpType::Int | PhpType::Float => either(predicate("is_numeric"), predicate("is_bool")),
+        PhpType::Int => crate::types::param_binding::runtime_weak_int_param_acceptance(value),
+        PhpType::Float => either(predicate("is_numeric"), predicate("is_bool")),
         PhpType::Str => either(predicate("is_scalar"), Expr::new(ExprKind::InstanceOf {
             value: Box::new(value.clone()),
             target: InstanceOfTarget::Name(Name::unqualified("Stringable")),
@@ -136,13 +164,9 @@ fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
     }, span)
 }
 
-/// Expands iterable's PHP union spelling without changing stored declaration metadata.
+/// Shares canonical PHP union and nullable spelling without changing declaration metadata.
 fn diagnostic_type(ty: &PhpType) -> String {
-    match ty {
-        PhpType::Iterable => "Traversable|array".into(),
-        PhpType::Union(members) => members.iter().map(diagnostic_type).collect::<Vec<_>>().join("|"),
-        _ => ty.to_string(),
-    }
+    crate::types::diagnostic_names::php_type_name(ty)
 }
 
 /// Literal-bool constraints use PHP's true/false diagnostic names rather than generic bool.

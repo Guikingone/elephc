@@ -440,6 +440,14 @@ impl Checker {
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
+        if self.enums.contains_key(class_name)
+            && args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            && crate::types::call_args::expand_planned_positional_spreads(args).is_none()
+        {
+            // Concrete and nullsafe enum calls share the selected runtime binder.
+            // Its boxed collector must also be the layout the method body reads.
+            self.promote_descriptor_variadic_container_for_method(class_name, &method_key, false);
+        }
         self.reject_unsupported_reflection_attribute_filter_flags(
             Some(class_name),
             &method_key,

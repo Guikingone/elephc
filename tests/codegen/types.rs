@@ -16,6 +16,8 @@ mod return_inference;
 mod enums;
 #[path = "types/enum_review_runtime_args.rs"]
 mod enum_review_runtime_args;
+#[path = "types/enum_argument_boundaries.rs"]
+mod enum_argument_boundaries;
 #[path = "types/enum_keyed_review.rs"]
 mod enum_keyed_review;
 #[path = "types/type_annotations.rs"]

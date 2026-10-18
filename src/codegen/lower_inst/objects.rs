@@ -172,6 +172,7 @@ mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
 mod mixed_property_type_guard;
+pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
 
 #[allow(unused_imports)]
 use fixed_new::*;

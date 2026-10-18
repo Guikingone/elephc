@@ -25,7 +25,7 @@
 //!   source value converts without a diagnostic). Partial coercions (`int $i` from a float or string) are limited to
 //!   compile-time constants, because PHP signals their failure modes with a runtime
 //!   `Deprecated:` notice or a `TypeError` and elephc has neither channel at a call boundary.
-//! - Selected enum unpacks have their own runtime guards and consume the sibling union plan
+//! - Selected enum unpacks add runtime guards and precision diagnostics through EIR, then use the sibling scalar plan
 //!   before parameter storage erases the declared member types.
 
 use crate::parser::ast::{CallableTarget, CastType, Expr, ExprKind, StaticReceiver};
@@ -34,7 +34,10 @@ use crate::numeric_string::{scan_numeric_prefix, NumericScan};
 use crate::types::PhpType;
 
 mod union;
-pub(crate) use union::{runtime_scalar_union_binding, runtime_strict_param_acceptance};
+pub(crate) use union::{
+    runtime_int_binding_needs_diagnostics, runtime_scalar_param_binding,
+    runtime_strict_param_acceptance, runtime_weak_int_param_acceptance,
+};
 
 /// How a declared parameter binds an argument whose type does not already match.
 #[derive(Debug, Clone, PartialEq)]
