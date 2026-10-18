@@ -17,6 +17,12 @@ pub(super) fn lower_nested_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let update = desugared_element_update(value, span, |read| read == target);
+    if matches!(&update, Some(ElementUpdate::Compound))
+        && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
+    {
+        return;
+    }
     // Lowering the FULL target as an expression routes the write through the
     // read helper (`__rt_mixed_array_get`), which returns a detached fresh box
     // whenever the slot storage is not already a boxed Mixed cell; the
@@ -36,10 +42,15 @@ pub(super) fn lower_nested_array_assign(
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
         let deferred = nested_target_is_all_bare_variables(target);
+        let mut roots = Vec::new();
+        let mut root_operand = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
+            let (operand, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, operand, span);
+            if let Some(owner) = owner { roots.push(owner); }
+            operand
+        };
         let value_first = deferred.then(|| {
             let value = lower_expr(ctx, value);
-            let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
-            (value, pins)
+            root_operand(ctx, value)
         });
         let parent = lower_nested_assign_parent(ctx, array, span);
         let parent = if ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed {
@@ -51,41 +62,25 @@ pub(super) fn lower_nested_array_assign(
             crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
             resolved
         } else { parent };
-        let parent_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[parent.value], span);
+        let parent = root_operand(ctx, parent);
         let key = lower_expr(ctx, index);
-        let key_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], span);
-        let (value, value_pins) = match value_first {
+        let key = root_operand(ctx, key);
+        let value = match value_first {
             Some(value) => value,
             None => {
                 let value = lower_expr(ctx, value);
-                let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
-                (value, pins)
+                root_operand(ctx, value)
             }
         };
         if !super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {
             return;
         }
         super::nested_scalar_writes::lower_nested_set(ctx, parent, key, value, span);
-        if deferred {
-            crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, span);
-            crate::ir_lower::expr::unpin_in_flight_owners(ctx, parent_pins, span);
-            crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
-        } else {
-            crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
-            crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, span);
-            crate::ir_lower::expr::unpin_in_flight_owners(ctx, parent_pins, span);
-        }
-        release_persisted_string_operand(ctx, key, span);
-        // The setter boxes/retains its stored value; retire the caller's temporary owner.
-        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-        // Parent subscript reads of Mixed/refcounted elements are owning
-        // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
-        // reference — fresh, retained, or installed by autovivification). The
-        // set helper mutates through the cell/object without consuming that
-        // reference, so release it here. Non-owning parents (plain locals,
-        // `$this`) are left to normal scope cleanup.
-        if ctx.value_is_owning_temporary(parent) {
-            crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+        // The boxed writer borrows all three operands and retains or copies the stored value.
+        // Roots also retire computed Mixed values and keep earlier operands safe if a later
+        // operand or the write throws into a same-frame catch.
+        for root in roots.into_iter().rev() {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
         }
         return;
     }

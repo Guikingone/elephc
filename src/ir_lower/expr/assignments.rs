@@ -22,6 +22,9 @@ pub(super) fn lower_assignment_expr(
     if let Some(result) = super::append_updates::lower(ctx, value, prelude) {
         return result;
     }
+    if let Some(result) = lower_weak_map_incdec_expression(ctx, target, value, result_target, prelude, expr) {
+        return result;
+    }
     let key_already_diagnosed = compound_array_key_diagnosed_in_prelude(target, value, prelude, expr.span);
     for stmt in prelude {
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
