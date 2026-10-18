@@ -516,9 +516,9 @@ fn report_class_id_inventory(checker: &Checker) {
 
 #[cfg(test)]
 mod tests {
-    /// Abstract enum method declarations retain their status in parallel class metadata.
+    /// Imported abstract factory requirements never replace synthesized concrete metadata.
     #[test]
-    fn enum_metadata_records_abstract_instance_and_static_methods() {
+    fn enum_metadata_keeps_synthesized_factories_concrete() {
         use crate::codegen_support::platform::{Arch, Platform, Target};
         use crate::parser::ast::{ClassMethod, Visibility};
         use crate::span::Span;
@@ -546,10 +546,10 @@ mod tests {
         let mut next_class_id = 1;
         crate::types::checker::schema::insert_enum_metadata(
             "State",
-            None,
+            Some(crate::types::PhpType::Int),
             Vec::new(),
             &[],
-            &[method("instance", false), method("statik", true)],
+            &[method("from", true), method("tryFrom", true)],
             &[],
             &[],
             &[],
@@ -560,12 +560,14 @@ mod tests {
         )
         .expect("record enum metadata");
         let class = checker.classes.get("State").expect("enum class metadata");
-        assert!(class.abstract_methods.contains("instance"));
-        assert!(class.abstract_static_methods.contains("statik"));
-        assert!(!class.method_impl_classes.contains_key("instance"));
-        assert!(!class.static_method_impl_classes.contains_key("statik"));
-        assert_eq!(class.method_declaring_classes.get("instance").map(String::as_str), Some("State"));
-        assert_eq!(class.static_method_declaring_classes.get("statik").map(String::as_str), Some("State"));
+        assert!(class.abstract_methods.is_empty());
+        assert!(class.abstract_static_methods.is_empty());
+        for name in ["from", "tryfrom"] {
+            assert_eq!(class.static_method_impl_classes.get(name).map(String::as_str), Some("State"));
+            assert_eq!(class.static_method_declaring_classes.get(name).map(String::as_str), Some("State"));
+            assert_eq!(class.static_methods[name].params[0].1, crate::types::PhpType::Int);
+            assert!(!class.method_decls.iter().any(|decl| decl.name.eq_ignore_ascii_case(name)));
+        }
     }
 
     /// Class ids must not depend on HashMap iteration order.
