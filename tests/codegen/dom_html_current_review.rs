@@ -9,6 +9,26 @@
 
 use crate::support::*;
 
+/// An old implied-root flag must not trim whitespace inside a later unclosed element.
+#[test]
+fn dom_html_body_boundary_review_later_element_blanks() {
+    let out = compile_and_run(r#"<?php
+$doc = new DOMDocument();
+foreach (['<div>B</div></body><span>   ', '<div>B</div></body><div>   ', '<span>   ', '<div><span>   '] as $source) {
+    $doc->loadHTML($source, LIBXML_HTML_NODEFDTD | LIBXML_NOERROR | LIBXML_NOBLANKS);
+    echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), '|';
+}
+"#);
+    // This documented subset keeps whitespace inside ordinary elements, not full areBlanks.
+    assert_eq!(out, "<html><body><div>B</div></body><span>   </span></html>|<html><body><div>B</div></body><div>   </div></html>|<html><body><span>   </span></body></html>|<html><body><div><span>   </span></div></body></html>|");
+}
+
+/// Element whitespace after a closed implied body is stable without EIR optimization.
+#[test]
+fn dom_html_body_boundary_review_later_element_blanks_no_ir_opt() {
+    without_ir_opt(dom_html_body_boundary_review_later_element_blanks);
+}
+
 /// Closing an implied body preserves the boundary before a later explicit body or text.
 #[test]
 fn dom_html_body_boundary_review_closed_implied_body() {
@@ -156,9 +176,11 @@ fn verify_late_body_owners(owned_names: bool) {
     } else {
         "$html_name = 'html'; $head_name = 'head'; $div_name = 'div'; $body_name = 'body';"
     };
+    // The report emits at most64 blocks; inspect every retained owner, not an unseen tail.
+    let iterations = if owned_names { 8 } else { 16 };
     let source = r#"<?php
 function enableDom(DOMDocument $doc): void {}
-for ($i = 0; $i < 16; $i++) {
+for ($i = 0; $i < ITERATIONS; $i++) {
     TAG_NAMES
     $tokens = [
         ['k' => 'start', 'n' => $html_name, 'a' => [], 'void' => 0],
@@ -178,21 +200,28 @@ for ($i = 0; $i < 16; $i++) {
     unset($body, $html, $roots, $tree, $forest, $tokens);
     unset($html_name, $head_name, $div_name, $body_name);
 }
-"#.replace("TAG_NAMES", names);
+"#.replace("TAG_NAMES", names).replace("ITERATIONS", &iterations.to_string());
     let out = compile_and_run_with_heap_debug(&source);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "2:BC|".repeat(16));
+    assert_eq!(out.stdout, "2:BC|".repeat(iterations));
     if owned_names {
-        // Unchanged 630c263 retains 128 strings, originally observed in minimum-size blocks.
+        // Unchanged 630c263 retains eight strings per iteration in minimum-size blocks.
         // Small bins can reuse a <=64-byte payload without splitting, plus a 16-byte header.
         // Bound owners and their actual kind, not a particular free-list capacity arrangement.
         let summary = out.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: allocs="))
             .expect("heap metrics");
         let metric = |name: &str| summary.split_once(name).unwrap().1
             .split_whitespace().next().unwrap().parse::<usize>().unwrap();
-        assert!(metric("live_blocks=") <= 128 && metric("live_bytes=") <= 128 * (64 + 16), "{}", out.stderr);
-        assert!(out.stderr.lines().filter(|line| line.starts_with("HEAP DEBUG: live offset="))
-            .all(|line| line.contains("kind=1 refs=1")), "{}", out.stderr);
+        let live_blocks = metric("live_blocks=");
+        assert!(live_blocks <= iterations * 8 && metric("live_bytes=") <= live_blocks * (64 + 16), "{}", out.stderr);
+        let retained = out.stderr.lines().filter(|line| line.starts_with("HEAP DEBUG: live offset="))
+            .collect::<Vec<_>>();
+        assert_eq!(retained.len(), live_blocks, "incomplete owner inventory: {}", out.stderr);
+        let single_string_owner = |line: &str| line.split_whitespace().any(|field| field == "kind=1")
+            && line.split_whitespace().any(|field| field == "refs=1");
+        assert!(!single_string_owner("kind=1 refs=10"));
+        assert!(!single_string_owner("kind=10 refs=1"));
+        assert!(retained.iter().all(|line| single_string_owner(line)), "{}", out.stderr);
     } else {
         assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
     }

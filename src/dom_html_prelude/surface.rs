@@ -441,7 +441,7 @@ function __elephc_dom_build_forest(mixed $tokens, int $flags): mixed {
                 if ($_parent["name"] === "head") {
                     continue;
                 }
-                if ($_implied_root_body && count($_stack) === 1
+                if ($_implied_root_body && $_parent["name"] === "body" && count($_stack) === 1
                     && $_token_position === count($tokens)) {
                     // Preserve fragment padding removal without trimming explicit-body spaces.
                     continue;

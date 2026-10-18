@@ -78,6 +78,8 @@ $doc->loadHTML('<body>A<div>B<body/>C</div>D</body>E');
 echo $doc->saveXML();
 $doc->loadHTML('<frameset>F<body id=x>C</body></frameset>');
 echo $doc->saveXML();
+$doc->loadHTML('<div>B</div></body><span>   ', LIBXML_NOBLANKS);
+echo $doc->saveXML();
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
