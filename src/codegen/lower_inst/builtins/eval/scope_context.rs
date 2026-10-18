@@ -39,6 +39,7 @@ pub(super) fn prepare_dynamic_eval_scope_access_mask(
     locals: &[EvalSyncLocal],
     globals: &[EvalSyncGlobal],
 ) -> Result<()> {
+    // -- prepare the dynamic eval scope access mask --
     ctx.emitter
         .comment("-- prepare the dynamic eval scope access mask --");
     load_eval_context_to_arg(ctx, 0);
@@ -114,6 +115,7 @@ fn emit_branch_if_mixed_numeric_scalar(
     emitter: &mut crate::codegen_support::emit::Emitter,
     label: &str,
 ) {
+    // -- unbox a selected Mixed binding for its scalar tag --
     emitter.comment(
         "-- accept selected Mixed bindings only when they hold numeric scalars --",
     );
@@ -121,12 +123,14 @@ fn emit_branch_if_mixed_numeric_scalar(
     let tag = abi::int_result_reg(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
+            // -- accept numeric scalar tags on AArch64 --
             for value in [0, 2, 3] {
                 emitter.instruction(&format!("cmp {tag}, #{value}"));           // accept an integer, float, or boolean payload
                 emitter.instruction(&format!("b.eq {label}"));                  // retain the selective mask for this scalar
             }
         }
         Arch::X86_64 => {
+            // -- accept numeric scalar tags on x86_64 --
             for value in [0, 2, 3] {
                 emitter.instruction(&format!("cmp {tag}, {value}"));            // accept an integer, float, or boolean payload
                 emitter.instruction(&format!("je {label}"));                    // retain the selective mask for this scalar
@@ -137,11 +141,18 @@ fn emit_branch_if_mixed_numeric_scalar(
 
 /// Branches to one scope-access label without changing the saved runtime mask.
 fn emit_branch_to_eval_scope_label(ctx: &mut FunctionContext<'_>, label: &str) {
+    // -- continue at the shared eval scope access path --
     ctx.emitter
         .comment("-- continue at the shared eval scope access path --");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b {label}")),        // continue at the shared scope-mask path
-        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {label}")),       // continue at the shared scope-mask path
+        Arch::AArch64 => {
+            // -- continue at the AArch64 scope-mask path --
+            ctx.emitter.instruction(&format!("b {label}"));                     // continue at the shared scope-mask path
+        }
+        Arch::X86_64 => {
+            // -- continue at the x86_64 scope-mask path --
+            ctx.emitter.instruction(&format!("jmp {label}"));                   // continue at the shared scope-mask path
+        }
     }
 }
 

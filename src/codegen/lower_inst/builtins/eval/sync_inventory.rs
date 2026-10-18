@@ -332,13 +332,16 @@ pub(super) fn emit_branch_if_eval_name_unaccessed(
 ) {
     let bit = eval_scope_name_mask(name).trailing_zeros();
     let scratch = abi::symbol_scratch_reg(emitter);
+    // -- guard eval scope synchronization by the parsed name mask --
     emitter.comment("-- guard eval scope synchronization by the parsed name mask --");
     abi::emit_load_temporary_stack_slot(emitter, scratch, access_mask_offset);
     match emitter.target.arch {
         Arch::AArch64 => {
+            // -- skip an unaccessed AArch64 scope name --
             emitter.instruction(&format!("tbz {scratch}, #{bit}, {label}"));    // skip a native scope name the parsed dynamic fragment cannot access
         }
         Arch::X86_64 => {
+            // -- skip an unaccessed x86_64 scope name --
             emitter.instruction(&format!("bt {scratch}, {bit}"));               // test the parsed dynamic fragment's conservative name bit
             emitter.instruction(&format!("jnc {label}"));                       // skip a native scope name the parsed dynamic fragment cannot access
         }
