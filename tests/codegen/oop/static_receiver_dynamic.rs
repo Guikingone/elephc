@@ -10,6 +10,91 @@
 
 use crate::support::*;
 
+/// Repeats a null compound write whose mixed property selector requires an owned string cast.
+fn verify_nullable_mixed_name(write: &str, property: &str, verb: &str) {
+    let source = format!(r#"<?php
+class Bag {{ public array $items = [1]; public int $number = 1; }}
+class Holder {{ public static ?Bag $bag = null; }}
+function write(mixed $name): void {{
+    try {{ {write} }}
+    catch (Error $error) {{ echo $error->getMessage(), '|'; unset($error); }}
+}}
+for ($i = 0; $i < 8; $i++) {{ write('{property}'); write(str_repeat('{property}', 1)); }}
+"#);
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout,
+        format!("Attempt to {verb} property \"{property}\" on null|").repeat(16),
+        "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A nullable dynamic array compound update retires its coerced property name once.
+#[test]
+fn test_static_receiver_grok_nullable_mixed_name_array() {
+    verify_nullable_mixed_name("Holder::$bag->{$name}[0] += 1;", "items", "modify");
+}
+
+/// A nullable dynamic scalar compound update retires its coerced property name once.
+#[test]
+fn test_static_receiver_grok_nullable_mixed_name_scalar() {
+    verify_nullable_mixed_name("Holder::$bag->{$name} += 1;", "number", "assign");
+}
+
+/// Nullable dynamic array unwind ownership is independent of EIR optimization.
+#[test]
+fn test_static_receiver_grok_nullable_mixed_name_array_no_ir_opt() {
+    without_ir_opt(test_static_receiver_grok_nullable_mixed_name_array);
+}
+
+/// Nullable dynamic scalar unwind ownership is independent of EIR optimization.
+#[test]
+fn test_static_receiver_grok_nullable_mixed_name_scalar_no_ir_opt() {
+    without_ir_opt(test_static_receiver_grok_nullable_mixed_name_scalar);
+}
+
+/// Executes a direct dynamic-property array write with a name that replaces its static owner.
+fn verify_direct_dynamic_array_write(write: &str, expected: &str) {
+    let source = format!(r#"<?php
+class Bag {{ public array $items = [1]; }}
+class C {{ public static ?Bag $o = null; }}
+function name(): string {{ echo 'N'; C::$o = new Bag(); C::$o->items = [7]; return str_repeat('items', 1); }}
+function rhs(): int {{ echo 'R', json_encode(C::$o->items); return 9; }}
+C::$o = new Bag();
+{write}
+echo json_encode(C::$o->items);
+C::$o = null;
+"#);
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A computed direct array-base name selects its replacement before the compound read.
+#[test]
+fn test_static_receiver_grok_direct_dynamic_array_compound() {
+    verify_direct_dynamic_array_write("C::$o->{name()}[0] += 1;", "N[8]");
+}
+
+/// Computed names run before RHS side effects even for a one-dimensional plain write.
+#[test]
+fn test_static_receiver_grok_direct_dynamic_array_plain() {
+    verify_direct_dynamic_array_write("C::$o->{name()}[0] = rhs(); echo ':';", "NR[7]:[9]");
+}
+
+/// Direct dynamic array compound writes preserve order without EIR optimization.
+#[test]
+fn test_static_receiver_grok_direct_dynamic_array_compound_no_ir_opt() {
+    without_ir_opt(test_static_receiver_grok_direct_dynamic_array_compound);
+}
+
+/// Direct dynamic array plain writes preserve order without EIR optimization.
+#[test]
+fn test_static_receiver_grok_direct_dynamic_array_plain_no_ir_opt() {
+    without_ir_opt(test_static_receiver_grok_direct_dynamic_array_plain);
+}
+
 /// Plain and compound dynamic-hop writes use the receiver installed by a single RHS hook.
 #[test]
 fn test_static_receiver_dynamic_review_hooks() {
@@ -230,4 +315,3 @@ fn test_static_receiver_dynamic_review_computed_name_no_ir_opt() {
 fn test_static_receiver_dynamic_review_null_owners_no_ir_opt() {
     without_ir_opt(test_static_receiver_dynamic_review_null_owners);
 }
-

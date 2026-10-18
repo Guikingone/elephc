@@ -92,17 +92,19 @@ pub(super) fn guard_static_compound_property_read(
         StaticCompoundProperty::Dynamic { property, .. } => {
             let name = lower_expr(ctx, property);
             let name = property_access::coerce_runtime_property_name(ctx, name, span);
+            if root == target {
+                receiver.narrow_for_dynamic_assignment(ctx, name, rhs, span);
+            } else {
+                receiver.narrow_for_dynamic_array(ctx, name, &[rhs.value], span);
+            }
+            // The nullable guard temporarily roots the name itself. Publish the longer
+            // compound-update lease only afterward, above the narrowed receiver lease.
             let pins = pin_in_flight_owners(ctx, &[name.value], span);
             let name_temp = ctx.declare_hidden_temp(PhpType::Str);
             let borrowed = ctx.emit_value(Op::Borrow, vec![name.value], None, PhpType::Str,
                 Op::Borrow.default_effects(), Some(span));
             ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
             ctx.store_local(&name_temp, borrowed, PhpType::Str, Some(span));
-            if root == target {
-                receiver.narrow_for_dynamic_assignment(ctx, name, rhs, span);
-            } else {
-                receiver.narrow_for_dynamic_array(ctx, name, &[rhs.value], span);
-            }
             (CachedStaticCompoundProperty::Dynamic(Expr::new(
                 ExprKind::Variable(name_temp.clone()), property.span,
             )), Some(StaticCompoundDynamicName { value: name, pins, temp: name_temp }))
