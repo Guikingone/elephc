@@ -374,6 +374,13 @@ pub(super) fn emit_dynamic_new_candidate(
         &candidate.owned_reference_property_offsets,
     )?;
     ctx.store_result_value(result)?;
+    let needs_construction_guard = candidate.constructor_impl.is_some()
+        || candidate.property_initialization.uses_thunk();
+    let construction_guard_bytes = if needs_construction_guard {
+        ctx.load_value_to_result(result)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        super::super::callable_guards::begin_unconstructed_object(ctx.emitter)
+    } else { 0 };
     emit_property_initialization(ctx, result, &candidate.property_initialization)?;
     if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
         ctx.load_value_to_result(result)?;
@@ -391,6 +398,10 @@ pub(super) fn emit_dynamic_new_candidate(
             &constructor.ref_params,
             constructor.padding_thunk.as_deref(),
         )?;
+    }
+    if needs_construction_guard {
+        super::super::callable_guards::end_unconstructed_object(ctx.emitter, construction_guard_bytes);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
     }
     Ok(())
 }

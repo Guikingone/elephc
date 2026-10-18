@@ -204,6 +204,7 @@ pub(crate) fn lower_user_function(
     function.flags.by_ref_return = signature.by_ref_return;
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
+    function.source_defaults = params.iter().map(|(_, _, default, _)| default.clone()).collect();
     function.attribute_names = check_result
         .function_attribute_names
         .get(name)
@@ -1306,26 +1307,30 @@ pub(crate) fn lower_eval_native_default_helpers(
                         || (uses_eval && eval_native_default_helper_literal(&default.kind)
                             && crate::types::signatures::literal_default_exceeds_compact_depth(default))
                     {
-                        specs.push((
-                            class_name.clone(),
-                            class_info.clone(),
-                            is_static,
-                            method_name.clone(),
-                            param_index,
-                            default.clone(),
-                        ));
+                        let scope = if is_static {
+                            class_info.static_method_impl_classes.get(method_name)
+                        } else { class_info.method_impl_classes.get(method_name) }
+                            .cloned().unwrap_or_else(|| class_name.clone());
+                        specs.push((eval_native_default_helper_name(
+                            class_info.class_id, is_static, method_name, param_index,
+                        ), Some(scope), default.clone()));
                     }
                 }
             }
         }
     }
-    for (class_name, class_info, is_static, method_name, param_index, default) in specs {
-        let function_name = eval_native_default_helper_name(
-            class_info.class_id,
-            is_static,
-            &method_name,
-            param_index,
-        );
+    let mut functions = check_result.functions.iter().collect::<Vec<_>>();
+    functions.sort_by_key(|(name, _)| name.as_str());
+    for (name, signature) in functions {
+        for (index, default) in signature.defaults.iter().enumerate() {
+            let Some(default) = default else { continue; };
+            if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_)) {
+                specs.push((format!("__elephc_eval_default\\function\\{name}\\{index}"),
+                    None, default.clone()));
+            }
+        }
+    }
+    for (function_name, default_scope, default) in specs {
         if module.functions.iter().any(|function| function.name == function_name) {
             continue;
         }
@@ -1335,12 +1340,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             PhpType::Mixed,
         );
         function.flags.is_synthetic = true;
-        let default_scope = if is_static {
-            class_info.static_method_impl_classes.get(&method_name)
-        } else {
-            class_info.method_impl_classes.get(&method_name)
-        }.cloned().unwrap_or_else(|| class_name.clone());
-        function.lexical_class = Some(default_scope.clone());
+        function.lexical_class = default_scope.clone();
         function.callable_default = Some(default.clone());
         let signature = FunctionSig {
             params: Vec::new(),
@@ -1394,7 +1394,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.mixed_storage_store_sites,
             function_name.clone(),
             constants,
-            Some(default_scope),
+            default_scope,
             PhpType::Mixed,
             true,
             &[],

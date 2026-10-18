@@ -8,7 +8,7 @@
 //! - Constructor names never replace the lexical scope of their arguments.
 //! - Free-function defaults cannot borrow the caller's class scope.
 
-use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
+use crate::support::{compile_and_run, compile_and_run_with_heap_debug, without_ir_opt};
 
 /// Checks the observable value and retirement of every native owner.
 fn check(source: &str, expected: &str) {
@@ -16,6 +16,11 @@ fn check(source: &str, expected: &str) {
     assert!(out.success, "stdout={}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, expected, "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Checks reflection semantics separately from its general metadata-graph ownership coverage.
+fn check_reflection(source: &str, expected: &str) {
+    assert_eq!(compile_and_run(source), expected);
 }
 
 /// Nested self factories bind to the declaring class or trait consumer across caller scopes.
@@ -144,4 +149,143 @@ try { make(); } catch (Error $error) { echo $error->getMessage(); unset($error);
 #[test]
 fn test_nested_default_grok_third_review_scalar_unbound_factory_no_ir_opt() {
     without_ir_opt(test_nested_default_grok_third_review_scalar_unbound_factory);
+}
+
+/// Native descriptors evaluate nested free-function factories in their empty class scope.
+#[test]
+fn test_nested_default_grok_fourth_review_free_object_callback() {
+    check(r#"<?php
+class Wrapper { public function __construct(public object $inner) { echo 'WRONG'; } }
+function make(object $value = new Wrapper(new self)): object { return $value; }
+function other(): object { return new stdClass(); }
+$factories = [make(...), other(...)];
+$factory = $factories[$argc - 1];
+try { $factory(); } catch (Error $error) { echo $error->getMessage(); unset($error); }
+unset($factory, $factories);
+"#, "Cannot access \"self\" when no class scope is active");
+}
+
+/// String callback binding raises a catchable Error for a nested relative constant default.
+#[test]
+fn test_nested_default_grok_fourth_review_free_array_callback() {
+    check(r#"<?php
+function make($value = [self::A]): mixed { return $value; }
+$names = ['make', 'strlen'];
+$name = $names[$argc - 1];
+try { call_user_func($name); } catch (Error $error) { echo $error->getMessage(); unset($error); }
+unset($name, $names);
+"#, "Cannot access \"self\" when no class scope is active");
+}
+
+/// AOT free-function reflection keeps constant spelling independently of deferred evaluation.
+#[test]
+fn test_nested_default_grok_fourth_review_free_reflection_constant() {
+    check_reflection(r#"<?php
+function first($value = self::A): mixed { return $value; }
+function second($value = parent::A): mixed { return $value; }
+$function = new ReflectionFunction('first');
+$parameters = $function->getParameters();
+$parameter = $parameters[0];
+echo (int)$parameter->isDefaultValueAvailable(), ':', (int)$parameter->isDefaultValueConstant(),
+    ':', $parameter->getDefaultValueConstantName(), '|';
+try { $parameter->getDefaultValue(); } catch (Error $error) { echo $error->getMessage(), '|'; unset($error); }
+$other = new ReflectionParameter('second', 0);
+echo (int)$other->isDefaultValueConstant(), ':', $other->getDefaultValueConstantName();
+unset($function, $parameter, $parameters, $other);
+"#, "1:1:self::A|Cannot access \"self\" when no class scope is active|1:parent::A");
+}
+
+/// Eval transports nested free-function defaults as owned data rather than fatal invoker fallbacks.
+#[test]
+fn test_nested_default_grok_fourth_review_free_nested_eval() {
+    check(r#"<?php
+class Wrapper { public function __construct(public object $inner) { echo 'WRONG'; } }
+function first($value = [self::A]): mixed { return $value; }
+function second(object $value = new Wrapper(new parent)): object { return $value; }
+function run(string $source): mixed { return eval($source); }
+echo run('try { first(); } catch (Error $error) { return $error->getMessage(); }'), '|';
+echo run('try { second(); } catch (Error $error) { return $error->getMessage(); }');
+"#, "Cannot access \"self\" when no class scope is active|Cannot access \"parent\" when no class scope is active");
+}
+
+/// Eval ReflectionFunction sees native root and nested defaults without executing them eagerly.
+#[test]
+fn test_nested_default_grok_fourth_review_free_eval_reflection() {
+    check_reflection(r#"<?php
+function first(object $value = new self): object { return $value; }
+function second($value = [parent::A]): mixed { return $value; }
+function run(string $source): mixed { return eval($source); }
+echo run('$r = new ReflectionFunction("first"); $p = $r->getParameters()[0]; echo (int)$p->isDefaultValueAvailable(), ":"; try { $p->getDefaultValue(); } catch (Error $e) { return $e->getMessage(); }'), '|';
+echo run('$r = new ReflectionFunction("second"); $p = $r->getParameters()[0]; echo (int)$p->isDefaultValueAvailable(), ":"; try { $p->getDefaultValue(); } catch (Error $e) { return $e->getMessage(); }');
+"#, "1:Cannot access \"self\" when no class scope is active|1:Cannot access \"parent\" when no class scope is active");
+}
+
+/// Eval reflection retains the same source constant names as native free-function reflection.
+#[test]
+fn test_nested_default_grok_fourth_review_free_eval_constant_names() {
+    check_reflection(r#"<?php
+function first($value = self::A): mixed { return $value; }
+function second($value = parent::A): mixed { return $value; }
+function run(string $source): mixed { return eval($source); }
+echo run('$p = new ReflectionParameter("first", 0); echo (int)$p->isDefaultValueConstant(), ":", $p->getDefaultValueConstantName(), "|"; $p = new ReflectionParameter("second", 0); echo (int)$p->isDefaultValueConstant(), ":", $p->getDefaultValueConstantName();');
+"#, "1:self::A|1:parent::A");
+}
+
+/// Free-function deferred defaults and reflection metadata agree without EIR optimization.
+#[test]
+fn test_nested_default_grok_fourth_review_free_without_ir_opt() {
+    without_ir_opt(|| {
+        test_nested_default_grok_fourth_review_free_object_callback();
+        test_nested_default_grok_fourth_review_free_array_callback();
+        test_nested_default_grok_fourth_review_free_reflection_constant();
+        test_nested_default_grok_fourth_review_free_nested_eval();
+        test_nested_default_grok_fourth_review_free_eval_reflection();
+        test_nested_default_grok_fourth_review_free_eval_constant_names();
+    });
+}
+
+/// Property reflection keeps a class-constant-selected default tree available and lazy.
+#[test]
+fn test_nested_default_grok_fourth_review_property_conditional_reflection() {
+    check_reflection(r#"<?php
+class Probe { const ENABLED = true; public array $items = [self::ENABLED ? 'ok' : parent::A]; }
+$property = new ReflectionProperty('Probe', 'items');
+echo (int)$property->hasDefaultValue(), ':', json_encode($property->getDefaultValue()), '|';
+$class = new ReflectionClass('Probe');
+echo json_encode($class->getDefaultProperties());
+unset($property, $class);
+"#, "1:[\"ok\"]|{\"items\":[\"ok\"]}");
+}
+
+/// Possible deferred property-default errors preserve the surrounding construction catch.
+#[test]
+fn test_nested_default_grok_fourth_review_property_conditional_catch() {
+    check(r#"<?php
+class Probe { const ENABLED = false; public array $items = [self::ENABLED ? 'ok' : parent::A]; }
+try { new Probe(); } catch (Error $error) { echo $error->getMessage(); unset($error); }
+"#, "Cannot access \"parent\" when current class scope has no parent");
+}
+
+/// Class and property reflection defer the selected Error until default materialization.
+#[test]
+fn test_nested_default_grok_fourth_review_property_conditional_reflection_error() {
+    check_reflection(r#"<?php
+class Probe { const ENABLED = false; public array $items = [self::ENABLED ? 'ok' : parent::A]; }
+$property = new ReflectionProperty('Probe', 'items');
+echo (int)$property->hasDefaultValue(), '|';
+try { $property->getDefaultValue(); } catch (Error $error) { echo $error->getMessage(), '|'; }
+$class = new ReflectionClass('Probe');
+echo 'created|';
+try { $class->getDefaultProperties(); } catch (Error $error) { echo $error->getMessage(); }
+"#, "1|Cannot access \"parent\" when current class scope has no parent|created|Cannot access \"parent\" when current class scope has no parent");
+}
+
+/// Conditional property defaults retain reflection and catch behavior without EIR optimization.
+#[test]
+fn test_nested_default_grok_fourth_review_property_without_ir_opt() {
+    without_ir_opt(|| {
+        test_nested_default_grok_fourth_review_property_conditional_reflection();
+        test_nested_default_grok_fourth_review_property_conditional_catch();
+        test_nested_default_grok_fourth_review_property_conditional_reflection_error();
+    });
 }

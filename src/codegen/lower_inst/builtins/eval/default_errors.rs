@@ -38,7 +38,8 @@ pub(super) fn register_eval_native_param_default_error(
     if !matches!(default.kind, ExprKind::Throw(_)) {
         register_native_reflection_factory(ctx, context_offset, key, index, default,
             default_context, if symbol.contains("_constructor_") { 2 }
-                else if symbol.contains("_static_method_") { 1 } else { 0 });
+                else if symbol.contains("_static_method_") { 1 }
+                else if symbol.contains("_function_") { 3 } else { 0 });
     }
     true
 }

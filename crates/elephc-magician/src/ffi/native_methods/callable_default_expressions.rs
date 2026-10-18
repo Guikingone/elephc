@@ -11,6 +11,18 @@
 
 use super::*;
 
+/// Registers a nested free-function default with an explicitly empty lexical class scope.
+///
+/// # Safety
+/// The context and borrowed UTF-8 buffers must remain valid for their declared lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_expression(
+    ctx: *mut ElephcEvalContext, key: *const u8, key_len: u64, index: u64,
+    source: *const u8, source_len: u64,
+) -> i32 {
+    register_expression(ctx, key, key_len, index, source, source_len, 3)
+}
+
 /// Registers a nested instance-method default expression.
 ///
 /// # Safety
@@ -63,7 +75,7 @@ unsafe fn register_expression(
         if statements.len() != 1 { return 0; }
         let Some(crate::eval_ir::EvalStmt::Return(Some(mut expression))) = statements.pop()
             else { return 0; };
-        let mut lexical_class = if kind == 2 { name }
+        let mut lexical_class = if kind == 3 { String::new() } else if kind == 2 { name }
             else { let Some((class, _)) = name.rsplit_once("::") else { return 0; }; class.to_string() };
         if let crate::eval_ir::EvalExpr::Call { name, args } = &expression {
             if name == "__elephc_default_lexical_scope" {
@@ -80,7 +92,10 @@ unsafe fn register_expression(
         let default = NativeCallableDefault::Expression {
             expression: Box::new(expression), lexical_class, reflection_factory: None,
         };
-        if kind == 2 {
+        if kind == 3 {
+            crate::ffi::native_functions::register_native_function_param_default_inner(
+                ctx, key, key_len, index, default)
+        } else if kind == 2 {
             register_native_constructor_param_default_inner(ctx, key, key_len, index, default)
         } else {
             register_native_method_param_default_inner(ctx, key, key_len, kind == 1, index, default)
@@ -102,21 +117,30 @@ pub unsafe extern "C" fn __elephc_eval_register_native_param_default_factory(
         let Some(context) = ctx.as_mut() else { return 0; };
         if context.abi_version() != ABI_VERSION { return 0; }
         let Ok(name) = abi_name_to_string(key, key_len) else { return 0; };
-        let signature = if kind == 2 { context.native_constructor_signature(&name) } else {
-            let Some((class, method)) = name.rsplit_once("::") else { return 0; };
-            match kind {
-                0 => context.native_method_signature(class, method),
-                1 => context.native_static_method_signature(class, method),
-                _ => return 0,
-            }
-        };
-        let Some(signature) = signature else { return 0; };
         let Ok(position) = usize::try_from(index) else { return 0; };
-        let Some(mut default) = signature.param_default(position).cloned() else { return 0; };
+        let default = if kind == 3 {
+            context.native_function(&name.to_ascii_lowercase())
+                .and_then(|function| function.param_default(position).cloned())
+        } else {
+            let signature = if kind == 2 { context.native_constructor_signature(&name) } else {
+                let Some((class, method)) = name.rsplit_once("::") else { return 0; };
+                match kind {
+                    0 => context.native_method_signature(class, method),
+                    1 => context.native_static_method_signature(class, method),
+                    _ => return 0,
+                }
+            };
+            let Some(signature) = signature else { return 0; };
+            signature.param_default(position).cloned()
+        };
+        let Some(mut default) = default else { return 0; };
         let NativeCallableDefault::Expression { reflection_factory, .. } = &mut default
             else { return 0; };
         *reflection_factory = Some(factory);
-        if kind == 2 {
+        if kind == 3 {
+            crate::ffi::native_functions::register_native_function_param_default_inner(
+                ctx, key, key_len, index, default)
+        } else if kind == 2 {
             register_native_constructor_param_default_inner(ctx, key, key_len, index, default)
         } else {
             register_native_method_param_default_inner(ctx, key, key_len, kind == 1, index, default)

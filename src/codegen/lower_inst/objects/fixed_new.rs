@@ -148,7 +148,8 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
-    let construction_guard_bytes = if constructor_impl.is_some() {
+    let needs_construction_guard = constructor_impl.is_some() || property_initialization.uses_thunk();
+    let construction_guard_bytes = if needs_construction_guard {
         ctx.load_value_to_result(result)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         super::super::callable_guards::begin_unconstructed_object(ctx.emitter)
@@ -172,6 +173,8 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             &constructor.ref_params,
             None,
         )?;
+    }
+    if needs_construction_guard {
         super::super::callable_guards::end_unconstructed_object(ctx.emitter, construction_guard_bytes);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
     }

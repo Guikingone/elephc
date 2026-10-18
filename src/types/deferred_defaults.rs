@@ -1,14 +1,29 @@
 //! Purpose:
-//! Shares normalized default-error tree queries between checking, optimization and lowering.
+//! Shares normalized default-error queries and source constant names across compiler consumers.
 //!
 //! Called from:
 //! - Method exception analysis, omitted-argument ownership and native default helper generation.
+//! - Native and eval reflection parameter-default metadata.
 //!
 //! Key details:
 //! - Finding a possible error is distinct from selecting an unconditional property error.
 //! - Lazy branches retain their expression structure rather than becoming eager root errors.
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
+
+/// Preserves a declared class-constant spelling independently of its normalized value or Error.
+pub(crate) fn source_constant_name(default: &Expr) -> Option<String> {
+    use crate::parser::ast::StaticReceiver;
+    let ExprKind::ScopedConstantAccess { receiver, name } = &default.kind else { return None; };
+    let receiver = match receiver.written_class_receiver() {
+        StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
+        StaticReceiver::Self_ => "self".into(),
+        StaticReceiver::Parent => "parent".into(),
+        StaticReceiver::Static => "static".into(),
+        StaticReceiver::Generic(_) => return None,
+    };
+    Some(format!("{receiver}::{name}"))
+}
 
 /// Returns whether any normalized default node can raise a deferred lexical Error.
 pub(crate) fn contains_deferred_error(expr: &Expr) -> bool {

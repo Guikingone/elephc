@@ -37,7 +37,7 @@ pub(super) fn reflection_class_property_member(
         )
     })?;
     let type_metadata = reflection_property_type_metadata(info, property_name);
-    let default_value = reflection_property_default_value(info, property_name);
+    let default_value = reflection_property_default_value(ctx, info, property_name);
     let declaring_class_name = reflection_property_declaring_class_name(info, property_name)
         .or_else(|| {
             (is_reflection_enum(ctx, class_name) && property_name == "name")
@@ -266,11 +266,13 @@ pub(super) fn reflection_property_hook_parameter_member(
 
 /// Returns supported default metadata for one reflected property.
 pub(super) fn reflection_property_default_value(
+    ctx: &FunctionContext<'_>,
     info: &crate::types::ClassInfo,
     property_name: &str,
 ) -> Option<ReflectionParameterDefaultValue> {
     if let Some((index, (name, _))) = info.visible_property(property_name) {
         return reflection_property_slot_default_value(
+            ctx, reflection_property_declaring_class_name(info, property_name).as_deref(),
             info.property_slot_is_declared(index, name),
             info.defaults.get(index).and_then(Option::as_ref),
         );
@@ -280,6 +282,7 @@ pub(super) fn reflection_property_default_value(
         .position(|(name, _)| name == property_name)
         .and_then(|index| {
             reflection_property_slot_default_value(
+                ctx, reflection_property_declaring_class_name(info, property_name).as_deref(),
                 info.declared_static_properties.contains(property_name),
                 info.static_defaults.get(index).and_then(Option::as_ref),
             )
@@ -288,6 +291,8 @@ pub(super) fn reflection_property_default_value(
 
 /// Converts one physical property slot default into PHP Reflection metadata.
 pub(super) fn reflection_property_slot_default_value(
+    ctx: &FunctionContext<'_>,
+    declaring_class: Option<&str>,
     is_declared: bool,
     default: Option<&Expr>,
 ) -> Option<ReflectionParameterDefaultValue> {
@@ -295,6 +300,7 @@ pub(super) fn reflection_property_slot_default_value(
         Some(default) => reflection_deferred_default_value(default)
             .or_else(|| crate::types::deferred_defaults::unconditional_error_message(default)
                 .map(|message| ReflectionParameterDefaultValue::DeferredError(message.to_string())))
+            .or_else(|| reflection_folded_property_default(ctx, declaring_class, default))
             .or_else(|| reflection_literal_parameter_default_value(default)),
         None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
         None => None,

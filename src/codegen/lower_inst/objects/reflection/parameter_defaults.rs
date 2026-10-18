@@ -20,10 +20,11 @@ pub(super) fn reflection_parameter_default_value(
         return Ok(Some(value));
     }
     if let Some(helper) = ctx.module.functions.iter().chain(ctx.module.closures.iter())
-        .find(|function| function.lexical_class.as_deref().is_some_and(|scope|
+        .find(|function| (function.lexical_class.is_none() && current_class.is_empty()
+            || function.lexical_class.as_deref().is_some_and(|scope|
             scope == current_class || current_info.is_some_and(|info|
                 info.method_impl_classes.values().chain(info.static_method_impl_classes.values())
-                    .any(|owner| owner == scope)))
+                    .any(|owner| owner == scope))))
             && function.callable_default.as_ref()
                 .is_some_and(|value| value == default && value.span == default.span))
     {
@@ -291,33 +292,7 @@ pub(super) fn reflection_parameter_default_from_constant_value(
 
 /// Returns PHP's constant-name metadata for parameter defaults that name a class constant.
 pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Option<String> {
-    match &default.kind {
-        ExprKind::ScopedConstantAccess { receiver, name } => Some(format!(
-            "{}::{}",
-            reflection_static_receiver_label(receiver),
-            name
-        )),
-        _ => None,
-    }
-}
-
-/// Returns the PHP source-visible receiver label for ReflectionParameter constant defaults.
-pub(super) fn reflection_static_receiver_label(receiver: &StaticReceiver) -> String {
-    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
-    // it, and this pass can run on a generic function's template body — which is
-    // walked and then stripped, never instantiated.
-    let receiver = &receiver.written_class_receiver();
-    match receiver {
-        // A generic receiver is instantiated into an ordinary named one before type checking;
-        // a template has no class to reach through.
-        StaticReceiver::Generic(_) => unreachable!(
-            "StaticReceiver::Generic must be instantiated by generics::classes"
-        ),
-        StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
-        StaticReceiver::Self_ => "self".to_string(),
-        StaticReceiver::Static => "static".to_string(),
-        StaticReceiver::Parent => "parent".to_string(),
-    }
+    crate::types::deferred_defaults::source_constant_name(default)
 }
 
 /// Converts a normalized parameter type into a supported `ReflectionType` subset.

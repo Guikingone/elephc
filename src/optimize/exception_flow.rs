@@ -387,6 +387,8 @@ impl ExceptionFlowAnalysis {
             constructor_default_errors: type_metadata.map(|(_, classes, _)| {
                 classes.iter().filter(|(_, class)| {
                     class.deferred_property_default_error.is_some()
+                        || class.defaults.iter().flatten()
+                            .any(crate::types::deferred_defaults::contains_deferred_error)
                         || class.methods.get("__construct").is_some_and(|signature| {
                             signature.defaults.iter().flatten()
                                 .any(crate::types::deferred_defaults::contains_deferred_error)

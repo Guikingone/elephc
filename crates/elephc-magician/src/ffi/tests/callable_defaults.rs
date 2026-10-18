@@ -10,6 +10,49 @@
 
 use super::*;
 
+/// Free-function deferred trees own their source, use no class scope and retain protected factories.
+#[test]
+fn register_native_free_function_deferred_defaults() {
+    let mut context = ElephcEvalContext::new();
+    let name = b"FREE_DEFAULT";
+    let message = b"missing lexical scope";
+    let mut source = b"return [__elephc_deferred_default_error('missing lexical scope')];".to_vec();
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_function(&mut context,
+            name.as_ptr(), name.len() as u64, 1usize as *mut c_void,
+            Some(fake_native_invoker), 1), 1);
+        assert_eq!(__elephc_eval_register_native_function_param_default_error(&mut context,
+            name.as_ptr(), name.len() as u64, 0, message.as_ptr(), message.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_function_param_default_error(&mut context,
+            name.as_ptr(), name.len() as u64, 1, message.as_ptr(), message.len() as u64), 0);
+        assert_eq!(context.native_function("free_default").unwrap().param_default(0),
+            Some(&NativeCallableDefault::DeferredError("missing lexical scope".into())));
+        let constant = b"self::A";
+        assert_eq!(__elephc_eval_register_native_function_param_default_constant_name(&mut context,
+            name.as_ptr(), name.len() as u64, 0, constant.as_ptr(), constant.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_function_param_default_constant_name(&mut context,
+            name.as_ptr(), name.len() as u64, 1, constant.as_ptr(), constant.len() as u64), 0);
+        assert_eq!(__elephc_eval_register_native_function_param_default_expression(&mut context,
+            name.as_ptr(), name.len() as u64, 0, source.as_ptr(), source.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_param_default_factory(&mut context,
+            name.as_ptr(), name.len() as u64, 0, 3, 0x1000), 1);
+        assert_eq!(__elephc_eval_register_native_function_param_default_expression(&mut context,
+            name.as_ptr(), name.len() as u64, 1, source.as_ptr(), source.len() as u64), 0);
+    }
+    source.fill(0);
+    let function = context.native_function("free_default").unwrap();
+    assert_eq!(function.param_default_constant_name(0), Some("self::A"));
+    let Some(NativeCallableDefault::Expression { expression, lexical_class, reflection_factory }) = function.param_default(0)
+        else { panic!("retain free-function expression"); };
+    assert!(lexical_class.is_empty());
+    assert_eq!(*reflection_factory, Some(0x1000));
+    assert!(format!("{expression:?}").contains("DeferredDefaultError"));
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_function_param_default_expression(&mut context,
+            name.as_ptr(), name.len() as u64, 0, std::ptr::null(), 1), 0);
+    }
+}
+
 /// Nested error trees are copied into all native signature kinds without running PHP.
 #[test]
 fn register_native_default_expression_preserves_owned_trees() {

@@ -48,6 +48,17 @@ class NestedMethodConsumer {
     public function instance(array $items = ['key' => [parent::A]]): array { return $items; }
     public function __construct(array $items = [parent::A]) {}
 }
+function freeRoot(int $value = self::A): int { return $value; }
+function freeNested(array $values = [parent::A]): array { return $values; }
+$freeParameter = new ReflectionParameter('freeRoot', 0);
+echo $freeParameter->isDefaultValueConstant(), $freeParameter->getDefaultValueConstantName();
+try { freeNested(); } catch (Error $error) { echo 'free-nested'; }
+class SelectedDefaultError {
+    const ENABLED = false;
+    public array $items = [self::ENABLED ? 'ok' : parent::A];
+}
+$selectedClass = new ReflectionClass('SelectedDefaultError');
+try { $selectedClass->getDefaultProperties(); } catch (Error $error) { echo 'class-default'; }
 $nestedParameter = new ReflectionParameter([NestedMethodConsumer::class, 'value'], 0);
 echo $nestedParameter->isDefaultValueAvailable();
 try { $nestedParameter->getDefaultValue(); } catch (Error $error) { echo 'nested-reflection'; }
@@ -137,9 +148,16 @@ echo (new MethodConsumer())->value(7), MethodConsumer::staticValue(value: 8);
     }
     for symbol in ["__elephc_eval_register_native_method_param_default_expression",
         "__elephc_eval_register_native_static_method_param_default_expression",
-        "__elephc_eval_register_native_constructor_param_default_expression"] {
+        "__elephc_eval_register_native_constructor_param_default_expression",
+        "__elephc_eval_register_native_function_param_default_expression",
+        "__elephc_eval_register_native_function_param_default_error",
+        "__elephc_eval_register_native_function_param_default_constant_name"] {
         assert!(assembly.contains(symbol), "{target_name}: missing nested default expression registration {symbol}");
     }
+    assert!(module.class_infos["ReflectionClass"].visible_property_index("__default_error").is_some(),
+        "{target_name}: class defaults retain lazy Errors separately from their cached values");
+    assert!(module.functions.iter().any(|function| function.lexical_class.is_none()
+        && function.callable_default.is_some()), "{target_name}: free defaults have unscoped helpers");
     assert_eq!(module.functions.iter().filter(|function| {
         function.lexical_class.as_deref() == Some("NestedMethodConsumer")
             && function.callable_default.is_some()

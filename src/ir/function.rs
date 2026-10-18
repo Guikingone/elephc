@@ -62,6 +62,8 @@ pub struct Function {
     pub entry: BlockId,
     pub source_signature: Option<String>,
     pub signature: Option<FunctionSig>,
+    /// Source spelling of free-function defaults, separate from normalized executable defaults.
+    pub source_defaults: Vec<Option<crate::parser::ast::Expr>>,
     pub attribute_names: Vec<String>,
     pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
     /// PHP lexical class scope inherited by methods and closures declared inside them.
@@ -119,6 +121,7 @@ impl Function {
             attribute_args: Vec::new(),
             lexical_class: None,
             callable_default: None,
+            source_defaults: Vec::new(),
             flags: FunctionFlags::default(),
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
         }
