@@ -826,6 +826,7 @@ pub(super) fn eval_reflection_native_callable_default_expr(default: &NativeCalla
     match default {
         NativeCallableDefault::DeferredError(message) => EvalExpr::DeferredDefaultError(message.clone()),
         NativeCallableDefault::Expression { expression, .. } => *expression.clone(),
+        NativeCallableDefault::ExecutablePath => EvalExpr::ConstFetch("PHP_BINARY".to_string()),
         NativeCallableDefault::Null => EvalExpr::Const(EvalConst::Null),
         NativeCallableDefault::Bool(value) => EvalExpr::Const(EvalConst::Bool(*value)),
         NativeCallableDefault::Int(value) => EvalExpr::Const(EvalConst::Int(*value)),

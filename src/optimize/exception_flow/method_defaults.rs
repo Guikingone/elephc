@@ -1,8 +1,8 @@
 //! Purpose:
-//! Tracks deferred method-default errors separately from clean method bodies.
+//! Tracks deferred callable-default errors separately from clean function and method bodies.
 //!
 //! Called from:
-//! - `ExceptionFlowAnalysis::from_program()` and exact method-call exception queries.
+//! - `ExceptionFlowAnalysis::from_program()` and function/method call exception queries.
 //!
 //! Key details:
 //! - The shared argument planner determines which defaults may be selected.
@@ -10,6 +10,19 @@
 
 use super::*;
 use crate::types::call_args::plan_call_args;
+
+/// Retains nonliteral free-function defaults when only the source AST is available.
+pub(super) fn collect_unresolved_functions(program: &[Stmt], functions: &mut HashSet<String>) {
+    for statement in program {
+        match &statement.kind {
+            StmtKind::FunctionDecl { name, params, .. } if params.iter().any(|(_, _, default, _)| {
+                default.as_ref().is_some_and(default_requires_metadata)
+            }) => { functions.insert(name.clone()); }
+            StmtKind::NamespaceBlock { body, .. } => collect_unresolved_functions(body, functions),
+            _ => {}
+        }
+    }
+}
 
 /// Keeps unresolved default expressions conservative for the AST-only compatibility API.
 pub(super) fn collect_unresolved(

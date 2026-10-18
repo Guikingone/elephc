@@ -77,6 +77,25 @@ pub(super) fn apply_properties(
             let priority = usize::from(prop.is_static) * 2 + usize::from(imported);
             default_errors[priority].get_or_insert_with(|| message.to_string());
         }
+        if prop.attributes.iter().flat_map(|group| &group.attributes)
+            .any(|attribute| super::super::validation::matches_global_builtin_attribute(attribute, "Override"))
+        {
+            let inherited = if prop.is_static {
+                state.static_property_declaring_classes.contains_key(&prop.name)
+                    && state.static_property_visibilities.get(&prop.name) != Some(&Visibility::Private)
+            } else {
+                state.property_declaring_classes.contains_key(&prop.name)
+                    && state.property_visibilities.get(&prop.name) != Some(&Visibility::Private)
+                    || class.implements.iter().chain(&state.interfaces).any(|interface| {
+                        checker.interfaces.get(interface)
+                            .is_some_and(|info| info.properties.contains_key(&prop.name))
+                    })
+            };
+            if !inherited {
+                return Err(CompileError::new(class.span, &format!(
+                    "{}::${} has #[\\Override] attribute, but no matching parent property was found", class.name, prop.name)));
+            }
+        }
         if prop.is_static {
             apply_static_property(state, class, checker, prop)?;
         } else {

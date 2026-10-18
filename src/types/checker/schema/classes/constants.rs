@@ -29,6 +29,7 @@ enum ParentScope<'a> {
     ValidateLazyConstants,
     ValidateLazyCallableDefaults,
     NoClass,
+    NoClassFunction,
 }
 
 impl<'a> From<Option<&'a str>> for ParentScope<'a> {
@@ -103,6 +104,13 @@ pub(crate) fn normalize_lexical_default_in_scope(
     Ok(rewritten)
 }
 
+/// Free functions defer relative factories/constants but reject unbound class-name literals.
+pub(crate) fn normalize_free_function_default_in_scope(value: &Expr) -> Result<Expr, CompileError> {
+    let mut rewritten = rewrite_expr(value, "", ParentScope::NoClassFunction)?;
+    crate::types::deferred_defaults::prune_literal_branches(&mut rewritten);
+    Ok(rewritten)
+}
+
 /// Identifies errors that can remain lazy in imported or ordinary constant defaults.
 pub(crate) fn is_missing_parent_default_error(error: &CompileError) -> bool {
     matches!(error.message.as_str(),
@@ -121,7 +129,7 @@ pub(crate) fn deferred_default_error(message: String, span: Span) -> Expr {
 
 /// Defers only lexical receiver failures, retaining preceding values and lazy branch selection.
 fn callable_receiver_error_is_lazy(scope: ParentScope<'_>, error: &CompileError) -> bool {
-    matches!(scope, ParentScope::MissingCallable | ParentScope::NoClass)
+    matches!(scope, ParentScope::MissingCallable | ParentScope::NoClass | ParentScope::NoClassFunction)
         && (is_missing_parent_default_error(error) || matches!(error.message.as_str(),
             "Cannot use \"self\" when no class scope is active"
             | "Cannot access \"self\" when no class scope is active"
@@ -315,8 +323,8 @@ fn rewrite_expr(
             callee: Box::new(rewrite_expr(callee, class_name, parent_name)?),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
-        ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
-            class_name: class_name.clone(),
+        ExprKind::NewObject { class_name: constructed_class, args } => ExprKind::NewObject {
+            class_name: constructed_class.clone(),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
         ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
@@ -416,7 +424,8 @@ fn rewrite_expr(
         ExprKind::ClassConstant { receiver } => {
             let resolved = match rewrite_constant_receiver(receiver, class_name, parent_name, expr.span, true) {
                 Ok(resolved) => resolved,
-                Err(error) if callable_receiver_error_is_lazy(parent_name, &error) => {
+                Err(error) if !matches!(parent_name, ParentScope::NoClassFunction)
+                    && callable_receiver_error_is_lazy(parent_name, &error) => {
                     return Ok(deferred_default_error(error.message, expr.span));
                 }
                 Err(error) => return Err(error),
@@ -461,7 +470,7 @@ fn rewrite_expr(
                 (StaticReceiver::Parent, ParentScope::ValidateLazyConstants
                     | ParentScope::ValidateLazyCallableDefaults) => None,
                 (StaticReceiver::Parent, _) => {
-                    let message = if matches!(parent_name, ParentScope::NoClass) {
+                    let message = if matches!(parent_name, ParentScope::NoClass | ParentScope::NoClassFunction) {
                         "Cannot access \"parent\" when no class scope is active"
                     } else {
                         "Cannot access \"parent\" when current class scope has no parent"
@@ -595,8 +604,10 @@ fn rewrite_constant_receiver(
             "StaticReceiver::Generic must be instantiated by generics::classes"
         ),
         StaticReceiver::Named(name) => Ok(StaticReceiver::Named(name.clone())),
-        StaticReceiver::Self_ | StaticReceiver::Parent if matches!(parent_name, ParentScope::NoClass) => {
-            let keyword = if class_name_resolution || matches!(receiver, StaticReceiver::Self_) {
+        StaticReceiver::Self_ | StaticReceiver::Parent
+            if matches!(parent_name, ParentScope::NoClass | ParentScope::NoClassFunction) => {
+            let keyword = if matches!(receiver, StaticReceiver::Self_)
+                || (class_name_resolution && matches!(parent_name, ParentScope::NoClass)) {
                 "self"
             } else { "parent" };
             let action = if class_name_resolution { "use" } else { "access" };

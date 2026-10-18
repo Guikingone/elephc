@@ -108,8 +108,31 @@ fn test_property_default_grok_second_review_new_static() {
         "<?php class Probe { public function value($object = new static) {} }",
         "<?php $closure = function ($object = new static) {};",
         "<?php $arrow = fn($object = new static) => $object;",
+        "<?php function value($object = new static) {}",
+        "<?php function value($object = [new self, new static]) {}",
     ] {
         expect_error(source, "\"static\" is not allowed in compile-time constants");
+    }
+}
+
+/// A literal array default is still incompatible with a scalar parameter after normalization.
+#[test]
+fn test_property_default_grok_third_review_free_function_literal_type() {
+    expect_error(
+        "<?php function value(int $value = []): int { return $value; }",
+        "parameter $value expects int",
+    );
+}
+
+/// Free functions reject relative class-name literals even though closures defer them.
+#[test]
+fn test_property_default_grok_third_review_free_function_class_names() {
+    for (default, keyword) in [("self::class", "self"), ("parent::class", "parent"),
+        ("[new self, self::class]", "self"), ("[new parent, parent::class]", "parent")] {
+        expect_error(
+            &format!("<?php function value($value = {default}) {{}}"),
+            &format!("Cannot use \"{keyword}\" when no class scope is active"),
+        );
     }
 }
 

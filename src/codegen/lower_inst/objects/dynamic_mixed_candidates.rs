@@ -284,6 +284,10 @@ pub(super) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static 
         "ArrayIterator",
         "ArrayObject",
         "AssertionError",
+        "ClosedGeneratorException",
+        "CompileError",
+        "ParseError",
+        "RequestParseBodyException",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CallbackFilterIterator",
@@ -327,6 +331,10 @@ pub(super) fn known_dynamic_new_builtin_class_names() -> &'static [&'static str]
         "ArrayIterator",
         "ArrayObject",
         "AssertionError",
+        "ClosedGeneratorException",
+        "CompileError",
+        "ParseError",
+        "RequestParseBodyException",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CachingIterator",
@@ -478,6 +486,10 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
         construction_guard_bytes,
         &candidate.property_initialization,
     )?;
+    if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, construction_guard_bytes);
+        emit_regular_throwable_creation_line(ctx, result, object_reg, candidate.class_id);
+    }
     if let Some(constructor) = &candidate.constructor_impl {
         if let Some(arg_container) = constructor_arg_container {
             emit_dynamic_new_mixed_constructor_container_call_at_offset(

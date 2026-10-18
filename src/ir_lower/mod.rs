@@ -33,6 +33,7 @@ mod property_default_errors;
 mod reflection;
 mod stmt;
 mod throwable_constructors;
+mod core_methods;
 
 #[cfg(test)]
 pub(crate) mod tests;

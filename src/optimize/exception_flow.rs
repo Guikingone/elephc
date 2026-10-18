@@ -61,6 +61,8 @@ pub(super) struct ExceptionFlowAnalysis {
     instance_method_object_ref_checks: HashMap<String, bool>,
     /// Class initialization or an omitted trait constructor default can raise Error before its body.
     constructor_default_errors: HashSet<String>,
+    function_error_defaults: HashMap<String, FunctionSig>,
+    function_unresolved_defaults: HashSet<String>,
     static_method_error_defaults: HashMap<String, FunctionSig>,
     instance_method_error_defaults: HashMap<String, FunctionSig>,
     static_method_unresolved_defaults: HashMap<String, bool>,
@@ -354,7 +356,9 @@ impl ExceptionFlowAnalysis {
         let instance_method_bodies = attach_class_contexts(instance_method_bodies, &class_contexts);
         let mut static_method_unresolved_defaults = HashMap::new();
         let mut instance_method_unresolved_defaults = HashMap::new();
+        let mut function_unresolved_defaults = HashSet::new();
         if type_metadata.is_none() {
+            method_defaults::collect_unresolved_functions(program, &mut function_unresolved_defaults);
             method_defaults::collect_unresolved(program,
                 &mut static_method_unresolved_defaults, &mut instance_method_unresolved_defaults);
         }
@@ -368,6 +372,12 @@ impl ExceptionFlowAnalysis {
             function_object_ref_checks,
             static_method_object_ref_checks,
             instance_method_object_ref_checks,
+            function_error_defaults: type_metadata.map(|(functions, _, _)| functions.iter()
+                .filter(|(_, signature)| signature.defaults.iter().flatten()
+                    .any(crate::types::deferred_defaults::contains_deferred_error))
+                .map(|(name, signature)| (name.clone(), signature.clone()))
+                .collect()).unwrap_or_default(),
+            function_unresolved_defaults,
             static_method_error_defaults: type_metadata
                 .map(|(_, classes, _)| method_defaults::collect(classes, true)).unwrap_or_default(),
             instance_method_error_defaults: type_metadata
@@ -796,6 +806,12 @@ impl ExceptionFlowAnalysis {
                 }
                 if self.function_object_ref_checks.contains(name.as_str()) {
                     thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                }
+                if self.function_unresolved_defaults.contains(name.as_str())
+                    || self.function_error_defaults.get(name.as_str()).is_some_and(|signature|
+                        method_defaults::can_throw(signature, args, expr.span))
+                {
+                    thrown = thrown.combined(ThrownTypes::unknown());
                 }
                 if let Some(summary) = self.function_throws.get(name.as_str()) {
                     return thrown.combined(summary.clone());

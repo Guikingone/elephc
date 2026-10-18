@@ -407,7 +407,7 @@ pub(super) fn lower_new_dynamic(
     if owns_name { guard_descriptor_container(ctx, name_value, expr.span); }
     crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name_value, expr.span);
     if owns_name { ctx.unguard_call_argument(name_value.value, expr.span); }
-    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_expr, name_value, &args, expr) {
+    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_value, &args, expr) {
         return value;
     }
     lower_new_dynamic_generic(ctx, name_value, &args, expr)
@@ -422,7 +422,7 @@ pub(super) fn lower_new_dynamic(
 /// arrive as plain positional arguments. What survives both — a spread whose operand is
 /// only known at runtime, or named arguments the planner could not resolve to a class —
 /// is passed through the runtime argument container rather than dropped on the floor.
-fn lower_new_dynamic_generic(
+pub(super) fn lower_new_dynamic_generic(
     ctx: &mut LoweringContext<'_, '_>,
     name_value: LoweredValue,
     args: &[Expr],
@@ -476,6 +476,11 @@ pub(super) fn lower_new_dynamic_object(
 ) -> LoweredValue {
     let class_name = lower_expr(ctx, class_name);
     crate::ir_lower::property_default_errors::for_dynamic_class(ctx, class_name, expr.span);
+    if let Some(value) = lower_planned_collector_new(
+        ctx, class_name, fallback_class.as_str(), args, expr,
+    ) {
+        return value;
+    }
     let mut operands = vec![class_name.value];
     operands.extend(lower_args(ctx, args));
     let name = format!("{}|{}", fallback_class.as_str(), required_parent.as_str());
@@ -488,6 +493,30 @@ pub(super) fn lower_new_dynamic_object(
         Op::DynamicObjectNew.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Reuses fixed-class argument binding for late-bound constructors with hidden collectors.
+pub(super) fn lower_planned_collector_new(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: LoweredValue,
+    fallback: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !args.iter().any(is_spread_arg)
+        || !constructor_signature(ctx, &Name::from(fallback.to_string()))
+            .is_some_and(crate::func_args::sig_collects_surplus_args)
+    {
+        return None;
+    }
+    let candidates = dynamic_new_planned_candidate_classes(ctx, args, true);
+    if candidates.is_empty() { return None; }
+    let mixed = lower_new_dynamic_planned_value(ctx, class_name, &candidates, args, expr);
+    let ty = PhpType::Object(fallback.to_string());
+    let object = ctx.emit_owned_value(Op::MixedUnbox, vec![mixed.value], None, ty.clone(),
+        Op::mixed_unbox_effects(&ty), Some(expr.span));
+    release_coerced_source_if_owned(ctx, mixed, Some(expr.span));
+    Some(object)
 }
 
 /// Returns constructor signature metadata when available for a fixed class.
