@@ -84,7 +84,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// BUMPED TO 18 to combine generic declarations with effective readonly setter metadata
 /// and retained abstract setter contracts. Format 17 already identifies the separate
 /// native deferred-default expression layout, so it cannot identify this branch as well.
-pub(crate) const FORMAT_VERSION: u32 = 18;
+/// BUMPED TO 19 to combine retained readonly setter contracts with main's conservative
+/// caller-scope access mask. Neither earlier branch layout may read this combined format.
+pub(crate) const FORMAT_VERSION: u32 = 19;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

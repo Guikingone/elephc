@@ -168,6 +168,7 @@ mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
 mod heap_alloc;
+mod heap_grow_tail;
 mod heap_debug_check_live;
 mod heap_debug_fail;
 mod heap_debug_report;
@@ -286,6 +287,8 @@ pub use array_free_deep::emit_array_free_deep;
 /// Emit deep array free helper.
 pub use array_grow::emit_array_grow;
 /// Emit array grow helper.
+pub use heap_grow_tail::emit_heap_grow_tail;
+/// Emit heap tail-growth helper.
 pub use array_hash_union::emit_array_hash_union;
 /// Emit array hash union helper.
 pub use array_intersect::emit_array_intersect;

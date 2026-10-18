@@ -40,6 +40,7 @@ mod eval_constructors;
 mod eval_reflection_invocation;
 mod eval_global_scope;
 mod eval_escape_guard;
+mod eval_scope_access_mask;
 mod eval_native_catalog;
 mod eval_undefined_functions;
 mod operators;
