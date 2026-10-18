@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Generic instance-property nested postfix updates return the unmodified captured value.
+#[test]
+fn test_static_prefix_greptile_instance_nested_postfix() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Bag { public array $items = [[5, 9]]; }
+$bag = new Bag();
+echo $bag->items[0][0]++, '|', $bag->items[0][1]--, '|', json_encode($bag->items);
+unset($bag);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "5|9|[[6,8]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Generic property postfix captures remain separate when EIR optimizations are disabled.
+#[test]
+fn test_static_prefix_greptile_instance_nested_postfix_no_ir_opt() {
+    crate::support::without_ir_opt(test_static_prefix_greptile_instance_nested_postfix);
+}
+
 /// False parent promotion is attached before the deprecation and preserves the ordinary leaf warning.
 #[test]
 fn test_static_prefix_ninth_review_false_parent() {

@@ -149,12 +149,18 @@ pub(crate) fn desugared_element_update<'a>(
         ExprKind::NullCoalesce { value: read, default } if reads_target(read) => {
             Some(ElementUpdate::NullCoalesce { read, default })
         }
-        ExprKind::Assignment { value, prelude, result_target: None, .. } if prelude.len() == 1 => {
+        ExprKind::Assignment { value, prelude, result_target: None, .. }
+            if matches!(prelude.len(), 1 | 2) => {
             let StmtKind::Assign { name, value: read } = &prelude[0].kind else { return None; };
             if !reads_target(read) { return None; }
+            let working = if let Some(copy) = prelude.get(1) {
+                let StmtKind::Assign { name: working, value: copy } = &copy.kind else { return None; };
+                if !matches!(&copy.kind, ExprKind::Variable(source) if source == name) { return None; }
+                working
+            } else { name };
             match &value.kind {
-                ExprKind::PreIncrement(local) if local == name => Some(ElementUpdate::IncDec { increment: true }),
-                ExprKind::PreDecrement(local) if local == name => Some(ElementUpdate::IncDec { increment: false }),
+                ExprKind::PreIncrement(local) if local == working => Some(ElementUpdate::IncDec { increment: true }),
+                ExprKind::PreDecrement(local) if local == working => Some(ElementUpdate::IncDec { increment: false }),
                 _ => None,
             }
         }
