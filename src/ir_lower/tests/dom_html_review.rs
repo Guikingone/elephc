@@ -100,6 +100,20 @@ echo $doc->saveXML();
     assert!(module.functions.iter().any(|function| {
         function.name == "__elephc_dom_is_frame_element"
     }), "{target}: frame exclusions use ordinary target-aware PHP lowering");
+    let generic = super::lower_source_at_for_target(r#"<?php
+namespace GenericDefaults;
+class Entity {}
+class T {}
+function identity<T, U = T>(T $value): U { return $value; }
+function boxed<T, U = array<T>>(T $value): U { return [$value]; }
+function entity<T : Entity, U = Entity>(T $value): U { return $value; }
+function class_default<T, U = \GenericDefaults\T>(T $value): U { return new \GenericDefaults\T(); }
+echo identity(42), identity('text');
+$items = boxed(7); echo $items[0], get_class(entity(new Entity())), get_class(class_default(5));
+"#, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen_support::platform::Target::parse(target).unwrap());
+    let assembly = crate::codegen::generate_user_asm_from_ir(&generic, false, false).unwrap();
+    assert!(!assembly.is_empty(), "{target}: scoped function template defaults");
 }
 
 /// Schedules every target independently without weakening the CI timeout.

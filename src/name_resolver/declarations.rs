@@ -20,7 +20,7 @@ use crate::parser::ast::{
 };
 
 use super::expressions::resolve_expr;
-use super::names::{resolve_type_expr, resolved_class_name};
+use super::names::{resolve_type_expr, resolve_type_expr_with_type_params, resolved_class_name};
 use super::statements::{resolve_params, resolve_stmt_list};
 use super::{resolved_name, Imports, Symbols};
 
@@ -61,11 +61,11 @@ fn resolve_type_params(
             bound: param
                 .bound
                 .as_ref()
-                .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
+                .map(|ty| resolve_type_expr_with_type_params(ty, namespace, imports, symbols, type_params)),
             default: param
                 .default
                 .as_ref()
-                .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
+                .map(|ty| resolve_type_expr_with_type_params(ty, namespace, imports, symbols, type_params)),
             variance: param.variance,
         })
         .collect()

@@ -11,6 +11,30 @@
 
 use crate::support::*;
 
+/// Function template defaults preserve parameter references while class bounds stay canonical.
+#[test]
+fn dom_html_review_namespaced_generic_parameter_defaults() {
+    let out = compile_and_run(r#"<?php
+namespace App;
+class Entity { public function label(): string { return 'entity'; } }
+class T {}
+function identity<T, U = T>(T $value): U { return $value; }
+function boxed<T, U = array<T>>(T $value): U { return [$value]; }
+function entity<T : Entity, U = Entity>(T $value): U { return $value; }
+function class_default<T, U = \App\T>(T $value): U { return new \App\T(); }
+echo identity(42), '|', identity('text'), '|';
+$values = boxed(7); echo $values[0], '|', entity(new Entity())->label();
+echo '|', get_class(class_default(5));
+"#);
+    assert_eq!(out, "42|text|7|entity|App\\T");
+}
+
+/// Template defaults keep the same namespace identity without EIR optimization.
+#[test]
+fn dom_html_review_namespaced_generic_parameter_defaults_no_ir_opt() {
+    without_ir_opt(dom_html_review_namespaced_generic_parameter_defaults);
+}
+
 /// Legacy PHP keeps content after a closed body beside it, not inside the selected body.
 #[test]
 fn dom_html_ninth_review_closed_body_following_content() {
