@@ -1112,7 +1112,7 @@ The runtime also resets the concat-buffer cursor before the final `longjmp`, so 
 
 ### JSON routines
 
-**Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_pretty.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.
+**Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_integer_tree/`, `system/json_pretty.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
@@ -1142,6 +1142,17 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_throw_error` | Record a JSON error code and construct/throw `JsonException` when `JSON_THROW_ON_ERROR` is active, using the shared formatted JSON error message | `x0` = JSON_ERROR_* code | may not return |
 | `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table, including decode/validate location suffixes when active | global JSON state | `x1`/`x2` = message |
 | `__rt_json_pretty_push` / `__rt_json_pretty_pop` / `__rt_json_pretty_line` / `__rt_json_pretty_colon_space` | Maintain `_json_indent_depth` and append PHP-style pretty-print whitespace while each container encoder emits bytes. These helpers are no-ops unless `JSON_PRETTY_PRINT` is active, avoiding a second buffer walk. | current JSON state, `x11` write pointer for line/space helpers | updated formatting state / `x11` write pointer |
+
+Top-level indexed-array trees containing only integers, nested indexed arrays, and
+boxed `Mixed` values holding either of those shapes can use the bounded integer-tree
+encoder when no JSON flags are active. It first proves the complete tree and computes
+its exact byte length without allocating, then allocates one result buffer and writes
+the accepted tree without callbacks. The allocation carries `CONCAT_TEMP_HEAP_KIND`,
+so the ordinary string persistence boundary adopts that owner once instead of copying
+the bytes. Direct integer arrays with at most 3,120 slots keep the existing one-pass
+scratch encoder. Flags, recursive encoder calls, references, hashes, strings, floats,
+booleans, nulls, objects, unsupported layouts, and rejected depth or size proofs fall
+back to the general encoder before observable JSON state or ownership changes.
 
 ### Serialization routines
 
