@@ -759,12 +759,12 @@ The wider slot is why a runtime helper that walks an indexed array cannot assume
 
 When `array_push` finds that `length >= capacity`, the array grows automatically:
 
-1. `__rt_array_grow` first runs `__rt_array_ensure_unique`, so shared arrays split before reallocation
-2. Allocates a new array with **2× capacity** (minimum 8)
-3. Copies the 24-byte header and all elements to the new array
-4. Frees the previous unique storage and returns the new array pointer
+1. `__rt_array_grow` first runs `__rt_array_ensure_unique`, so shared arrays split before any storage mutation.
+2. It computes **2× capacity** (minimum 8) and the corresponding payload size.
+3. If the unique allocation ends at the current bump tail and the extension fits in the configured heap, `__rt_heap_grow_tail` advances the bump offset, updates the block size and live-byte accounting, and keeps the same array pointer. This path does not copy elements or increment allocation/free counters.
+4. Otherwise the existing fallback allocates a new array, copies the live elements, frees the previous unique storage, and returns the replacement pointer.
 
-The caller updates its stored pointer to the new array. This means arrays are truly dynamic — you can push unlimited elements (limited only by heap size). Direct indexed writes into empty arrays now also grow the backing storage and extend `length` to cover the highest written index.
+The caller always republishes the returned pointer, even though successful tail extension preserves it. A later live allocation, including a separate array, prevents tail ownership and therefore forces the allocate-copy-free fallback. Arrays remain dynamic within the configured heap limit. Direct indexed writes into empty arrays also grow the backing storage and extend `length` to cover the highest written index.
 
 ### Copy-on-write containers
 
