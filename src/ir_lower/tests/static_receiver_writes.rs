@@ -93,6 +93,24 @@ function dispatch(): void {
         if ($value instanceof Named) { echo $value->name(); }
     }
 }
+class LeasePayload {}
+class LeaseBox { public ?LeasePayload $child = null; public int $v = 0; }
+class LeaseParent {
+    public LeaseBox $child { get { LeaseHolder::$root = null; return new LeaseBox(); } }
+    public function __destruct() { throw new Exception('parent'); }
+}
+class LeaseHolder { public static ?LeaseBox $box = null; public static ?LeaseParent $root = null; }
+function writeCapturedLease(LeaseBox $source): void { LeaseHolder::$box->child = $source->child; }
+function writeChildLease(): void { LeaseHolder::$root->child->v = 7; }
+class ArrayOperandLeaf { public array $items = [1]; }
+class ArrayOperandRoot {
+    public ArrayOperandLeaf $child { get { throw new Exception('getter'); } }
+}
+class ArrayOperandHolder { public static ?ArrayOperandRoot $root = null; }
+function writeArrayRhsOwner(int $width): void { ArrayOperandHolder::$root->child->items[0] = str_repeat('n', $width); }
+function writeArrayAppendOwner(int $width): void { ArrayOperandHolder::$root->child->items[] = str_repeat('n', $width); }
+function writeArrayKeyOwner(int $width): void { ArrayOperandHolder::$root->child->items[str_repeat('k', $width)] = 1; }
+function writeMixedNameLocal(?O $object, mixed $name, mixed $value): void { $object->{$name} = (string)$value; }
 C::$o = new O(); C::$nullable = new O();
 R::$root = new Root();
 write(); writeNested(); writeChild();
@@ -105,6 +123,22 @@ C::$nullable->items[] = 3;
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    for name in ["writeArrayRhsOwner", "writeArrayAppendOwner", "writeArrayKeyOwner"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let getter = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::MethodCall)
+            .expect("the intermediate getter must be evaluated");
+        let capture = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate else { return None; };
+            let local = &function.locals[slot.as_raw() as usize];
+            (inst.op == crate::ir::Op::StoreLocal && index < getter
+                && local.kind == crate::ir::LocalKind::PhpLocal
+                && local.php_type.codegen_repr() == crate::types::PhpType::Str).then_some((index, slot))
+        }).unwrap_or_else(|| panic!("{target}: {name} must park its string in an unwind-visible PHP slot"));
+        assert!(!function.instructions[capture.0 + 1..getter].iter().any(|inst|
+            inst.op == crate::ir::Op::ReleaseLocalSlot
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(capture.1))),
+            "{target}: {name} must preserve its outer owner through the getter");
+    }
     for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested", "writeStaticAppend",
         "writeStaticElement", "writeStaticCompound", "writeStaticNestedElement", "writeInterface", "writeCompoundNull",
         "writeBareStaticCall", "writeDynamicHop", "writeDynamicHopCompound"] {

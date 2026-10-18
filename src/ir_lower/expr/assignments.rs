@@ -465,7 +465,9 @@ pub(super) fn lower_dynamic_property_assign(
         let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         let value = lower_expr(ctx, value);
+        unpin_in_flight_owners(ctx, property_pins, span);
         (receiver, property, ctx.borrow_write_operand_if_needed(value, span))
     };
     receiver.narrow_for_dynamic_assignment(ctx, property, value, span);

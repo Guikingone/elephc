@@ -10,6 +10,92 @@
 
 use crate::support::*;
 
+/// Checks temporary key and RHS owners across a delayed array-property receiver getter.
+fn verify_array_operands_throwing_getter(operation: &str) {
+    let operation = operation.replace("$argc + 7", "$width").replace("$argc", "$width");
+    let source = r#"<?php
+class SlotBox { public array $items = [1]; }
+class ParentBox { public SlotBox $child { get { throw new Exception('getter'); } } }
+class Holder { public static ?ParentBox $value = null; }
+function run(int $width, mixed $payload): void {
+Holder::$value = new ParentBox();
+for ($i = 0; $i < 16; $i++) {
+    try { UPDATE }
+    catch (Exception $error) { echo 'caught|'; unset($error); }
+}
+Holder::$value = null;
+}
+run($argc + 7, 'payload');
+"#.replace("UPDATE", &operation);
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|".repeat(16), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Statement array writes retain their fresh RHS until delayed traversal completes.
+#[test]
+fn test_static_receiver_grok_array_rhs_throwing_getter() {
+    verify_array_operands_throwing_getter("Holder::$value->child->items[0] = str_repeat('n', $argc + 7);");
+    verify_array_operands_throwing_getter("Holder::$value->child->items[] = str_repeat('n', $argc + 7);");
+}
+
+/// Array RHS traversal guards are independent of EIR optimization.
+#[test]
+fn test_static_receiver_grok_array_rhs_throwing_getter_no_ir_opt() {
+    without_ir_opt(test_static_receiver_grok_array_rhs_throwing_getter);
+}
+
+/// Replayable mixed casts remain guarded even when no PHP RHS capture is synthesized.
+#[test]
+fn test_static_receiver_grok_array_cast_rhs_throwing_getter() {
+    verify_array_operands_throwing_getter("Holder::$value->child->items[0] = (string)$payload;");
+    verify_array_operands_throwing_getter("Holder::$value->child->items[] = (string)$payload;");
+}
+
+/// Replayable RHS cast guards are independent of EIR optimization.
+#[test]
+fn test_static_receiver_grok_array_cast_rhs_throwing_getter_no_ir_opt() {
+    without_ir_opt(test_static_receiver_grok_array_cast_rhs_throwing_getter);
+}
+
+/// An independently allocated array key stays unwind-visible through receiver getters.
+#[test]
+fn test_static_receiver_grok_array_key_throwing_getter() {
+    verify_array_operands_throwing_getter("Holder::$value->child->items[str_repeat('k', $argc)] = 1;");
+}
+
+/// Array key traversal guards are independent of EIR optimization.
+#[test]
+fn test_static_receiver_grok_array_key_throwing_getter_no_ir_opt() {
+    without_ir_opt(test_static_receiver_grok_array_key_throwing_getter);
+}
+
+/// Ordinary instance writes also guard a coerced name while a replayable RHS cast throws.
+#[test]
+fn test_static_receiver_grok_instance_name_throwing_cast() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Text { public function __toString(): string { throw new Exception('cast'); } }
+class Box { public string $slot = 'old'; }
+function write(mixed $name): void {
+    $box = new Box(); $text = new Text();
+    try { $box->{$name} = (string)$text; }
+    catch (Exception $error) { echo 'caught|'; unset($error); }
+    unset($box, $text);
+}
+for ($i = 0; $i < 16; $i++) { write('slot'); }
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|".repeat(16), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Instance-name RHS guards are independent of EIR optimization.
+#[test]
+fn test_static_receiver_grok_instance_name_throwing_cast_no_ir_opt() {
+    without_ir_opt(test_static_receiver_grok_instance_name_throwing_cast);
+}
+
 /// A mixed selector stays unwind-visible while a delayed receiver getter throws.
 #[test]
 fn test_static_receiver_greptile_mixed_name_throwing_getter() {
