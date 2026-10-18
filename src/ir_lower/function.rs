@@ -31,6 +31,8 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+mod object_comparisons;
+pub(super) use object_comparisons::lower_object_comparison_dispatch;
 pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
@@ -1784,10 +1786,8 @@ fn lower_body_into_function(
     ctx.lower_with_final_string_append_storage(|ctx| {
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
-        } else if !super::throwable_constructors::lower(ctx) {
-            for stmt in body {
-                crate::ir_lower::stmt::lower_stmt(ctx, stmt);
-            }
+        } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
+            crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
         }
     });
     terminate_open_block(&mut ctx);
@@ -1834,6 +1834,7 @@ fn seed_recursive_closure_binding(
             captures,
             return_alias: binding.return_alias,
             loop_guarded: false,
+            numeric_loop_guarded: false,
         },
     );
 }

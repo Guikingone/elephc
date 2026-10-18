@@ -98,6 +98,8 @@ pub(crate) enum StaticCallableBinding {
         return_alias: ReturnArgAlias,
         /// Requires scalar/nonthrowing call gates for newly preserved loop facts.
         loop_guarded: bool,
+        /// Allows direct calls only at spans admitted by the numeric loop proof.
+        numeric_loop_guarded: bool,
     },
     StaticMethod {
         receiver: StaticReceiver,
@@ -206,6 +208,10 @@ pub(crate) struct LoweringSnapshot {
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
+    numeric_closure_sites: std::collections::HashSet<Span>,
+    numeric_tracked_locals: std::collections::HashSet<String>,
+    final_mixed_locals: std::collections::HashSet<String>,
+    numeric_proof_sealed: bool,
 }
 
 /// Lengths of append-only intern pools captured for speculative rollback.
@@ -416,6 +422,21 @@ pub(crate) struct LoweringContext<'m, 'f> {
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
+    /// Call spans whose arguments were proved `int|float` for a known closure.
+    ///
+    /// The proof is per span. A later call of the same local with an unproved
+    /// argument does not inherit it.
+    pub(crate) numeric_closure_sites: HashSet<Span>,
+    /// Locals read or written by an admitted numeric proof.
+    pub(crate) numeric_tracked_locals: HashSet<String>,
+    /// Locals whose frame slot must be Mixed from the first store.
+    ///
+    /// Set only on the replay that follows a discovery pass. The sealed proof
+    /// still describes the `int|float` value; this set is only the storage.
+    pub(crate) final_mixed_locals: HashSet<String>,
+    /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
+    /// another proof from the now-Mixed slots.
+    pub(crate) numeric_proof_sealed: bool,
     source_path: Option<String>,
 }
 
@@ -563,6 +584,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_scope_read_names: HashSet::new(),
             eval_scope_write_names: HashSet::new(),
             eval_scope_flush_names: BTreeSet::new(),
+            numeric_closure_sites: HashSet::new(),
+            numeric_tracked_locals: HashSet::new(),
+            final_mixed_locals: HashSet::new(),
+            numeric_proof_sealed: false,
             source_path,
         }
     }
@@ -614,6 +639,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_scope_read_names: self.eval_scope_read_names.clone(),
             eval_scope_write_names: self.eval_scope_write_names.clone(),
             eval_scope_flush_names: self.eval_scope_flush_names.clone(),
+            numeric_closure_sites: self.numeric_closure_sites.clone(),
+            numeric_tracked_locals: self.numeric_tracked_locals.clone(),
+            final_mixed_locals: self.final_mixed_locals.clone(),
+            numeric_proof_sealed: self.numeric_proof_sealed,
         }
     }
 
@@ -685,6 +714,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.eval_scope_read_names = snapshot.eval_scope_read_names;
         self.eval_scope_write_names = snapshot.eval_scope_write_names;
         self.eval_scope_flush_names = snapshot.eval_scope_flush_names;
+        self.numeric_closure_sites = snapshot.numeric_closure_sites;
+        self.numeric_tracked_locals = snapshot.numeric_tracked_locals;
+        self.final_mixed_locals = snapshot.final_mixed_locals;
+        self.numeric_proof_sealed = snapshot.numeric_proof_sealed;
     }
 
     /// Returns the canonical PHP source path associated with this lowered body, if known.
@@ -804,7 +837,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn constant_value(&self, name: &str) -> Option<(ExprKind, PhpType)> {
         self.constants
             .get(name)
-            .or_else(|| self.constants.get(name.trim_start_matches('\\')))
+            .or_else(|| self.constants.get(elephc_builtin_contract::canonical_constant_name(name)))
             .cloned()
     }
 
@@ -941,6 +974,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// slot back to `I64` wherever no access can observe the float, which is what keeps an
     /// ordinary counter loop as fast as it was.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+        if self.final_mixed_locals.contains(name) {
+            return PhpType::Mixed;
+        }
         if !matches!(php_type.codegen_repr(), PhpType::Str) {
             return php_type;
         }
@@ -1742,6 +1778,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // in every scope. Ordinary globals remain boxed Mixed cells.
         let php_type = if uses_global {
             self.global_alias_type(name)
+        } else if self.final_mixed_locals.contains(name) && !self.is_ref_bound_local(name) {
+            // The sealed proof already established int|float. Read the boxed slot
+            // as Mixed so codegen does not insert a truncating mixed-to-int cast.
+            PhpType::Mixed
         } else {
             self.local_type(name)
         };
@@ -3698,11 +3738,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.value_needs_release_after_use(value)
     }
 
-    /// Includes provisional string unboxes in cleanup without claiming their ownership can move.
+    /// Includes provisional string and callable unboxes without claiming their ownership can move.
     ///
-    /// A later store can widen a string local to Mixed after a consumer is lowered. Reading
-    /// that slot then allocates a detached string. Emit its release provisionally and let
-    /// builder finalization prune it when the final slot still lends a concrete string.
+    /// A later store or eval barrier can widen a local to Mixed after a consumer is lowered.
+    /// Reading it then allocates a detached string or retains its callable payload. Emit a
+    /// provisional release and let finalization prune it when storage still lends the value.
     pub(crate) fn value_needs_release_after_use(&self, value: LoweredValue) -> bool {
         if self.write_operand_is_borrowed {
             return false;
@@ -3710,7 +3750,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_temporary(value) {
             return true;
         }
-        if self.builder.value_php_type(value.value).codegen_repr() != PhpType::Str {
+        if !matches!(self.builder.value_php_type(value.value).codegen_repr(), PhpType::Str | PhpType::Callable) {
             return false;
         }
         let Some(inst) = self.builder.value_defining_instruction(value.value) else {
@@ -4545,6 +4585,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits an `is_truthy` conversion when a value is not already I64.
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+        if let Some(value) = super::expr::object_operators::lower_object_truthy(self, input, span) {
+            return value;
+        }
         if input.ir_type == IrType::I64 {
             return input;
         }
