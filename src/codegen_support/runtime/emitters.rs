@@ -194,6 +194,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_throw_error(emitter);
     system::emit_json_depth_enter(emitter);
     system::emit_json_depth_exit(emitter);
+    system::emit_json_integer_tree(emitter);
     system::emit_json_encode_array_dynamic(emitter);
     system::emit_json_encode_array_int(emitter);
     system::emit_json_encode_array_str(emitter);
