@@ -160,7 +160,7 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     let array_value = load_array_local_for_write(ctx, array, span);
     let op = array_set_op(array_value.ir_type);
     if op == Op::RuntimeCall {
-        lower_boxed_array_local_set(ctx, array_value, index, value, span, key_already_diagnosed);
+        lower_boxed_array_set(ctx, array_value, index, value, span, key_already_diagnosed);
         return;
     }
     let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
@@ -236,7 +236,7 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
 /// The backend copies strings and retains other payloads in a separate consumed box.
 /// `key_already_diagnosed` marks the write half of a compound update, whose read already
 /// reported a float key's conversion, so the boxed writer rebuilds the key silently.
-fn lower_boxed_array_local_set(
+pub(super) fn lower_boxed_array_set(
     ctx: &mut LoweringContext<'_, '_>,
     array: LoweredValue,
     index: &Expr,

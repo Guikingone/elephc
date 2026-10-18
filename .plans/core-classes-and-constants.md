@@ -516,3 +516,25 @@ WeakMap semantics and target ABI repair are unchanged.
 All7 prelude parity tests pass with curl enabled, and all5 printer tests pass.
 The compiler/library/exporter build is warning-free. Regenerated documentation
 has no drift; registry/site/EIR and whitespace audits pass.
+
+
+## WeakMap reference receiver resolution
+
+Greptile rated0ab94c46e7 at4/5 because property and method results typed as
+WeakMap missed the narrow isset receiver probe. A regression reproduces the
+object-as-array EIR validation error before the repair. Reference lowering now
+uses the shared instance receiver resolver, including property, instance-method
+and static-method return types. The fixture checks aliasing, one-time operand
+evaluation and reference lifetime after receiver/key cleanup against PHP8.5.10.
+The five-target lowering fixture includes these receiver forms.
+
+The same fixture exposed a fresh RHS leak in typed ArrayAccess property writes
+even without entry references. The property writer now shares the existing
+boxed/local writer's evaluation order, unwind roots and operand retirement.
+The receiver regression keeps a clean-heap assertion; a second PHP-matched
+fixture covers throwing value evaluation and invalid keys passed to offsetSet.
+
+All6 WeakMap regressions pass with clean native heaps. The five-target EIR
+fixture and all7 prelude parity tests pass. The compiler/library/exporter build
+is warning-free and generated docs, registry/site/EIR, Rustdoc and whitespace
+audits pass without generated drift.

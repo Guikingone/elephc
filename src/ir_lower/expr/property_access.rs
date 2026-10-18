@@ -165,8 +165,8 @@ pub(crate) fn lower_ref_assign_array_elem(
     let ExprKind::ArrayAccess { array, index } = &source.kind else {
         return;
     };
-    if super::native_isset::isset_object_expr_class(ctx, array)
-        .is_some_and(|(class, _)| class.eq_ignore_ascii_case("WeakMap"))
+    if instance_object_class_for_ir(ctx, array)
+        .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap"))
     {
         let call = Expr::new(ExprKind::MethodCall {
             object: array.clone(), method: "__elephc_reference".into(), args: vec![(**index).clone()],

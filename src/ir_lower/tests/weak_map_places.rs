@@ -14,12 +14,25 @@ use crate::codegen::platform::Target;
 #[test]
 fn weak_map_reference_places_preserve_private_cell_abi_on_all_targets() {
     let source = r#"<?php
+        class WeakMapHolder {
+            public WeakMap $map;
+            public function __construct() { $this->map = new WeakMap(); }
+            public function take(): WeakMap { return $this->map; }
+            public static function takeStatic(WeakMapHolder $holder): WeakMap { return $holder->map; }
+        }
         $key = new stdClass();
         $map = new WeakMap();
         $map[$key] = ['n' => 0];
         $reference = &$map[$key];
         $reference['n'] = 1;
         echo $map[$key]['n'];
+        $holder = new WeakMapHolder();
+        $holder->map[$key] = ['n' => 0];
+        $propertyReference = &$holder->map[$key];
+        $methodReference = &$holder->take()[$key];
+        $staticReference = &WeakMapHolder::takeStatic($holder)[$key];
+        $staticReference['n'] = 1;
+        echo $propertyReference['n'], $methodReference['n'];
     "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source,
