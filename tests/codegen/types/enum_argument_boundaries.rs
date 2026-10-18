@@ -297,3 +297,38 @@ restore_error_handler();
 fn test_enum_argument_boundaries_typed_missing_arguments_no_ir_opt() {
     without_ir_opt(test_enum_argument_boundaries_typed_missing_arguments);
 }
+
+/// Named holes reject before coercion, after evaluating every supplied source argument once.
+#[test]
+fn test_enum_argument_boundaries_named_hole_diagnostics() {
+    let out = compile_and_run(r#"<?php
+interface NamedHole { public function value(int $a, int $b, int $c): void; }
+enum NamedHoleValue implements NamedHole {
+    case A; public function value(int $a, int $b, int $c): void {}
+}
+function fractional(): float { echo 'F'; return 1.5; }
+function fractional_text(): string { echo 'S'; return str_repeat('2.75', 1); }
+function later(): int { echo 'L'; return 2; }
+function hole_handler(int $code, string $message): bool { echo 'D'; return true; }
+set_error_handler('hole_handler');
+function run_holes(NamedHole $target): void {
+    try { $target->value(fractional(), c: later()); } catch (ArgumentCountError $e) { echo 'A|'; unset($e); }
+    try { $target->value(a: fractional(), c: later()); } catch (ArgumentCountError $e) { echo 'A|'; unset($e); }
+    try { $target->value(fractional_text(), c: later()); } catch (ArgumentCountError $e) { echo 'A|'; unset($e); }
+    try { $target->value(fractional()); } catch (ArgumentCountError $e) { echo 'A|'; unset($e); }
+    try { $target->value(a: fractional()); } catch (ArgumentCountError $e) { echo 'A|'; unset($e); }
+    try { $target->value('invalid', c: later()); } catch (ArgumentCountError $e) { echo 'A|'; unset($e); }
+    try { $target->value(...['a' => fractional(), 'c' => later()]); }
+    catch (ArgumentCountError $e) { echo $e->getMessage(); unset($e); }
+}
+run_holes(NamedHoleValue::A);
+restore_error_handler();
+"#);
+    assert_eq!(out, "FLA|FLA|SLA|FDA|FDA|LA|FLNamedHoleValue::value(): Argument #2 ($b) not passed");
+}
+
+/// Named-hole and missing-tail diagnostic ordering is identical without EIR optimization.
+#[test]
+fn test_enum_argument_boundaries_named_hole_diagnostics_no_ir_opt() {
+    without_ir_opt(test_enum_argument_boundaries_named_hole_diagnostics);
+}

@@ -32,6 +32,14 @@ function missing_call(MissingArguments $target): void {
     try { $target->value(good_float()); } catch (ArgumentCountError $error) { echo 'missing'; }
 }
 missing_call(MissingValue::A);
+interface NamedHole { public function value(int $a, int $b, int $c): void; }
+enum NamedHoleValue implements NamedHole {
+    case A; public function value(int $a, int $b, int $c): void {}
+}
+function named_hole_call(NamedHole $target): void {
+    try { $target->value(good_float(), c: 2); } catch (ArgumentCountError $error) { echo 'hole'; }
+}
+named_hole_call(NamedHoleValue::A);
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     assert!(crate::ir::print_module(&module).contains("implicit_int_cast"), "{target}: diagnostic EIR cast");

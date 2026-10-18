@@ -13,6 +13,13 @@
 use super::*;
 use super::nullable_method_calls::lower_method_call_with_receiver_direct;
 
+/// Retains binding-failure provenance so named holes fail before supplied-argument guards.
+struct EnumArgumentError {
+    exception_class: &'static str,
+    message: String,
+    guard_supplied_arguments: bool,
+}
+
 /// Uses a final enum's signature, rather than its interface's defaults, for its runtime branch.
 pub(super) fn lower_enum_interface_call(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
@@ -77,17 +84,21 @@ pub(super) fn lower_enum_interface_call(
                     let bound = if required < crate::types::call_args::regular_param_count(signature) {
                         "at least"
                     } else { "exactly" };
-                    ("ArgumentCountError", format!(
-                        "Too few arguments to function {class}::{method}(), {provided} passed and {bound} {required} expected"
-                    ))
+                    EnumArgumentError {
+                        exception_class: "ArgumentCountError",
+                        message: format!(
+                            "Too few arguments to function {class}::{method}(), {provided} passed and {bound} {required} expected"
+                        ),
+                        guard_supplied_arguments: true,
+                    }
                 }),
                 Err(error) => Some(enum_argument_error(
                     &class, method, &signature, args, error,
                 )),
             };
-            if let Some((exception_class, message)) = error {
+            if let Some(error) = error {
                 terminate_enum_argument_error(ctx, args, Some((&class, method, signature)),
-                    exception_class, message, expr.span);
+                    error, expr.span);
                 ctx.builder.position_at_end(next);
                 continue;
             }
@@ -150,7 +161,7 @@ pub(super) fn lower_enum_interface_call(
 fn terminate_enum_argument_error(
     ctx: &mut LoweringContext<'_, '_>, args: &[Expr],
     selected: Option<(&str, &str, &FunctionSig)>,
-    exception_class: &str, message: String, span: Span,
+    error: EnumArgumentError, span: Span,
 ) {
     let mut staged = Vec::new();
     for arg in args {
@@ -162,7 +173,7 @@ fn terminate_enum_argument_error(
         register_owned_call_operand(ctx, ctx.local_slots[&slot], arg.span);
         staged.push(slot);
     }
-    if exception_class == "ArgumentCountError" {
+    if error.guard_supplied_arguments {
         if let Some((class, method, signature)) = selected {
             let bindings = staged_argument_bindings(ctx, args, &staged, signature, span);
             for (index, value) in bindings {
@@ -185,8 +196,8 @@ fn terminate_enum_argument_error(
         }
     }
     let exception = Expr::new(ExprKind::NewObject {
-        class_name: Name::unqualified(exception_class),
-        args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
+        class_name: Name::unqualified(error.exception_class),
+        args: vec![Expr::new(ExprKind::StringLiteral(error.message), span)],
     }, span);
     let exception = lower_expr(ctx, &exception);
     ctx.builder.terminate(Terminator::Throw { value: exception.value });
@@ -262,9 +273,9 @@ fn staged_argument_bindings(
 fn enum_argument_error(
     class: &str, method: &str, signature: &FunctionSig, args: &[Expr],
     error: crate::types::call_args::CallArgPlanError,
-) -> (&'static str, String) {
+) -> EnumArgumentError {
     use crate::types::call_args::CallArgPlanError;
-    match error {
+    let (exception_class, message) = match error {
         CallArgPlanError::MissingRequired { param_idx, .. } => {
             let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
             let later_named_parameter = expanded.iter().any(|arg| {
@@ -284,13 +295,14 @@ fn enum_argument_error(
                 } else {
                     "exactly"
                 };
-                return (
-                    "ArgumentCountError",
-                    format!(
+                return EnumArgumentError {
+                    exception_class: "ArgumentCountError",
+                    message: format!(
                         "Too few arguments to function {class}::{method}(), {} passed and {bound} {required} expected",
                         expanded.len(),
                     ),
-                );
+                    guard_supplied_arguments: true,
+                };
             }
             (
                 "ArgumentCountError",
@@ -306,5 +318,6 @@ fn enum_argument_error(
         CallArgPlanError::Duplicate { name, .. } =>
             ("Error", format!("Named parameter ${name} overwrites previous argument")),
         _ => ("Error", format!("Invalid arguments to enum method {method}()")),
-    }
+    };
+    EnumArgumentError { exception_class, message, guard_supplied_arguments: false }
 }
