@@ -1068,6 +1068,12 @@ Converting a boxed `Mixed` value into a concrete scalar, string, or object prope
 
 ### Pending compound append leases
 
+Plain nested assigns with converted keys use the same leases after publishing each parent.
+Their generated live-guard Assign markers are consumed by EIR before statement lowering:
+the apparent copy never acquires another owner and never reads a missing child. Key
+conversion precedes the guard, so a throwing diagnostic retains the published parent,
+and a returning diagnostic can cancel a selection that no PHP owner preserves.
+
 Parser-generated append cell aliases are ordinary retained Mixed boxes, not persistent PHP
 reference sets. When a child lease replaces an older compiler parent, EIR pops the parent's
 record, publishes the child, then releases the old parent slot. This keeps unwinding safe

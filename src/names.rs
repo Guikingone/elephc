@@ -1040,6 +1040,20 @@ pub(crate) fn append_update_alias_prefers_hash(name: &str) -> bool {
         .is_some_and(|stem| stem.starts_with(APPEND_UPDATE_ALIAS_PREFIX) && stem.ends_with("_parent_hash"))
 }
 
+/// Constructs an unread marker that guards the selected parent after a key diagnostic.
+pub(crate) fn generated_append_live_guard(span: crate::span::Span, index: usize) -> String {
+    generated_local_name(&format!(
+        "__elephc_append_live_guard_{}_{}_{}_{}",
+        span.source_id(), span.line, span.col, index,
+    ))
+}
+
+/// Recognizes only compiler-generated guards, never a PHP variable with a similar name.
+pub(crate) fn is_append_live_guard(name: &str) -> bool {
+    name.strip_suffix(GENERATED_LOCAL_MARKER)
+        .is_some_and(|stem| stem.starts_with("__elephc_append_live_guard_"))
+}
+
 /// Constructs the unforgeable result local for a prefix increment of an append target.
 pub(crate) fn generated_append_prefix_increment_result(
     span: crate::span::Span,

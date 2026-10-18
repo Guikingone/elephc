@@ -10,6 +10,111 @@
 
 use crate::support::*;
 
+/// Plain nested append publishes its parent after the RHS but before key diagnostics.
+#[test]
+fn test_append_greptile_plain_parent_publication() {
+    for throwing in [false, true] {
+        let source = r#"<?php
+function rhs(): int { echo 'R|'; return 1; }
+$items = [];
+set_error_handler(function(int $level, string $message) use (&$items): bool {
+    echo 'H:', json_encode($items), '|'; HANDLER_ACTION
+});
+try { $items[][1.5] = rhs(); }
+catch (Error $error) { echo 'C|'; unset($error); }
+restore_error_handler(); echo json_encode($items); unset($items);
+"#.replace("HANDLER_ACTION", if throwing { "throw new Error('stop');" } else { "return true;" });
+        assert_output(&source, if throwing { "R|H:[[]]|C|[[]]" } else { "R|H:[[]]|[{\"1\":1}]" });
+    }
+}
+
+/// Plain-parent publication is independent of EIR optimization.
+#[test]
+fn test_append_greptile_plain_parent_publication_no_ir_opt() {
+    without_ir_opt(test_append_greptile_plain_parent_publication);
+}
+
+/// Plain writes follow the selected parent's surviving copy or cancel after separation.
+#[test]
+fn test_append_greptile_plain_selected_parent_cancellation() {
+    for (callback, expected) in [
+        ("$copy = $items[0]; $items[0] = ['other' => 2];", "1:[{\"other\":2}]:{\"1\":1}"),
+        ("$items[0]['other'] = 2;", "null:[{\"other\":2}]:[]"),
+        ("$items = [];", "null:[]:[]"),
+    ] {
+        let source = format!(r#"<?php
+function run(array $items): void {{
+    $copy = [];
+    set_error_handler(function(int $level, string $message) use (&$items, &$copy): bool {{
+        {callback} return true;
+    }});
+    $result = ($items[][1.5] = 1);
+    restore_error_handler();
+    echo json_encode($result), ':', json_encode($items), ':', json_encode($copy);
+    unset($items, $copy, $result);
+}}
+run([]);
+"#);
+        assert_output(&source, expected);
+    }
+}
+
+/// Plain selected-parent cancellation keeps its CFG without EIR optimization.
+#[test]
+fn test_append_greptile_plain_selected_parent_cancellation_no_ir_opt() {
+    without_ir_opt(test_append_greptile_plain_selected_parent_cancellation);
+}
+
+/// Nested converted keys publish every intermediate before diagnosing that key exactly once.
+#[test]
+fn test_append_greptile_plain_multilevel_key_order() {
+    assert_output(r#"<?php
+function selectedKey(): float { echo 'K|'; return 1.5; }
+function rhs(): int { echo 'R|'; return 7; }
+$items = [];
+set_error_handler(function(int $level, string $message) use (&$items): bool {
+    echo 'H:', json_encode($items), '|'; return true;
+});
+$result = ($items[][selectedKey()][2.5] = rhs());
+restore_error_handler(); echo json_encode($result), ':', json_encode($items);
+unset($items, $result);
+"#, "K|R|H:[[]]|H:[{\"1\":[]}]|7:[{\"1\":{\"2\":7}}]");
+}
+
+/// Multiple private live guards survive the unoptimized EIR path too.
+#[test]
+fn test_append_greptile_plain_multilevel_key_order_no_ir_opt() {
+    without_ir_opt(test_append_greptile_plain_multilevel_key_order);
+}
+
+/// Mutating the selected child before retaining a copy cancels, including at a growth threshold.
+#[test]
+fn test_append_grok_review_prefilled_detached_child_control() {
+    let entries = (0..12).map(|index| format!("\"p{index}\":1")).collect::<Vec<_>>().join(",");
+    let expected = format!("W:null:[{{\"other\":2}}]:{{{entries}}}");
+    assert_output(r#"<?php
+function run(array $items): void {
+    $copy = [];
+    set_error_handler(function(int $level, string $message) use (&$items, &$copy): bool {
+        echo 'W:';
+        for ($i = 0; $i < 12; $i++) { $items[0]["p$i"] = 1; }
+        $copy = $items[0]; $items[0] = ['other' => 2]; return true;
+    });
+    $result = ($items[]['k'] += 1);
+    restore_error_handler();
+    echo json_encode($result), ':', json_encode($items), ':', json_encode($copy);
+    unset($items, $copy, $result);
+}
+run([]);
+"#, &expected);
+}
+
+/// Callback child separation still cancels without EIR optimization.
+#[test]
+fn test_append_grok_review_prefilled_detached_child_control_no_ir_opt() {
+    without_ir_opt(test_append_grok_review_prefilled_detached_child_control);
+}
+
 /// Checks one callback/operator pair and verifies complete temporary cleanup.
 fn assert_append(callback: &str, operation: &str, expected: &str) {
     let source = format!(r#"<?php

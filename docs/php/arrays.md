@@ -60,6 +60,13 @@ original cell and an independent payload copy both survive, PHP also cancels the
 stale target. A cancelled prefix increment still returns `1`.
 Each missing intermediate key emits its own warning before it is autovivified.
 
+Plain nested writes with converted keys publish their parents before key diagnostics.
+For `$items[][1.5] = rhs()`, `rhs()` runs first, then a deprecation handler sees `[[]]`.
+A throwing handler leaves that published parent in place. A returning handler may preserve
+the selection through a saved child copy; if it instead abandons the selected parent, the
+assignment yields null and does not insert the leaf. Plain writes do not emit missing-key
+warnings while creating those parents.
+
 ## String arrays
 ```php
 <?php

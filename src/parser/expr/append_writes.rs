@@ -94,8 +94,14 @@ pub(super) fn parse_append_write(
     }
     let mut lowerer = AppendLowerer { span, next_temp: 0, prelude, result: None };
     if matches!(update, AppendUpdate::Assign) {
-        let value = lowerer.nested_value(&dimensions, &rhs, &update);
-        lowerer.push(base, value)?;
+        if !property_suffix && dimensions.iter().flatten().any(|index|
+            !matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)))
+        {
+            lowerer.assign_published_plain(base, &dimensions, &rhs)?;
+        } else {
+            let value = lowerer.nested_value(&dimensions, &rhs, &update);
+            lowerer.push(base, value)?;
+        }
     } else {
         lowerer.update_reserved_slot(base, &dimensions, &rhs, &update)?;
     }
@@ -372,6 +378,43 @@ impl AppendLowerer {
     fn reset_slot_alias(&mut self, alias: &Expr, value: Expr) {
         let ExprKind::Variable(name) = &alias.kind else { unreachable!("cell alias is a local") };
         self.prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value }, self.span));
+    }
+
+    /// Publishes plain-write parents before key conversion without reading missing children.
+    fn assign_published_plain(
+        &mut self, base: Expr, dimensions: &[Option<Expr>], rhs: &Expr,
+    ) -> Result<(), CompileError> {
+        let target = self.reserve_append_slot(base)?;
+        let associative = dimensions.first().and_then(Option::as_ref)
+            .is_some_and(crate::types::empty_array_key_requires_hash_storage);
+        let mut cell = self.bind_slot_alias(target, false, associative);
+        for (position, dimension) in dimensions.iter().enumerate() {
+            let target = if let Some(index) = dimension {
+                let index = if matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
+                    index.clone()
+                } else {
+                    let index = self.normalize_dimension_key(index.clone())?;
+                    let name = crate::names::generated_append_live_guard(self.span, self.next_temp);
+                    self.next_temp += 1;
+                    self.prelude.push(Stmt::new(StmtKind::Assign {
+                        name, value: cell.clone(),
+                    }, self.span));
+                    index
+                };
+                Expr::new(ExprKind::ArrayAccess {
+                    array: Box::new(cell), index: Box::new(index),
+                }, self.span)
+            } else {
+                self.reserve_append_slot(cell)?
+            };
+            let leaf = position + 1 == dimensions.len();
+            let associative = dimensions.get(position + 1).and_then(Option::as_ref)
+                .is_some_and(crate::types::empty_array_key_requires_hash_storage);
+            cell = self.bind_slot_alias(target, leaf, associative);
+        }
+        let value = self.leaf(cell.clone(), rhs, &AppendUpdate::Assign);
+        self.reset_slot_alias(&cell, value);
+        Ok(())
     }
 
     /// Marks a temporary ordinary-cell lease; EIR does not promote it into a PHP reference set.

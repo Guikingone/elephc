@@ -22,7 +22,9 @@ pub(super) fn lower(
         StmtKind::RefAssign { target, .. } if crate::names::append_update_alias_kind(target).is_some()
     )) { return None; }
     let mut aliases: Vec<(String, LocalSlotId, crate::span::Span)> = Vec::new();
-    let cancellable = prelude.iter().any(|stmt| read_parent_alias(stmt).is_some());
+    let cancellable = prelude.iter().any(|stmt| {
+        read_parent_alias(stmt).or_else(|| guarded_parent_alias(stmt)).is_some()
+    });
     let prefix_increment = matches!(
         &result.kind,
         ExprKind::Variable(name) if crate::names::is_append_prefix_increment_result(name)
@@ -66,8 +68,12 @@ pub(super) fn lower(
                 continue;
             }
         }
-        crate::ir_lower::stmt::lower_stmt(ctx, stmt);
-        if let Some(parent) = read_parent_alias(stmt) {
+        let guarded_parent = guarded_parent_alias(stmt);
+        // A guard must never create a PHP owner or trigger an undefined-key read.
+        if guarded_parent.is_none() {
+            crate::ir_lower::stmt::lower_stmt(ctx, stmt);
+        }
+        if let Some(parent) = guarded_parent.or_else(|| read_parent_alias(stmt)) {
             let selected = selected.as_ref().unwrap();
             let merge = merge.unwrap();
             let parent = ctx.load_local(parent, Some(stmt.span));
@@ -113,6 +119,14 @@ pub(super) fn lower(
     } else {
         Some(value)
     }
+}
+
+/// Selects the compiler-only parent probe without lowering its apparent assignment.
+fn guarded_parent_alias(stmt: &Stmt) -> Option<&str> {
+    let StmtKind::Assign { name, value } = &stmt.kind else { return None; };
+    if !crate::names::is_append_live_guard(name) { return None; }
+    let ExprKind::Variable(parent) = &value.kind else { return None; };
+    (crate::names::append_update_alias_kind(parent) == Some(false)).then_some(parent.as_str())
 }
 
 /// Recognizes only the parser's missing-leaf read through an unforgeable parent lease.

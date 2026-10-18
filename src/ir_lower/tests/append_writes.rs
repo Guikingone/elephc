@@ -97,6 +97,10 @@ function hashReturn(string $key, mixed $value): array {
     $items = [$value]; $items[$key] = $value; return $items;
 }
 echo json_encode(hashReturn('key', $argc));
+function plainConvertedKey(array $items, float $key): array {
+    $items[][$key] = 1; return $items;
+}
+echo json_encode(plainConvertedKey([], 1.5));
 "#;
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),
@@ -111,6 +115,16 @@ echo json_encode(hashReturn('key', $argc));
         "{target}: pending compound appends preserve the pre-callback parent selection");
     assert!(main.blocks.iter().any(|block| block.name.starts_with("append.update.cancel")),
         "{target}: detached parents bypass leaf materialization and the operator");
+    let plain = module.functions.iter().find(|function| function.name == "plainConvertedKey").unwrap();
+    for runtime in [crate::ir::RuntimeCallTarget::MixedArrayCellHasLiveOwner,
+        crate::ir::RuntimeCallTarget::PendingAppendFetchForWrite]
+    {
+        assert!(plain.instructions.iter().any(|inst|
+            inst.immediate == Some(crate::ir::Immediate::RuntimeCall(runtime))),
+            "{target}: plain converted keys preserve selected-parent guards through AST optimization");
+    }
+    assert!(plain.blocks.iter().any(|block| block.name.starts_with("append.update.cancel")),
+        "{target}: plain writes cancel without reading missing array keys");
     let returning = module.functions.iter().find(|function| function.name == "hashReturn")
         .expect("missing hash-return fixture");
     assert!(returning.blocks.iter().flat_map(|block| &block.instructions)
