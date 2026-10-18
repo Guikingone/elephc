@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from datetime import datetime, timezone
 
 from common import atomic_json
 
@@ -94,19 +95,32 @@ def bridge_fingerprints(directories: dict[str, Path]) -> dict:
 
 
 def measure_commands(commands: dict[str, list[str]], cwd: Path, checksum: str,
-                     rounds: int, warmups: int, timeout: float) -> dict:
+                     rounds: int, warmups: int, timeout: float, require_idle: bool = False) -> dict:
     """Rotate variant order each round and check warmups exactly like recorded samples."""
     samples = {label: [] for label in commands}
     labels = list(commands)
     for index in range(-warmups, rounds):
         offset = index % len(labels)
         for label in labels[offset:] + labels[:offset]:
+            if require_idle:
+                assert_no_builds(cwd, timeout)
             started = time.perf_counter_ns()
             output = execute(commands[label], cwd, timeout)
             sample = parse_sample(output, checksum, time.perf_counter_ns() - started)
+            if require_idle:
+                assert_no_builds(cwd, timeout)
             if index >= 0:
                 samples[label].append(sample)
     return samples
+
+
+def assert_no_builds(cwd: Path, timeout: float) -> None:
+    """Reject a sample if a known compiler or linker is visible before or after execution."""
+    names = execute(["ps", "-A", "-o", "comm="], cwd, timeout).splitlines()
+    builders = {"cargo", "rustc", "as", "cc1", "cc1plus", "ld", "ld.lld", "ld64", "collect2"}
+    active = sorted({Path(name.strip()).name for name in names} & builders)
+    if active:
+        raise RuntimeError("concurrent compilation detected; reject this comparison: " + ", ".join(active))
 
 
 def main() -> None:
@@ -128,6 +142,7 @@ def main() -> None:
     parser.add_argument("--cpu", type=int, help="Pin every child to this CPU on Linux")
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--noise-limit", type=float, default=.05)
+    parser.add_argument("--require-idle", action="store_true", help="Reject visible concurrent compilers/linkers using ps")
     parser.add_argument("--json", type=Path, required=True)
     args = parser.parse_args()
     if min(args.iterations, args.size, args.rows, args.columns, args.heap_size) < 1 \
@@ -148,6 +163,8 @@ def main() -> None:
         php = shutil.which(args.php)
         if not php:
             raise ValueError(f"PHP interpreter unavailable: {args.php}")
+        if args.require_idle and not shutil.which("ps"):
+            raise ValueError("--require-idle requires ps")
         if args.cpu is not None and (not hasattr(os, "sched_getaffinity")
                                     or args.cpu not in os.sched_getaffinity(0)):
             raise ValueError("--cpu requires an available Linux CPU")
@@ -189,12 +206,16 @@ def main() -> None:
                            str(source), *arguments]
         expected = f"{args.size * (args.size-1)//2}:{args.size * (args.size+1)//2}:{args.size}:" \
                    f"{3 * args.eval_count}:{args.rows}"
-        samples = measure_commands(commands, cwd, expected, args.iterations, args.warmup, args.timeout)
+        measured_at = datetime.now(timezone.utc).isoformat()
+        samples = measure_commands(commands, cwd, expected, args.iterations, args.warmup, args.timeout, args.require_idle)
         if fingerprints != {label: file_hash(path) for label, path in compilers.items()} \
                 or bridge_hashes != bridge_fingerprints(bridges):
             raise RuntimeError("a selected compiler or bridge changed during the comparison")
         stats = summarize(samples, args.noise_limit)
         payload = {"schema_version": 1, "measurement": "mixed-body-phases-and-process-wall",
+                   "measurement_started_at": measured_at,
+                   "measurement_finished_at": datetime.now(timezone.utc).isoformat(),
+                   "concurrent_build_guard": args.require_idle,
                    "platform": platform.platform(), "architecture": platform.machine(),
                    "php_version": execute([php, "-n", "-v"], cwd, args.timeout).splitlines()[0],
                    "semantic_profile": args.php_version, "ir_opt": args.ir_opt,

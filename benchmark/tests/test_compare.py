@@ -6,10 +6,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 import support  # Bootstrap the benchmark import path for the workflow's unittest discovery command.
-from compare import FIELDS, assignments, bridge_environment, bridge_fingerprints, measure_commands, parse_sample, summarize
+from compare import FIELDS, assignments, assert_no_builds, bridge_environment, bridge_fingerprints, measure_commands, parse_sample, summarize
 
 
 class CompareTests(unittest.TestCase):
+    @patch("compare.execute", return_value="python3\n/usr/bin/rustc\nas\n")
+    def test_idle_guard_rejects_builders_even_when_timing_dispersion_would_be_low(self, execute):
+        with self.assertRaisesRegex(RuntimeError, "concurrent compilation detected"):
+            assert_no_builds(Path("."), 5)
+
+    @patch("compare.execute", return_value="python3\nps\nsshd\n")
+    def test_idle_guard_accepts_unrelated_processes(self, execute):
+        assert_no_builds(Path("."), 5)
+
     def test_explicit_bridges_replace_ambient_overrides_and_fingerprint_all_archives(self):
         with tempfile.TemporaryDirectory(prefix="elephc-compare-test-") as temporary:
             directory = Path(temporary)

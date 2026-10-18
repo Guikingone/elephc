@@ -158,7 +158,7 @@ from the historical process-only suites:
 python3 benchmark/compare.py --compiler main=/path/to/main/elephc \
   --revision main=FULL_COMMIT_SHA --bridge-dir main=/path/to/main/archives \
   --compiler release=/path/to/release/elephc --revision release=v0.27.3 \
-  --bridge-dir release=/path/to/release/archives --json mixed-results.json
+  --bridge-dir release=/path/to/release/archives --require-idle --json mixed-results.json
 ```
 
 Each compiler builds the same PHP fixture once with the selected PHP semantic
@@ -182,8 +182,10 @@ The source revision is explicit because a compiler can come from another checkou
 Every warmup and measured run must produce the expected checksum and consistent
 phase clocks. A phase whose median absolute deviation exceeds 5% of its median
 marks the comparison noisy, preserves the results and exits nonzero. Run on a
-quiet machine with no concurrent builds; the noise gate cannot detect systematic
-contention or make different architectures comparable. These samples are not
+quiet machine with no concurrent builds. `--require-idle` additionally checks
+`ps` before and after each execution and rejects visible compiler/linker processes;
+measurement start/end timestamps are saved. Neither this guard nor the noise
+gate can detect all systematic contention or make different architectures comparable. These samples are not
 appended to the historical dashboard. Startup-sensitive whole-process ratios and
 body ratios must be reported separately, and isolated speedups must not be multiplied.
 
