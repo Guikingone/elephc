@@ -46,6 +46,7 @@ mod argument_guards;
 mod deep_cleanup;
 #[path = "runtime_gc/scalar_mixed_cleanup.rs"]
 mod scalar_mixed_cleanup;
+mod scalar_set_fast_path;
 #[path = "runtime_gc/eval_constructor.rs"]
 mod eval_constructor;
 #[path = "runtime_gc/eval_native_calls.rs"]
