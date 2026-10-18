@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.27.2"
+version = "0.27.3"
 edition = "2021"
 default-run = "elephc"
 description = "A PHP-to-native AOT compiler"
@@ -167,12 +167,6 @@ pdo-cubrid = ["elephc-pdo/cubrid"]
 # process), and what makes `cargo build --example gen_builtins --features curl`
 # export the curl rows into the generated builtin documentation.
 curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
-
-# PDO needs two mysql client controls that upstream 28.0.0 does not expose:
-# caller-supplied authentication RSA keys and rustls cipher-suite selection.
-# Keep the small audited patch in-tree until those options land upstream.
-[patch.crates-io]
-mysql = { path = "vendor/mysql-28.0.0" }
 
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
