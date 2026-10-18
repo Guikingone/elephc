@@ -92,7 +92,9 @@ mod tests {
     /// comparisons, invalidating stored parse failures without changing the serialized shape.
     /// BUMPED TO 17: generic declarations and native deferred-default Error expressions
     /// now coexist, requiring a fingerprint of the complete merged source inventory.
-    const RECORDED_FINGERPRINT: u64 = 10525032840310677046;
+    /// BUMPED TO 20: deferred-default expressions and caller-scope access masks need
+    /// a combined identity distinct from both parents and readonly-setter formats 18/19.
+    const RECORDED_FINGERPRINT: u64 = 8601957468285356768;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

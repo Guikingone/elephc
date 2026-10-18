@@ -83,7 +83,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Previously stored parse failures for those valid expressions must be reparsed.
 /// BUMPED TO 17 to combine generic declarations with native deferred-default Error metadata.
 /// Neither branch's earlier serialized layout describes this merged enum shape.
-pub(crate) const FORMAT_VERSION: u32 = 17;
+/// BUMPED TO 20 to combine deferred-default errors with main's caller-scope access mask.
+/// Formats 18 and 19 already identify the sibling readonly-setter layouts.
+pub(crate) const FORMAT_VERSION: u32 = 20;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
