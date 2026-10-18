@@ -150,6 +150,40 @@ Magician history explains each case's intended path.
 
 ## Internal measurements
 
+For controlled revision comparisons of the mixed workload, select each compiler
+explicitly and supply its source revision. This diagnostic runner is separate
+from the historical process-only suites:
+
+```bash
+python3 benchmark/compare.py --compiler main=/path/to/main/elephc \
+  --revision main=FULL_COMMIT_SHA --bridge-dir main=/path/to/main/archives \
+  --compiler release=/path/to/release/elephc --revision release=v0.27.3 \
+  --bridge-dir release=/path/to/release/archives --json mixed-results.json
+```
+
+Each compiler builds the same PHP fixture once with the selected PHP semantic
+profile, optimizer setting and heap size. Supply matching release-built Magician
+archives using `--bridge-dir` when they are not adjacent to that compiler.
+Compilation happens before timing. PHP is required and runs with `-n`, OPcache
+and JIT disabled. Two warmups precede 21 measured rounds with rotating variant
+order. On Linux, `--cpu N` pins every measured child to an available CPU.
+
+The output separates arithmetic, closure, append, dynamic eval, JSON decode with
+function teardown, total workload body and whole-process wall time. JSON input
+is prepared before timing, and the eval phase includes its first activation.
+Use `--size`, `--rows`, `--columns` and `--eval-count` to investigate scaling;
+changes to these parameters describe different workloads. Compiler/binary/input
+hashes, supplied revisions, the exact PHP version and all raw samples are saved.
+The source revision is explicit because a compiler can come from another checkout.
+
+Every warmup and measured run must produce the expected checksum and consistent
+phase clocks. A phase whose median absolute deviation exceeds 5% of its median
+marks the comparison noisy, preserves the results and exits nonzero. Run on a
+quiet machine with no concurrent builds; the noise gate cannot detect systematic
+contention or make different architectures comparable. These samples are not
+appended to the historical dashboard. Startup-sensitive whole-process ratios and
+body ratios must be reported separately, and isolated speedups must not be multiplied.
+
 Rust stopwatches that require private compiler/interpreter APIs retain their
 owning test modules, with commands exposed through the same entry point:
 
