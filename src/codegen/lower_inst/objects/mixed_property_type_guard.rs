@@ -734,16 +734,19 @@ fn emit_coerced_property_value(
         crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
         return emit_release_untransferred_source_box(ctx, value, slot);
     }
-    emit_box_current_value_as_mixed(ctx.emitter, target);
+    if *target == PhpType::Str {
+        emit_box_persisted_string_and_release(ctx);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, target);
+    }
     emit_release_untransferred_source_box(ctx, value, slot)
 }
 
-/// Releases the source box the ordinary accept path would have handed to the slot.
+/// Releases a source box only when EIR delegated its owner to the physical store.
 ///
-/// `can_store_boxed_value_for_mixed_property()` makes a Mixed-shaped slot ADOPT the source box
-/// outright, so EIR emits no cleanup for a source it expects to be handed over. An arm that
-/// stores a DIFFERENT value instead leaves that box with no owner at all, which leaked one
-/// boxed cell per accepted write until the release was emitted here.
+/// A source with explicit EIR cleanup is retained rather than adopted by an accepting store;
+/// its normal release and unwind pin remain authoritative even when this arm coerces it.
+/// An adoptable source instead needs retirement here when the slot receives a different box.
 fn emit_release_untransferred_source_box(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,

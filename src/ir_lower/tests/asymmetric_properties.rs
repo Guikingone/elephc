@@ -18,6 +18,9 @@ fn check_conditional_readonly_write(target: &str) {
 class ConditionalReadonly {
     public(set) readonly int $explicit;
     public(set) readonly ?int $explicitNullable;
+    public(set) readonly mixed $explicitMixed;
+    public(set) readonly array $explicitArray;
+    public(set) readonly ?string $explicitText;
     public readonly int $implicit;
     public readonly ?int $nullable;
 }
@@ -30,6 +33,9 @@ function mixedFallback(): mixed { return "7"; }
 function initializeNullablePublic(ConditionalReadonly $box): void {
     $box->explicitNullable = mixedFallback();
 }
+function initializeMixedPublic(ConditionalReadonly $box): void { $box->explicitMixed = 4; }
+function initializeArrayPublic(ConditionalReadonly $box): void { $box->explicitArray = [4]; }
+function initializeTextPublic(ConditionalReadonly $box): void { $box->explicitText = 7; }
 function overwriteIncompatible(ConditionalReadonly $box): void {
     try { $box->explicit = []; } catch (Error $error) { echo $error->getMessage(); }
 }
@@ -152,6 +158,12 @@ echo count($properties);
     let store_index = nullable_store.instructions.iter().position(|instruction| instruction.op == Op::PropSet).unwrap();
     assert!(nullable_store.instructions[store_index + 1..].iter().any(|instruction| instruction.op == Op::Release),
         "{target}: inline nullable storage releases the boxed source after copying its payload");
+    for name in ["initializeMixedPublic", "initializeArrayPublic", "initializeTextPublic"] {
+        let store = module.functions.iter().find(|function| function.name == name).unwrap();
+        let write_index = store.instructions.iter().position(|instruction| instruction.op == Op::PropSet).unwrap();
+        assert!(store.instructions[write_index + 1..].iter().any(|instruction| instruction.op == Op::Release),
+            "{target}: {name} retires the successful boxed source, not just its error sibling");
+    }
     let union = module.functions.iter().find(|function| function.name == "initializeUnion").unwrap();
     assert!(union.instructions.iter().any(|inst| inst.op == Op::TypePredicate
         && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object))),

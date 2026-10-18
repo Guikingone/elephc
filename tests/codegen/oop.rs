@@ -66,3 +66,5 @@ mod mixed_receiver_property_writes;
 mod reflection_attribute_filter;
 #[path = "oop/readonly_setter_review.rs"]
 mod readonly_setter_review;
+#[path = "oop/readonly_store_box_review.rs"]
+mod readonly_store_box_review;
