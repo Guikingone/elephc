@@ -70,7 +70,10 @@ pub(super) fn prepare_call_site(
         .exception_activation_offset
         .expect("backtrace activation requires an activation frame slot");
     abi::store_at_offset(ctx.emitter, scratch, activation_offset - 32);
-    let callback = ctx.next_label("backtrace_frame_reader");
+    // Address-taken entries need real symbols: Mach-O folds temporary L labels into
+    // their enclosing symbol's signed 24-bit addend, which large PHP frames exceed.
+    // label() keeps this entry file-local; it is not exported with .globl.
+    let callback = ctx.next_global_label("backtrace_frame_reader");
     abi::emit_symbol_address(ctx.emitter, scratch, &callback);
     abi::store_at_offset(ctx.emitter, scratch, activation_offset - 24);
 

@@ -576,3 +576,10 @@ evaluates the RHS and throws `Error: Cannot append to WeakMap`, while an explici
 null offset or `offsetSet(null, ...)` throws `TypeError`. A private append helper
 uses ordinary EIR method-call ownership on every target. Local, instance-property,
 and static-property forms have native and opaque-eval heap-debug regressions.
+
+The macOS matrix also exposed a large-function Mach-O relocation limit in the
+Core dynamic-spread regression. Backtrace frame-reader callback entries now use
+real file-local symbols rather than temporary L labels, so PAGE/PAGEOFF
+relocations avoid the signed24-bit enclosing-symbol addend limit. The entries
+remain unexported. An all-five-target EIR regression checks the entry contract,
+and Apple-host tests assemble an entry nine MB into its caller.
