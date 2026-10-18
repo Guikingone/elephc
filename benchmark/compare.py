@@ -77,6 +77,22 @@ def file_hash(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def bridge_environment(environment: dict, directory: Path) -> dict:
+    """Select one explicit archive directory without inheriting another build's bridge overrides."""
+    selected = {key: value for key, value in environment.items()
+                if not (key.startswith("ELEPHC_") and key.endswith("_LIB_DIR"))}
+    for archive in directory.glob("libelephc_*.a"):
+        name = archive.stem.removeprefix("libelephc_").upper()
+        selected[f"ELEPHC_{name}_LIB_DIR"] = str(directory)
+    return selected
+
+
+def bridge_fingerprints(directories: dict[str, Path]) -> dict:
+    """Record every supplied bridge, including non-Magician callbacks linked by opaque eval."""
+    return {label: {path.name: file_hash(path) for path in sorted(directory.glob("libelephc_*.a"))}
+            for label, directory in directories.items()}
+
+
 def measure_commands(commands: dict[str, list[str]], cwd: Path, checksum: str,
                      rounds: int, warmups: int, timeout: float) -> dict:
     """Rotate variant order each round and check warmups exactly like recorded samples."""
@@ -139,7 +155,7 @@ def main() -> None:
         parser.error(str(error))
     output = args.json.resolve()
     fingerprints = {label: file_hash(path) for label, path in compilers.items()}
-    bridge_hashes = {label: file_hash(path / "libelephc_magician.a") for label, path in bridges.items()}
+    bridge_hashes = bridge_fingerprints(bridges)
     # One task-owned directory holds sources, caches and binaries, and is removed on failure too.
     with tempfile.TemporaryDirectory(prefix=".benchmark-compare-", dir=Path.cwd()) as temporary:
         cwd = Path(temporary)
@@ -156,7 +172,7 @@ def main() -> None:
             destination = cwd / f"variant-{index}"
             environment = os.environ.copy()
             if label in bridges:
-                environment["ELEPHC_MAGICIAN_LIB_DIR"] = str(bridges[label])
+                environment = bridge_environment(environment, bridges[label])
             # Keep caches isolated from concurrent source changes and other compiler revisions.
             environment["XDG_CACHE_HOME"] = str(cwd / f"cache-{index}")
             command = [str(compiler), "--quiet", f"--php-version={args.php_version}",
@@ -175,8 +191,7 @@ def main() -> None:
                    f"{3 * args.eval_count}:{args.rows}"
         samples = measure_commands(commands, cwd, expected, args.iterations, args.warmup, args.timeout)
         if fingerprints != {label: file_hash(path) for label, path in compilers.items()} \
-                or bridge_hashes != {label: file_hash(path / "libelephc_magician.a")
-                                     for label, path in bridges.items()}:
+                or bridge_hashes != bridge_fingerprints(bridges):
             raise RuntimeError("a selected compiler or bridge changed during the comparison")
         stats = summarize(samples, args.noise_limit)
         payload = {"schema_version": 1, "measurement": "mixed-body-phases-and-process-wall",

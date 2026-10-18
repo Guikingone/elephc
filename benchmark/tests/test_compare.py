@@ -1,13 +1,29 @@
 """Verify mixed-workload checksums, phase accounting, sample ordering and noise rejection."""
 
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from compare import FIELDS, assignments, measure_commands, parse_sample, summarize
+import support  # Bootstrap the benchmark import path for the workflow's unittest discovery command.
+from compare import FIELDS, assignments, bridge_environment, bridge_fingerprints, measure_commands, parse_sample, summarize
 
 
 class CompareTests(unittest.TestCase):
+    def test_explicit_bridges_replace_ambient_overrides_and_fingerprint_all_archives(self):
+        with tempfile.TemporaryDirectory(prefix="elephc-compare-test-") as temporary:
+            directory = Path(temporary)
+            for name in ["magician", "tz"]:
+                (directory / f"libelephc_{name}.a").write_bytes(name.encode())
+            environment = bridge_environment({"PATH": "/bin", "ELEPHC_MAGICIAN_LIB_DIR": "/debug",
+                                              "ELEPHC_TZ_LIB_DIR": "/debug", "ELEPHC_PDO_LIB_DIR": "/debug"}, directory)
+            self.assertEqual(environment, {"PATH": "/bin", "ELEPHC_MAGICIAN_LIB_DIR": temporary,
+                                           "ELEPHC_TZ_LIB_DIR": temporary})
+            before = bridge_fingerprints({"main": directory})
+            self.assertEqual(set(before["main"]), {"libelephc_magician.a", "libelephc_tz.a"})
+            (directory / "libelephc_tz.a").write_bytes(b"changed")
+            self.assertNotEqual(before, bridge_fingerprints({"main": directory}))
+
     def test_variant_options_reject_duplicates_and_missing_values(self):
         self.assertEqual(assignments(["main=/compiler", "release=/release"]),
                          {"main": "/compiler", "release": "/release"})

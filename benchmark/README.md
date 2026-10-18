@@ -163,7 +163,10 @@ python3 benchmark/compare.py --compiler main=/path/to/main/elephc \
 
 Each compiler builds the same PHP fixture once with the selected PHP semantic
 profile, optimizer setting and heap size. Supply matching release-built Magician
-archives using `--bridge-dir` when they are not adjacent to that compiler.
+archives using `--bridge-dir` when they are not adjacent to that compiler. Opaque
+eval can also link callbacks from other bridges, so supply their matching
+archives in the same directory. Every supplied archive is fingerprinted and its
+library-directory override replaces inherited overrides from other builds.
 Compilation happens before timing. PHP is required and runs with `-n`, OPcache
 and JIT disabled. Two warmups precede 21 measured rounds with rotating variant
 order. On Linux, `--cpu N` pins every measured child to an available CPU.
