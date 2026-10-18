@@ -267,16 +267,18 @@ fn lower_property_assign_value(
     // jump to __rt_throw_current with the assigned temporary still pure SSA, so pin it in the
     // unwind chain for the store and retire the pin without releasing once the store returns.
     //
-    // Physical stores need a pin when they keep an independent owner. A no-op abstract setter
-    // instead keeps argument ownership in EIR, including when a boxed receiver could dispatch
-    // to either a setter or an ordinary slot. Normal retirement below follows the same choice.
-    let stored_property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
-    // A no-op setter consumes no storage owner, and its argument guard may throw.
-    // Scoped cleanup prevents any dispatch arm from adopting the original SSA owner.
-    let pins = if retained_abstract_setter || property_store_keeps_independent_ref(
-        &stored_property_ty,
-        &ctx.builder.value_php_type(value.value),
-    ) {
+    // The receiver is still owned by this statement if a guard throws. An unknown runtime
+    // slot can also reject a value before adopting its box, so protect that source as well.
+    // Independent stores keep the existing source pin; a known transferring slot needs none.
+    // Pins acquire no reference. Keep the receiver protected until source cleanup completes:
+    // retiring a fresh Stringable source can invoke a destructor that throws after publication.
+    let stored_property_ty = object_property_type(ctx, object.value, property);
+    let receiver_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span);
+    let source_pins = if value.value != object.value
+        && (retained_abstract_setter || stored_property_ty.as_ref().is_none_or(|property_ty| {
+            property_store_keeps_independent_ref(property_ty, &ctx.builder.value_php_type(value.value))
+        }))
+    {
         crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span)
     } else {
         Vec::new()
@@ -306,14 +308,23 @@ fn lower_property_assign_value(
             Some(span),
         );
     }
-    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    // The source is about to be released, so its unwind record must no longer own it.
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, source_pins, span);
     // Undeclared dynamic properties store boxed Mixed values. Boxing retains a
     // concrete temporary payload just like a declared property store does.
     let property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
     if retained_abstract_setter {
         release_magic_set_value_after_call(ctx, value, span);
+    } else if stored_property_ty.is_none() && ctx.value_is_owning_temporary(value) {
+        // Runtime slots may copy a payload or retain its box; EIR owns the source in either arm.
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     } else {
         release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    }
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, receiver_pins, span);
+    // Keep the receiver pinned until a released source's destructor has finished.
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
     }
 }
 

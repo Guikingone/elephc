@@ -189,6 +189,27 @@ echo "bad";');
     assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
 }
 
+/// A retained setter with the same name must not change ordinary runtime receiver ownership.
+#[test]
+fn test_readonly_setter_grok_review_mixed_receiver_same_name() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+abstract class Base { abstract public int $x { set; } }
+abstract class Child extends Base { public public(set) readonly int|string $x; }
+class Grandchild extends Child {}
+class Ordinary { public string $x = ''; }
+function write(mixed $object): void { $object->x = str_repeat('q', 3); }
+$ordinary = new Ordinary();
+write($ordinary); echo $ordinary->x, '|';
+$retained = new Grandchild();
+try { write($retained); } catch (TypeError $error) { echo 'T'; unset($error); }
+echo isset($retained->x) ? 'bad' : 'U';
+unset($ordinary, $retained);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "qqq|TU", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Each IR-off control is separately scheduled under the existing CI timeout.
 macro_rules! without_opt_test {
     ($name:ident, $case:ident) => {
@@ -209,3 +230,4 @@ without_opt_test!(test_readonly_setter_review_reflected_result_owner_no_ir_opt, 
 without_opt_test!(test_readonly_setter_tenth_review_nullable_argument_guard_no_ir_opt, test_readonly_setter_tenth_review_nullable_argument_guard);
 without_opt_test!(test_readonly_setter_tenth_review_aot_class_supertype_order_no_ir_opt, test_readonly_setter_tenth_review_aot_class_supertype_order);
 without_opt_test!(test_readonly_setter_tenth_review_eval_self_owner_no_ir_opt, test_readonly_setter_tenth_review_eval_self_owner);
+without_opt_test!(test_readonly_setter_grok_review_mixed_receiver_same_name_no_ir_opt, test_readonly_setter_grok_review_mixed_receiver_same_name);
