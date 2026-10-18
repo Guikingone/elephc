@@ -297,16 +297,37 @@ fn check_promoted_nested_update_value(
             checker.infer_type_with_assignment_effects(default, env)?;
             Ok(true)
         }
-        ExprKind::Assignment { value, prelude, result_target: None, .. }
-            if prelude.len() == 1 =>
+        ExprKind::Assignment { target: result, value, prelude, result_target: None, .. }
+            if matches!(prelude.len(), 1 | 2) =>
         {
             let crate::parser::ast::StmtKind::Assign { name, value: read } = &prelude[0].kind
                 else { return Ok(false); };
             if read != target {
                 return Ok(false);
             }
-            Ok(matches!(&value.kind,
-                ExprKind::PreIncrement(local) | ExprKind::PreDecrement(local) if local == name))
+            let working = if prelude.len() == 2 {
+                let crate::parser::ast::StmtKind::Assign { name: working, value: copy } = &prelude[1].kind
+                    else { return Ok(false); };
+                if !matches!(&copy.kind, ExprKind::Variable(source) if source == name) {
+                    return Ok(false);
+                }
+                working
+            } else {
+                name
+            };
+            if !matches!(&value.kind,
+                ExprKind::PreIncrement(local) | ExprKind::PreDecrement(local) if local == working)
+            {
+                return Ok(false);
+            }
+            let ExprKind::Variable(result) = &result.kind else { return Ok(false); };
+            // The write-context lookup supplies a boxed null for the missing leaf.
+            // Publish both captures without replaying an invalid read through false.
+            env.insert(name.clone(), PhpType::Mixed);
+            env.insert(working.clone(), PhpType::Mixed);
+            let result_type = checker.infer_type_with_assignment_effects(value, env)?;
+            env.insert(result.clone(), result_type);
+            Ok(true)
         }
         _ => Ok(false),
     }

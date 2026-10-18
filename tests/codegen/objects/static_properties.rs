@@ -9,6 +9,41 @@
 
 use super::*;
 
+/// Checks a result-bearing update through a statically inferred false parent.
+fn verify_inferred_false_update_result(operation: &str, expected: &str) {
+    let out = compile_and_run_with_heap_debug(&format!(r#"<?php
+$items = [false];
+set_error_handler(function(int $level, string $message): bool {{ echo $level, ','; return true; }});
+$result = {operation};
+echo json_encode($result), ':', json_encode($items);
+restore_error_handler(); unset($result, $items);
+"#));
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Prefix expressions bind their generated result local when a false parent autovivifies.
+#[test]
+fn test_static_prefix_greptile_inferred_false_result_prefix() {
+    verify_inferred_false_update_result("++$items[0][1]", "8192,2,1:[{\"1\":1}]");
+}
+
+/// Postfix expressions keep their old null capture and bind the independent working local.
+#[test]
+fn test_static_prefix_greptile_inferred_false_result_postfix() {
+    verify_inferred_false_update_result("$items[0][1]++", "8192,2,null:[{\"1\":1}]");
+}
+
+/// Inferred-parent capture types do not depend on EIR optimization.
+#[test]
+fn test_static_prefix_greptile_inferred_false_result_without_ir_opt() {
+    crate::support::without_ir_opt(|| {
+        test_static_prefix_greptile_inferred_false_result_prefix();
+        test_static_prefix_greptile_inferred_false_result_postfix();
+    });
+}
+
 /// Generic instance-property nested postfix updates return the unmodified captured value.
 #[test]
 fn test_static_prefix_greptile_instance_nested_postfix() {
