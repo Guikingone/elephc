@@ -231,4 +231,3 @@ echo text_error(TextBoundaryValue::A, [[1]]);
 fn test_enum_argument_boundaries_canonical_type_errors_no_ir_opt() {
     without_ir_opt(test_enum_argument_boundaries_canonical_type_errors);
 }
-
