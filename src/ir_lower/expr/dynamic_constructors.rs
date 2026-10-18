@@ -293,4 +293,3 @@ fn dynamic_new_args_lower_to_exact_arity(
             .is_some_and(|default| default.is_some())
     })
 }
-
