@@ -9,6 +9,7 @@
 //! - Ordinary call planning owns defaults, named/spread arguments and reference returns.
 //! - Interface declarations remain unchanged for reflection and non-enum fallback dispatch.
 //! - Rejected binding throws only in its selected branch after source argument evaluation.
+//! - Result-owner slots are zeroed before publication even when every branch rejects binding.
 
 use super::*;
 use super::nullable_method_calls::lower_method_call_with_receiver_direct;
@@ -49,6 +50,9 @@ pub(super) fn lower_enum_interface_call(
         // Heap cleanup treats its slot as a pointer. Scalar result slots are neither heap
         // owners nor zero-initialized, and a rejected branch never stores a result there.
         if result_needs_owner {
+            ctx.emit_void(Op::ZeroLocalSlot, Vec::new(),
+                Some(Immediate::LocalSlot(ctx.local_slots[&name])),
+                Op::ZeroLocalSlot.default_effects(), Some(expr.span));
             register_owned_call_operand(ctx, ctx.local_slots[&name], expr.span);
         }
         Some(name)

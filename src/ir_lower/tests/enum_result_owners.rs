@@ -7,6 +7,7 @@
 //! Key details:
 //! - A rejected call leaves its result slot untouched, so scalar storage cannot be a heap root.
 //! - Heap-bearing results keep their prepublished cleanup record and every target still emits.
+//! - A store-free rejected call must zero its result slot before publishing that root.
 
 use crate::ir::{Immediate, LocalKind, Op, Ownership};
 use crate::types::PhpType;
@@ -40,6 +41,17 @@ try { missing_string(H::A); } catch (ArgumentCountError $e) { echo $e->getMessag
         if name == "missing_string" {
             assert!(roots.iter().any(|local| local.php_type == PhpType::Str && local.kind == LocalKind::OwnedTemp),
                 "{target}: the string result must retain its prepublished root");
+            for local in roots.iter().filter(|local|
+                local.php_type == PhpType::Str && local.kind == LocalKind::OwnedTemp)
+            {
+                let publish = function.instructions.iter().position(|instruction|
+                    instruction.op == Op::PushCallOperandOwner
+                        && instruction.immediate == Some(Immediate::LocalSlot(local.id))).unwrap();
+                assert!(function.instructions[..publish].iter().any(|instruction|
+                    instruction.op == Op::ZeroLocalSlot
+                        && instruction.immediate == Some(Immediate::LocalSlot(local.id))),
+                    "{target}: initialize store-free string result before publishing its owner");
+            }
         }
     }
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
