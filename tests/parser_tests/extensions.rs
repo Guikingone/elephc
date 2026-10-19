@@ -220,6 +220,21 @@ fn test_parse_extern_int_widths() {
     }
 }
 
+/// Parses the C `float` width: `f32` is its own C type while `f64` and `double` fold to `float`.
+#[test]
+fn test_parse_extern_float_widths() {
+    use elephc::parser::ast::CType;
+    let stmts = parse_source("<?php extern function fw(f32 $a, f64 $b, double $c): f32;");
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { params, return_type, .. } => {
+            let types: Vec<&CType> = params.iter().map(|param| &param.c_type).collect();
+            assert_eq!(types, vec![&CType::F32, &CType::Float, &CType::Float]);
+            assert_eq!(return_type, &CType::F32);
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
 /// Parses `extern "m" function sin(float $x): float;` as an `ExternFunctionDecl` with library `"m"`.
 /// Verifies name, library, param types, and return type are all captured correctly.
 #[test]

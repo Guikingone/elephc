@@ -8,8 +8,9 @@
 //!
 //! Key details:
 //! - FFI metadata must preserve target-independent type contracts while leaving register/stack layout to ABI helpers.
-//! - Every C integer width maps to the PHP type `int`; `ExternAbiType` keeps the declared width
-//!   so the call boundary can normalize registers without widening the PHP type system.
+//! - Every C integer width maps to the PHP type `int` and C `float` to the PHP type `float`;
+//!   `ExternAbiType` keeps the declared width so the call boundary can normalize registers
+//!   without widening the PHP type system.
 
 use std::collections::HashMap;
 
@@ -28,6 +29,8 @@ pub enum ExternAbiType {
     Int { bits: u8, signed: bool },
     /// C `double` in a floating-point register.
     Float64,
+    /// C `float`: a single in the low half of the floating-point register, widened to the PHP double.
+    Float32,
     /// C `bool`: only the low byte is defined.
     Bool,
     /// `char*` converted to and from a PHP string at the boundary.
@@ -51,6 +54,7 @@ pub fn ctype_to_abi_type(ct: &CType) -> ExternAbiType {
         CType::Int => ExternAbiType::INT64,
         CType::IntWidth(width) => ExternAbiType::Int { bits: width.bits(), signed: width.signed() },
         CType::Float => ExternAbiType::Float64,
+        CType::F32 => ExternAbiType::Float32,
         CType::Str => ExternAbiType::CStr,
         CType::Bool => ExternAbiType::Bool,
         CType::Void => ExternAbiType::Void,
@@ -62,12 +66,12 @@ pub fn ctype_to_abi_type(ct: &CType) -> ExternAbiType {
 /// Maps a parser CType to its corresponding PhpType for FFI and extern declaration lowering.
 ///
 /// Used when lowering `extern` declarations to connect the parser's C types (Int, IntWidth,
-/// Float, Str, Bool, Void, Ptr, TypedPtr, Callable) to the compiler's internal PhpType
-/// representation. Every C integer width is a PHP `int`.
+/// Float, F32, Str, Bool, Void, Ptr, TypedPtr, Callable) to the compiler's internal PhpType
+/// representation. Every C integer width is a PHP `int` and both float widths are a PHP `float`.
 pub fn ctype_to_php_type(ct: &CType) -> PhpType {
     match ct {
         CType::Int | CType::IntWidth(_) => PhpType::Int,
-        CType::Float => PhpType::Float,
+        CType::Float | CType::F32 => PhpType::Float,
         CType::Str => PhpType::Str,
         CType::Bool => PhpType::Bool,
         CType::Void => PhpType::Void,
@@ -88,6 +92,7 @@ pub fn ctype_stack_size(ct: &CType) -> usize {
         CType::Int
         | CType::IntWidth(_)
         | CType::Float
+        | CType::F32
         | CType::Bool
         | CType::Ptr
         | CType::TypedPtr(_)

@@ -183,12 +183,16 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `ptr_read16()` | Pointer | Reads one unsigned 16-bit word through a raw pointer and returns it as an integer. |
 | `ptr_read32()` | Pointer | Reads one unsigned 32-bit word through a raw pointer and returns it as an integer. |
 | `ptr_read8()` | Pointer | Reads one unsigned byte through a raw pointer and returns it as an integer. |
+| `ptr_read_f32()` | Pointer | Reads one IEEE 754 single-precision value through a raw pointer and returns it as a float. |
+| `ptr_read_f64()` | Pointer | Reads one IEEE 754 double-precision value through a raw pointer and returns it as a float. |
 | `ptr_read_string()` | Pointer | Copies raw bytes from a pointer into a PHP string of the given length. |
 | `ptr_set()` | Pointer | Writes one machine word through a raw pointer. |
 | `ptr_sizeof()` | Pointer | Returns the byte size of the named pointer target type. |
 | `ptr_write16()` | Pointer | Writes one 16-bit word through a raw pointer. |
 | `ptr_write32()` | Pointer | Writes one 32-bit word through a raw pointer. |
 | `ptr_write8()` | Pointer | Writes one byte through a raw pointer. |
+| `ptr_write_f32()` | Pointer | Writes one IEEE 754 single-precision value through a raw pointer, rounding the float to 32 bits. |
+| `ptr_write_f64()` | Pointer | Writes one IEEE 754 double-precision value through a raw pointer. |
 | `ptr_write_string()` | Pointer | Copies PHP string bytes into raw memory at the given pointer. |
 | `zval_free()` | Pointer | Frees a PHP zval pointer allocated by `zval_pack`. |
 | `zval_pack()` | Pointer | Packs an elephc runtime value into a heap-allocated PHP zval pointer. |

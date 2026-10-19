@@ -241,6 +241,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     PtrRead16,
     /// Dispatches `ptr_read32(...)`.
     PtrRead32,
+    /// Dispatches `ptr_read_f32(...)`.
+    PtrReadF32,
+    /// Dispatches `ptr_read_f64(...)`.
+    PtrReadF64,
     /// Dispatches `ptr_read_string(...)`.
     PtrReadString,
     /// Dispatches `ptr_set(...)`.
@@ -253,6 +257,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     PtrWrite16,
     /// Dispatches `ptr_write32(...)`.
     PtrWrite32,
+    /// Dispatches `ptr_write_f32(...)`.
+    PtrWriteF32,
+    /// Dispatches `ptr_write_f64(...)`.
+    PtrWriteF64,
     /// Dispatches `ptr_write_string(...)`.
     PtrWriteString,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
@@ -479,12 +487,16 @@ impl EvalDirectHook {
             Self::PtrRead8 => eval_builtin_ptr_read8(args, context, scope, values),
             Self::PtrRead16 => eval_builtin_ptr_read16(args, context, scope, values),
             Self::PtrRead32 => eval_builtin_ptr_read32(args, context, scope, values),
+            Self::PtrReadF32 => eval_builtin_ptr_read_f32(args, context, scope, values),
+            Self::PtrReadF64 => eval_builtin_ptr_read_f64(args, context, scope, values),
             Self::PtrReadString => eval_builtin_ptr_read_string(args, context, scope, values),
             Self::PtrSet => eval_builtin_ptr_set(args, context, scope, values),
             Self::PtrSizeof => eval_builtin_ptr_sizeof(args, context, scope, values),
             Self::PtrWrite8 => eval_builtin_ptr_write8(args, context, scope, values),
             Self::PtrWrite16 => eval_builtin_ptr_write16(args, context, scope, values),
             Self::PtrWrite32 => eval_builtin_ptr_write32(args, context, scope, values),
+            Self::PtrWriteF32 => eval_builtin_ptr_write_f32(args, context, scope, values),
+            Self::PtrWriteF64 => eval_builtin_ptr_write_f64(args, context, scope, values),
             Self::PtrWriteString => eval_builtin_ptr_write_string(args, context, scope, values),
             Self::Sin => eval_builtin_sin(args, context, scope, values),
             Self::Sinh => eval_builtin_sinh(args, context, scope, values),

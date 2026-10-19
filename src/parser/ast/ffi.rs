@@ -52,7 +52,8 @@ impl CIntWidth {
 pub enum CType {
     Int,                    // int64_t / long, also spelled `i64`
     IntWidth(CIntWidth),    // explicit narrower or unsigned C integer (i8..u32, u64)
-    Float,
+    Float,                  // double, also spelled `f64`
+    F32,                    // C float; widened to a PHP double at the call boundary
     Str,        // char* (null-terminated)
     Bool,
     Void,

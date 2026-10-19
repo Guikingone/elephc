@@ -170,7 +170,7 @@ fn test_error_extern_unknown_int_width() {
 fn test_error_extern_class_field_rejects_int_width() {
     expect_error(
         "<?php extern class Bad { i32 $field; }",
-        "Extern class 'Bad' field $field uses an explicit C integer width",
+        "Extern class 'Bad' field $field uses an explicit C width",
     );
 }
 
@@ -185,12 +185,45 @@ fn test_error_extern_rejects_more_than_eight_integer_arguments() {
     );
 }
 
+/// Verifies that `ptr_write_f32()` rejects a statically non-numeric value.
+#[test]
+fn test_error_ptr_write_f32_rejects_string_value() {
+    expect_error(
+        "<?php $x = 1; $p = ptr($x); ptr_write_f32($p, \"oops\");",
+        "ptr_write_f32() value must be float",
+    );
+}
+
+/// Verifies that `ptr_read_f64()` rejects a non-pointer argument.
+#[test]
+fn test_error_ptr_read_f64_rejects_int_argument() {
+    expect_error("<?php echo ptr_read_f64(42);", "ptr_read_f64()");
+}
+
+/// Verifies that the C `float` width is rejected on extern class fields like the integer widths.
+#[test]
+fn test_error_extern_class_field_rejects_f32() {
+    expect_error(
+        "<?php extern class Bad { f32 $field; }",
+        "Extern class 'Bad' field $field uses an explicit C width",
+    );
+}
+
+/// Verifies that a float width elephc does not know is rejected like any other unknown C type.
+#[test]
+fn test_error_extern_unknown_float_width() {
+    expect_error(
+        "<?php extern function foo(f16 $x): int;",
+        "Unknown C type: f16",
+    );
+}
+
 /// Verifies that explicit C integer widths are rejected on extern globals.
 #[test]
 fn test_error_extern_global_rejects_int_width() {
     expect_error(
         "<?php extern global u8 $flag;",
-        "Extern global $flag uses an explicit C integer width",
+        "Extern global $flag uses an explicit C width",
     );
 }
 
