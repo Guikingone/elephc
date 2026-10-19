@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
+//! - String parents preserve reference markers and publish their stored child before leaf writes.
 
 use super::*;
 
@@ -52,6 +53,15 @@ pub(super) fn lower_nested_array_assign(
             root_operand(ctx, value)
         });
         let parent = lower_nested_assign_parent(ctx, array, span);
+        let parent = if ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed {
+            let resolved = ctx.emit_owned_value(
+                Op::RuntimeCall, vec![parent.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellResolveForWrite)),
+                PhpType::Mixed, effects_lookup::runtime_effects(), Some(span),
+            );
+            crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+            resolved
+        } else { parent };
         let parent = root_operand(ctx, parent);
         let key = lower_expr(ctx, index);
         let key = root_operand(ctx, key);
@@ -62,13 +72,10 @@ pub(super) fn lower_nested_array_assign(
                 root_operand(ctx, value)
             }
         };
-        ctx.emit_void(
-            Op::RuntimeCall,
-            vec![parent.value, key.value, value.value],
-            None,
-            effects_lookup::runtime_effects(),
-            Some(span),
-        );
+        if !super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {
+            return;
+        }
+        super::nested_scalar_writes::lower_nested_set(ctx, parent, key, value, span);
         // The boxed writer borrows all three operands and retains or copies the stored value.
         // Roots also retire computed Mixed values and keep earlier operands safe if a later
         // operand or the write throws into a same-frame catch.
@@ -96,7 +103,7 @@ pub(super) fn lower_nested_array_assign(
 /// undefined-key warning for these legal writes, and neither does this path.
 /// Shapes without a for-write lowering fall back to the plain read used
 /// before (ArrayAccess objects, non-container receivers).
-pub(super) fn lower_nested_assign_parent(
+pub(crate) fn lower_nested_assign_parent(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
     span: Span,
@@ -127,10 +134,16 @@ pub(super) fn lower_nested_assign_parent(
     let receiver = lower_nested_assign_parent(ctx, array, span);
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         let key = lower_expr(ctx, index);
+        let target = match &array.kind {
+            ExprKind::Variable(name) if ctx.append_update_cell_aliases.contains(name) => {
+                RuntimeCallTarget::PendingAppendFetchForWrite
+            }
+            _ => RuntimeCallTarget::ArrayFetchForWrite,
+        };
         let parent = ctx.emit_value(
             Op::RuntimeCall,
             vec![receiver.value, key.value],
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+            Some(Immediate::RuntimeCall(target)),
             PhpType::Mixed,
             effects_lookup::runtime_effects(),
             Some(expr.span),
@@ -147,12 +160,12 @@ pub(super) fn lower_nested_assign_parent(
 }
 
 /// Lowers `$local[key]` as the parent of a nested assignment when the local
-/// holds a concrete container (`array<mixed>` or a Mixed-valued assoc array):
+/// holds an indexed array or an assoc array:
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
 /// context, the possibly promoted/reallocated container is stored back into
 /// the local, and the guaranteed-present element is re-read as the parent
-/// cell. Returns `None` for shapes without a concrete for-write lowering
-/// (typed element arrays, non-Int/Str key expressions).
+/// cell. Every key shape keeps selected scalar storage attached, and keys are evaluated once.
+/// Returns `None` for receiver or key shapes without a concrete lowering.
 pub(super) fn lower_local_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -162,48 +175,49 @@ pub(super) fn lower_local_parent_fetch_for_write(
     let span = parent_expr.span;
     let local_ty = ctx.local_type(name);
     match local_ty.codegen_repr() {
-        PhpType::Array(elem_ty)
-            if elem_ty.codegen_repr() == PhpType::Mixed
-                || is_empty_indexed_array_element(elem_ty.as_ref()) =>
-        {
+        PhpType::Array(elem_ty) => {
             match index_expr_key_type(ctx, index) {
                 PhpType::Int => {
-                    let array_value = ctx.load_local(name, Some(span));
+                    let array = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
+                    if matches!(key.ir_type, IrType::Str
+                        | IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)) {
+                        // Syntactic inference defaults variables/calls to integer keys. Their
+                        // lowered values are authoritative, and must not be coerced to zero.
+                        if ctx.is_ref_bound_local(name) && elem_ty.codegen_repr() == PhpType::Mixed {
+                            let cell = lower_indexed_parent_fetch_for_write(ctx, name, array, key, span);
+                            crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+                            return Some(cell);
+                        }
+                        let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
+                        ctx.prepare_mutated_local_owner_for_backend_retire(name, array, assoc_ty.clone(), Some(span));
+                        let hash = ctx.emit_value(
+                            Op::ArrayToHash, vec![array.value], None, assoc_ty.clone(),
+                            Op::ArrayToHash.default_effects(), Some(span),
+                        );
+                        return Some(lower_hash_parent_fetch_for_write_with_key(
+                            ctx, name, hash, assoc_ty, key, span,
+                        ));
+                    }
+                    // A nested write needs the attached child cell even for a typed string
+                    // or boolean element. A plain read loses its writeback identity.
                     let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
-                    // Autovivification makes the element type effectively
-                    // Mixed even when the array started empty-typed. The
-                    // ensure call consumes the loaded container (in-place
-                    // mutation or realloc), so the previous boxed owner of a
-                    // Mixed-storage slot must be released up front and the
-                    // storeback must not release again.
-                    let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
-                    ctx.prepare_mutated_local_owner(name, array_value, ensured_ty.clone(), Some(span));
-                    let ensured = ctx.emit_value(
-                        Op::RuntimeCall,
-                        vec![array_value.value, key.value],
-                        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
-                        ensured_ty.clone(),
-                        effects_lookup::runtime_effects(),
-                        Some(span),
-                    );
-                    ctx.store_prepared_mutated_local(name, ensured, ensured_ty, Some(span));
-                    // The element now exists: the in-bounds read returns the
-                    // STORED cell (retained) without an undefined-key warning.
-                    let cell = ctx.emit_value(
-                        Op::ArrayGetForWrite,
-                        vec![ensured.value, key.value],
-                        None,
-                        PhpType::Mixed,
-                        Op::ArrayGetForWrite.default_effects(),
-                        Some(span),
-                    );
+                    Some(lower_indexed_parent_fetch_for_write(ctx, name, array, key, span))
+                }
+                PhpType::Str if elem_ty.codegen_repr() == PhpType::Mixed
+                    && ctx.is_ref_bound_local(name) => {
+                    // Keep reference variadics on the runtime storage-aware fetch. A string
+                    // parent can promote storage, but must not reinterpret marker payloads.
+                    let array = ctx.load_local(name, Some(span));
+                    let key = lower_expr(ctx, index);
+                    let cell = lower_indexed_parent_fetch_for_write(ctx, name, array, key, span);
+                    release_persisted_string_operand(ctx, key, span);
                     Some(cell)
                 }
                 PhpType::Str => {
                     // A literal string key on an indexed local is always a
                     // hash key: promote the local to a Mixed-valued hash
-                    // first (mirrors `lower_string_key_array_promotion`),
+                    // first (mirrors `lower_array_key_hash_promotion`),
                     // then ensure the element through the hash path. The
                     // promoted hash flows straight into the ensure call and
                     // is stored back exactly once at the end.
@@ -223,14 +237,47 @@ pub(super) fn lower_local_parent_fetch_for_write(
                 _ => None,
             }
         }
-        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
+        PhpType::AssocArray { key, .. } => {
             let hash_value = ctx.load_local(name, Some(span));
-            let assoc_ty = ctx.local_type(name);
+            let assoc_ty = PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) };
+            // Fetch-for-write normalizes typed entries in place and returns their attached
+            // Mixed cells. Declare that result contract before publishing the changed hash.
             ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
             Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span))
         }
         _ => None,
     }
+}
+
+/// Ensures and re-reads a writable indexed or runtime-promoted parent without copying its cell.
+/// The ensure helper consumes the loaded owner; prepared storeback must not retire it again.
+/// Mixed-backed frame slots are widened before cleanup, while reference cells publish normally.
+fn lower_indexed_parent_fetch_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array: LoweredValue,
+    key: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    ctx.prepare_mutated_local_owner(name, array, ensured_ty.clone(), Some(span));
+    let ensured = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![array.value, key.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        ensured_ty.clone(),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    ctx.store_prepared_mutated_local(name, ensured, ensured_ty, Some(span));
+    ctx.emit_value(
+        Op::ArrayGetForWrite,
+        vec![ensured.value, key.value],
+        None,
+        PhpType::Mixed,
+        Op::ArrayGetForWrite.default_effects(),
+        Some(span),
+    )
 }
 
 /// Ensures a hash element exists for a nested write parent, stores the
@@ -246,6 +293,18 @@ pub(super) fn lower_hash_parent_fetch_for_write(
     span: Span,
 ) -> LoweredValue {
     let key = lower_expr(ctx, index);
+    lower_hash_parent_fetch_for_write_with_key(ctx, name, hash_value, assoc_ty, key, span)
+}
+
+/// Uses an already evaluated hash key for both the ensure and stored-cell read, then retires it.
+fn lower_hash_parent_fetch_for_write_with_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    hash_value: LoweredValue,
+    assoc_ty: PhpType,
+    key: LoweredValue,
+    span: Span,
+) -> LoweredValue {
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![hash_value.value, key.value],
@@ -255,14 +314,16 @@ pub(super) fn lower_hash_parent_fetch_for_write(
         Some(span),
     );
     ctx.store_prepared_mutated_local(name, ensured, assoc_ty, Some(span));
-    ctx.emit_value(
+    let cell = ctx.emit_value(
         Op::HashGetForWrite,
         vec![ensured.value, key.value],
         Some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::HashGetForWrite.default_effects(),
         Some(span),
-    )
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    cell
 }
 
 /// Returns true when every part of a nested write target is a bare variable.
