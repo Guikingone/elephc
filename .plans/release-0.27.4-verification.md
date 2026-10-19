@@ -3,7 +3,7 @@
 - [x] Verify the published base, exact candidate and complete source inventory.
 - [x] Run static release checks and a warning-free build without running tests.
 - [x] Correct documentation and regenerate the builtin references.
-- [ ] Present the audited changelog draft for approval.
+- [x] Present the audited changelog draft for approval.
 - [ ] Apply and commit the approved numbered release notes.
 
 ## Scope and evidence
@@ -22,7 +22,9 @@ candidate were verified independently without replacing that tag.
 The bundled release inventory reconciled 37 merged PRs and 5 direct commits,
 covering all 301 commits with zero errors and zero unaccounted commits. All PRs
 target main and their merge commits are reachable from the candidate. The
-semantic ledger and proposed notes are recorded separately before approval.
+semantic ledger and 25 proposed bullets are in
+[the changelog audit](release-0.27.4-changelog-audit.md). All 42 source rows have
+an include/omit decision; only approval to apply the draft remains pending.
 
 The user requested verification, documentation updates, then final changelog
 preparation, with progressive commits and no test execution. The changelog
