@@ -40,6 +40,14 @@ final-status-level = "slow"
 slow-timeout = { period = "60s", terminate-after = 1 }
 status-level = "slow"
 
+# One JUnit report per CI run, written under the run's target dir
+# (`<target>/nextest/ci/junit.xml`). The sharded jobs upload it so per-test wall
+# times are available for every run instead of only the >60s "SLOW" lines the
+# console status level prints; `cargo nextest archive` runs extract into
+# `$RUNNER_TEMP/nextest` for exactly this reason.
+[profile.ci.junit]
+path = "junit.xml"
+
 # `cargo nextest archive` captures the test binaries + the `elephc` bin, but NOT
 # the bridge staticlibs — the codegen test runner links compiled PHP programs
 # against libelephc_*.a at run time (via `ld`), so nextest can't discover them.

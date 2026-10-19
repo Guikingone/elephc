@@ -627,14 +627,27 @@ jobs:
 
       - name: Run non-codegen tests
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
             --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 3
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-non-codegen-tests-macos-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   non-codegen-tests-linux-x86_64:
     name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
@@ -661,14 +674,27 @@ jobs:
 
       - name: Run non-codegen tests
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
             --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 4
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-non-codegen-tests-linux-x86_64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   non-codegen-tests-linux-aarch64:
     name: Non-Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
@@ -695,14 +721,27 @@ jobs:
 
       - name: Run non-codegen tests
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
             --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 4
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-non-codegen-tests-linux-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   cli-tests-macos-aarch64:
     name: CLI Eval Tests (macos-aarch64 ${{ matrix.shard }}/6)
@@ -753,14 +792,27 @@ jobs:
         # multi-second compile plus link. Two at a time keeps the compiler's
         # memory and the runner's cores in check while halving the serial span.
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
             --partition hash:${{ matrix.shard }}/6 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 2
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-cli-tests-macos-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   cli-tests-linux-x86_64:
     name: CLI Eval Tests (linux-x86_64 ${{ matrix.shard }}/6)
@@ -791,14 +843,27 @@ jobs:
         # multi-second compile plus link. Two at a time keeps the compiler's
         # memory and the runner's cores in check while halving the serial span.
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
             --partition hash:${{ matrix.shard }}/6 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 2
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-cli-tests-linux-x86_64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   cli-tests-linux-aarch64:
     name: CLI Eval Tests (linux-aarch64 ${{ matrix.shard }}/6)
@@ -829,14 +894,27 @@ jobs:
         # multi-second compile plus link. Two at a time keeps the compiler's
         # memory and the runner's cores in check while halving the serial span.
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
             --partition hash:${{ matrix.shard }}/6 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 2
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-cli-tests-linux-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   web-tests-macos-aarch64:
     name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
@@ -883,13 +961,26 @@ jobs:
 
       - name: Run web test shard
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(web_tests) or binary(web_session_tests)' \
             --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-web-tests-macos-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   web-tests-linux-x86_64:
     name: Web Tests (linux-x86_64 ${{ matrix.shard }}/2)
@@ -916,13 +1007,26 @@ jobs:
 
       - name: Run web test shard
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(web_tests) or binary(web_session_tests)' \
             --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-web-tests-linux-x86_64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   web-tests-linux-aarch64:
     name: Web Tests (linux-aarch64 ${{ matrix.shard }}/2)
@@ -949,13 +1053,26 @@ jobs:
 
       - name: Run web test shard
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(web_tests) or binary(web_session_tests)' \
             --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-web-tests-linux-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   codegen-tests-macos-aarch64:
     name: Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
@@ -1043,10 +1160,22 @@ jobs:
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 3
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-codegen-tests-macos-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   codegen-tests-linux-x86_64:
     name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
@@ -1114,10 +1243,22 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 4
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-codegen-tests-linux-x86_64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   codegen-tests-linux-aarch64:
     name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
@@ -1185,10 +1326,22 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 4
+
+      - name: Upload JUnit report
+        # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
+        # run into the extracted archive's target dir; the aggregate job merges them.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-codegen-tests-linux-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   # PDO fixtures all inject the same large standard-library prelude. Running a
   # deterministic shard in one libtest process lets parser/runtime/bridge caches
@@ -1783,6 +1936,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
           EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
           EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
+          EVAL_SHARD_JUNIT_FILE: ${{ runner.temp }}/nextest/target/nextest/ci/junit-pass1.xml
           # The shard runner installs no nextest of its own: pass 2 runs the
           # binary packaged with the archive (see build-archive-macos-aarch64).
           EVAL_SHARD_NEXTEST_BIN: ${{ runner.temp }}/cargo-nextest
@@ -1792,6 +1946,19 @@ jobs:
           test -n "$eval_test_binary"
           bash scripts/ci/run_eval_codegen_shard.sh \
             "$eval_test_binary" "${{ matrix.shard }}" 16
+
+      - name: Upload JUnit reports
+        # The shard runner writes `junit-pass1.xml` for its single-process pass (every selected
+        # test, see EVAL_SHARD_JUNIT_FILE in scripts/ci/run_eval_codegen_shard.sh) and
+        # `[profile.ci.junit]` writes nextest's `junit.xml` for the reruns; the aggregate job
+        # merges both.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-eval-codegen-tests-macos-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/
+          if-no-files-found: ignore
+          retention-days: 7
 
   eval-codegen-tests-linux-x86_64:
     name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
@@ -1832,12 +1999,26 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
           EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
           EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
+          EVAL_SHARD_JUNIT_FILE: ${{ runner.temp }}/nextest/target/nextest/ci/junit-pass1.xml
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
           test -n "$eval_test_binary"
           bash scripts/ci/run_eval_codegen_shard.sh \
             "$eval_test_binary" "${{ matrix.shard }}" 16
+
+      - name: Upload JUnit reports
+        # The shard runner writes `junit-pass1.xml` for its single-process pass (every selected
+        # test, see EVAL_SHARD_JUNIT_FILE in scripts/ci/run_eval_codegen_shard.sh) and
+        # `[profile.ci.junit]` writes nextest's `junit.xml` for the reruns; the aggregate job
+        # merges both.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-eval-codegen-tests-linux-x86_64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/
+          if-no-files-found: ignore
+          retention-days: 7
 
   eval-codegen-tests-linux-aarch64:
     name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
@@ -1878,12 +2059,26 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
           EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
           EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
+          EVAL_SHARD_JUNIT_FILE: ${{ runner.temp }}/nextest/target/nextest/ci/junit-pass1.xml
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
           test -n "$eval_test_binary"
           bash scripts/ci/run_eval_codegen_shard.sh \
             "$eval_test_binary" "${{ matrix.shard }}" 16
+
+      - name: Upload JUnit reports
+        # The shard runner writes `junit-pass1.xml` for its single-process pass (every selected
+        # test, see EVAL_SHARD_JUNIT_FILE in scripts/ci/run_eval_codegen_shard.sh) and
+        # `[profile.ci.junit]` writes nextest's `junit.xml` for the reruns; the aggregate job
+        # merges both.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-eval-codegen-tests-linux-aarch64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/nextest/target/nextest/ci/
+          if-no-files-found: ignore
+          retention-days: 7
 
   image-api-sync:
     name: Image API stubs in sync
@@ -2386,6 +2581,18 @@ jobs:
       - benchmark-tooling
     if: always()
     steps:
+      - name: Merge JUnit reports
+        # One artifact with every shard's report, so per-test timings for a run can be
+        # read in one download instead of ~150. Never fails the gate: the reports are
+        # diagnostics, the job results below are the verdict.
+        continue-on-error: true
+        uses: actions/upload-artifact/merge@v7
+        with:
+          name: junit-all
+          pattern: junit-*
+          separate-directories: true
+          retention-days: 7
+
       - name: Verify test jobs
         run: |
           test "${{ needs.build-archive-macos-aarch64.result }}" = "success"
