@@ -18,10 +18,17 @@ fi
 umask 077
 SIGNING_WORKDIR="$(mktemp -d "$RUNNER_TEMP/elephc-notarization.XXXXXX")"
 KEYCHAIN_PATH="$SIGNING_WORKDIR/signing.keychain-db"
+ACTIVE_NOTARY_PID=""
 
 cleanup() {
     local result=$?
     trap - EXIT
+    # Stop our worker before deleting the inputs it may still be using. A
+    # cancelled submission must not defer cleanup until Apple's wait finishes.
+    if [[ -n "$ACTIVE_NOTARY_PID" ]]; then
+        kill -KILL "$ACTIVE_NOTARY_PID" 2>/dev/null || true
+        wait "$ACTIVE_NOTARY_PID" 2>/dev/null || true
+    fi
     security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
     rm -rf "$SIGNING_WORKDIR"
     exit "$result"
@@ -29,6 +36,17 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+run_notary() {
+    local result=0
+    xcrun notarytool "$@" &
+    ACTIVE_NOTARY_PID=$!
+    # Unlike a foreground external command, the wait builtin lets Bash run its
+    # signal trap immediately while the worker is still alive.
+    wait "$ACTIVE_NOTARY_PID" || result=$?
+    ACTIVE_NOTARY_PID=""
+    return "$result"
+}
 
 KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
 echo "::add-mask::$KEYCHAIN_PASSWORD"
@@ -48,10 +66,12 @@ codesign --verify --strict --verbose=2 "$NOTARIZE_BINARY"
 # Apple accepts ZIP submissions. The identical signed bytes go into the tarball
 # later. Standalone CLI binaries cannot carry stapled tickets; Gatekeeper looks
 # up their notarization tickets online.
-ditto -c -k --keepParent "$NOTARIZE_BINARY" "$SIGNING_WORKDIR/elephc.zip"
+mkdir "$SIGNING_WORKDIR/payload"
+cp "$NOTARIZE_BINARY" "$SIGNING_WORKDIR/payload/elephc"
+ditto -c -k --keepParent "$SIGNING_WORKDIR/payload" "$SIGNING_WORKDIR/elephc.zip"
 NOTARY_CREDENTIALS=(--apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD")
 SUBMIT_RESULT=0
-xcrun notarytool submit "$SIGNING_WORKDIR/elephc.zip" "${NOTARY_CREDENTIALS[@]}" \
+run_notary submit "$SIGNING_WORKDIR/elephc.zip" "${NOTARY_CREDENTIALS[@]}" \
     --wait --timeout 30m --output-format json > "$SIGNING_WORKDIR/submission.json" || SUBMIT_RESULT=$?
 cat "$SIGNING_WORKDIR/submission.json"
 SUBMISSION_ID="$(jq -r '.id // empty' "$SIGNING_WORKDIR/submission.json" 2>/dev/null || true)"
@@ -60,7 +80,7 @@ STATUS="$(jq -r '.status // empty' "$SIGNING_WORKDIR/submission.json" 2>/dev/nul
 if [[ "$SUBMIT_RESULT" -ne 0 || "$STATUS" != Accepted ]]; then
     # Print Apple's diagnostic log before cleanup so it survives in the job log.
     if [[ -n "$SUBMISSION_ID" ]]; then
-        if xcrun notarytool log "$SUBMISSION_ID" "${NOTARY_CREDENTIALS[@]}" "$SIGNING_WORKDIR/notary-log.json"; then
+        if run_notary log "$SUBMISSION_ID" "${NOTARY_CREDENTIALS[@]}" "$SIGNING_WORKDIR/notary-log.json"; then
             cat "$SIGNING_WORKDIR/notary-log.json"
         fi
     fi

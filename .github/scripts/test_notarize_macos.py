@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import zipfile
 
@@ -33,6 +35,7 @@ import os
 from pathlib import Path
 import signal
 import sys
+import time
 import zipfile
 
 tool = Path(sys.argv[0]).name
@@ -54,18 +57,26 @@ elif tool == "codesign":
         binary = Path(args[-1])
         binary.write_bytes(binary.read_bytes() + b"signed-by-fixture\n")
 elif tool == "ditto":
-    binary = Path(args[-2])
+    payload_dir = Path(args[-2])
+    assert payload_dir.is_dir(), "Notarization requires a directory with an explicit ZIP layout"
     with zipfile.ZipFile(args[-1], "w") as archive:
-        archive.write(binary, binary.name)
+        for binary in payload_dir.iterdir():
+            archive.write(binary, str(Path(payload_dir.name) / binary.name))
 elif tool == "xcrun":
     assert args[0] == "notarytool", args
     if args[1] == "submit":
         with zipfile.ZipFile(args[2]) as archive:
-            payload = archive.read("elephc")
+            assert archive.namelist() == ["payload/elephc"], archive.namelist()
+            payload = archive.read("payload/elephc")
         assert payload.endswith(b"signed-by-fixture\n"), payload
         assert payload == Path(os.environ["NOTARIZE_BINARY"]).read_bytes()
         if os.environ.get("MOCK_TERMINATE"):
+            if os.environ.get("MOCK_CHILD_STAYS_ALIVE"):
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                Path(os.environ["MOCK_CHILD_PID_FILE"]).write_text(str(os.getpid()))
             os.kill(int(os.environ.get("MOCK_STEP_PID", os.getppid())), signal.SIGTERM)
+            if os.environ.get("MOCK_CHILD_STAYS_ALIVE"):
+                time.sleep(60)
             sys.exit(1)
         if os.environ.get("MOCK_BAD_JSON"):
             print("unexpected response")
@@ -215,6 +226,41 @@ class NotarizationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 143, result.stdout + result.stderr)
         self.assertNotIn("Apple accepted notarization", result.stdout)
 
+    def test_cancellation_stops_live_notary_child_and_cleans_promptly(self):
+        action = read_yaml(ROOT / ".github/actions/notarize-macos/action.yml")
+        wrapper_path = self.root / "runner-step.sh"
+        wrapper_path.write_text('export MOCK_STEP_PID="$$"\n' + action["runs"]["steps"][0]["run"])
+        child_pid_file = self.root / "notary-child.pid"
+        process = subprocess.Popen(
+            ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(wrapper_path)],
+            env={**self.env, "GITHUB_ACTION_PATH": str(SCRIPT.parent), "MOCK_TERMINATE": "1",
+                 "MOCK_CHILD_STAYS_ALIVE": "1", "MOCK_CHILD_PID_FILE": str(child_pid_file)},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        started = time.monotonic()
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 143, stdout + stderr)
+            self.assertLess(time.monotonic() - started, 5)
+            self.assertEqual(list(self.runner_temp.iterdir()), [], stdout + stderr)
+            self.assertTrue(child_pid_file.is_file(), "Worker must remain alive after signalling its parent")
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(child_pid_file.read_text()), 0)
+            calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+            self.assertEqual(calls[-1]["tool"], "security")
+            self.assertEqual(calls[-1]["args"][0], "delete-keychain")
+        finally:
+            # A failed regression must also terminate its deliberately stuck
+            # child so it cannot hold stdout pipes or outlive the test suite.
+            if process.poll() is None:
+                process.kill()
+            if child_pid_file.is_file():
+                try:
+                    os.kill(int(child_pid_file.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.communicate(timeout=5)
+
     def test_nightly_can_sign_a_candidate_without_the_action(self):
         workflow = read_yaml(ROOT / ".github/workflows/nightly.yml")
         steps = workflow["jobs"]["build"]["steps"]
@@ -315,11 +361,15 @@ class NotarizationTests(unittest.TestCase):
         ], check=True, capture_output=True)
         subprocess.run([str(self.binary)], check=True, capture_output=True)
         archive_path = self.root / "native.zip"
+        payload_dir = self.root / "payload"
+        payload_dir.mkdir()
+        shutil.copy2(self.binary, payload_dir / "elephc")
         subprocess.run([
-            "/usr/bin/ditto", "-c", "-k", "--keepParent", str(self.binary), str(archive_path),
+            "/usr/bin/ditto", "-c", "-k", "--keepParent", str(payload_dir), str(archive_path),
         ], check=True, capture_output=True)
         with zipfile.ZipFile(archive_path) as archive:
-            self.assertEqual(archive.read("elephc"), self.binary.read_bytes())
+            self.assertIn("payload/elephc", archive.namelist(), archive.namelist())
+            self.assertEqual(archive.read("payload/elephc"), self.binary.read_bytes())
         tar_path = self.root / "native.tar.gz"
         subprocess.run([
             "/usr/bin/tar", "czf", str(tar_path), "-C", str(self.root), "elephc",
