@@ -11,6 +11,7 @@ use super::super::*;
 use super::support::*;
 
 mod depth;
+mod key_errors;
 
 /// Verifies dynamic builtin calls inside eval dispatch through runtime value hooks.
 #[test]

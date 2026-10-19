@@ -122,7 +122,18 @@ fn eval_json_encode_result(
     ) {
         Ok(()) => {}
         Err(EvalJsonEncodeFailure::Json(failure)) => error = Some(failure),
-        Err(EvalJsonEncodeFailure::Runtime(status)) => return Err(status),
+        Err(EvalJsonEncodeFailure::Runtime(status)) => {
+            // PHP publishes a pending JSON error after a callback throws, without
+            // exposing that error to the callback while encoding is still active.
+            if flags & EVAL_JSON_THROW_ON_ERROR == 0
+                || flags & EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR != 0
+            {
+                if let Some(error) = error {
+                    context.set_json_error(error.code, error.message);
+                }
+            }
+            return Err(status);
+        }
     }
     if let Some(error) = error {
         context.set_json_error(error.code, error.message);
@@ -459,10 +470,16 @@ fn eval_json_encode_append_string(
             EvalJsonStringPosition::Value => output.extend_from_slice(b"null"),
             EvalJsonStringPosition::Key => output.extend_from_slice(b"\"\""),
         }
-        return eval_json_encode_record_error(flags, error, EvalJsonEncodeError {
+        let failure = EvalJsonEncodeError {
             code: EVAL_JSON_ERROR_UTF8,
             message: EVAL_JSON_UTF8_MESSAGE,
-        });
+        };
+        if matches!(position, EvalJsonStringPosition::Key) {
+            // Invalid keys still allow their values and later callbacks to run.
+            *error = Some(failure);
+            return Ok(());
+        }
+        return eval_json_encode_record_error(flags, error, failure);
     } else {
         eval_json_encode_append_invalid_utf8_bytes(bytes, flags, output)?;
     }

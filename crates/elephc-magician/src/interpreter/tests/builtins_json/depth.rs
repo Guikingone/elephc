@@ -129,18 +129,21 @@ enum PartialDepthResult implements JsonSerializable {
 }
 enum ThrowingDepthResult implements JsonSerializable {
     case Ready;
-    public function jsonSerialize(): mixed { throw new Exception("user"); }
+    public function jsonSerialize(): mixed {
+        echo "inside:" . json_last_error() . ":";
+        throw new Exception("user");
+    }
 }
 try {
     json_encode([PartialDepthResult::Ready, ThrowingDepthResult::Ready], JSON_PARTIAL_OUTPUT_ON_ERROR, 1);
 } catch (JsonException $e) { echo "wrong"; }
-catch (Exception $e) { echo $e->getMessage() . ":"; }
+catch (Exception $e) { echo $e->getMessage() . ":" . json_last_error() . ":"; }
 echo json_encode(3);
 "#).expect("parse user exception after partial JSON failure");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     execute_program(&program, &mut scope, &mut values).expect("recover from user exception");
-    assert_eq!(values.output, "user:3");
+    assert_eq!(values.output, "inside:0:user:1:3");
 }
 
 /// Recursive object results produce JSON recursion errors instead of unbounded traversal.
@@ -200,8 +203,10 @@ fn execute_program_json_enum_depth_cleanup_failure_is_not_json() {
     let outer = values.alloc(FakeValue::Array(vec![inner]));
     let flags = values.int(0).expect("allocate JSON flags");
     let depth = values.int(1).expect("allocate JSON depth");
-    values.fail_release_call = Some(1);
+    // Skip flag/depth conversions and the scalar read; fail the inner array cleanup.
+    values.fail_release_call = Some(3);
     let result = eval_json_encode_values_result(&[outer, flags, depth], &mut context, &mut values);
     assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)));
-    assert_eq!(context.json_last_error(), 0);
+    assert_eq!(values.releases.last(), Some(&inner));
+    assert_eq!(context.json_last_error(), 1);
 }

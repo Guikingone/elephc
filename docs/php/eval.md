@@ -1168,6 +1168,9 @@ When an encoded result exceeds the depth limit, eval returns `false` and records
 Partial output takes precedence over throwing and keeps the encoded tree while
 recording the depth error. Owned serializer results and traversal reads are
 released on success and failure.
+Invalid UTF-8 array keys still allow their associated values and later callbacks to run.
+If a callback throws after a partial JSON failure, the caller can inspect that
+JSON error after catching the callback's exception.
 
 Eval local filesystem calls operate on host filesystem paths and support the
 implemented stream-wrapper paths, including `file://`, `php://memory`,
