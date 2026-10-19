@@ -372,7 +372,8 @@ value representation or target-specific ABI is introduced. PHPDoc token provenan
 mode acceptance; `EvalProgram` records native syntax for rejection before execution. The current
 file-cache layout includes retained templates, tokens, imports, structural types, typed locals,
 and the conservative caller-scope access mask, alongside preserved source spelling for direct
-and first-class function calls and native deferred-default error expressions.
+and first-class function calls, native deferred-default error expressions, and retained readonly
+setter contracts.
 `FORMAT_VERSION` in `crates/elephc-magician/src/script_cache/file_store.rs` identifies the complete
 serialized layout; incompatible entries are rejected before decoding. Format changes invalidate
 older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents and

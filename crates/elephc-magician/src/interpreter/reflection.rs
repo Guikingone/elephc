@@ -47,6 +47,7 @@ pub(in crate::interpreter) use class_member_api::*;
 use constant_construction::*;
 use flags::*;
 use formatting::*;
+pub(in crate::interpreter) use formatting::eval_parameter_type_error_label;
 use function_construction::*;
 use function_metadata::*;
 use invocation::*;

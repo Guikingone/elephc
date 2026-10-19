@@ -102,6 +102,7 @@ pub(super) fn resolve_physical_property_slot(
         is_declared: info.property_slot_is_declared(index, property),
         is_packed: false,
         is_reference: info.property_slot_is_reference(index, property),
+        abstract_setter_type_error_prefix: None,
     })
 }
 
@@ -1035,6 +1036,7 @@ fn resolve_scope_private_property_slot(
         is_declared: class_info.property_slot_is_declared(index, slot_property),
         is_packed: false,
         is_reference: class_info.property_slot_is_reference(index, slot_property),
+        abstract_setter_type_error_prefix: None,
     })
 }
 
@@ -1152,6 +1154,7 @@ pub(super) fn resolve_property_slot_for_class(
         is_declared: class_info.property_slot_is_declared(index, property),
         is_packed: false,
         is_reference,
+        abstract_setter_type_error_prefix: None,
     })
 }
 
@@ -1337,5 +1340,6 @@ pub(super) fn resolve_packed_field_slot(
         is_declared: false,
         is_packed: true,
         is_reference: false,
+        abstract_setter_type_error_prefix: None,
     })
 }

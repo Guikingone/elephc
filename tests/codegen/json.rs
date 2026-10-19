@@ -10,6 +10,8 @@
 
 use crate::support::*;
 
+#[path = "json/compatibility_constants.rs"]
+mod compatibility_constants;
 #[path = "json/constants.rs"]
 mod constants;
 #[path = "json/last_error.rs"]
@@ -65,3 +67,6 @@ mod diagnostic_regressions;
 
 #[path = "json/coordinate_regressions.rs"]
 mod coordinate_regressions;
+
+#[path = "json/token_dispatch.rs"]
+mod token_dispatch;

@@ -92,9 +92,14 @@ mod tests {
     /// comparisons, invalidating stored parse failures without changing the serialized shape.
     /// BUMPED TO 17: generic declarations and native deferred-default Error expressions
     /// now coexist, requiring a fingerprint of the complete merged source inventory.
-    /// BUMPED TO 20: deferred-default expressions and caller-scope access masks need
-    /// a combined identity distinct from both parents and readonly-setter formats 18/19.
-    const RECORDED_FINGERPRINT: u64 = 8601957468285356768;
+    /// BUMPED TO 18: retained readonly setter contracts coexist with generic declarations.
+    /// Format 17 belongs to the distinct native deferred-default expression layout.
+    /// BUMPED TO 19: retained readonly setter contracts and main's caller-scope access
+    /// mask need a fresh cache identity for their combined serialized layout.
+    /// BUMPED TO 20: deferred-default expressions coexist with caller-scope access masks.
+    /// BUMPED TO 21: both branches' deferred-default expressions and retained readonly
+    /// setter contracts now share generic declarations and caller-scope access masks.
+    const RECORDED_FINGERPRINT: u64 = 7753400166082656829;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

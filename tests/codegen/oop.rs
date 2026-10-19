@@ -25,6 +25,8 @@ mod lexical_property_defaults;
 mod nested_default_review;
 mod nested_default_grok_scope;
 mod nested_default_review_boundaries;
+#[path = "oop/readonly_initialization.rs"]
+mod readonly_initialization;
 #[path = "oop/callables/mod.rs"]
 mod callables;
 #[path = "oop/union_types.rs"]
@@ -68,3 +70,7 @@ mod class_relation_names;
 mod mixed_receiver_property_writes;
 #[path = "oop/reflection_attribute_filter.rs"]
 mod reflection_attribute_filter;
+#[path = "oop/readonly_setter_review.rs"]
+mod readonly_setter_review;
+#[path = "oop/readonly_store_box_review.rs"]
+mod readonly_store_box_review;
