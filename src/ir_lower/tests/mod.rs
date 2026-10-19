@@ -66,6 +66,7 @@ mod callable_operand_owners;
 mod capture_view_owners;
 mod static_properties;
 mod asymmetric_properties;
+mod static_receiver_writes;
 mod synthetic_arrays;
 mod throwable_constructors;
 mod mixed_throw_errors;

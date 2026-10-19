@@ -49,10 +49,12 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
-        RuntimeCallTarget::ArrayFetchForWrite => {
+        RuntimeCallTarget::ArrayFetchForWrite
+        | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst, false)
         }
-        RuntimeCallTarget::PendingAppendFetchForWrite => {
+        RuntimeCallTarget::PendingAppendFetchForWrite
+        | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst, true)
         }
         RuntimeCallTarget::StringWriteOffset => super::string_write_offsets::lower_offset(ctx, inst),

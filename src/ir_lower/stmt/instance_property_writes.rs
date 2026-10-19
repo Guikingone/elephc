@@ -38,9 +38,18 @@ pub(super) fn lower_property_assign(
             }
         }
     }
-    let object = lower_expr(ctx, object);
     let value_expr = value;
-    let lowered_value = lower_expr(ctx, value_expr);
+    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+        let rhs = lower_expr(ctx, value_expr);
+        let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
+        (receiver, rhs)
+    } else {
+        let object = lower_expr(ctx, object);
+        let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        let rhs = lower_expr(ctx, value_expr);
+        (receiver, rhs)
+    };
+    let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     // Preserve the original PHP tag until the initialization probe has chosen its branch.
     // Only an authorized first write reaches the backend's weak typed-property guard.
     let lowered_value = if readonly_write.is_some()
@@ -50,10 +59,10 @@ pub(super) fn lower_property_assign(
     } else { lowered_value };
     if let Some((overwrite_message, initialization_error)) = readonly_write {
         super::readonly_receiver_guard::guard_readonly_write_receiver(
-            ctx, object, lowered_value, property, span,
+            ctx, &receiver, lowered_value, property, span,
         );
         let data = ctx.intern_string(property);
-        let initialized = ctx.emit_value(Op::PropInitialized, vec![object.value],
+        let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
         let overwrite = ctx.builder.create_named_block("readonly.write.initialized", Vec::new());
         let initialize = ctx.builder.create_named_block("readonly.write.uninitialized", Vec::new());
@@ -62,20 +71,22 @@ pub(super) fn lower_property_assign(
             else_target: initialize, else_args: Vec::new(),
         });
         ctx.builder.position_at_end(overwrite);
-        lower_readonly_write_error(ctx, object, lowered_value, &overwrite_message, span);
+        lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &overwrite_message, span);
         ctx.builder.position_at_end(initialize);
         if let Some(message) = initialization_error {
-            lower_readonly_write_error(ctx, object, lowered_value, &message, span);
+            lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &message, span);
             return;
         }
     }
+    receiver.narrow_for_assignment(ctx, property, lowered_value, span);
+    let object = receiver.value;
     // A runtime SUBCLASS can declare `__set` where the receiver's STATIC class does not, and php
     // calls the accessor on such an instance. Only the runtime class can answer that, so the guard
     // asks it. Receiver and value are already lowered, once each and in source order, so the
     // guard adds no evaluation and both branches see exactly the same two values.
     let magic_classes = magic_accessor_subclasses(ctx, object.value, property, "__set");
     if !magic_classes.is_empty() {
-        return lower_property_assign_guarding_magic_subclasses(
+        lower_property_assign_guarding_magic_subclasses(
             ctx,
             object,
             property,
@@ -84,18 +95,19 @@ pub(super) fn lower_property_assign(
             &magic_classes,
             span,
         );
+    } else {
+        lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
-    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span)
+    receiver.finish(ctx, span);
 }
 
 /// Releases independent evaluated operands before a readonly write throws its catchable Error.
 pub(super) fn lower_readonly_write_error(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, value: LoweredValue,
+    ctx: &mut LoweringContext<'_, '_>, receiver: property_write_receiver::PropertyWriteReceiver,
+    value: LoweredValue,
     message: &str, span: Span,
 ) {
-    if ctx.value_is_owning_temporary(object) {
-        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
-    }
+    receiver.finish(ctx, span);
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
@@ -274,13 +286,13 @@ fn lower_property_assign_value(
     // jump to __rt_throw_current with the assigned temporary still pure SSA, so pin it in the
     // unwind chain for the store and retire the pin without releasing once the store returns.
     //
-    // The receiver is still owned by this statement if a guard throws. An unknown runtime
-    // slot can also reject a value before adopting its box, so protect that source as well.
-    // Independent stores keep the existing source pin; a known transferring slot needs none.
-    // Pins acquire no reference. Keep the receiver protected until source cleanup completes:
-    // retiring a fresh Stringable source can invoke a destructor that throws after publication.
+    // `PropertyWriteReceiver` already keeps every independent receiver lease visible to unwind.
+    // Do not publish a second pin for the same SSA owner here: pins acquire no reference, so two
+    // records would both release that one lease if the store throws. An unknown runtime slot can
+    // also reject a value before adopting its box, so protect that source independently. Keep the
+    // outer receiver lease until source cleanup completes because retiring a fresh Stringable
+    // source can invoke a destructor that throws after publication.
     let stored_property_ty = object_property_type(ctx, object.value, property);
-    let receiver_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span);
     let source_pins = if value.value != object.value
         && (retained_abstract_setter || stored_property_ty.as_ref().is_none_or(|property_ty| {
             property_store_keeps_independent_ref(property_ty, &ctx.builder.value_php_type(value.value))
@@ -328,11 +340,10 @@ fn lower_property_assign_value(
     } else {
         release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
     }
-    crate::ir_lower::expr::unpin_in_flight_owners(ctx, receiver_pins, span);
-    // Keep the receiver pinned until a released source's destructor has finished.
-    if ctx.value_is_owning_temporary(object) {
-        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
-    }
+    // `PropertyWriteReceiver` owns every independent receiver lease, including a narrowed
+    // object extracted from a boxed nullable static property. Its caller retires those leases
+    // after this store returns. Releasing `object` here as well would free that narrowed object
+    // twice and leave any freshly published property payload dangling.
 }
 
 /// Returns whether this receiver can dispatch the write through an inherited abstract setter.
@@ -601,9 +612,12 @@ pub(super) fn lower_magic_property_set(
         Op::ConstStr.default_effects(),
         Some(span),
     );
+    // The caller's `PropertyWriteReceiver` already publishes any independent receiver lease.
+    // Only the additional call operands need records here; a duplicate object record would
+    // release the same lease twice when `__set` throws.
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,
-        &[object, property_name.value, value.value],
+        &[property_name.value, value.value],
         span,
     );
     ctx.emit_void(
