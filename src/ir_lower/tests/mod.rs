@@ -65,6 +65,7 @@ mod reference_return_boundaries;
 mod callable_operand_owners;
 mod capture_view_owners;
 mod static_properties;
+mod nested_append_review;
 mod asymmetric_properties;
 mod static_receiver_writes;
 mod synthetic_arrays;

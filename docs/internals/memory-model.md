@@ -1093,6 +1093,12 @@ reference sets. When a child lease replaces an older compiler parent, EIR pops t
 record, publishes the child, then releases the old parent slot. This keeps unwinding safe
 without making dead compiler ancestors look like live PHP owners.
 
+A selected object child retains that same rooted cell while EIR dispatches an append
+through `ArrayAccess::offsetSet(null, value)`. The method borrows the receiver and
+RHS roots; ordinary array/null children instead use the consuming boxed append helper.
+Both branches retire the caller's roots after mutation and expose them to exception
+unwinding when a user method throws.
+
 A fresh parent is preallocated with the indexed or associative representation required by
 its next key before the missing-key callback runs. Around conversion and reads, a typed, non-retaining
 EIR query counts both cell and payload owners. Their sum must be exactly three:

@@ -33,3 +33,15 @@ fn test_nested_write_eleventh_review_undefined_selector_rejected() {
 fn test_nested_write_eleventh_review_false_probe_rejected() {
     expect_error("<?php $items = [false]; echo isset($items[0][0]);", "Cannot index non-array");
 }
+
+/// A deeper false ancestor is not readable merely because generated updates can promote it.
+#[test]
+fn test_nested_append_review_deep_false_read_rejected() {
+    expect_error("<?php $items = [false]; echo $items[0][0][1];", "Cannot index non-array");
+}
+
+/// An explicit RHS read is not the parser-generated read of an increment.
+#[test]
+fn test_nested_append_review_deep_false_rhs_rejected() {
+    expect_error("<?php $items = [false]; $items[0][0][1] = $items[0][0][1];", "Cannot index non-array");
+}

@@ -264,13 +264,15 @@ pub(super) fn check_nested_array_assign(
     }
 }
 
-/// Returns whether a nested write parent may legally autovivify from false or null.
+/// Returns whether a nested write parent may contain a promotable false or null.
 fn nested_write_parent_can_promote(parent: &PhpType, array: &Expr) -> bool {
     if !matches!(array.kind, ExprKind::ArrayAccess { .. }) {
         return false;
     }
     match parent {
-        PhpType::Bool | PhpType::False | PhpType::Void => true,
+        // An earlier false/null ancestor is already inferred as Mixed in write context.
+        // Only recognized generated updates skip their ordinary read below.
+        PhpType::Mixed | PhpType::Bool | PhpType::False | PhpType::Void => true,
         PhpType::Union(members) => members.iter().all(|member| matches!(member,
             PhpType::Bool | PhpType::False | PhpType::Void)),
         _ => false,

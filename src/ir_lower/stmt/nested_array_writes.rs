@@ -81,8 +81,8 @@ pub(super) fn lower_nested_array_assign(
         return;
     }
     if let Some((_, write)) = bind_concrete_static_update_root(ctx, target, target) {
-        lower_nested_array_assign_inner(ctx, &write, value, span, false);
-    } else { lower_nested_array_assign_inner(ctx, target, value, span, false); }
+        lower_nested_array_assign_inner(ctx, &write, value, span, static_update);
+    } else { lower_nested_array_assign_inner(ctx, target, value, span, static_update); }
 }
 
 /// Releases key snapshots without widening their already allocated PHP storage.

@@ -46,6 +46,13 @@ leading-numeric offset such as `"1abc"`; invalid nonnumeric offsets throw
 `TypeError`. A `false` element is converted to an array with an `E_DEPRECATED`
 diagnostic. Both paths preserve copy-on-write aliases and caller references.
 
+Nested appends preserve object identity: `$items[0][] = $value` invokes
+`offsetSet(null, $value)` when the selected child implements `ArrayAccess`, while
+an array or null child keeps the attached array append path. `WeakMap` children
+reject append with a catchable `Error`. Generated nested updates can also create
+missing parents below a false or null ancestor, without permitting ordinary reads
+through a scalar value.
+
 A compound append such as `$items[]['k'] += 1` stops if its missing-key handler
 detaches the selected array and no PHP owner keeps that array alive. The expression
 then yields null without inserting the leaf or evaluating the operator, including

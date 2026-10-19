@@ -30,6 +30,8 @@ mod static_properties;
 mod static_false_writes;
 #[path = "objects/nested_write_review.rs"]
 mod nested_write_review;
+#[path = "objects/nested_append_review.rs"]
+mod nested_append_review;
 #[path = "objects/untyped_property_defaults.rs"]
 mod untyped_property_defaults;
 #[path = "objects/nested_array_property_defaults.rs"]

@@ -8,6 +8,7 @@
 //! - Computed inputs run before the RHS; write-context traversal runs after it.
 //! - False conversion is published before its deprecation callback.
 //! - Parent, key and RHS owners remain rooted across callbacks and retirement.
+//! - Object appends call offsetSet with PHP null, not an array-only append helper.
 
 use super::*;
 
@@ -90,20 +91,75 @@ fn emit_store(
     }
 }
 
-/// Rejects string and scalar append parents before dispatching the boxed append.
+/// Rejects scalar parents and dispatches object appends separately from boxed arrays.
 fn emit_append(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     value: LoweredValue, span: Span,
 ) {
-    if super::nested_write_guards::guard_nested_write_parent(ctx, parent, None, span) {
-        ctx.emit_void(
-            Op::MixedArrayAppend,
-            vec![parent.value, value.value],
-            None,
-            Op::MixedArrayAppend.default_effects(),
-            Some(span),
-        );
-    }
+    if !super::nested_write_guards::guard_nested_write_parent(ctx, parent, None, span) { return; }
+    let object = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let object_append = ctx.builder.create_named_block("nested.append.object", Vec::new());
+    let array_append = ctx.builder.create_named_block("nested.append.array", Vec::new());
+    let done = ctx.builder.create_named_block("nested.append.done", Vec::new());
+    let initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: object.value, then_target: object_append, then_args: Vec::new(),
+        else_target: array_append, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(object_append);
+    emit_object_append(ctx, parent, value, span);
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(array_append);
+    ctx.restore_initialized_slots(initialized.clone());
+    ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
+        Op::MixedArrayAppend.default_effects(), Some(span));
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(initialized);
+}
+
+/// Uses ArrayAccess::offsetSet(null, value), preserving the normal error for other objects.
+fn emit_object_append(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
+    value: LoweredValue, span: Span,
+) {
+    let weak_map = ctx.intern_class_name("WeakMap");
+    let denied = ctx.emit_value(Op::InstanceOf, vec![parent.value], Some(Immediate::Data(weak_map)),
+        PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
+    let weak_map_error = ctx.builder.create_named_block("nested.append.weakmap.error", Vec::new());
+    let dispatch = ctx.builder.create_named_block("nested.append.object.dispatch", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: denied.value, then_target: weak_map_error, then_args: Vec::new(),
+        else_target: dispatch, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(weak_map_error);
+    lower_throw_access_error(ctx, "Cannot append to WeakMap", span);
+    ctx.builder.position_at_end(dispatch);
+    let interface = ctx.intern_class_name("ArrayAccess");
+    let access = ctx.emit_value(Op::InstanceOf, vec![parent.value], Some(Immediate::Data(interface)),
+        PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
+    let append = ctx.builder.create_named_block("nested.append.arrayaccess", Vec::new());
+    let rejected = ctx.builder.create_named_block("nested.append.not.indexable", Vec::new());
+    let done = ctx.builder.create_named_block("nested.append.object.done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: access.value, then_target: append, then_args: Vec::new(),
+        else_target: rejected, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(append);
+    let null = ctx.builder.emit_const_null();
+    let method = ctx.intern_string("offsetSet");
+    ctx.emit_void(Op::MethodCall, vec![parent.value, null, value.value], Some(Immediate::Data(method)),
+        Op::MethodCall.default_effects(), Some(span));
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(rejected);
+    // The shared setter names the runtime class in its catchable non-indexable Error.
+    let null = ctx.builder.emit_const_null();
+    ctx.emit_void(Op::RuntimeCall, vec![parent.value, null, value.value], None,
+        effects_lookup::runtime_effects(), Some(span));
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(done);
 }
 
 /// Fetches one child with balanced, unwind-visible input and result owners.
