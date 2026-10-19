@@ -28,8 +28,8 @@ pub(super) fn lower_nested_array_assign(
         super::nested_plain_writes::lower_store(ctx, target, value, span);
         return;
     }
-    let compound = matches!(&update, Some(ElementUpdate::Compound));
-    if compound && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
+    if matches!(&update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
+        && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
     {
         return;
     }

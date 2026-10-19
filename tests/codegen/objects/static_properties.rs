@@ -64,6 +64,32 @@ fn test_static_prefix_greptile_instance_nested_postfix_no_ir_opt() {
     crate::support::without_ir_opt(test_static_prefix_greptile_instance_nested_postfix);
 }
 
+/// Static WeakMap incdec expressions update the live entry alias and evaluate keys once.
+#[test]
+fn test_static_prefix_main_weakmap_expression_alias() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Holder { public static WeakMap $map; }
+function weakKey(object $key): object { echo 'K'; return $key; }
+Holder::$map = new WeakMap();
+$key = new stdClass(); Holder::$map[$key] = 5;
+$reference = &Holder::$map[$key];
+echo Holder::$map[weakKey($key)]++, ':', $reference, ':', Holder::$map[$key], '|';
+echo ++Holder::$map[weakKey($key)], ':', $reference, '|';
+echo Holder::$map[weakKey($key)]--, ':', $reference, '|';
+echo --Holder::$map[weakKey($key)], ':', $reference;
+unset($reference, $key);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "K5:6:6|K7:7|K7:6|K5:5", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Entry-reference update semantics do not depend on EIR optimization.
+#[test]
+fn test_static_prefix_main_weakmap_expression_alias_no_ir_opt() {
+    crate::support::without_ir_opt(test_static_prefix_main_weakmap_expression_alias);
+}
+
 /// False parent promotion is attached before the deprecation and preserves the ordinary leaf warning.
 #[test]
 fn test_static_prefix_ninth_review_false_parent() {

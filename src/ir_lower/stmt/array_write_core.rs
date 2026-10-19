@@ -99,7 +99,7 @@ pub(super) fn lower_array_assign(
     let update = desugared_element_update(value, span, |read| {
         reads_local_array_element(read, array, index)
     });
-    if matches!(&update, Some(ElementUpdate::Compound))
+    if matches!(&update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
         && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
     {
         return;

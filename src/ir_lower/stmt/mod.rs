@@ -104,7 +104,7 @@ pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };
 pub(crate) use array_write_core::{
-    desugared_element_update, lower_array_assign_with_diagnosed_key,
+    desugared_element_update, lower_array_assign_with_diagnosed_key, ElementUpdate,
 };
 pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
 pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
