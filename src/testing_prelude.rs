@@ -136,7 +136,7 @@ mod oracle_tests {
         }
     }
 
-    /// The surface is fixed: the runtime namespace with its four classes, then the alias
+    /// The surface is fixed: the runtime namespace with its five classes, then the alias
     /// namespace with one. A class disappearing silently is exactly the failure the PHP-text
     /// form could not catch.
     #[test]
@@ -160,6 +160,7 @@ mod oracle_tests {
                     vec![
                         "AssertionFailedError".to_string(),
                         "SkippedTestError".to_string(),
+                        "IncompleteTestError".to_string(),
                         "TestCase".to_string(),
                         "Runner".to_string(),
                     ]
@@ -181,9 +182,9 @@ mod oracle_tests {
             methods,
             is_abstract,
             ..
-        } = &body[2].kind
+        } = &body[3].kind
         else {
-            panic!("TestCase must be the third declaration");
+            panic!("TestCase must be the fourth declaration");
         };
         assert!(*is_abstract, "TestCase is abstract");
         let assertions: Vec<&crate::parser::ast::ClassMethod> = methods

@@ -288,6 +288,7 @@ elephc repl --php-version 8.4 --no-history
 # Compile the test suite under tests/ to a native binary and run it
 elephc test
 elephc test tests/Unit --filter CounterTest --strict-php
+elephc test --junit report.xml --timeout 30
 
 # Print the compiler version
 elephc --version

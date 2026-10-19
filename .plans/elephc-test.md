@@ -17,13 +17,15 @@ design, and this document is its single source of truth. Code Journal plan
 - [x] 2. `elephc test` subcommand: test-file discovery, synthesized entry, project
       root and Composer resolution, compile-time test discovery inside the compiler,
       `--filter`
-- [ ] 3. Isolation: one forked child per test on the executable hosts, fatals and
+- [x] 3. Isolation: one forked child per test on the executable hosts, fatals and
       signals reported as failures, per-test timeout, `--no-isolation`
-- [ ] 4. Lifecycle: `setUp`/`tearDown` ordering guarantees, data providers,
-      `expectException`, skipped and incomplete tests
-- [ ] 5. PHPUnit-compatible subset audit and differential runs (php-src PHPUnit
-      versus the compiled binary) in CI
-- [ ] 6. JUnit XML and TAP output, docs page, example, Ivory migrates off its harness
+- [x] 4. Lifecycle: `setUp`/`tearDown` ordering guarantees, data providers,
+      `expectException`, skipped and incomplete tests, a fresh instance per test
+- [x] 5. Differential runs (php-src PHPUnit versus the compiled binary):
+      `scripts/test-differential.py` and the `differential-tests` CI job on
+      `examples/testing`; the installed PHPUnit is excluded from the suite's autoload
+- [x] 6. JUnit XML output, docs page, example; TAP dropped until a consumer asks;
+      Ivory migrated to `elephc test`
 
 ## Why
 

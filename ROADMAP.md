@@ -1134,9 +1134,9 @@ real-world validation rather than by speculative pass work.
 - [x] Tail-call optimization: direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding; conservative scalar-frame eligibility)
 - [x] Native test runtime as a compiler prelude: `Elephc\Testing\TestCase` with a PHPUnit-compatible assertion subset plus typed variants, `Elephc\Testing\Runner` with a stable report and exit code, and the `PHPUnit\Framework\TestCase` alias so plain-PHP suites compile unchanged
 - [x] `elephc test`: compile-time discovery of test classes and methods (`test*` and `#[Test]`, inherited ones included), a synthesized entry rooted for declaration reachability, Composer `autoload` and `autoload-dev` from the nearest project root, `--filter`, the suite's verdict as the exit code
-- [ ] `elephc test` isolation: one forked child per test on the executable hosts, native fatals and signals reported as failures, per-test timeout, `--no-isolation`
-- [ ] `elephc test` lifecycle: data providers, `expectException()`, skipped and incomplete tests, a fresh instance per test
-- [ ] `elephc test` differential runs against php-src PHPUnit in CI, and JUnit/TAP output
+- [x] `elephc test` isolation: one forked child per test on the executable hosts, native fatals and signals reported as errors, per-test timeout, `--no-isolation`
+- [x] `elephc test` lifecycle: data providers, `expectException()`, skipped and incomplete tests, a fresh instance per test, `--junit` output
+- [x] `elephc test` differential runs against php-src PHPUnit in CI (`scripts/test-differential.py` on the example suite)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
 - [ ] Real-world CLI tools compiled as validation

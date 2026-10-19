@@ -17,9 +17,8 @@
 
 use crate::parser::ast::{BinOp, TypeExpr};
 use crate::synthetic_class::{
-    e_binop, e_bool, e_call, e_method_call, e_not, e_null, e_str, e_ternary, e_this,
-    e_var, method, s_assign, s_expr, s_if, s_return_void, t_array, t_mixed, t_union,
-    MethodBuilder,
+    e_binop, e_bool, e_call, e_method_call, e_not, e_null, e_str, e_ternary, e_this, e_var,
+    method, s_assign, s_expr, s_if, s_return_void, t_array, t_mixed, t_union, MethodBuilder,
 };
 
 /// Every assertion method, in PHP source order.

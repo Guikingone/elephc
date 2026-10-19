@@ -238,3 +238,264 @@ fn test_cli_test_refuses_output_modes_and_forwards_compile_options() {
     assert_eq!(code, 0);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Writes a project whose tests exercise the lifecycle surface: a data provider, expected
+/// exceptions, skipped and incomplete tests, inline property state, and a native fatal.
+fn write_lifecycle_project(dir: &Path) {
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{ "autoload-dev": { "psr-4": { "App\\Tests\\": "tests/" } } }"#).unwrap();
+    fs::write(
+        dir.join("tests/LifecycleTest.lfc"),
+        r#"namespace App\Tests;
+use Elephc\Testing\TestCase;
+final class LifecycleTest extends TestCase {
+    private array $seen = [];
+
+    public static function sums(): array {
+        return ['small' => [1, 2, 3], 'big' => [10, 20, 30], [0, 0, 0]];
+    }
+
+    #[DataProvider('sums')]
+    public function testAdds(int $a, int $b, int $sum): void {
+        $this->assertSame($sum, $a + $b);
+    }
+
+    public function testFreshInstanceOne(): void {
+        $this->assertCount(0, $this->seen);
+        $this->seen[] = 'one';
+    }
+
+    public function testFreshInstanceTwo(): void {
+        $this->assertCount(0, $this->seen);
+    }
+
+    public function testExpectsException(): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('bad');
+        throw new \InvalidArgumentException('very bad');
+    }
+
+    public function testExpectedButNotThrown(): void {
+        $this->expectException(\RuntimeException::class);
+    }
+
+    public function testSkipped(): void {
+        $this->markTestSkipped('no database here');
+    }
+
+    public function testIncomplete(): void {
+        $this->markTestIncomplete();
+    }
+
+    public function testFatal(): void {
+        $values = buffer_new<int>(1);
+        $this->assertSame(0, $values[7]);
+    }
+
+    public function testAfterFatal(): void {
+        $this->assertTrue(true);
+    }
+}
+"#,
+    )
+    .unwrap();
+}
+
+/// Data-provider rows become labelled tests, every test gets a fresh instance, expected
+/// exceptions pass or fail with PHPUnit's wording, skipped and incomplete tests are reported
+/// without failing, and a native fatal in one test is an ERROR that does not stop the run.
+#[test]
+fn test_cli_test_lifecycle_surface_with_isolation() {
+    let dir = make_cli_test_dir("elephc_cli_test_lifecycle");
+    write_lifecycle_project(&dir);
+    let (stdout, stderr, code) = run_test_command(&dir, &[]);
+    assert_eq!(
+        stdout,
+        "ok   App\\Tests\\LifecycleTest::testAdds with data set \"small\" (1 assertion)\n\
+         ok   App\\Tests\\LifecycleTest::testAdds with data set \"big\" (1 assertion)\n\
+         ok   App\\Tests\\LifecycleTest::testAdds with data set #0 (1 assertion)\n\
+         ok   App\\Tests\\LifecycleTest::testFreshInstanceOne (1 assertion)\n\
+         ok   App\\Tests\\LifecycleTest::testFreshInstanceTwo (1 assertion)\n\
+         ok   App\\Tests\\LifecycleTest::testExpectsException (2 assertions)\n\
+         FAIL App\\Tests\\LifecycleTest::testExpectedButNotThrown\n\
+         \x20    Failed asserting that exception of type \"RuntimeException\" is thrown.\n\
+         SKIP App\\Tests\\LifecycleTest::testSkipped\n\
+         \x20    no database here\n\
+         INCOMPLETE App\\Tests\\LifecycleTest::testIncomplete\n\
+         ERROR App\\Tests\\LifecycleTest::testFatal\n\
+         \x20    Test process exited with code 70 before reporting a result\n\
+         ok   App\\Tests\\LifecycleTest::testAfterFatal (1 assertion)\n\
+         \n\
+         Tests: 11, Assertions: 9, Failures: 1, Errors: 1, Skipped: 1, Incomplete: 1.\n",
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("Fatal error: buffer index out of bounds"), "{stderr}");
+    assert_eq!(code, 1);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Without isolation the native fatal ends the whole run with the fatal's own exit code:
+/// everything before it is reported, nothing after it.
+#[test]
+fn test_cli_test_no_isolation_lets_a_fatal_end_the_run() {
+    let dir = make_cli_test_dir("elephc_cli_test_no_isolation");
+    write_lifecycle_project(&dir);
+    let (stdout, stderr, code) = run_test_command(&dir, &["--no-isolation"]);
+    assert!(stdout.contains("INCOMPLETE App\\Tests\\LifecycleTest::testIncomplete\n"), "{stdout}");
+    assert!(!stdout.contains("testAfterFatal"), "the run must stop at the fatal: {stdout}");
+    assert!(stderr.contains("Fatal error: buffer index out of bounds"), "{stderr}");
+    assert_eq!(code, 70);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A test running past `--timeout` is ended by the alarm and reported as an error with the
+/// configured limit; the suite continues and the exit code reflects the error.
+#[test]
+fn test_cli_test_timeout_ends_a_slow_test() {
+    let dir = make_cli_test_dir("elephc_cli_test_timeout");
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(
+        dir.join("tests/SlowTest.php"),
+        r#"<?php
+use Elephc\Testing\TestCase;
+final class SlowTest extends TestCase {
+    public function testSlow(): void { usleep(3000000); $this->assertTrue(true); }
+    public function testQuick(): void { $this->assertTrue(true); }
+}
+"#,
+    )
+    .unwrap();
+    let (stdout, stderr, code) = run_test_command(&dir, &["--timeout", "1"]);
+    assert_eq!(
+        stdout,
+        "ERROR SlowTest::testSlow\n\
+         \x20    Test exceeded the timeout of 1 second\n\
+         ok   SlowTest::testQuick (1 assertion)\n\
+         \n\
+         Tests: 2, Assertions: 1, Failures: 0, Errors: 1.\n",
+        "stderr: {stderr}"
+    );
+    assert_eq!(code, 1);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--junit FILE` writes a JUnit report next to the caller, with one testcase per run test,
+/// the totals on the suite, and failures, errors and skips as their JUnit elements.
+#[test]
+fn test_cli_test_writes_a_junit_report() {
+    let dir = make_cli_test_dir("elephc_cli_test_junit");
+    write_lifecycle_project(&dir);
+    let (_, stderr, code) = run_test_command(&dir, &["--junit", "out/report.xml", "--filter", "Fresh"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    fs::create_dir_all(dir.join("out")).ok();
+    let (_, stderr, code) = run_test_command(&dir, &["--junit", "out/report.xml"]);
+    assert_eq!(code, 1, "stderr: {stderr}");
+    let report = fs::read_to_string(dir.join("out/report.xml")).expect("the report is written where the caller pointed");
+    assert!(report.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites>\n"), "{report}");
+    assert!(
+        report.contains("<testsuite name=\"elephc test\" tests=\"11\" assertions=\"9\" failures=\"1\" errors=\"1\" skipped=\"2\" time=\""),
+        "{report}"
+    );
+    assert!(report.contains("<testcase classname=\"App\\Tests\\LifecycleTest\" name=\"testAdds with data set &quot;small&quot;\" time=\""), "{report}");
+    assert!(report.contains("<failure type=\"failure\">Failed asserting that exception of type &quot;RuntimeException&quot; is thrown.</failure>"), "{report}");
+    assert!(report.contains("<skipped message=\"no database here\" />"), "{report}");
+    assert!(report.contains("<error type=\"error\">Test process exited with code 70 before reporting a result</error>"), "{report}");
+    assert!(report.ends_with("  </testsuite>\n</testsuites>\n"), "{report}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Skipped and incomplete tests alone do not fail the run: the verdict is `OK, but there
+/// were issues!` and the exit code is zero.
+#[test]
+fn test_cli_test_skipped_tests_do_not_fail_the_run() {
+    let dir = make_cli_test_dir("elephc_cli_test_skipped");
+    write_lifecycle_project(&dir);
+    let (stdout, stderr, code) = run_test_command(&dir, &["--filter", "testSkipped"]);
+    assert_eq!(
+        stdout,
+        "SKIP App\\Tests\\LifecycleTest::testSkipped\n\
+         \x20    no database here\n\
+         \n\
+         OK, but there were issues!\n\
+         Tests: 1, Assertions: 0, Skipped: 1.\n",
+        "stderr: {stderr}"
+    );
+    assert_eq!(code, 0);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A filter that names a provider row selects that row at run time.
+#[test]
+fn test_cli_test_filter_matches_provider_labels() {
+    let dir = make_cli_test_dir("elephc_cli_test_provider_filter");
+    write_lifecycle_project(&dir);
+    let (stdout, stderr, code) = run_test_command(&dir, &["--filter", "data set \"big\""]);
+    assert_eq!(
+        stdout,
+        "ok   App\\Tests\\LifecycleTest::testAdds with data set \"big\" (1 assertion)\n\
+         \n\
+         OK (1 test, 1 assertion)\n",
+        "stderr: {stderr}"
+    );
+    assert_eq!(code, 0);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// An installed PHPUnit (and the packages only it requires) is left out of the suite's
+/// autoload index: its `autoload.files` entry would otherwise be inlined and drag the
+/// runner's own classes, with their run-time `require`s, into the compile. Other dev
+/// packages stay available.
+#[test]
+fn test_cli_test_ignores_an_installed_phpunit() {
+    let dir = make_cli_test_dir("elephc_cli_test_vendor_phpunit");
+    write_project(&dir);
+    for package in ["phpunit/phpunit", "sebastian/exporter", "acme/helpers"] {
+        let package_dir = dir.join("vendor").join(package);
+        fs::create_dir_all(package_dir.join("src")).unwrap();
+        fs::write(
+            package_dir.join("composer.json"),
+            format!(r#"{{"name": "{package}", "autoload": {{"files": ["src/functions.php"]}}}}"#),
+        )
+        .unwrap();
+    }
+    // PHPUnit's real `Functions.php` shape: a file-level helper that reaches into the
+    // package, here with the kind of dynamic include the compiler refuses.
+    fs::write(
+        dir.join("vendor/phpunit/phpunit/src/functions.php"),
+        "<?php\n$loader = __DIR__ . '/Loader.php';\nrequire $loader;\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/sebastian/exporter/src/functions.php"),
+        "<?php\n$helper = __DIR__ . '/Helper.php';\nrequire $helper;\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/acme/helpers/src/functions.php"),
+        "<?php\nfunction acme_double(int $n): int { return $n * 2; }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("vendor/composer")).unwrap();
+    fs::write(
+        dir.join("vendor/composer/installed.json"),
+        r#"{"packages": [
+            {"name": "phpunit/phpunit", "require": {"php": ">=8.3", "sebastian/exporter": "^6"}},
+            {"name": "sebastian/exporter", "require": {}},
+            {"name": "acme/helpers", "require": {}}
+        ]}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("tests/HelpersTest.php"),
+        "<?php\nnamespace App\\Tests;\nuse PHPUnit\\Framework\\TestCase;\nfinal class HelpersTest extends TestCase {\n    public function testVendorHelper(): void { $this->assertSame(4, \\acme_double(2)); }\n}\n",
+    )
+    .unwrap();
+    let (stdout, stderr, code) = run_test_command(&dir, &["--filter", "HelpersTest"]);
+    assert_eq!(
+        stdout,
+        "ok   App\\Tests\\HelpersTest::testVendorHelper (1 assertion)\n\nOK (1 test, 1 assertion)\n",
+        "stderr: {stderr}"
+    );
+    assert_eq!(code, 0);
+    let _ = fs::remove_dir_all(&dir);
+}

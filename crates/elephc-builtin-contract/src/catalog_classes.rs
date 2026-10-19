@@ -133,6 +133,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("DOMProcessingInstruction", "domprocessinginstruction", Class, Dom, Prelude),
     class!("DOMText", "domtext", Class, Dom, Prelude),
     class!("Elephc\\Testing\\AssertionFailedError", "elephc\\testing\\assertionfailederror", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Testing\\IncompleteTestError", "elephc\\testing\\incompletetesterror", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\Runner", "elephc\\testing\\runner", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\SkippedTestError", "elephc\\testing\\skippedtesterror", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\TestCase", "elephc\\testing\\testcase", Class, Elephc, Prelude, extension: true),

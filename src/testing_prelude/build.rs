@@ -14,7 +14,8 @@
 //!   AST against that parse node by node. Edit the shape here only with that comparison in
 //!   hand.
 //! - Declaration ORDER follows the PHP source (`AssertionFailedError`, `SkippedTestError`,
-//!   `TestCase`, `Runner`, then the alias namespace) so the oracle can zip the two programs.
+//!   `IncompleteTestError`, `TestCase`, `Runner`, then the alias namespace) so the oracle can
+//!   zip the two programs.
 //! - One helper per class, never one expression for the whole surface: a prelude built as a
 //!   single nested builder expression overflows the stack.
 //! - The alias class extends `\Elephc\Testing\TestCase` by its FULLY QUALIFIED spelling: a
@@ -38,6 +39,7 @@ fn decl_elephc_testing_namespace() -> Stmt {
         vec![
             decl_assertion_failed_error(),
             decl_skipped_test_error(),
+            decl_incomplete_test_error(),
             test_case::decl_test_case(),
             runner::decl_runner(),
         ],
@@ -53,9 +55,17 @@ fn decl_assertion_failed_error() -> Stmt {
         .build()
 }
 
-/// `final class SkippedTestError extends \Exception`: reserved for `markTestSkipped()`.
+/// `final class SkippedTestError extends \Exception`: what `markTestSkipped()` throws.
 fn decl_skipped_test_error() -> Stmt {
     class("SkippedTestError")
+        .final_()
+        .extends("\\Exception")
+        .build()
+}
+
+/// `final class IncompleteTestError extends \Exception`: what `markTestIncomplete()` throws.
+fn decl_incomplete_test_error() -> Stmt {
+    class("IncompleteTestError")
         .final_()
         .extends("\\Exception")
         .build()

@@ -1,6 +1,7 @@
 //! Purpose:
-//! Argument parsing for `elephc test`: the optional test path, `--filter`, `--help`, and the
-//! pass-through of ordinary compile options, with output-mode and target flags refused.
+//! Argument parsing for `elephc test`: the optional test path, `--filter`, `--no-isolation`,
+//! `--timeout`, `--junit`, `--help`, and the pass-through of ordinary compile options, with
+//! output-mode and target flags refused.
 //!
 //! Called from:
 //! - `crate::cli::parse_args` when the first argument is exactly `test`.
@@ -20,11 +21,20 @@ pub(crate) struct TestCommand {
     pub(crate) path: String,
     /// A case-sensitive substring over `Class::method` that selects the tests to compile.
     pub(crate) filter: Option<String>,
+    /// Run every test in a forked child (the default) or in the runner's own process.
+    pub(crate) isolate: bool,
+    /// Seconds an isolated test may run before it is ended and reported; 0 disables.
+    pub(crate) timeout: u32,
+    /// Path of the JUnit XML report to write, when requested.
+    pub(crate) junit: Option<String>,
     /// Ordinary compile options forwarded to the compiler.
     pub(crate) compile_args: Vec<String>,
     /// `-h` / `--help` was given: print usage and exit.
     pub(crate) help: bool,
 }
+
+/// The default per-test timeout, in seconds.
+pub(crate) const DEFAULT_TIMEOUT: u32 = 60;
 
 /// The usage text for `elephc test --help` and for argument errors.
 pub(crate) const HELP: &str = "Usage: elephc test [PATH] [OPTIONS] [COMPILE OPTIONS]
@@ -36,6 +46,11 @@ Composer autoload and autoload-dev are read from the nearest composer.json above
 
 Options:
   --filter PATTERN        Run only the tests whose Class::method contains PATTERN
+  --no-isolation          Run tests in the runner's process instead of a forked child
+                          per test (faster, for debuggers; a native fatal then ends the run)
+  --timeout SECONDS       Seconds an isolated test may run before it is ended and
+                          reported as an error (default 60; 0 disables)
+  --junit FILE            Write a JUnit XML report to FILE
   -h, --help              Show this help
 
 Compile options such as --strict-php, --with-<crate>, --heap-size, --php-version,
@@ -62,6 +77,9 @@ const REFUSED_FLAGS: &[(&str, &str)] = &[
 pub(crate) fn parse_args(args: &[String]) -> Result<TestCommand, String> {
     let mut path: Option<String> = None;
     let mut filter = None;
+    let mut isolate = true;
+    let mut timeout = DEFAULT_TIMEOUT;
+    let mut junit = None;
     let mut compile_args = Vec::new();
     let mut help = false;
     let mut i = 0;
@@ -77,6 +95,20 @@ pub(crate) fn parse_args(args: &[String]) -> Result<TestCommand, String> {
             filter = Some(value.clone());
         } else if let Some(value) = arg.strip_prefix("--filter=") {
             filter = Some(value.to_string());
+        } else if arg == "--no-isolation" {
+            isolate = false;
+        } else if arg == "--timeout" {
+            i += 1;
+            let value = args.get(i).ok_or("missing seconds after --timeout")?;
+            timeout = parse_timeout(value)?;
+        } else if let Some(value) = arg.strip_prefix("--timeout=") {
+            timeout = parse_timeout(value)?;
+        } else if arg == "--junit" {
+            i += 1;
+            let value = args.get(i).ok_or("missing file after --junit")?;
+            junit = Some(value.clone());
+        } else if let Some(value) = arg.strip_prefix("--junit=") {
+            junit = Some(value.to_string());
         } else if let Some((flag, reason)) = refused(arg) {
             return Err(format!("{flag} is not accepted by `elephc test`: {reason}"));
         } else if arg.starts_with('-') && arg.len() > 1 {
@@ -102,9 +134,19 @@ pub(crate) fn parse_args(args: &[String]) -> Result<TestCommand, String> {
     Ok(TestCommand {
         path: path.unwrap_or_else(|| "tests".to_string()),
         filter,
+        isolate,
+        timeout,
+        junit,
         compile_args,
         help,
     })
+}
+
+/// Parses the `--timeout` value: a non-negative number of seconds, 0 meaning no timeout.
+fn parse_timeout(value: &str) -> Result<u32, String> {
+    value
+        .parse::<u32>()
+        .map_err(|_| format!("--timeout expects a non-negative number of seconds, got '{value}'"))
 }
 
 /// Returns the refused flag and its reason when `arg` is one, in its bare or `=value` form.
@@ -161,6 +203,9 @@ mod tests {
             TestCommand {
                 path: "tests".into(),
                 filter: None,
+                isolate: true,
+                timeout: DEFAULT_TIMEOUT,
+                junit: None,
                 compile_args: vec![],
                 help: false
             }
@@ -211,6 +256,23 @@ mod tests {
             let error = parse_args(&args(&[flag])).unwrap_err();
             assert!(error.contains("is not accepted by `elephc test`"), "{flag}: {error}");
         }
+    }
+
+    /// `--no-isolation`, both `--timeout` spellings and both `--junit` spellings are parsed,
+    /// and a non-numeric timeout is an error.
+    #[test]
+    fn parses_isolation_timeout_and_junit() {
+        let command = parse_args(&args(&["--no-isolation", "--timeout", "5", "--junit", "r.xml"])).expect("parses");
+        assert!(!command.isolate);
+        assert_eq!(command.timeout, 5);
+        assert_eq!(command.junit.as_deref(), Some("r.xml"));
+        let command = parse_args(&args(&["--timeout=0", "--junit=out/r.xml"])).expect("parses");
+        assert_eq!(command.timeout, 0);
+        assert_eq!(command.junit.as_deref(), Some("out/r.xml"));
+        let error = parse_args(&args(&["--timeout", "soon"])).unwrap_err();
+        assert!(error.contains("--timeout expects a non-negative number"), "{error}");
+        let error = parse_args(&args(&["--junit"])).unwrap_err();
+        assert!(error.contains("missing file after --junit"), "{error}");
     }
 
     /// `--help` is recognized anywhere and wins over everything else.

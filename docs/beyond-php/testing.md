@@ -16,8 +16,9 @@ in `.plans/elephc-test.md`.
 
 ## Writing a test
 
-A test class extends `Elephc\Testing\TestCase`. Public methods are the tests; `setUp()` and
-`tearDown()` run around each one:
+A test class extends `Elephc\Testing\TestCase`. Public methods whose name starts with
+`test`, or that carry `#[Test]`, are the tests; every test runs on a fresh instance, and
+`setUp()` and `tearDown()` run around each one:
 
 ```php
 <?php
@@ -74,7 +75,10 @@ What it does, in order:
 2. Finds the project root: the nearest directory, starting at the path itself, with a
    `composer.json`. Its `autoload` and `autoload-dev` sections resolve project and test
    classes, so `Ivory\Tests\` mapped to `tests/` under `autoload-dev` is all a project
-   declares.
+   declares. An installed `phpunit/phpunit`, and the packages only it requires (read from
+   `vendor/composer/installed.json`), are left out of the index: the compiler provides
+   that namespace itself, and PHPUnit's own `autoload.files` entry would otherwise pull
+   the real runner into the compile. Every other dev dependency stays available.
 3. Compiles a virtual entry that requires those files, with the testing runtime forced in.
    After autoloading, when every class the tests extend is known, it discovers the test
    classes: every concrete class whose ancestry reaches `Elephc\Testing\TestCase` (the
@@ -90,6 +94,86 @@ compilation. Compile options after the path (`--strict-php`, `--with-<crate>`,
 and `--target` are refused. An empty run (no test files, no test classes, a filter that
 matches nothing) is an error, not a green build. See the
 [CLI reference](../compiling/cli-reference.md#test-runner-command) for the full table.
+
+### Isolation
+
+Every test runs in a forked child by default. The runner forks, the child runs
+`setUp()`, the test and `tearDown()`, writes its outcome through a socket pair and exits;
+the parent reads the outcome, waits for the child and prints the line. What this buys:
+
+- A native fatal (a buffer index out of bounds, a null pointer dereference, a segfault in
+  FFI code) ends only that child. The parent reports `ERROR` with the exit code or the
+  signal (`Test process exited with code 70 before reporting a result`, `Test process
+  killed by signal 11 (SIGSEGV)`) and runs the next test.
+- A test that never returns is ended by `pcntl_alarm` after `--timeout` seconds (default
+  60, `0` disables) and reported as `Test exceeded the timeout of 60 seconds`.
+- Every test starts from a fresh process state, on top of its fresh instance.
+
+`--no-isolation` runs every test in the runner's own process: faster, and what a debugger
+wants, but a native fatal then ends the whole run with the fatal's exit code. The
+isolation is plain PHP in the runtime over the compiled `pcntl_*` builtins, so it exists
+on every executable host (macOS ARM64, Linux ARM64, Linux x86_64) and nowhere else.
+
+### Data providers
+
+A `#[DataProvider('name')]` test runs once per row of the public static method `name()`,
+which returns an array of argument rows. The row key names the run: `with data set "small"`
+for a string key, `with data set #0` for an integer key, and `--filter` matches that label.
+
+```php
+<?php
+
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+
+final class ParserTest extends TestCase
+{
+    public static function integers(): array
+    {
+        return ['plain' => ['42', 42], 'negative' => ['-7', -7]];
+    }
+
+    #[DataProvider('integers')]
+    public function testParsesIntegers(string $text, int $expected): void
+    {
+        $this->assertSame($expected, (int) $text);
+    }
+}
+```
+
+The row's elements are passed by position, one per declared parameter, so a row must
+supply every parameter: the compiler cannot spread a run-time array into a typed call.
+
+### Expected exceptions, skipped and incomplete tests
+
+`expectException(Foo::class)` makes the test pass when a `Foo`, or a direct subclass of
+`Foo`, escapes it, and fail otherwise; `expectExceptionMessage('text')` additionally
+requires the message to contain `text`. Deeper subclasses are not matched: that needs
+`is_a()` with a run-time class name, the unfinished half of
+[issue #1113](https://github.com/illegalstudio/elephc/issues/1113), so a test expecting
+`\Exception` and throwing `\InvalidArgumentException` (two levels down) fails with
+`Failed asserting that exception of type "InvalidArgumentException" matches expected
+exception "Exception".` rather than passing.
+
+`markTestSkipped('why')` and `markTestIncomplete('why')` stop the test and report it as
+`SKIP` or `INCOMPLETE`. Neither fails the run: the verdict becomes `OK, but there were
+issues!` with the counts, and the exit code stays `0`.
+
+### Differential runs against PHPUnit
+
+Because the alias namespace is what PHPUnit itself declares, a plain-PHP suite runs
+unchanged under both. `scripts/test-differential.py PROJECT` runs `vendor/bin/phpunit`
+and `elephc test` on the same project with a JUnit report each, and fails when a test
+PHPUnit reports is missing from the compiled run or ends differently. CI runs it on
+`examples/testing` with PHPUnit installed by Composer, which is the compiler's semantic
+parity signal for everything a PHPUnit suite can express. Tests that only elephc runs,
+from `.lfc` files PHPUnit cannot parse, are listed and never fail the comparison.
+
+### JUnit report
+
+`--junit FILE` writes a JUnit XML report: one `<testcase>` per run test with its class,
+name and duration, `<failure>`, `<error>` and `<skipped>` children for the other outcomes,
+and the totals on the `<testsuite>`. The file is resolved against the working directory.
 
 ### Driving a suite by hand
 
@@ -125,19 +209,22 @@ compiles only what the program reaches, and `$case->testIncrements()` inside the
 what keeps the method in the binary. `elephc test` synthesizes exactly this driver from
 the classes it discovers.
 
-`Runner::run()` records one of three outcomes per test and prints one line for it:
+`Runner::run()` records one of five outcomes per test and prints one line for it:
 
 | Line | Meaning |
 |---|---|
 | `ok   Class::method (n assertions)` | Every assertion passed. |
-| `FAIL Class::method` | An assertion failed, or `fail()` was called. The message follows, indented. |
-| `ERROR Class::method` | The test threw anything else. The exception class and message follow. |
+| `FAIL Class::method` | An assertion failed, `fail()` was called, or an expected exception was wrong or missing. The message follows, indented. |
+| `ERROR Class::method` | The test threw anything else, died of a native fatal or a signal, or ran past the timeout. The reason follows. |
+| `SKIP Class::method` | `markTestSkipped()` was called. |
+| `INCOMPLETE Class::method` | `markTestIncomplete()` was called. |
 
-`Runner::finish()` prints the totals and returns the exit code: `0` only when every test
-passed and at least one ran.
+`Runner::finish()` prints the totals and returns the exit code: `0` when no test failed
+or errored and at least one ran; skipped and incomplete tests are counted but do not
+fail the run.
 
 ```text
-Tests: 4, Assertions: 12, Failures: 1, Errors: 1.
+Tests: 4, Assertions: 12, Failures: 1, Errors: 1, Skipped: 1.
 ```
 
 `tearDown()` always runs after a `setUp()` that succeeded, whatever the test did. A user
@@ -173,6 +260,10 @@ when it fails. Failure text follows PHPUnit's wording where elephc can reproduce
 | `assertStringStartsWith(string $prefix, string $string)` | `str_starts_with($string, $prefix)` |
 | `assertStringEndsWith(string $suffix, string $string)` | `str_ends_with($string, $suffix)` |
 | `fail(string $message = '')` | never: throws immediately |
+| `expectException(string $class)` | the test ends with an exception of that class or a direct subclass |
+| `expectExceptionMessage(string $text)` | the expected exception's message contains `$text` |
+| `markTestSkipped(string $message = '')` | never: reports the test as skipped |
+| `markTestIncomplete(string $message = '')` | never: reports the test as incomplete |
 
 The `mixed` parameters box a scalar into a runtime cell. Four elephc-only variants take the
 typed value directly and print the same failure text, for suites that assert in hot loops:
@@ -197,18 +288,18 @@ and currently answers `false`, so the assertion would fail every time; write
 | Class | Role |
 |---|---|
 | `Elephc\Testing\TestCase` | Abstract base of every test class: lifecycle hooks and the assertions above. |
-| `Elephc\Testing\Runner` | `run(TestCase $case, string $name, callable $test)` and `finish(): int`. |
+| `Elephc\Testing\Runner` | `__construct(bool $isolate = true, int $timeout = 60, string $filter = '', string $junit = '')`, `run(TestCase $case, string $name, callable $test)`, `runWithData(TestCase $case, string $name, callable $test, mixed $dataSet)` and `finish(): int`. |
 | `Elephc\Testing\AssertionFailedError` | Thrown by a failing assertion and by `fail()`; extends `Exception`. |
-| `Elephc\Testing\SkippedTestError` | Reserved for `markTestSkipped()`. |
+| `Elephc\Testing\SkippedTestError` | Thrown by `markTestSkipped()`. |
+| `Elephc\Testing\IncompleteTestError` | Thrown by `markTestIncomplete()`. |
 | `PHPUnit\Framework\TestCase` | Empty abstract subclass of `Elephc\Testing\TestCase`: the compatibility alias. |
 
 ## Limits
 
-- One instance of a test class serves every test method; `setUp()` reinitializes state
-  before each test, as the example above relies on. A fresh instance per test, as PHPUnit
-  creates, is planned with data providers.
-- A native fatal (buffer out of bounds, null pointer dereference, FFI segfault) ends the
-  process: the runner cannot report it as a failure yet. Per-test process isolation is the
-  next step of the plan.
-- Data providers, `expectException()`, skipped and incomplete tests, JUnit and TAP output
-  are not available yet.
+- `assertInstanceOf` and deeper-than-one-level `expectException()` matching wait on
+  `is_a()` with a run-time class name (issue #1113).
+- A data-provider row must supply every declared parameter; the compiler does not spread
+  a run-time array into a typed call.
+- `expectExceptionCode()`, `#[Depends]`, `#[Group]`, test doubles and the rest of
+  PHPUnit's surface are not provided; a call to them is a compile error.
+- TAP output is not provided; JUnit XML is the CI format.

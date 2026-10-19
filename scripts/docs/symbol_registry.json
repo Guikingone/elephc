@@ -1616,6 +1616,24 @@
       "internal": false,
       "kind": "class",
       "module": "elephc",
+      "name": "Elephc\\Testing\\IncompleteTestError",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "class",
+      "module": "elephc",
       "name": "Elephc\\Testing\\Runner",
       "php_manual": null,
       "since": null

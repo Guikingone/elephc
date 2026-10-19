@@ -16,6 +16,8 @@
 //!   the next run overwrites.
 //! - Compile options after the path are the ordinary ones; output-mode and target flags are
 //!   refused up front because the runner always builds and runs a host executable.
+//! - Isolation, timeout, filter and the JUnit path are not compiler options: they are baked
+//!   into the synthesized driver's `Runner` constructor call by `discover::driver_source`.
 //! - The child inherits stdio and the caller's working directory; its exit code is the
 //!   command's, and a signal death becomes `128 + signal` with one diagnostic line.
 
@@ -88,14 +90,23 @@ fn run_inner(command: TestCommand) -> Result<i32, String> {
     let mut config = crate::cli::parse_compile_args(&args);
     crate::apply_project_ini(&mut config);
     crate::emit_ini_override_warnings(&config);
+    // The report path is resolved against the caller's directory now, so the suite writes
+    // it where the user pointed even though the binary lives under the cache.
+    let junit = command.junit.as_deref().map(|path| {
+        cwd.join(path)
+            .to_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| path.to_string())
+    });
+    let options = crate::testing_prelude::discover::DriverOptions {
+        filter: command.filter.clone(),
+        isolate: command.isolate,
+        timeout: command.timeout,
+        junit,
+    };
     // A compile error ends the process inside the pipeline with the compiler's own
     // diagnostics and exit code; only a successful build returns here.
-    crate::pipeline::compile_test(
-        config,
-        &entry_source,
-        &output_stem,
-        command.filter.as_deref(),
-    );
+    crate::pipeline::compile_test(config, &entry_source, &output_stem, &options);
 
     let binary = build_dir.join(OUTPUT_STEM);
     let status = Command::new(&binary)

@@ -55,8 +55,13 @@ pub(crate) fn compile_repl(config: CliConfig, output: &str) {
 /// Compiles an `elephc test` suite: `source` is the synthesized entry (the `require_once`
 /// of every test file) whose logical path is `config.filename`, the binary goes to
 /// `output`, and compile-time discovery appends the driver for the tests `filter` keeps.
-pub(crate) fn compile_test(config: CliConfig, source: &str, output: &str, filter: Option<&str>) {
-    compile_inner(config, EntryKind::TestSuite { source, output, filter });
+pub(crate) fn compile_test(
+    config: CliConfig,
+    source: &str,
+    output: &str,
+    options: &crate::testing_prelude::discover::DriverOptions,
+) {
+    compile_inner(config, EntryKind::TestSuite { source, output, options });
 }
 
 /// How the entry program reaches the pipeline and where its outputs go.
@@ -72,11 +77,11 @@ pub(crate) enum EntryKind<'a> {
     /// The embedded REPL host: generated bootstrap, no autoload, outputs at `output`.
     ReplHost { output: &'a str },
     /// An `elephc test` suite: generated entry, ordinary autoload, outputs at `output`,
-    /// and the driver synthesized for the tests `filter` keeps.
+    /// and the driver synthesized with `options` (filter, isolation, timeout, report).
     TestSuite {
         source: &'a str,
         output: &'a str,
-        filter: Option<&'a str>,
+        options: &'a crate::testing_prelude::discover::DriverOptions,
     },
 }
 
@@ -206,6 +211,10 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     let phase_started = Instant::now();
     let (autoload_registry, parsed) = if entry.is_repl_host() {
         (autoload::Registry::empty(), parsed)
+    } else if entry.is_test_suite() {
+        // The compiler stands in for PHPUnit: an installed `phpunit/phpunit` (and what only
+        // it requires) must not be autoloaded into the suite. See `autoload::dev_packages`.
+        autoload::Registry::build_excluding(parent, parsed, &autoload::phpunit_closure(parent))
     } else {
         autoload::Registry::build(parent, parsed)
     };
@@ -608,10 +617,10 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     // the ones autoloading just brought in, is in the AST with resolved names, and append
     // the synthesized driver. An empty run is a compile error here, not a binary that
     // reports it.
-    let ast = if let EntryKind::TestSuite { filter, .. } = entry {
+    let ast = if let EntryKind::TestSuite { options, .. } = entry {
         crate::progress::phase("test-discovery");
         let phase_started = Instant::now();
-        let ast = match crate::testing_prelude::discover::append_driver(ast, filter) {
+        let ast = match crate::testing_prelude::discover::append_driver(ast, options) {
             Ok(ast) => ast,
             Err(e) => {
                 crate::progress::clear();
