@@ -49,6 +49,8 @@ This page explains where every value lives in memory at runtime.
 │                              │  _rt_diag_suppression, _rt_diag_pending_*,
 │                              │  _php_diagnostic_*,
 │                              │  _rt_unmanaged_ref_borrow_top,
+│                              │  _obj_handle_index, _obj_handle_free/_top,
+│                              │  _obj_weak_reference_index,
 │                              │  _resource_inventory_head/_tail,
 │                              │  _json_last_error, _json_active_*,
 │                              │  _json_indent_depth, _json_validate_*,
@@ -1013,6 +1015,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
 - `_resource_id_prefix` — prefix used by resource display helpers
 - `_obj_handle_index`, `_obj_handle_free`, `_obj_handle_free_top` — direct heap-granule-to-object-handle index plus the LIFO pool of reusable PHP object handles
+- `_obj_weak_reference_index` - one non-owning wrapper pointer per 16-byte heap granule, cleared before referent or wrapper reuse; `_weak_map_key_retire_fn` selects the live WeakMap retirement callback, and `_weak_reference_class_id` / `_weak_map_class_id` identify the emitted classes
 - `_web_heap_guard_enabled` — enables per-request live-block accounting for persistent `--web` workers
 - `_resource_id_keys`, `_resource_id_vals` — open-addressed native-resource-to-PHP-id map; resource ids and object handles deliberately use separate numbering spaces
 - `_vd_indent`, `_vd_seen`, `_vd_seen_n` — current `var_dump()` indentation and its bounded recursion-detection stack
@@ -1188,6 +1191,7 @@ read the same uniform heap header, including on the iOS targets.
 | Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn`, `_elephc_eval_closure_bind_fn`, `_elephc_eval_wrap_callback_fn`, `_elephc_eval_object_gc_child_fn`, `_elephc_eval_object_release_fn`, `_elephc_eval_array_reference_retire_fn`, `_elephc_eval_object_clone_fn` = 8 bytes each | Late-bound Magician callbacks for eval-managed handlers, closures, callbacks, objects, references, and cloning |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
 | Heap and GC metadata | `_heap_off`, `_heap_free_list`, `_heap_debug_enabled`, `_heap_max`, and each `_gc_*` flag, counter, pointer, or timer = 8 bytes each; `_heap_small_bins` = 32 bytes | Fixed-size allocator, cycle-collector, destructor, pin, and timing bookkeeping |
+| Weak-reference identity index | `_obj_weak_reference_index` = `(heap_size / 16 + 2) * 8` bytes, or 4 MiB plus 16 bytes for the default 8 MiB heap | One non-owning wrapper pointer per heap granule; it neither keeps keys alive nor acts as a collector root |
 | Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: buffer registry exhausted` (an invalid requested size aborts earlier with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size`) |
 | Exception and user-handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, and every `_php_error_handler_*` / `_php_exception_handler_*` slot = 8 bytes each | Active exception state and current user handlers; nested handler registrations use heap-backed linked stacks |
 | Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-set recursion guard |

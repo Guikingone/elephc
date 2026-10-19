@@ -450,11 +450,13 @@ repetition stays inside the finalizer. The inliner and
 [checked-integer sinking](#checked-integer-sinking) have already finished.
 
 The finalizer removes a `MixedClone` of a fresh owned `ICheckedAdd`,
-`ICheckedSub`, or `ICheckedMul` result when that result is used only by the
+`ICheckedSub`, `ICheckedMul`, or dynamic `MixedNumericBinop` add/sub/mul result
+when that result is used only by the
 clone and by the next non-`nop` instruction in the same block, which must be
 the `Release` of the source. Uses of the clone result are redirected to the
 source, and the clone and that release become `nop`. The checked operation
-stays in place, including overflow-to-float promotion. Borrowed, acquired,
+stays in place, including overflow-to-float promotion and dynamic int/float
+representation. Dynamic power and other producers remain excluded. Borrowed, acquired,
 shared, and otherwise observed sources, and a release in another block, keep
 the copy.
 

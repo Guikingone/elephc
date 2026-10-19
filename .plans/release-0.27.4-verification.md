@@ -2,7 +2,7 @@
 
 - [x] Verify the published base, exact candidate and complete source inventory.
 - [x] Run static release checks and a warning-free build without running tests.
-- [ ] Correct documentation and regenerate the builtin references.
+- [x] Correct documentation and regenerate the builtin references.
 - [ ] Present the audited changelog draft for approval.
 - [ ] Apply and commit the approved numbered release notes.
 
@@ -47,7 +47,7 @@ The project structure describes the active EIR and shared runtime boundaries.
 
 ### 2. Language reference and internals
 
-Status: NEEDS DOCUMENTATION UPDATES.
+Status: PASS after documentation updates. The initial findings corrected were:
 
 - Both the pipeline reference and architecture diagram omit the new
   `dom-html-prelude` and `dom-html-autoload-prelude` timing phases.
@@ -71,15 +71,25 @@ CLI flags and the three parsed environment overrides are documented. The old
 accepted option parser. Defaults and aliases are checked against current CLI
 parsing and target selection.
 
-Generated references will be rebuilt from the shared contract and audited in the
-documentation phase. This avoids treating the obsolete paths in the invoked
-skill descriptions as sources of truth.
+Generated references were rebuilt with `cargo build --example gen_builtins
+--features curl -j 4`, `extract_builtins.py --render --force`,
+`gen_module_sections.py` and `gen_php_comparison.py`. The committed generated
+pages and registries were already reproducible, so no generated changes were
+needed. `audit_builtins.py`, `validate_site_compat.py` and
+`audit_builtin_eir_boundary.py --enforce-target-architecture` all pass with zero
+errors. The exporter build also completed without warnings.
+
+The runtime reference now names all 1,004 literal global `__rt_*` labels found
+in shared emitters, including 20 previously omitted helpers. The memory model
+covers all 234 literal BSS names from the data emitters, including the weak
+reference identity index and its size. These inventories check explicit symbol
+names; they do not claim to exhaust dynamically formatted metadata labels.
 
 ### 3. Roadmap
 
-Status: NEEDS DOCUMENTATION UPDATES. Existing completed v0.27.x items are still
-under a `Planned` heading, and the introductory claim that v0.27.x contains only
-unshipped work contradicts those items. Preserve them in v0.27.x and identify
+Status: PASS after documentation updates. Existing completed v0.27.x items are still
+under a `Planned` heading before this update, and the introductory claim that v0.27.x contains only
+unshipped work contradicted those items. They now remain in v0.27.x under
 their delivered release. Tail self/mutual recursion is implemented by
 `src/ir_passes/tail_call.rs`; its existing item is already checked. The remaining
 compute-performance, DOOM benchmark and real-world CLI validation goals cannot
@@ -141,7 +151,7 @@ Cross-target execution and regression freedom are therefore not newly verified.
 
 Release ready: NOT YET ESTABLISHED.
 
-1. Finish and audit the documentation updates.
+1. Documentation updates and non-test audits are complete.
 2. Approve, apply and commit the numbered changelog with complete traceability.
 3. Resolve or explicitly accept the direct-wrapper coverage gaps before claiming
    exhaustive coverage; retain the distinction between static presence and

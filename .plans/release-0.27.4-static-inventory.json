@@ -2376,5 +2376,13 @@
   "candidate_sha": "df57a9800f4fb61bd4e876f0ddf309b9d08109f2",
   "base_sha": "132b4da6f74da2da0956bc25026a9d5570f49689",
   "tests_executed": false,
-  "test_count_method": "Literal #[test] declarations in tracked integration Rust sources; macro-generated cases are not expanded."
+  "test_count_method": "Literal #[test] declarations in tracked integration Rust sources; macro-generated cases are not expanded.",
+  "documentation_after_update": {
+    "docs_count": 2356,
+    "format_or_link_errors": [],
+    "literal_runtime_helpers": 1004,
+    "undocumented_literal_runtime_helpers": [],
+    "literal_fixed_bss_symbols": 234,
+    "undocumented_literal_bss_symbols": []
+  }
 }
