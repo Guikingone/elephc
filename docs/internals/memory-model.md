@@ -1298,3 +1298,11 @@ skips the string-registry lookup; the child's release still retires its own
 identity before allocator reuse. Eval array-reference observers retire before
 this skip, including when a Mixed cell no longer contains its former array
 value. Other allocation kinds retain their existing identity retirement path.
+
+### Packed integer prefixes in JSON arrays
+
+The structural JSON decoder constructs each fresh indexed array with signed-i64 slots. A bounded, allocation-free token probe accepts only strict JSON integers within PHP's integer range, followed by JSON whitespace and a comma or closing bracket. It appends the raw value with `__rt_array_push_int`, preserving the ordinary separator, depth and error cleanup paths. It records the same token-start diagnostic candidate as recursive decoding.
+
+At the first other token, `__rt_array_to_mixed` converts the existing integer prefix once before recursive decoding continues. This covers floats, oversized integers (including `JSON_BIGINT_AS_STRING`), strings, booleans, null and containers. Later elements keep the generic path; the decoder never rereads the whole array to choose its storage. Fully integer arrays remain packed under their Mixed container box. Existing runtime-header-aware consumers handle reads, COW, references, mutation and encoding. Construction owners remain unique and unpublished until the existing owned-container boxing transfer. Partial errors release either representation through ordinary array cleanup.
+
+Packed integer leaves remain outside the cycle collector's swept-node set. When an unreachable graph owner releases one, the uniform decref dispatcher therefore performs an ordinary array decrement even during the final sweep. A surviving native alias keeps the buffer alive; the final owner releases it. Graph-backed array storage keeps its existing reachability and sweep suppression.
