@@ -17,6 +17,7 @@ use crate::ir::{print_module, Terminator};
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
 mod arrays;
+mod append_writes;
 mod array_reference_outputs;
 mod array_implode;
 mod array_membership;
@@ -31,6 +32,7 @@ mod debug_info;
 mod descriptor_ownership;
 mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
+mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
 mod string_append;
@@ -62,6 +64,7 @@ mod reference_return_boundaries;
 mod callable_operand_owners;
 mod capture_view_owners;
 mod static_properties;
+mod asymmetric_properties;
 mod synthetic_arrays;
 mod throwable_constructors;
 mod mixed_throw_errors;
@@ -157,6 +160,7 @@ fn try_lower_source_at_for_target(
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(
         ast,
         crate::php_version::PhpVersion::default(),
@@ -170,6 +174,8 @@ fn try_lower_source_at_for_target(
         &defines,
     )
     .expect("autoload failed");
+    let ast = crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory)
+        .expect("autoload DOM prelude injection failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.

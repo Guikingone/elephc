@@ -67,3 +67,6 @@ mod diagnostic_regressions;
 
 #[path = "json/coordinate_regressions.rs"]
 mod coordinate_regressions;
+
+#[path = "json/token_dispatch.rs"]
+mod token_dispatch;
