@@ -118,4 +118,3 @@ var_dump(run());
 "#, r#"warning;int(2)
 "#, 24);
 }
-
