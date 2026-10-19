@@ -283,7 +283,7 @@ Proper type system for PHP compatibility.
 
 ## v0.14.x — FFI (Foreign Function Interface)
 
-- [x] `extern function` declarations with C type annotations (`int`, `float`, `string`, `bool`, `void`, `ptr`)
+- [x] `extern function` declarations with C type annotations (`int`, explicit widths `i8`..`u64`, `float`, `string`, `bool`, `void`, `ptr`)
 - [x] `extern "libname" { }` blocks (auto `-l` linker flag)
 - [x] `extern "libname" function name(): type;` single-line syntax
 - [x] `--link` / `-l` and `--link-path` / `-L` CLI flags

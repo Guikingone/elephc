@@ -97,22 +97,27 @@ echo elephc_test_wide_i64(), " ", elephc_test_wide_u64(), "\n";
     assert_eq!(out, "5 -5\n5 -5\n5 -5\n-5000000000 -1\n");
 }
 
-/// Verifies unsigned narrow returns zero-extend the same words the signed test sign-extends, and that
-/// `i64` is an alias of `int`.
+/// Verifies unsigned narrow returns zero-extend: the negative words of the signed test read as their
+/// unsigned values, the positive words with dirty upper bits read as 5 (without zero extension the
+/// `u32` word would be a negative PHP int), and `i64` is an alias of `int`.
 #[test]
 fn test_ffi_extern_unsigned_int_returns_zero_extend() {
     let out = compile_and_run_with_c_fixture(
         r#"<?php
+extern function elephc_test_dirty_32_positive(): u32;
 extern function elephc_test_dirty_32_negative(): u32;
+extern function elephc_test_dirty_16_positive(): u16;
 extern function elephc_test_dirty_16_negative(): u16;
+extern function elephc_test_dirty_8_positive(): u8;
 extern function elephc_test_dirty_8_negative(): u8;
 extern function elephc_test_wide_i64(): i64;
 echo elephc_test_dirty_32_negative(), " ", elephc_test_dirty_16_negative(), " ", elephc_test_dirty_8_negative(), "\n";
+echo elephc_test_dirty_32_positive(), " ", elephc_test_dirty_16_positive(), " ", elephc_test_dirty_8_positive(), "\n";
 echo elephc_test_wide_i64(), "\n";
 "#,
         DIRTY_RETURN_FIXTURE,
     );
-    assert_eq!(out, "4294967291 65531 251\n-5000000000\n");
+    assert_eq!(out, "4294967291 65531 251\n5 5 5\n-5000000000\n");
 }
 
 /// Verifies 8 and 16-bit arguments are reduced modulo their width and extended to 32 bits by the

@@ -33,7 +33,7 @@ extern "SDL2" {
 | `u64` | `uint64_t` / `size_t` | integer argument register |
 | `i32` / `u32` | `int32_t` / `uint32_t` (C `int` / `unsigned`) | integer argument register |
 | `i16` / `u16` | `int16_t` / `uint16_t` (`short`) | integer argument register |
-| `i8` / `u8` | `int8_t` / `uint8_t` (`char`) | integer argument register |
+| `i8` / `u8` | `int8_t` / `uint8_t` (`signed char` / `unsigned char`) | integer argument register |
 | `float` | `double` | floating-point argument register |
 | `bool` | `bool` (`_Bool`, one byte) | integer argument register |
 | `string` | `char*` (auto null-terminated) | integer argument register |
@@ -67,9 +67,13 @@ Declare the width the C header uses:
 | `size_t`, `uint64_t`, `Uint64`, `uintptr_t` | `u64` |
 | `short`, `int16_t` | `i16` |
 | `unsigned short`, `uint16_t`, `Uint16` | `u16` |
-| `char`, `int8_t` | `i8` |
+| `signed char`, `int8_t` | `i8` |
 | `unsigned char`, `uint8_t`, `Uint8` | `u8` |
 | `bool`, `_Bool` | `bool` |
+
+Plain `char` is signed on linux-x86_64 and on the Apple targets but unsigned on
+linux-aarch64, so declare it `i8` or `u8` from the header's intent, not from
+the keyword.
 
 What elephc does at the call boundary:
 
