@@ -16,6 +16,17 @@ user assembly for the selected target.
 
 ## Pipeline Position
 
+Internal value classes can declare operator adapters in their shared
+`ClassContract::operators` metadata. Type inference resolves their result types,
+and EIR lowering emits ordinary typed calls after evaluating and capturing
+operands in source order. Boxed operands branch on the actual runtime class
+before scalar fallback. Magician consumes the same metadata. Decimal work stays
+in `elephc-bcmath`; the existing target-aware BCMath ABI shapes marshal class
+operations on every supported target. Identity comparisons bypass this dispatch.
+AST effect and exception summaries retain potentially dispatched arithmetic,
+including unused results and calls through mixed parameters. Literal scalar
+arithmetic keeps its ordinary folding rules.
+
 ```text
 PHP source
   -> Lexer
@@ -50,6 +61,9 @@ and link the resulting user object against the cached runtime object.
 | `src/codegen/lower_inst/runtime_calls.rs`, `runtime_functions/` | Validates and lowers typed `RuntimeCallTarget` / `RuntimeFnId` operations into target-aware backend implementations |
 | `src/codegen/lower_inst/builtins/eval.rs` | Literal-eval AOT bodies, scope synchronization, bridge calls, and dynamic post-barrier dispatch |
 | `src/codegen/lower_term.rs` | Terminator lowering for returns, branches, switches, and unreachable paths |
+| `src/codegen/block_layout.rs` | Machine block order (cold blocks last) and compare-branch fusion eligibility |
+| `src/codegen/parallel_moves.rs` | Direct scalar block-argument copies ordered as a parallel move |
+| `src/codegen/machine_peephole.rs` | Late per-function machine peepholes over emitted assembly text |
 | `src/codegen/context.rs` | EIR function emission state and value materialization helpers |
 | `src/codegen/frame.rs` | Stack-frame sizing, local slots, register allocation integration |
 | `src/codegen/value_placement.rs` | Stack/register placement for EIR values |
@@ -67,6 +81,123 @@ and link the resulting user object against the cached runtime object.
 
 The active backend must remain target-aware. New lowering paths should use the
 ABI helpers instead of hardcoding AArch64 or x86_64 register and stack details.
+
+## Scalar Constants and Immediate Operands
+
+With the default `--regalloc=linear`, integer, boolean, raw null, and floating-point
+constants have reconstruction recipes instead of spill slots. A constant used only
+as an immediate emits no standalone definition. Other consumers reconstruct it in
+their requested register. Float recipes preserve the exact IEEE bits, including
+negative zero and NaN payloads. Strings, heap values, and two-word tagged scalars
+retain their existing storage and ownership rules.
+
+`src/ir_passes/rematerialize.rs` estimates the cost of keeping a constant in a
+register versus reconstructing it. Encodable immediate uses contribute no register
+benefit. Other uses receive a loop-depth weight, capped at three nesting levels;
+definition cost, callee-save overhead, and a live-range surcharge offset that
+benefit. Expensive constants reused in a loop can therefore stay in registers
+after LICM places their definitions outside the loop. Register pressure falls back
+to reconstruction rather than a constant spill slot. Functions with implicit
+exception edges or generator suspension use recipes without allocating registers.
+The explicit `--regalloc=stack` mode retains backing slots as a diagnostic baseline.
+
+Allocation and emission share the encoding rules in
+`src/codegen_support/abi/immediate.rs`:
+
+| Operation | AArch64 | x86_64 |
+|---|---|---|
+| Integer add/subtract and compare | Unsigned 12-bit immediate, optionally shifted by 12; negative constants use the inverse add/subtract or `cmn` | Signed 32-bit immediate extended to 64 bits |
+| Integer AND/OR/XOR | Repeated, rotated runs of ones in a power-of-two bit width | Signed 32-bit immediate extended to 64 bits |
+| Integer multiply | Register operand | Signed 32-bit immediate extended to 64 bits |
+
+These constraints follow the [Arm instruction reference](https://documentation-service.arm.com/static/6245c734b059dc5ff9a8bdab)
+and [Intel instruction reference](https://www.intel.com/content/www/us/en/content-details/825760/intel-64-and-ia-32-architectures-software-developer-s-manual-combined-volumes-2a-2b-2c-and-2d-instruction-set-reference-a-z.html).
+Values outside an encoding's range use full-width registers. Commutative operations
+can exchange operands; comparisons also reverse their predicate. Loop bounds use
+the same comparison selection. Checked integer-to-int arithmetic enters the cold
+overflow path with one not-taken conditional branch (`b.vs`, `b.ne` for AArch64
+multiply, or `jo` on x86_64); the in-range result falls through. The overflow
+path reconstructs an immediate operand only when conversion needs it. Boxed
+checked arithmetic still follows its runtime call ABI.
+
+`examples/constant-rematerialization/main.php` demonstrates bounded sample
+accumulation with immediate masks, scaling, increments, and a fixed loop bound.
+
+## Late Instruction Selection and Machine Peepholes
+
+After EIR passes and register allocation, the backend applies a final set of
+target-aware choices while emitting each function. None of them changes
+observable behavior, so they run in every optimizer mode.
+
+**Constant-multiply strength reduction**
+(`src/codegen/lower_inst/strength_reduction.rs`). An unchecked `imul` by a
+constant (one whose overflow the integer range analysis ruled out, so the result
+is defined modulo 2^64) is factored as `±m * 2^k` with `m` equal to `1`,
+`2^j + 1`, or `2^j - 1`. Each candidate sequence is priced with a per-target
+latency and instruction-count model and is kept only when it beats the multiplier:
+
+| Constant | AArch64 | x86_64 |
+|---|---|---|
+| `x * 8` | `lsl x0, x0, #3` | `shl rax, 3` |
+| `x * 9` | `add x0, x0, x0, lsl #3` | `lea rax, [rax + rax*8]` |
+| `x * 31` | `lsl x10, x0, #5` + `sub x0, x10, x0` | `mov r10, rax` + `shl rax, 5` + `sub rax, r10` |
+| `x * -8` | `neg x0, x0, lsl #3` | `shl rax, 3` + `neg rax` |
+| `x * 11` | `mul` (no cheaper sequence) | `imul rax, 11` |
+
+AArch64 accepts at most two ALU instructions within `mul`'s latency, because
+`mul` also needs the constant materialized; x86_64 requires strictly lower
+latency than its single 3-cycle `imul r, r, imm32`. Checked multiplies keep the
+hardware overflow flag and are not rewritten.
+
+**Operand selection.** Integer compares, AArch64 three-operand arithmetic, and
+right-hand x86_64 operands read register-allocated values in place instead of
+copying them into the result register first.
+
+**Block layout** (`src/codegen/block_layout.rs`). The first block stays first
+(the prologue falls into it). Blocks that can only end abnormally
+(`unreachable`, `fatal`, `throw`) move after every other block, so a loop's hot
+blocks are contiguous. Each block knows its layout successor: an unconditional
+`br` to it emits no jump, and a `cond_br` whose then-block is next branches only
+on the inverted condition.
+
+**Compare-and-branch fusion.** When a block ends in `icmp` whose only use is the
+block's `cond_br`, and only `nop`s follow it, the compare is emitted by the
+terminator and the branch consumes its flags directly (`cmp` + `b.ge` /
+`jge`) instead of materializing a boolean with `cset` / `setcc` and testing it.
+
+**Cold paths.** Overflow paths of checked integer arithmetic and fused checked
+chains are written to a per-function cold section
+(`src/codegen/context/machine_layout.rs`) and appended after the function's last
+block, which no block can fall into. The hot path only carries the not-taken
+overflow branch, and the cold path jumps back after promoting or reporting.
+
+**Block-argument moves** (`src/codegen/parallel_moves.rs`). Edges whose
+arguments and parameters are all `int`, `bool`, or `float` copy values directly
+into the parameter homes, ordered as a parallel move; a cyclic dependency (such
+as a swap) falls back to the general stack-based copy.
+
+**Machine peepholes** (`src/codegen/machine_peephole.rs`) run over each finished
+small or loop-carrying function's text. They delete full-width self-moves and the second move of a
+`mov a, b` / `mov b, a` pair, forward a value stored to a frame slot into an
+adjacent reload of the same slot, and remove unconditional jumps to the label
+that immediately follows. Patterns only look through comments and blank lines:
+a label is a join point and a directive is opaque. Conditional branches on
+AArch64 reach only ±1 MiB, so far branches are emitted as an inverted short
+branch over `b` (`cbz x0, 1f; b L; 1:`). The peephole folds that into one
+`cbnz x0, L` / `b.cond L` when `L` is a label of the same function and the
+function is provably smaller than the conditional reach. The text peepholes run
+on functions that are small (up to 8 KiB of assembly text, typically the callees
+of hot loops) or contain a loop (an edge back to the same or an earlier block),
+up to 256 KiB. Larger loop-free and very large bodies (generated helpers and
+dispatch code such as an eval-heavy program's top level) skip them to keep
+compile time flat; block layout still removes their jumps to the next block. Overflow code
+moved to the cold tail repeats its instruction's `@src` marker, so debug line
+info and source maps keep pointing at the originating PHP statement.
+
+`examples/machine-peepholes/main.php` shows a fused loop test, an out-of-line
+overflow path, and strength-reduced multiplies.
+
+## Compound Array Operations
 
 For a nested write into an associative array, `ArrayFetchForWrite` ensures the
 parent entry exists and diagnoses a float key while normalizing it. The

@@ -284,6 +284,10 @@ pub(super) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static 
         "ArrayIterator",
         "ArrayObject",
         "AssertionError",
+        "ClosedGeneratorException",
+        "CompileError",
+        "ParseError",
+        "RequestParseBodyException",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CallbackFilterIterator",
@@ -327,6 +331,10 @@ pub(super) fn known_dynamic_new_builtin_class_names() -> &'static [&'static str]
         "ArrayIterator",
         "ArrayObject",
         "AssertionError",
+        "ClosedGeneratorException",
+        "CompileError",
+        "ParseError",
+        "RequestParseBodyException",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CachingIterator",
@@ -471,6 +479,10 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
         abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
         emit_property_default(ctx, object_base_reg, default)?;
     }
+    if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+        emit_regular_throwable_creation_line(ctx, result, object_reg, candidate.class_id);
+    }
     let construction_guard_bytes = candidate
         .constructor_impl
         .as_ref()
@@ -585,6 +597,7 @@ pub(super) fn emit_dynamic_new_mixed_spl_dll_candidate(
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         class_id as i64,
     );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
     abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
     emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
     ctx.store_result_value(result)

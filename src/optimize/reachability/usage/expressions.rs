@@ -38,6 +38,14 @@ impl Scanner<'_> {
                 self.scan_class_introspection_callable(&callable, args);
                 self.scan_exprs(args);
             }
+            // A generic construction keeps its class alive through the TYPE it names, which
+            // the type scanner already records head and arguments of.
+            ExprKind::NewGeneric { class_type, args } => {
+                self.scan_type(class_type);
+                for arg in args {
+                    self.scan_expr(arg);
+                }
+            }
             ExprKind::NewObject { class_name, args } => {
                 let key = self.record_class(class_name.as_str());
                 self.usage.instantiated_classes.insert(key.clone());
@@ -124,7 +132,17 @@ impl Scanner<'_> {
             }
             ExprKind::InstanceOf { value, target } => {
                 self.scan_expr(value);
-                match target { InstanceOfTarget::Name(name) => { self.record_class(name.as_str()); }, InstanceOfTarget::Expr(expr) => { self.usage.hazards.dynamic_class = true; self.scan_expr(expr); } }
+                match target {
+                    InstanceOfTarget::Name(name) => {
+                        self.record_class(name.as_str());
+                    }
+                    // Head and arguments both keep a class alive, as in any type position.
+                    InstanceOfTarget::Generic(class_type) => self.scan_type(class_type),
+                    InstanceOfTarget::Expr(expr) => {
+                        self.usage.hazards.dynamic_class = true;
+                        self.scan_expr(expr);
+                    }
+                }
             }
             ExprKind::ClassConstant { receiver } | ExprKind::ScopedConstantAccess { receiver, .. }
             | ExprKind::StaticPropertyAccess { receiver, .. } => self.scan_receiver(receiver),
@@ -229,6 +247,10 @@ impl Scanner<'_> {
     /// Scans a direct call, distinguishing literal introspection from dynamic hazards.
     pub(super) fn scan_function_call(&mut self, name: &str, args: &[Expr]) {
         let key = self.record_callable(name);
+        if matches!(key.as_str(), "debug_backtrace" | "debug_print_backtrace") {
+            let class = self.record_class("SensitiveParameterValue");
+            self.usage.instantiated_classes.insert(class);
+        }
         self.record_builtin_requirements(name, args);
         self.scan_builtin_callback_arguments(&key, args);
         self.scan_declaration_arguments(&key, args);
@@ -779,7 +801,16 @@ impl Scanner<'_> {
 
     /// Resolves a static receiver to its named, current, or immediate parent class.
     pub(super) fn receiver_class(&self, receiver: &StaticReceiver) -> Option<String> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => Some(self.class_key(name.as_str())),
             StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.as_deref().map(php_symbol_key),
             StaticReceiver::Parent => self.parent_class.as_deref().map(php_symbol_key),
@@ -1053,6 +1084,9 @@ impl Scanner<'_> {
                 if let ExprKind::Variable(variable) = &unwrap_named_arg(argument).kind {
                     variables.insert(variable.clone());
                 }
+                if let ExprKind::ArrayAccess { array, .. } = &unwrap_named_arg(argument).kind {
+                    self.record_protocol_methods(array, &["__elephc_reference"]);
+                }
             }
         }
         for variable in variables {
@@ -1069,6 +1103,17 @@ impl Scanner<'_> {
     /// Records a class key and applies conservative Reflection hazards.
     pub(super) fn record_class(&mut self, name: &str) -> String {
         let key = self.class_key(name);
+        if let Some(operators) = elephc_builtin_contract::lookup_class(&key).and_then(|class| class.operators) {
+            for (_, method) in operators.arithmetic {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            if let Some(method) = operators.compare {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            if let Some(method) = operators.boolean {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
+        }
         if key
             .rsplit('\\')
             .next()
@@ -1106,7 +1151,10 @@ impl Scanner<'_> {
             | ExprKind::NullsafeDynamicPropertyAccess { .. } => {
                 self.usage.hazards.dynamic_method = true;
             }
-            ExprKind::ArrayAccess { array, .. } => self.scan_assignment_target(array),
+            ExprKind::ArrayAccess { array, .. } => {
+                self.record_protocol_methods(array, &["__elephc_reference"]);
+                self.scan_assignment_target(array);
+            }
             _ => {}
         }
     }

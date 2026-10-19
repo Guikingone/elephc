@@ -33,6 +33,10 @@ mod tests {
         ("callable", include_str!("../eval_ir/callable.rs")),
         ("classes", include_str!("../eval_ir/classes.rs")),
         ("enums", include_str!("../eval_ir/enums.rs")),
+        ("generics", include_str!("../eval_ir/generics.rs")),
+        ("generic-types", include_str!("../../../elephc-generics/src/lib.rs")),
+        ("tokens", include_str!("../lexer/token.rs")),
+        ("namespace-imports", include_str!("../parser/state.rs")),
         ("expressions", include_str!("../eval_ir/expressions.rs")),
         ("interfaces", include_str!("../eval_ir/interfaces.rs")),
         ("methods", include_str!("../eval_ir/methods.rs")),
@@ -76,7 +80,21 @@ mod tests {
     /// BUMPED TO 10 WITH THIS VALUE: an included file is one parsed program, and
     /// `ScriptSegment::Output` is gone.
     /// BUMPED TO 11 WITH THIS VALUE: the open-tag separator became a shared function.
-    const RECORDED_FINGERPRINT: u64 = 17666271573136969314;
+    /// BUMPED TO 12 with the same fingerprint: call-name contents retain source spelling,
+    /// while the serialized shape stays unchanged. Older entries must be reparsed.
+    /// BUMPED TO 13 with the same fingerprint: first-class function callable names
+    /// also retain source spelling without changing the serialized shape.
+    /// BUMPED TO 14: retained generic templates, structural types, and typed locals are serialized
+    /// alongside main's source-spelling semantics. The combined layout has a fresh cache identity.
+    /// BUMPED TO 15 with the same fingerprint: case-insensitive native class-like scopes
+    /// now retain member PHPDoc types that earlier parsers silently omitted.
+    /// BUMPED TO 16 with the same fingerprint: complete-list lookahead preserves class
+    /// comparisons, invalidating stored parse failures without changing the serialized shape.
+    /// BUMPED TO 18: retained readonly setter contracts coexist with generic declarations.
+    /// Format 17 belongs to the distinct native deferred-default expression layout.
+    /// BUMPED TO 19: retained readonly setter contracts and main's caller-scope access
+    /// mask need a fresh cache identity for their combined serialized layout.
+    const RECORDED_FINGERPRINT: u64 = 13881816518370807753;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

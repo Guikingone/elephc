@@ -19,6 +19,8 @@ mod array_keys;
 pub mod dynamic_params;
 /// Array storage-representation conversions shared by checking and lowering.
 mod array_storage;
+/// `(array)` cast classification shared by checking and lowering.
+mod array_cast;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
 /// Fiber/stack introspection for async and coroutine analysis.
@@ -31,6 +33,7 @@ pub(crate) mod param_binding;
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
+pub(crate) mod object_operators;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;
 /// Type checker result types and the `check` entry point.
@@ -56,10 +59,12 @@ mod defined;
 mod warnings;
 
 pub(crate) use array_keys::{
-    array_key_type_from_value_type, is_php_integer_array_key, merge_array_key_types,
-    normalized_array_key_type, parse_php_string_offset_literal,
+    array_key_contiguity_is_unproven, array_key_type_from_value_type,
+    empty_array_key_requires_hash_storage, is_php_integer_array_key,
+    merge_array_key_types, normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
+pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayCast};
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
@@ -72,7 +77,7 @@ pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.
 #[allow(unused_imports)]
-pub use result::check_with_target;
+pub use result::{check_with_options_and_bounds, check_with_target, check_with_target_and_bounds};
 pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
 pub use schema::{

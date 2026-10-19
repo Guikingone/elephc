@@ -44,6 +44,16 @@ use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
 /// Reads PHP source, tokenizes, parses, resolves names, type-checks, optimizes,
 /// generates assembly, and links into a native binary. Exits on any error.
 pub(crate) fn compile(config: CliConfig) {
+    compile_inner(config, None);
+}
+
+/// Compiles the embedded REPL host with a logical project source and cache-local outputs.
+pub(crate) fn compile_repl(config: CliConfig, output: &str) {
+    compile_inner(config, Some(output));
+}
+
+/// Shares every compiler pass while separating generated host storage from project discovery.
+fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let CliConfig {
         filename,
         heap_size,
@@ -59,6 +69,7 @@ pub(crate) fn compile(config: CliConfig) {
         check_only,
         emit_timings,
         emit_source_map,
+        report_generics,
         emit_debug_info,
         keep_symbols,
         regalloc_linear,
@@ -91,7 +102,7 @@ pub(crate) fn compile(config: CliConfig) {
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
-    let output_paths = output_paths(filename, target, emit);
+    let output_paths = output_paths(repl_output.unwrap_or(filename), target, emit);
     // BEFORE ANY WORK RUNS. Every generated path is derived from the source filename, so a
     // tree someone else controls chooses them; refusing a symlink destination up front is
     // the only way to cover the ones an external assembler or linker writes, which this
@@ -109,7 +120,10 @@ pub(crate) fn compile(config: CliConfig) {
     }
     let mut timings = CompileTimings::new(emit_timings);
 
-    let parsed = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
+    let parsed = frontend::read_and_parse(
+        filename, source_mode, &defines, &mut timings,
+        repl_output.map(|_| crate::repl::HOST_SOURCE),
+    );
 
     // `opcache.preload` becomes an implicit `require_once` at the very top of the entry program,
     // which is what reference PHP's startup preload pass IS for a compiler: the resolver inlines
@@ -128,7 +142,11 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
-    let (autoload_registry, parsed) = autoload::Registry::build(parent, parsed);
+    let (autoload_registry, parsed) = if repl_output.is_some() {
+        (autoload::Registry::empty(), parsed)
+    } else {
+        autoload::Registry::build(parent, parsed)
+    };
     codegen::set_autoload_rule_count(autoload_registry.rule_count());
     for warning in autoload_registry.warnings() {
         errors::report_warning(warning);
@@ -190,6 +208,7 @@ pub(crate) fn compile(config: CliConfig) {
         (with_crates.contains("image"), "image"),
         (with_crates.contains("curl"), "curl"),
         (with_crates.contains("xml"), "xml"),
+        (with_crates.contains("bcmath"), "bcmath"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -313,7 +332,12 @@ pub(crate) fn compile(config: CliConfig) {
     // `SG(request_info).path_translated`, the ENTRY script — not the executing file), and the
     // manifest deliberately drops entries it cannot stat, so its first element is not a
     // dependable stand-in. See `opcache_prelude::restrict_api_denies`.
-    let opcache_entry_path = opcache_prelude::canonical_entry_path(filename);
+    // The embedded REPL entry is virtual, so only its project directory exists on disk.
+    let opcache_entry_path = if repl_output.is_some() {
+        crate::repl::canonical_entry_path(filename)
+    } else {
+        opcache_prelude::canonical_entry_path(filename)
+    };
     // The SAME verdict for the eval bridge: an OPcache call hidden in a runtime-provided
     // `eval()` source gets no native body, so the interpreter must refuse it itself.
     codegen::set_opcache_api_restricted(opcache_prelude::restrict_api_denies(
@@ -382,6 +406,8 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
@@ -423,6 +449,13 @@ pub(crate) fn compile(config: CliConfig) {
         &mut prelude_inventory,
     );
     timings.record_since("xml-prelude", phase_started);
+    // Inject the Termwind-facing DOM HTML subset only when the program names a
+    // DOM class, so other binaries never carry the HTML walker. This is an
+    // interim prelude (choice B vs draft PR #654's native libxml stack).
+    crate::progress::phase("dom-html-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    timings.record_since("dom-html-prelude", phase_started);
 
     // The resolved `opcache.preload` path, so the web prelude can find that file's guard by
     // label and lift it out of the per-request handler. Recomputed rather than threaded down
@@ -500,6 +533,19 @@ pub(crate) fn compile(config: CliConfig) {
             }
         };
     timings.record_since("autoload-run", phase_started);
+
+    // Discover DOM use inside newly loaded classes, resolving only injected declarations.
+    crate::progress::phase("dom-html-autoload-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("dom-html-autoload-prelude", phase_started);
 
     // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
     // spells a `(object)` cast, so other binaries carry nothing.
@@ -589,8 +635,12 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
     let check_options = types::CheckOptions { strict_locals };
-    let mut check_result = match types::check_with_target_and_options(&ast, target, check_options) {
-        Ok(result) => result,
+    // Type checking runs to a generic-instantiation fixpoint, so every reachable template has
+    // become an ordinary monomorphic declaration before anything downstream sees the program.
+    let (ast, mut check_result) = match crate::generics::monomorphize(ast, |program, bounds| {
+        types::check_with_target_and_options(program, target, check_options, bounds)
+    }) {
+        Ok(pair) => pair,
         Err(e) => {
             crate::progress::clear();
             errors::report(&e);
@@ -600,6 +650,12 @@ pub(crate) fn compile(config: CliConfig) {
     timings.record_since("typecheck", phase_started);
     for warning in &check_result.warnings {
         errors::report_warning(warning);
+    }
+    // The instantiation report is printed here, before declaration pruning and codegen: every
+    // template is already gone and every remaining `<...>` name is a concrete instantiation, so
+    // this is the complete monomorphization set. It is diagnostic only and changes nothing.
+    if report_generics {
+        eprintln!("{}", crate::generics::instantiation_report(&ast));
     }
     if !target.supports_current_backend() {
         crate::progress::clear();
@@ -690,6 +746,13 @@ pub(crate) fn compile(config: CliConfig) {
     if preload_startup_path.is_some() {
         exported_function_names.insert(crate::web_prelude::PRELOAD_STARTUP_FN.to_string());
     }
+    // A generic instantiation is reachable by construction — it exists only because a call
+    // site asked for it — but no call site NAMES it: the source still says `identity(5)` and
+    // lowering is what resolves that to `identity<int>`. Without this the pruner drops every
+    // instantiation as unreferenced and lowering finds nothing to call.
+    exported_function_names.extend(crate::generics::instantiation_roots(
+        &check_result.requested_instantiations,
+    ));
     let exported_function_names = exported_function_names;
     let ast = optimize::prune_unreachable_declarations(
         ast,
@@ -772,8 +835,17 @@ pub(crate) fn compile(config: CliConfig) {
         ir_passes::optimize_module(&mut ir_module);
     }
     timings.record_since("ir-opt", phase_started);
+    // The shape merge has now folded everything the EIR comparison could prove identical, so what
+    // remains is the measured case for widening it: candidates whose lowered bodies agree.
+    if report_generics {
+        eprintln!(
+            "{}",
+            codegen::generic_body_sharing_oracle(&ir_module, regalloc_linear)
+        );
+    }
 
     backend::emit_and_link(backend::BackendInputs {
+        repl_build: repl_output.is_some(),
         filename,
         with_crates: &with_crates,
         ini_overrides: &ini_overrides,

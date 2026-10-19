@@ -71,6 +71,8 @@ pub(super) struct PropertySlot {
     is_declared: bool,
     is_packed: bool,
     is_reference: bool,
+    /// Argument diagnostic prefix when this temporary slot models an inherited setter.
+    abstract_setter_type_error_prefix: Option<String>,
 }
 
 /// Declared-property candidate reachable from a `Mixed` object receiver.
@@ -149,6 +151,9 @@ pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
+// The one stderr-and-exit sequence for the whole lowering tree. Every caller names it rather than
+// open-coding the platform split, so `Emitter::syscall`'s macOS-to-Linux mapping has a single site.
+pub(super) use dynamic_factory::emit_fatal_message;
 mod dynamic_pdo;
 mod property_defaults;
 mod known_property_reads;
@@ -165,6 +170,7 @@ mod property_compatibility;
 mod property_loads;
 mod property_fetch_for_write;
 mod property_stores;
+mod property_hook_writes;
 mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
@@ -204,6 +210,7 @@ use named_property_writes::*;
 use instanceof_entry::*;
 #[allow(unused_imports)]
 use allocation_clone::*;
+pub(super) use allocation_clone::emit_object_allocation;
 #[allow(unused_imports)]
 use interface_layout::*;
 #[allow(unused_imports)]
@@ -214,6 +221,7 @@ use property_compatibility::*;
 use property_loads::*;
 #[allow(unused_imports)]
 use property_stores::*;
+use property_hook_writes::*;
 #[allow(unused_imports)]
 use property_store_values::*;
 #[allow(unused_imports)]
@@ -235,6 +243,7 @@ pub(super) use known_property_reads::{
     lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
 pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,

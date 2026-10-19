@@ -59,6 +59,7 @@ __rt_itoa          integer → string
 __rt_resource_to_string resource → "Resource id #N"
 __rt_ftoa          float → string
 __rt_concat        string + string → string
+__rt_str_append    consuming append onto a local string owner
 __rt_str_eq        string == string → bool
 __rt_array_new     allocate a new array
 __rt_throw_current throw the active exception
@@ -159,7 +160,14 @@ Converts a signed 64-bit integer in `x0` to a decimal string.
 
 The digits are written **right-to-left** because division gives us the least significant digit first. The result is written into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad).
 
-### `__rt_resource_to_string` — Resource to string
+`__rt_itoa_into` formats the same signed integer directly into a caller-owned
+21-byte window, returning its right-aligned pointer/length slice without changing
+`_concat_buf` or `_concat_off`. AArch64 takes the integer in `x0` and destination
+in `x1`, returning pointer/length in `x0`/`x1`; x86_64 takes `rdi`/`rsi` and
+returns `rax`/`rdx`. `implode()` uses this path after reserving its destination so
+integer formatting cannot overwrite its live scratch-buffer output.
+
+### `__rt_resource_to_string` - Resource to string
 
 **File:** `strings/resource_to_string.rs`
 
@@ -182,6 +190,12 @@ applying the two fixups where C's `%G` differs from `zend_gcvt`: exponential for
 keeps a mantissa fraction (`1.0E+300`, not `1E+300`) and the exponent is written without
 zero padding (`1.0E-7`, not `1E-07`). `NAN` is emitted unsigned, since glibc renders a
 negative quiet NaN as `-NAN` and PHP never does. `INF` / `-INF` pass through unchanged.
+
+`__rt_ftoa_into` uses the same formatter with a caller-provided destination
+(`x1` on AArch64, `rsi` on x86_64), preserving the shared concat cursor. It returns
+the usual string pointer/length pair. Both entry points branch to
+`__rt_ftoa_body`, a global shared body whose symbol keeps it reachable when
+Mach-O dead stripping separates the two entry points into distinct atoms.
 
 **Input:** `d0` = float value
 **Output:** `x1` = pointer to string, `x2` = length
@@ -217,6 +231,25 @@ Concatenates two strings by copying both into the [concat buffer](memory-model.m
 3. Copy right string bytes
 4. Update buffer offset
 5. Return pointer to start of result + total length
+
+### `__rt_str_append` — Consuming string append
+
+**File:** `strings/str_append.rs`, with the bodies in `strings/str_append/aarch64.rs` and `strings/str_append/x86_64.rs`
+
+Appends a borrowed right-hand string to a string owner that EIR has already decided to consume. Lowering calls it for an admitted `StrAppend`; ordinary `StrConcat` still calls `__rt_concat`. The helper uses the same pointer/length ABI as concat and does not allocate concat scratch. The header's size field is the payload capacity. The returned pair's length word is the logical length.
+
+**Input:** AArch64 `x1`/`x2` = left owner (ptr/len), `x3`/`x4` = borrowed right-hand string (ptr/len). x86_64 `rax`/`rdx` = left owner, `rdi`/`rsi` = borrowed right-hand string. Every AArch64 target, including iOS device and Simulator, uses the AArch64 body. Linux x86_64 uses the x86_64 body.
+**Output:** AArch64 `x1`/`x2`, x86_64 `rax`/`rdx` = result pointer and logical length.
+
+**Algorithm:**
+
+1. Add the two lengths before any payload access. Unsigned wrap, or a sum above `0xfffffff8` (the largest aligned payload the heap header can represent), branches to `__rt_alloc_overflow`. That trampoline recovers through an active cdylib boundary; an ordinary executable writes the allocation-overflow fatal and exits. On the unique kind-1 path, a right-hand interval whose end address wraps takes the same branch before the overlap test.
+2. A zero-length right-hand side returns the original pointer and length. Ownership and mbstring origin stay as they were.
+3. `__rt_heap_kind` classifies the left pointer. Kind 1 is an ordinary owned string. A literal, concat-scratch slice, or other non-kind-1 value is copied into a new allocation. This helper does not release that input.
+4. A kind-1 string with refcount 1, whose right-hand side lies completely outside `[payload, payload + capacity)`, is reused when the new logical length fits in that capacity. Reuse keeps the same owner. The suffix write happens after the origin refresh below.
+5. Otherwise it allocates before retiring any old owner. A unique buffer that is too small doubles its previous capacity. A shared string or an overlap, including appending a string to itself, copies instead, and that growth seed is the old logical length rather than unused spare capacity. A non-kind-1 input has no capacity to double, so the seed is zero. The reservation is the larger of that growth and the required length, and at least 16 bytes. When doubling would exceed `0xfffffff8`, the reservation is the exact required length. The new block is stamped kind 1, with the x86_64 `"ELPH"` marker in the kind word.
+6. When the mbstring runtime feature or the eval bridge is enabled, a non-empty append calls `__rt_mbstring_ini_fresh` with the result pointer and the new length before any result byte is stored, installing a fresh INI origin for the changed string. The call is omitted when those features are off. An empty append has already returned, so its origin is preserved either way.
+7. A new allocation copies the old prefix, then the right-hand side, including embedded NUL bytes. Only after that copy does the helper `__rt_decref_any` the old kind-1 owner. Reused unique owners skip that release. `__rt_heap_alloc` runs before the decref, so a failed allocation leaves the old local owner in place.
 
 ### `__rt_atoi` — String to integer
 
@@ -372,6 +405,12 @@ identity for cycles and aliases, and copies binary keys and values before the ne
 reader invocation. Rust does not interpret native array layouts. The target-aware
 reader owns indexed strides, hash iteration, Mixed unboxing, and nullable-container
 normalization.
+
+The Rust encoding catalog is one immutable static slice. Codec selection and
+encoding lookup share its metadata and embedded byte tables, rather than
+instantiating the complete `const` catalog at multiple use sites. Regenerating
+the catalog preserves that storage policy; the encoding order and payload bytes
+still come from the PHP fixtures.
 
 AOT and production eval calls use the shared invocation coordinator for argument
 preparation and delayed array snapshots. AOT supplies stack-local borrowed invoker
@@ -747,13 +786,14 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (204 top-level files plus 7 nested target/debug helpers)
+**Source:** `src/codegen_support/runtime/arrays/` (206 top-level files plus 7 nested target/debug helpers)
 
 ### Core allocation
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_heap_alloc` | Free-list + bump allocator with a 16-byte `[size:4][refcount:4][kind:8]` header | `x0` = size | `x0` = pointer |
+| `__rt_heap_grow_tail` | Extend a live bump-tail allocation in place, updating its payload size and live/peak byte counters without counting a new allocation | `x0` = pointer, `x1` = requested payload bytes | unchanged pointer on success, null when the caller must fall back |
 | `__rt_heap_free` | Return block to free list (bump reset if last block) | `x0` = pointer | — |
 | `__rt_heap_free_safe` | Free only if pointer is in heap range | `x0` = pointer | — |
 | `__rt_heap_debug_fail` | Print a heap-debug fatal error and terminate immediately | `x1` = msg ptr, `x2` = msg len | — |
@@ -765,7 +805,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_array_clone_shallow` | Clone indexed array storage for copy-on-write splitting, retaining nested heap children as needed | `x0` = array | `x0` = new array |
 | `__rt_array_to_mixed` | Convert an indexed array's live slots to boxed Mixed cells and stamp the array metadata as mixed | `x0` = array | `x0` = same array |
 | `__rt_array_ensure_unique` | Split a shared indexed array before mutation | `x0` = array | `x0` = unique array |
-| `__rt_array_grow` | Ensure uniqueness, double array capacity, copy elements, free old unique storage | `x0` = array | `x0` = new array |
+| `__rt_array_grow` | Ensure uniqueness and double array capacity, extending a unique bump-tail allocation in place when possible or falling back to allocate-copy-free growth | `x0` = array | `x0` = grown array |
 | `__rt_array_free_deep` | Free array storage and release nested heap-backed elements | `x0` = array | — |
 | `__rt_array_union` | Build PHP indexed-array union: left numeric keys win, only missing right suffix keys are appended | `x0` = left array, `x1` = right array | `x0` = result array |
 | `__rt_array_hash_union` | Build PHP indexed+associative union by converting left indexes to integer hash keys before appending missing right entries | `x0` = left array, `x1` = right hash | `x0` = result hash |
@@ -912,7 +952,15 @@ fallback boxes both operands and calls the first one.
 | `__rt_mixed_array_loose_eq` | Equal counts plus, for every key of the left array, the same key on the right with a loosely equal value (order-independent) | `x0`/`x1` = boxed arrays, `x2` = depth | `x0` = 0/1 |
 | `__rt_obj_loose_eq` | Same instance, or same runtime class id with every descriptor property loosely equal | `x0`/`x1` = object pointers, `x2` = depth | `x0` = 0/1 |
 
-Rule order inside `__rt_mixed_loose_eq` is load-bearing: a `bool` operand coerces
+An object operand first enters the program-specific
+`__elephc_internal_object_compare` function generated from the internal class
+operator contracts. Its ordinary EIR static calls preserve hidden argument-count
+and collector parameters. Result `3` requests the ordinary comparison table;
+handled comparisons are equal only at `0`, so unordered result `2` is false.
+This also gives `switch`, loose `in_array()`, and recursive array/property
+comparisons the decimal equality defined by `BcMath\Number`.
+
+For unhandled values, rule order inside `__rt_mixed_loose_eq` is load-bearing: a `bool` operand coerces
 both sides first, then `null` (converted to `""` against a string and to `bool`
 otherwise), then containers (an array equals only another array), then objects,
 then strings, then a numeric comparison. Same-tag int/resource/callable payloads
@@ -932,7 +980,7 @@ path for from a leaf helper.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (45 top-level files plus 43 files in nested date, JSON, serialization, and parsing modules; 88 files recursively)
+**Source:** `src/codegen_support/runtime/system/` (46 top-level files plus 44 files in nested date, JSON, serialization, and parsing modules; 90 files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -1024,7 +1072,30 @@ elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
 
-The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes `Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stderr before exiting with status 255. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, the line from the payload's creation-line slot (`THROWABLE_CREATION_LINE_OFFSET`, formatted through `__rt_itoa`), and the file from `_script_source_file`. An empty message drops the `": "` separator, and a zero line drops the whole ` in <file>:<line>` suffix, both matching reference PHP.
+The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`,
+which reads the published `_exc_value` and writes
+`Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stdout before exiting
+with status 255. The class name comes from `_class_name_entries` and the message
+from payload offsets 8/16. The report and public getters share
+`__rt_throwable_location_borrowed`, which resolves creation metadata and independent
+`ErrorException` filename/line overrides without allocating. Getter strings are
+persisted by their public adapter; the report borrows bytes from the published
+receiver and saves pointer, length, and line across syscalls. An explicit zero
+line or empty filename remains visible. A separate known-origin flag omits the
+suffix for synthesized errors with no source location. An empty message drops
+the `": "` separator.
+
+Ordinary Throwable objects, including `ErrorException` and subclasses with extra
+properties, reserve a creation-line word after declared properties and the optional
+dynamic-property hash. Scalar property writes cannot overwrite this metadata.
+`_class_throwable_line_offsets` locates the word; `_class_object_allocation_sizes`
+includes it, while `_class_object_payload_sizes` keeps the property and GC layout
+unchanged. Fixed and dynamic EIR allocation stamp the allocating expression's line
+before the constructor runs. Location readers and uncaught reporting distinguish
+ordinary metadata from the existing compact Throwable prefix. `ErrorException`
+location getters use an explicit constructor override when present, including line zero. Explicit eval calls to
+`__construct` reuse the constructor signature registration when ordinary method
+metadata is absent, so named arguments and defaults use the same binding as `new`.
 
 Codegen guards in `codegen::lower_inst::exceptions` have their OWN uncaught path: they write a fatal message baked at emit time and exit before the throwable is ever allocated, so they never reach this helper. They share `UNCAUGHT_EXIT_STATUS` with it so the status a script observes does not depend on which kind of exception escaped.
 
@@ -1048,7 +1119,13 @@ The runtime also resets the concat-buffer cursor before the final `longjmp`, so 
 
 ### JSON routines
 
-**Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_pretty.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.
+**Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_integer_tree/`, `system/json_pretty.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.
+
+The structural decoder trims each borrowed token once. Numbers, literals and
+containers consume that raw slice directly. Only a string token that has passed
+validation enters `__rt_json_decode` for unescaping, avoiding another trim and
+legacy-decoder call for every scalar or nested container. Both architecture
+emitters preserve the same numeric overflow, error and ownership boundaries.
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
@@ -1072,24 +1149,61 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_skip_ws` | Shared RFC 8259 whitespace skipper used by `json_decode_mixed` and its recursive array/object parsers; advances a caller-owned cursor to the next token or caller-supplied limit | JSON slice pointer, exclusive limit, cursor | updated cursor |
 | `__rt_json_validate` | Standalone RFC 8259 validator used by `json_validate()`; scalar validator helpers are also reused by `json_decode_mixed` for strings and numbers | `x1`/`x2` = JSON string | `x0` = 1 valid / 0 invalid |
 | `__rt_json_depth_enter` / `__rt_json_depth_exit` | Maintain `_json_active_depth` and compare against `_json_depth_limit` for recursive encode/decode/validate walks | global JSON state | status / updated state |
-| `__rt_json_set_error_location` | Convert a decoder target pointer into one-based line/column data relative to `_json_error_source_ptr` | target pointer | updates `_json_error_location_active`, `_json_error_line`, `_json_error_column` |
-| `__rt_json_error_message` | Build the current JSON error message, appending the PHP 8.6 `" near location line:column"` suffix when decode location state is active | global JSON state | `x1`/`x2` = message |
+| `__rt_json_note_error_candidate` | Store an absolute candidate pointer, or one byte past the offending token, without reading the source | candidate pointer | updates `_json_error_candidate_ptr` |
+| `__rt_json_set_error_location` | If a nonempty decode or validate source is active, scan `[source, min(candidate, source+len))` into one-based line/column data, then clear the source and candidate pointers. Called only from `__rt_json_throw_error` | global candidate and source slots | updates `_json_error_location_active`, `_json_error_line`, `_json_error_column`, then zeroes the source slots |
+| `__rt_json_error_message` | Build the current JSON error message, appending Elephc's `" near location line:column"` suffix when decode or validate location state is active; PHP 8.2-8.5 base messages remain the comparison oracle | global JSON state | `x1`/`x2` = message |
 | `__rt_json_throw_error` | Record a JSON error code and construct/throw `JsonException` when `JSON_THROW_ON_ERROR` is active, using the shared formatted JSON error message | `x0` = JSON_ERROR_* code | may not return |
-| `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table, including decode location suffixes when active | global JSON state | `x1`/`x2` = message |
+| `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table, including decode/validate location suffixes when active | global JSON state | `x1`/`x2` = message |
 | `__rt_json_pretty_push` / `__rt_json_pretty_pop` / `__rt_json_pretty_line` / `__rt_json_pretty_colon_space` | Maintain `_json_indent_depth` and append PHP-style pretty-print whitespace while each container encoder emits bytes. These helpers are no-ops unless `JSON_PRETTY_PRINT` is active, avoiding a second buffer walk. | current JSON state, `x11` write pointer for line/space helpers | updated formatting state / `x11` write pointer |
+
+Top-level indexed-array trees containing only integers, nested indexed arrays, and
+boxed `Mixed` values holding either of those shapes can use the bounded integer-tree
+encoder when no JSON flags are active. It first proves the complete tree and computes
+its exact byte length without allocating, then allocates one result buffer and writes
+the accepted tree without callbacks. The allocation carries `CONCAT_TEMP_HEAP_KIND`,
+so the ordinary string persistence boundary adopts that owner once instead of copying
+the bytes. Direct integer arrays with at most 3,120 slots keep the existing one-pass
+scratch encoder. Flags, recursive encoder calls, references, hashes, strings, floats,
+booleans, nulls, objects, unsupported layouts, and rejected depth or size proofs fall
+back to the general encoder before observable JSON state or ownership changes.
 
 ### Serialization routines
 
-**Files:** `system/serialize.rs`, `system/unserialize/` (15 Rust modules including `mod.rs`)
+**Files:** `system/serialize.rs`, `system/serialize/`, `system/serialization_hooks.rs`, and `system/unserialize/`
 
-These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references. A class PHP refuses to serialize (the builtins php-src flags `ZEND_ACC_NOT_SERIALIZABLE` that elephc registers, listed in `NOT_SERIALIZABLE_BUILTIN_CLASSES`: the Reflection family, `Generator`, `Fiber`, the `SplFileInfo` family, `Phar`, `PharData`, and the PDO, curl, gd and XML handles, plus anything extending them) has its `_class_serialize_ptrs` entry pointed at `__rt_throw_serialization_denied` instead of a `__serialize` method. That helper throws a catchable `Exception("Serialization of '<Class>' is not allowed")`, so the denial holds wherever the serializer meets the object: typed, behind `mixed`, nested in an array, or on a subclass that declares its own `__serialize()`. Only elephc's own declaration of a listed class counts (`ClassInfo::is_internal`, set for builtins registered without source and for classes from compiler-generated statements such as an injected prelude), so a user class that shares its name with a PHP internal elephc does not register (`WeakMap`, `ReflectionType`), or with a prelude class the program does not load (`CurlHandle` or `Pdo\Sqlite` without the curl or PDO prelude), serializes normally. A Closure (runtime tag 10, including a `Closure`-typed property slot) throws the same Exception naming `Closure` through `__rt_throw_serialization_denied_name`. The default property walk leaves out a typed property that was never initialized (its slot's high word holds the uninitialized sentinel) and counts only the properties it writes, as PHP does, so an unset `Closure`-typed property is simply omitted. The `__sleep()` path does the same through `__rt_serialize_named_prop`, which reports whether it wrote the named property; because that count is only known once every name was looked up, `__rt_serialize_sleep_body` writes the body first and `__rt_concat_hoist_tail` then moves the `<count>:{` header in front of it inside the concat buffer. On the way back, `__rt_obj_store_prop` writes each restored slot's high word (the string length, or zero), which clears the uninitialized marker of a typed property declared without a default.
+These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references. A class PHP refuses to serialize (the builtins php-src flags `ZEND_ACC_NOT_SERIALIZABLE` that elephc registers, listed in `NOT_SERIALIZABLE_BUILTIN_CLASSES`: the Reflection family, `Generator`, `Fiber`, the `SplFileInfo` family, `Phar`, `PharData`, and the PDO, curl, gd and XML handles, plus anything extending them) has its `_class_serialize_ptrs` entry pointed at `__rt_throw_serialization_denied` instead of a `__serialize` method. That helper throws a catchable `Exception("Serialization of '<Class>' is not allowed")`, so the denial holds wherever the serializer meets the object: typed, behind `mixed`, nested in an array, or on a subclass that declares its own `__serialize()`. Only elephc's own declaration of a listed class counts (`ClassInfo::is_internal`, set for builtins registered without source and for classes from compiler-generated statements such as an injected prelude), so a namespaced user class such as `Demo\WeakMap`, a class named `ReflectionType` that elephc does not register, or a user class named like a prelude class the program does not load (`CurlHandle` or `Pdo\Sqlite` without the curl or PDO prelude), serializes normally. A Closure (runtime tag 10, including a `Closure`-typed property slot) throws the same Exception naming `Closure` through `__rt_throw_serialization_denied_name`. The default property walk leaves out a typed property that was never initialized (its slot's high word holds the uninitialized sentinel) and counts only the properties it writes, as PHP does, so an unset `Closure`-typed property is simply omitted. The `__sleep()` path does the same through `__rt_serialize_named_prop`, which reports whether it wrote the named property; because that count is only known once every name was looked up, `__rt_serialize_sleep_body` writes the body first and `__rt_concat_hoist_tail` then moves the `<count>:{` header in front of it inside the concat buffer. On the way back, `__rt_obj_store_prop` checks each parsed value's boxed tag against the property's `_class_serpdiag_*` row: a tag the declared type does not accept raises PHP's catchable `TypeError` (`Cannot assign <value> to property C::$p of type <T>`) through `__rt_unser_throw_property_type_error`, and an accepted `int` is rewritten to a `float` in place only when the declared type includes `float` but not `int` (`int|float` keeps the integer). It then writes each restored slot's high word (the string length, or zero), which clears the uninitialized marker of a typed property declared without a default.
+
+Property metadata follows physical layout slots. A private parent property and a
+child property with the same name keep distinct mangled keys, byte offsets, storage
+tags and declaring-type diagnostics. The metadata resolver walks the ancestry for
+a slot hidden by the child's name map; the renderer's `__debugInfo()` projection
+does not change the serializer's property list.
+
+Option-validation TypeErrors use the entry that closes its pre-parser context;
+property TypeErrors leave that closure to the protected decoder boundary.
+Their common diagnostic body uses shared join labels: on Mach-O these are
+alternate entries, so branches from either global helper retain the common
+body under dead stripping instead of crossing into another helper's local label.
 
 `unserialize()` refuses the same classes from its allocation-free preflight. As soon as `__rt_unser_validate_at` has bounded an object's class name, `__rt_unser_refuse_class` asks the `allowed_classes` policy (a blocked class still becomes `__PHP_Incomplete_Class`) and then matches the name case-insensitively against the per-program `_unser_refused_classes` table. That table lists the refused classes the program declares (subclasses included) and the refused builtins it does not declare at all (a Reflection class that declaration pruning removed, or `Closure`), but not a program's own class that merely carries a builtin's name. A match throws `Unserialization of '<Class>' is not allowed`, with the class spelled as declared, through `__rt_throw_unserialization_denied_name`. Because the preflight runs before the decoder, the refusal comes before any object, box or container is allocated and before any `__wakeup()`/`__unserialize()` hook of the payload runs (PHP defers those hooks until the whole payload decoded), so a caught refusal leaves nothing behind; it unwinds through the public entry boundary that closes the unserialize context.
+
+The public `__rt_serialize_call_value` entry protects the reference counter and populated
+object pointer/index pairs with a stack snapshot and guarded dispatch. Ordinary nested
+operations restore that snapshot on success and on exceptions. The scoped adapters in
+`serialization_hooks.rs` select shared registries for legacy `Serializable` callbacks
+and isolated registries for modern hooks. Shared nested decodes promote their temporary
+reference owners to the enclosing context before cleanup; calls without options inherit
+its allowed-class policy. Native hook return metadata distinguishes strings, boxed values,
+null, scalars, and other heap owners, so invalid serialize results throw after cleanup and
+ignored unserialize results are released. EIR declares serialize results independent and
+unserialize results fresh, allowing throwing builtin operand guards to retain and release
+temporary inputs correctly.
 
 The unserializer keeps the fixed runtime-emission order in `unserialize/mod.rs`. Shared diagnostics and per-call context lifecycle are separated from target-specific allowed-class policy parsing, allocation-free validation, recursive decoding, and object-storage/key helpers. The two decoder files are cohesive architecture leaves; every surrounding orchestration or support module remains below the repository's 500-line warning threshold.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
+| `__rt_serialize_call_value` | Guard a public call and preserve shared or isolated reference state across hooks | value tag + payload | string slice |
 | `__rt_serialize_value` | Tag-dispatching serializer for a raw runtime value, appending its wire form to the concat buffer | value tag + payload | `x1`/`x2` = string slice |
 | `__rt_serialize_mixed` | Unbox a boxed Mixed cell (null pointer → `N;`), then serialize it | `x0` = mixed cell | `x1`/`x2` = string slice |
 | `__rt_serialize_indexed_array` / `__rt_serialize_hash` | Serialize indexed arrays and hashes as `a:<n>:{...}` | array/hash pointer | `x1`/`x2` = string slice |
@@ -1102,8 +1216,9 @@ The unserializer keeps the fixed runtime-emission order in `unserialize/mod.rs`.
 
 **Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`,
 `system/mb_ereg_match.rs`, `system/preg_match.rs`,
-`system/preg_match_all.rs`, `system/preg_replace.rs`,
-`system/preg_replace_callback.rs`, `system/preg_split.rs`; the embedded shim
+`system/preg_match_all.rs`, `system/preg_match_all_capture.rs`,
+`system/preg_replace.rs`, `system/preg_replace_callback.rs`,
+`system/preg_split.rs`; the embedded shim
 source is `src/native_deps/recipes/pcre2_shim.c`.
 
 Generated runtime assembly calls only the versioned
@@ -1130,6 +1245,7 @@ a package.
 | `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees | pattern + subject strings | `x0` = 1 (match) or 0 (no match) |
 | `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings | pattern + subject strings | match flag plus matches array pointer |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
+| `__rt_preg_match_all_capture` | Fill `preg_match_all()`'s by-reference `$matches` for numbered groups. `PREG_PATTERN_ORDER` uses `$matches[group][match]`, `PREG_SET_ORDER` uses `$matches[match][group]`, `PREG_OFFSET_CAPTURE` boxes `[value, offset]`, and `PREG_UNMATCHED_AS_NULL` uses null (offset `-1` with offset capture). Unsupported extra flag bits, or both order bits at once, return count 0 and `[]` | pattern + subject strings + flags | `x0`/`rax` = match count, `x1`/`rdx` = matches array |
 | `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
 | `__rt_preg_replace_callback` | Replace all regex matches using shim-sized fixed-pair capture storage, building an indexed `$matches` string array, invoking the callback, and appending its string result while preserving concat-buffer state across callback prologues | pattern + callback + subject | `x1`/`x2` = result string |
 | `__rt_preg_split` | Split the subject string at regex match boundaries using shim-sized fixed-pair capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout | pattern + subject strings, limit, flags | `x0` = array pointer |
@@ -1377,9 +1493,11 @@ These helpers support `stdClass`, `json_decode()` object results, boxed Mixed pr
 
 ## SPL and iterable routines
 
-**Source:** `src/codegen_support/runtime/spl/` (3 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/spl/` (4 files: `fixed_array.rs`, `doubly_linked_list.rs`, `offset_convert.rs`, `mod.rs`)
 
 These helpers back SPL container classes whose PHP surface needs custom runtime storage. `SplDoublyLinkedList` (and its `SplStack` / `SplQueue` subclasses) store a class id, an owned indexed array of boxed `Mixed` cells, an iterator index, and iterator-mode bits. `SplFixedArray` stores a class id and a fixed-size storage array of owned boxed `Mixed` cells (or null for unset/null slots). Mutating methods take ownership of the boxed `Mixed` arguments prepared by call lowering, and resize/overwrite paths release any replaced cell first.
+
+`ArrayAccess` offsets for both families funnel through `__rt_spl_offset_convert`, which applies the PHP offset rules of the receiver: a canonical integer string is an index for `SplFixedArray` while the linked-list family weak-coerces any numeric one (mode 0/1/2 selects the family, and mode 2 gives `offsetSet(null)` its own append meaning). A rejected offset answers the receiver's exact `Cannot access offset of type <type>` / `... must be of type ?int` spelling through `__rt_spl_throw_offset_type`; the owned offset box is released before any diagnostic that may dispatch to a user error handler. `_spl_offset_type_rows` and `_spl_fixed_offset_type_prefix` / `_spl_fixed_offset_type_suffix` / `_spl_float_string_prefix` / `_spl_float_string_suffix` hold those spellings and the float-string deprecation words.
 
 ### SplDoublyLinkedList / SplStack / SplQueue
 
@@ -1406,6 +1524,13 @@ These helpers back SPL container classes whose PHP surface needs custom runtime 
 | `__rt_spl_fixed_offset_exists` / `__rt_spl_fixed_offset_get` / `__rt_spl_fixed_offset_set` / `__rt_spl_fixed_offset_unset` | `ArrayAccess` operations with bounds checking |
 | `__rt_spl_fixed_to_array` / `__rt_spl_fixed_from_array` / `__rt_spl_fixed_copy_from_array` | Convert to / build from a PHP array |
 | `__rt_spl_fixed_unserialize` | Serialization helper |
+
+### Shared SPL offset conversion
+
+| Routine | What it does |
+|---|---|
+| `__rt_spl_offset_convert` | Convert a boxed `mixed` offset under the receiver's rules: mode 0 uses `SplFixedArray`'s array-key ones (a canonical integer string is an index), mode 1 the linked-list family's weak `int $index` coercion with null reading as 0, mode 2 the `offsetSet(null)` append form. Answers the converted index or, on rejection, the exact type spelling taken from `_spl_offset_type_rows`; consumes the owned offset box, releasing it before any diagnostic that may reach a user error handler |
+| `__rt_spl_throw_offset_type` | Raise `TypeError` spelling the rejected offset's type: `<prefix><type><suffix>` concatenated, persisted, and thrown as a canonical 56-byte Throwable stamped with `_spl_type_error_class_id`; never returns |
 
 ## Generator routines
 
@@ -1500,7 +1625,7 @@ The tables above document the public runtime operations. The emitters also split
 - **Additional array and scalar entry points:** `__rt_alloc_overflow`, `__rt_array_chunk_to_hash`, `__rt_array_count_values`, `__rt_array_iter_next`, `__rt_array_key_exists_mixed_key`, `__rt_array_ptr_key`, `__rt_array_ptr_seek`, `__rt_array_ptr_value`, `__rt_array_slice_to_hash`, `__rt_array_splice_insert_boxed`, `__rt_array_splice_insert_refcounted`, `__rt_array_splice_insert_str`, `__rt_array_splice_insert_unboxed`, `__rt_array_strict_eq`, `__rt_array_to_hash_reverse`, `__rt_count_values_bump`, `__rt_hash_count_values`, `__rt_int_pow_checked`, `__rt_min_max_hash`, `__rt_min_max_mixed`, `__rt_min_max_str`, `__rt_mixed_clone`, `__rt_mixed_inc_dec`, `__rt_mixed_intval_base`, `__rt_mixed_numeric_pow`, `__rt_php_float_to_int`, `__rt_php_truthy`, and `__rt_round_mode`.
 - **Additional string and crypto entry points:** `__rt_base_convert`, `__rt_base_to_number`, `__rt_chunk_split`, `__rt_concat_grow`, `__rt_concat_publish`, `__rt_concat_reserve`, `__rt_count_chars`, `__rt_dec_to_base`, `__rt_openssl_cipher_iv_length`, `__rt_openssl_decrypt`, `__rt_openssl_encrypt`, `__rt_openssl_get_cipher_methods`, `__rt_parse_url_key_address`, `__rt_parse_url_throw_component`, `__rt_quotemeta`, `__rt_str_inc_dec`, `__rt_str_to_int_base`, `__rt_str_word_count`, `__rt_strncasecmp`, `__rt_strncmp`, `__rt_strtr_array`, `__rt_strtr_hash`, `__rt_strtr_int_key_len`, `__rt_strtr_pairwise`, `__rt_strtr_probe`, and `__rt_substr_count`.
 - **Additional object, generator, I/O, bridge, and PDO entry points:** `__rt_bcmath_throw`, `__rt_file_get_contents_range`, `__rt_gen_suspend_delegated`, `__rt_obj_dump_dyn_props`, `__rt_obj_dyn_prop_at`, `__rt_obj_enum_case_name`, `__rt_obj_prop_count`, `__rt_obj_prop_name`, `__rt_pdo_call_agg_final`, `__rt_pdo_call_agg_step`, `__rt_pdo_call_collation`, `__rt_pdo_call_scalar`, `__rt_pr_obj_desc`, `__rt_print_r_hash_entries`, `__rt_print_r_object`, and `__rt_var_dump_emit_enum_line`.
-- **Boxed arrays, hashes, references, and properties:** `__rt_array_cell_ensure_unique`, `__rt_array_column_boxed`, `__rt_array_flip_boxed`, `__rt_array_flip_boxed_body`, `__rt_array_map_boxed`, `__rt_array_merge_boxed`, `__rt_array_multisort_boxed`, `__rt_array_reduce_boxed`, `__rt_array_reverse_boxed`, `__rt_array_set_mixed_key_already_diagnosed`, `__rt_array_take_boxed`, `__rt_array_walk_boxed`, `__rt_array_walk_boxed_visit`, `__rt_hash_append_error`, `__rt_hash_chunk`, `__rt_hash_entry_deref`, `__rt_hash_entry_make_reference`, `__rt_hash_iter_next_value`, `__rt_hash_iter_resync`, `__rt_hash_next_index`, `__rt_hash_pop_boxed`, `__rt_hash_project_spread`, `__rt_hash_set_value`, `__rt_hash_try_next_index`, `__rt_hash_write_guard_claim`, `__rt_hash_write_guard_pop`, `__rt_hash_write_guard_push`, `__rt_in_array_boxed`, `__rt_local_ref_cell_release`, `__rt_mixed_deref`, `__rt_reference_cell_clone`, `__rt_reference_cell_free_deep`, `__rt_reference_cell_is_unmanaged_borrow`, `__rt_reference_cell_new`, `__rt_reference_cell_owner`, `__rt_reference_cell_release`, `__rt_reference_cell_value_release`, `__rt_reference_is`, `__rt_reference_new`, `__rt_reference_replace`, `__rt_property_hash_get`, `__rt_property_hash_set`, `__rt_object_clone_shallow_boxed`, and `__rt_mixed_str_operand_is_float`.
+- **Boxed arrays, hashes, references, and properties:** `__rt_array_cell_ensure_unique`, `__rt_array_column_boxed`, `__rt_array_flip_boxed`, `__rt_array_flip_boxed_body`, `__rt_array_map_boxed`, `__rt_array_merge_boxed`, `__rt_array_multisort_boxed`, `__rt_array_reduce_boxed`, `__rt_array_reverse_boxed`, `__rt_array_set_mixed_key_already_diagnosed`, `__rt_array_take_boxed`, `__rt_array_walk_boxed`, `__rt_array_walk_boxed_visit`, `__rt_hash_append_error`, `__rt_hash_chunk`, `__rt_hash_entry_deref`, `__rt_hash_entry_make_reference`, `__rt_hash_iter_next_value`, `__rt_hash_iter_resync`, `__rt_hash_iter_resync_successor`, `__rt_hash_next_index`, `__rt_hash_pop_boxed`, `__rt_hash_project_spread`, `__rt_hash_set_value`, `__rt_hash_try_next_index`, `__rt_hash_write_guard_claim`, `__rt_hash_write_guard_pop`, `__rt_hash_write_guard_push`, `__rt_in_array_boxed`, `__rt_local_ref_cell_release`, `__rt_mixed_deref`, `__rt_reference_cell_clone`, `__rt_reference_cell_free_deep`, `__rt_reference_cell_is_unmanaged_borrow`, `__rt_reference_cell_new`, `__rt_reference_cell_owner`, `__rt_reference_cell_release`, `__rt_reference_cell_value_release`, `__rt_reference_is`, `__rt_reference_new`, `__rt_reference_replace`, `__rt_property_hash_get`, `__rt_property_hash_set`, `__rt_object_clone_shallow_boxed`, and `__rt_mixed_str_operand_is_float`.
 - **Argument binding and mbstring bridge adapters:** `__rt_call_argument_collect_named`, `__rt_call_argument_collect_positionals`, `__rt_call_argument_validate_unpack`, `__rt_mbregex_init`, `__rt_mbstring_array_next_impl`, `__rt_mbstring_build_array`, `__rt_mbstring_build_ini_array`, `__rt_mbstring_capture_reference_fill`, `__rt_mbstring_capture_reference_store`, `__rt_mbstring_catalog`, `__rt_mbstring_clone`, `__rt_mbstring_drop_array`, `__rt_mbstring_exception_chain`, `__rt_mbstring_float`, `__rt_mbstring_header_status`, `__rt_mbstring_ini_input`, `__rt_mbstring_output_header`, `__rt_mbstring_pin`, `__rt_mbstring_publish_throw`, `__rt_mbstring_query_hash_store_array`, `__rt_mbstring_query_next`, `__rt_mbstring_query_register`, `__rt_mbstring_query_release`, `__rt_mbstring_query_root`, `__rt_mbstring_release_catalog`, `__rt_mbstring_request_reset`, `__rt_mbstring_restore_array`, and `__rt_mbstring_restore_ini_array`.
 - **GC, cleanup, exceptions, and diagnostics:** `__rt_backtrace_print_arg`, `__rt_call_object_destructor_body`, `__rt_cleanup_call`, `__rt_cleanup_chain_previous`, `__rt_cleanup_invoke`, `__rt_cleanup_preserve_exception`, `__rt_destructor_throw_mixed`, `__rt_diag_reset`, `__rt_diag_write`, `__rt_dispatch_uncaught_exception`, `__rt_error_handler_invoke`, `__rt_error_handler_restore`, `__rt_exception_chain`, `__rt_gc_collect_cycles_explicit`, `__rt_gc_collector_begin`, `__rt_gc_collector_end`, `__rt_gc_destructor_begin`, `__rt_gc_destructor_end`, `__rt_gc_destructors`, `__rt_gc_disable`, `__rt_gc_drop_pins`, `__rt_gc_enable`, `__rt_gc_enabled`, `__rt_gc_eval_object_children`, `__rt_gc_free_begin`, `__rt_gc_mem_caches`, `__rt_gc_protected_destructor`, `__rt_gc_request_start`, `__rt_gc_rethrow_pending`, `__rt_gc_status_metric`, `__rt_gc_unpin_reachable`, `__rt_heap_debug_live_blocks`, `__rt_magic_set_guard_pop`, `__rt_magic_set_guard_push`, `__rt_throw_boxed_destructor_exception`, `__rt_throwable_append_previous`, `__rt_throwable_box_owned`, `__rt_throwable_initialize`, `__rt_throwable_previous`, `__rt_throwable_previous_slot`, `__rt_throwable_take_boxed`, `__rt_warning_cleanup`, and `__rt_wrapper_unbox_int`.
 - **Curl and iconv bridge adapters:** `__rt_curl_easy_body`, `__rt_curl_easy_str_op`, `__rt_curl_invoke_callback`, `__rt_curl_rethrow_pending`, `__rt_curl_version`, `__rt_iconv_build_array`, `__rt_iconv_call`, `__rt_iconv_call_bool`, `__rt_iconv_invoke`, `__rt_iconv_materialize`, `__rt_iconv_mime_option`, `__rt_iconv_option_table`, and `__rt_iconv_release_block`.
@@ -1571,10 +1696,14 @@ _buffer_registry_next:
 .comm _json_validate_ptr, 8  ; validator input pointer
 .comm _json_validate_len, 8  ; validator input length
 .comm _json_decode_assoc, 8  ; json_decode object-shape selector
-.comm _json_error_source_ptr, 8 ; json_decode input pointer for error locations
+.comm _json_error_source_ptr, 8 ; original decode/validate input pointer
+.comm _json_error_source_len, 8 ; original decode/validate input length in bytes
+.comm _json_error_candidate_ptr, 8 ; absolute candidate byte, noted in O(1)
 .comm _json_error_location_active, 8 ; whether line/column should be appended
-.comm _json_error_line, 8    ; one-based line for the last json_decode error
-.comm _json_error_column, 8  ; one-based column for the last json_decode error
+.comm _json_error_line, 8    ; one-based line for the last JSON error (zero for empty input)
+.comm _json_error_column, 8  ; one-based column for the last JSON error (zero for empty input)
+.comm _json_error_scan_count, 8 ; completed diagnostic location scans
+.comm _json_error_scan_bytes, 8 ; source bytes loaded by those scans
 _heap_max:
     .quad 8388608            ; configured heap size limit
 .comm _gc_allocs, 8          ; allocation counter

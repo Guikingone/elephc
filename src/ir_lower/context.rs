@@ -11,6 +11,8 @@
 //! - Control-flow joins can reload locals from slots, so Phase 03 does not need
 //!   to synthesize block-parameter phis for every PHP variable yet.
 
+mod string_append;
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::{
@@ -94,6 +96,10 @@ pub(crate) enum StaticCallableBinding {
         signature: FunctionSig,
         captures: Vec<ClosureCapture>,
         return_alias: ReturnArgAlias,
+        /// Requires scalar/nonthrowing call gates for newly preserved loop facts.
+        loop_guarded: bool,
+        /// Allows direct calls only at spans admitted by the numeric loop proof.
+        numeric_loop_guarded: bool,
     },
     StaticMethod {
         receiver: StaticReceiver,
@@ -188,6 +194,7 @@ pub(crate) struct LoweringSnapshot {
     reference_call_context: Option<ReferenceCallContext>,
     refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    append_update_cell_aliases: HashSet<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -197,10 +204,15 @@ pub(crate) struct LoweringSnapshot {
     argument_guard_scopes: Vec<Vec<(usize, ValueId)>>,
     eval_barrier_active: bool,
     eval_executed: bool,
+    consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
+    numeric_closure_sites: std::collections::HashSet<Span>,
+    numeric_tracked_locals: std::collections::HashSet<String>,
+    final_mixed_locals: std::collections::HashSet<String>,
+    numeric_proof_sealed: bool,
 }
 
 /// Lengths of append-only intern pools captured for speculative rollback.
@@ -265,6 +277,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) reference_call_context: Option<ReferenceCallContext>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    pub(crate) append_update_cell_aliases: HashSet<String>,
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
@@ -288,6 +301,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
+    /// Which monomorphic instantiation each generic call site resolved to, keyed by the
+    /// enclosing body's loop-storage scope and the call position.
+    ///
+    /// Carried from the checker rather than re-derived: choosing the instantiation needs the
+    /// argument TYPES, and `lower_args_with_signature` needs the callee signature before it
+    /// lowers the arguments, so lowering cannot ask the question itself.
+    pub generic_call_sites: &'m HashMap<(String, Span), String>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
     /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
@@ -399,10 +419,26 @@ pub(crate) struct LoweringContext<'m, 'f> {
     write_operand_is_borrowed: bool,
     eval_barrier_active: bool,
     eval_executed: bool,
+    consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
+    /// Call spans whose arguments were proved `int|float` for a known closure.
+    ///
+    /// The proof is per span. A later call of the same local with an unproved
+    /// argument does not inherit it.
+    pub(crate) numeric_closure_sites: HashSet<Span>,
+    /// Locals read or written by an admitted numeric proof.
+    pub(crate) numeric_tracked_locals: HashSet<String>,
+    /// Locals whose frame slot must be Mixed from the first store.
+    ///
+    /// Set only on the replay that follows a discovery pass. The sealed proof
+    /// still describes the `int|float` value; this set is only the storage.
+    pub(crate) final_mixed_locals: HashSet<String>,
+    /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
+    /// another proof from the now-Mixed slots.
+    pub(crate) numeric_proof_sealed: bool,
     source_path: Option<String>,
 }
 
@@ -429,6 +465,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         builtin_call_types: &'m HashMap<Span, PhpType>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
+        generic_call_sites: &'m HashMap<(String, Span), String>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
@@ -493,6 +530,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             builtin_call_types,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
+            generic_call_sites,
             loop_storage_types,
             string_incdec_locals,
             bind_kill_sites,
@@ -538,15 +576,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             expression_depth: 0,
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
+            append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
             write_operand_is_borrowed: false,
             eval_barrier_active: false,
             eval_executed: false,
+            consuming_string_append_enabled: true,
             eval_scope_read_param: None,
             eval_scope_read_names: HashSet::new(),
             eval_scope_write_names: HashSet::new(),
             eval_scope_flush_names: BTreeSet::new(),
+            numeric_closure_sites: HashSet::new(),
+            numeric_tracked_locals: HashSet::new(),
+            final_mixed_locals: HashSet::new(),
+            numeric_proof_sealed: false,
             source_path,
         }
     }
@@ -589,14 +633,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // always lowered again for real, and that pass records its refusals again.
             refusals: crate::ir_lower::diagnostics::mark(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
+            append_update_cell_aliases: self.append_update_cell_aliases.clone(),
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
             eval_executed: self.eval_executed,
+            consuming_string_append_enabled: self.consuming_string_append_enabled,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
             eval_scope_read_names: self.eval_scope_read_names.clone(),
             eval_scope_write_names: self.eval_scope_write_names.clone(),
             eval_scope_flush_names: self.eval_scope_flush_names.clone(),
+            numeric_closure_sites: self.numeric_closure_sites.clone(),
+            numeric_tracked_locals: self.numeric_tracked_locals.clone(),
+            final_mixed_locals: self.final_mixed_locals.clone(),
+            numeric_proof_sealed: self.numeric_proof_sealed,
         }
     }
 
@@ -659,14 +709,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reference_call_context = snapshot.reference_call_context;
         crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
+        self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
         self.eval_executed = snapshot.eval_executed;
+        self.consuming_string_append_enabled = snapshot.consuming_string_append_enabled;
         self.eval_scope_read_param = snapshot.eval_scope_read_param;
         self.eval_scope_read_names = snapshot.eval_scope_read_names;
         self.eval_scope_write_names = snapshot.eval_scope_write_names;
         self.eval_scope_flush_names = snapshot.eval_scope_flush_names;
+        self.numeric_closure_sites = snapshot.numeric_closure_sites;
+        self.numeric_tracked_locals = snapshot.numeric_tracked_locals;
+        self.final_mixed_locals = snapshot.final_mixed_locals;
+        self.numeric_proof_sealed = snapshot.numeric_proof_sealed;
     }
 
     /// Returns the canonical PHP source path associated with this lowered body, if known.
@@ -786,7 +842,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn constant_value(&self, name: &str) -> Option<(ExprKind, PhpType)> {
         self.constants
             .get(name)
-            .or_else(|| self.constants.get(name.trim_start_matches('\\')))
+            .or_else(|| self.constants.get(elephc_builtin_contract::canonical_constant_name(name)))
             .cloned()
     }
 
@@ -905,17 +961,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
     }
 
-    /// Returns the frame storage type a local must use, boxing `string` locals that PHP's
-    /// `++`/`--` can retype.
+    /// Returns the frame storage type a local must use, boxing the locals PHP's `++`/`--`
+    /// can retype.
     ///
-    /// `"9"++` is `int(10)`, so a local the checker recorded as a string increment/decrement
-    /// target cannot keep concrete `Str` storage. Widening the slot lazily at the increment
-    /// is not enough: the slot type is a whole-frame property, so every OTHER `Str`-typed
-    /// read of the same slot would then have to detach an owned copy out of the boxed cell
-    /// (`__rt_mixed_cast_string`), leaking one heap block per executed read. Boxing from the
-    /// first store — including the incoming-parameter store — keeps every access on the
-    /// ordinary boxed-Mixed path instead.
+    /// Two types qualify, for the same reason. `"9"++` is `int(10)`, so a string target
+    /// cannot keep concrete `Str` storage; and `PHP_INT_MAX++` is a float, so an int target
+    /// cannot keep a raw `I64` one. Widening the slot lazily at the increment is not enough:
+    /// the slot type is a whole-frame property, so every OTHER concretely typed access to it
+    /// reads the wrong representation. The string case leaked one heap block per read
+    /// (`__rt_mixed_cast_string` detaching an owned copy); the int case silently TRUNCATED —
+    /// the promoting `ichecked_add` produced a boxed float and the raw slot kept its low
+    /// word, so `for ($i = PHP_INT_MAX - 1; …; $i++)` wrapped to the negative minimum where
+    /// php prints the float.
+    ///
+    /// Boxing from the first store — including the incoming-parameter store — keeps every
+    /// access on the ordinary boxed-Mixed path instead, and `checked_int_sink` narrows the
+    /// slot back to `I64` wherever no access can observe the float, which is what keeps an
+    /// ordinary counter loop as fast as it was.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+        if self.final_mixed_locals.contains(name) {
+            return PhpType::Mixed;
+        }
         if !matches!(php_type.codegen_repr(), PhpType::Str) {
             return php_type;
         }
@@ -1717,6 +1783,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // in every scope. Ordinary globals remain boxed Mixed cells.
         let php_type = if uses_global {
             self.global_alias_type(name)
+        } else if self.final_mixed_locals.contains(name) && !self.is_ref_bound_local(name) {
+            // The sealed proof already established int|float. Read the boxed slot
+            // as Mixed so codegen does not insert a truncating mixed-to-int cast.
+            PhpType::Mixed
         } else {
             self.local_type(name)
         };
@@ -2022,6 +2092,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
         reset_array_cursor: bool,
     ) -> LoweredValue {
+        if self.append_update_cell_aliases.contains(name) {
+            return crate::ir_lower::expr::store_append_update_cell(self, name, value, span);
+        }
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
         self.clear_reflection_function_local(name);
@@ -3329,6 +3402,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedPow
                     | Op::MixedCastString
                     | Op::StrConcat
+                    | Op::StrAppend
                     | Op::StrPersist
                     | Op::StrCharAt
                     | Op::StrInterpolate
@@ -3466,8 +3540,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 // is the wrong answer. Taking it made the caller release a class-typed value the
                 // callee handed back at `+0` (issue #1203). A freshly built operand is not a
                 // local load and still refuses, which is what #486 needs.
+                // A concrete string projected from final Mixed storage is the exception:
+                // its cast detached an owned string, whose lease flows through a passthrough.
                 let argument_is_a_caller_temporary = self.value_is_owning_temporary(lowered)
-                    && !self.value_is_owned_unboxed_local_load(*argument);
+                    && (!self.value_is_owned_unboxed_local_load(*argument)
+                        || self.builder.value_php_type(*argument).codegen_repr() == PhpType::Str);
                 !argument_is_a_caller_temporary
             })
     }
@@ -3669,11 +3746,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.value_needs_release_after_use(value)
     }
 
-    /// Includes provisional string unboxes in cleanup without claiming their ownership can move.
+    /// Includes provisional string and callable unboxes without claiming their ownership can move.
     ///
-    /// A later store can widen a string local to Mixed after a consumer is lowered. Reading
-    /// that slot then allocates a detached string. Emit its release provisionally and let
-    /// builder finalization prune it when the final slot still lends a concrete string.
+    /// A later store or eval barrier can widen a local to Mixed after a consumer is lowered.
+    /// Reading it then allocates a detached string or retains its callable payload. Emit a
+    /// provisional release and let finalization prune it when storage still lends the value.
     pub(crate) fn value_needs_release_after_use(&self, value: LoweredValue) -> bool {
         if self.write_operand_is_borrowed {
             return false;
@@ -3681,7 +3758,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_temporary(value) {
             return true;
         }
-        if self.builder.value_php_type(value.value).codegen_repr() != PhpType::Str {
+        if !matches!(self.builder.value_php_type(value.value).codegen_repr(), PhpType::Str | PhpType::Callable) {
             return false;
         }
         let Some(inst) = self.builder.value_defining_instruction(value.value) else {
@@ -3766,7 +3843,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 })
             }
             Some(Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
+                crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+                    | crate::ir::RuntimeCallTarget::PendingAppendFetchForWrite,
             )) => matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)),
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
                 matches!(
@@ -4516,6 +4594,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits an `is_truthy` conversion when a value is not already I64.
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+        if let Some(value) = super::expr::object_operators::lower_object_truthy(self, input, span) {
+            return value;
+        }
         if input.ir_type == IrType::I64 {
             return input;
         }
@@ -4661,6 +4742,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                     crate::ir::RuntimeFnId::FunctionExists
                         | crate::ir::RuntimeFnId::IsCallable
                         | crate::ir::RuntimeFnId::ObStart
+                        | crate::ir::RuntimeFnId::StripTags
                 ) || target.string_callback_operand_index().is_some()
                     || target.uses_mbstring_runtime() =>
             {
@@ -5003,7 +5085,8 @@ fn runtime_call_may_invoke_implicit_user_code(
         return false;
     };
     match target {
-        crate::ir::RuntimeCallTarget::ArrayFetchForWrite => true,
+        crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+        | crate::ir::RuntimeCallTarget::PendingAppendFetchForWrite => true,
         crate::ir::RuntimeCallTarget::Pcntl(
             crate::ir::PcntlRuntime::Signal | crate::ir::PcntlRuntime::SignalDispatch,
         ) => true,
@@ -5080,6 +5163,8 @@ pub(crate) fn value_ir_type(php_type: &PhpType) -> IrType {
 /// Converts parsed type syntax into a conservative PHP type for fallback metadata.
 pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
     match type_expr {
+        // Storage is a callable descriptor either way; the declared signature is checker-side.
+        TypeExpr::CallableSig { .. } => PhpType::Callable,
         TypeExpr::Int => PhpType::Int,
         TypeExpr::Float => PhpType::Float,
         TypeExpr::Bool => PhpType::Bool,
@@ -5089,11 +5174,19 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Never => PhpType::Never,
         TypeExpr::Iterable => PhpType::Iterable,
         TypeExpr::Array(inner) => PhpType::Array(Box::new(type_expr_to_php_type(inner))),
+        TypeExpr::AssocArray { key, value } => PhpType::AssocArray {
+            key: Box::new(type_expr_to_php_type(key)),
+            value: Box::new(type_expr_to_php_type(value)),
+        },
         TypeExpr::Ptr(name) => {
             PhpType::Pointer(name.as_ref().map(|name| name.as_str().to_string()))
         }
         TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(type_expr_to_php_type(inner))),
         TypeExpr::Named(name) => named_type_expr_to_php_type(name.as_str()),
+        // Lowering only ever sees instantiated classes, which are `Named`. Should one
+        // arrive uninstantiated, its head is the class it denotes — conservative metadata,
+        // which is all this fallback promises.
+        TypeExpr::GenericClass { name, .. } => named_type_expr_to_php_type(name.as_str()),
         TypeExpr::Nullable(inner) => {
             PhpType::Union(vec![PhpType::Void, type_expr_to_php_type(inner)])
         }

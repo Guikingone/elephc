@@ -1025,6 +1025,8 @@ pub fn s_try(
     let catches = catches
         .into_iter()
         .map(|(types, variable, body)| CatchClause {
+            // A synthesised catch names ordinary classes; nothing generic reaches here.
+            exception_type_args: Vec::new(),
             exception_types: types.into_iter().map(class_name).collect(),
             variable: variable.map(str::to_string),
             body,
@@ -1065,6 +1067,7 @@ pub fn s_do_while(body: Vec<Stmt>, condition: Expr) -> Stmt {
     Stmt::new(StmtKind::DoWhile { body, condition }, Span::synthetic())
 }
 
+/// Builds a synthetic while statement with its condition and body.
 pub fn s_while(condition: Expr, body: Vec<Stmt>) -> Stmt {
     Stmt::new(StmtKind::While { condition, body }, Span::synthetic())
 }
@@ -1112,6 +1115,10 @@ fn walk_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         StmtKind::Assign { name, value } => {
             out.push(name.clone());
             walk_expr(value, out);
+        }
+        StmtKind::RefAssign { target, source } => {
+            out.push(target.clone());
+            walk_expr(source, out);
         }
         StmtKind::StaticPropertyAssign { value, .. }
         | StmtKind::StaticPropertyArrayPush { value, .. } => walk_expr(value, out),
@@ -1623,6 +1630,7 @@ impl MethodBuilder {
         // of a method that has no body.
         let param_attributes = vec![Vec::new(); self.signature.params.len()];
         ClassMethod {
+            type_params: Vec::new(),
             name: self.name,
             visibility: self.visibility,
             is_static: self.is_static,
@@ -1662,6 +1670,7 @@ impl MethodBuilder {
         param_attributes
             .resize_with(params.len() + usize::from(variadic_name.is_some()), Vec::new);
         ClassMethod {
+            type_params: Vec::new(),
             name: self.name,
             visibility: self.visibility,
             is_static: self.is_static,
@@ -1808,6 +1817,9 @@ impl FunctionBuilder {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: self.name,
+                // Synthetic declarations are already monomorphic: a builder emits one concrete
+                // function, never a template to instantiate.
+                type_params: Vec::new(),
                 params,
                 param_attributes,
                 variadic: variadic_name,
@@ -1859,6 +1871,7 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         StmtKind::Assign { value, .. } | StmtKind::TypedAssign { value, .. } => {
             audit_expr(value, out)
         }
+        StmtKind::RefAssign { source, .. } => audit_expr(source, out),
         StmtKind::StaticPropertyAssign { value, .. }
         | StmtKind::StaticPropertyArrayPush { value, .. } => audit_expr(value, out),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
@@ -1999,6 +2012,16 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
                 }
             }
         }
+        StmtKind::EnumDecl { cases, methods, constants, .. } => {
+            for case in cases {
+                if let Some(value) = &case.value { audit_expr(value, out); }
+            }
+            for constant in constants { audit_expr(&constant.value, out); }
+            for method in methods {
+                audit_params(&method.params, out);
+                for inner in &method.body { audit_stmt(inner, out); }
+            }
+        }
         // An interface declares SIGNATURES, which carry no call sites; only a constant's
         // initializer can hold one.
         StmtKind::InterfaceDecl {
@@ -2014,7 +2037,7 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         StmtKind::ConstDecl { value, .. } => audit_expr(value, out),
         // A namespace body is just declarations, and the audit has to reach them: the PDO
         // driver subclasses all live inside one, and stopping here would exempt them.
-        StmtKind::NamespaceBlock { body, .. } => {
+        StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
             for inner in body {
                 audit_stmt(inner, out);
             }
@@ -2447,7 +2470,8 @@ impl ClassBuilder {
     pub fn build(self) -> Stmt {
         Stmt::new(
             StmtKind::ClassDecl {
-                name: self.name,
+                generics: None,
+            name: self.name,
                 extends: self.extends,
                 implements: self.implements,
                 is_abstract: false,
@@ -2517,7 +2541,8 @@ impl InterfaceBuilder {
     pub fn build(self) -> Stmt {
         Stmt::new(
             StmtKind::InterfaceDecl {
-                name: self.name,
+                generics: None,
+            name: self.name,
                 extends: self.extends,
                 properties: Vec::new(),
                 methods: self.methods,

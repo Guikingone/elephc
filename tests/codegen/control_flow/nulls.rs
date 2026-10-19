@@ -290,3 +290,105 @@ echo ($a[$hit_i][$miss_j] ?? 'dflt');
     );
     assert!(out.success, "program should exit successfully");
 }
+
+/// A nullable TYPED array flowing through `??` must unbox, not be stored as a cell.
+///
+/// `?array<int>` is a boxed nullable cell, and the `??` merge temp is a raw `array<int>`. The
+/// coercion that fills that temp only ever ran for a `mixed`-payload target, because before
+/// `array<T>` existed a container merge target could not be typed — so a typed one took an early
+/// return and stored the CELL into the raw slot. `g([1, 2, 3])` then printed `0` and dumped four
+/// zeros where php prints `1` and `[1, 2, 3]`.
+///
+/// A ternary was correct, and a bare `?array` was correct: only the typed element type through
+/// `??` was wrong, which is why the suite never caught it. Found by an external review that ran
+/// it.
+#[test]
+fn test_nullable_typed_array_through_null_coalesce_unboxes() {
+    let out = compile_and_run(
+        "<?php \
+         function g(?array<int> $a): string { \
+           $r = $a ?? [4, 5]; \
+           return $r[0] . '/' . count($r); \
+         } \
+         echo g([1, 2, 3]), '|', g(null);",
+    );
+    assert_eq!(out, "1/3|4/2");
+}
+
+/// The same for string elements, and from a CALL RESULT rather than a parameter.
+#[test]
+fn test_nullable_typed_array_from_a_call_through_null_coalesce() {
+    let out = compile_and_run(
+        "<?php \
+         function src(bool $empty): ?array<string> { return $empty ? null : ['a', 'b']; } \
+         function pick(bool $empty): string { $r = src($empty) ?? ['z']; return $r[0]; } \
+         echo pick(false), pick(true);",
+    );
+    assert_eq!(out, "az");
+}
+
+/// The caller's array stays intact and the ledger stays balanced.
+///
+/// The unbox takes its own reference to the payload rather than consuming the cell's, so the
+/// live array a caller still holds must not be rewritten in place — and 200 round trips must
+/// free everything they allocate.
+#[test]
+fn test_nullable_typed_array_merge_preserves_the_caller_array() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php \
+         function g(?array<int> $a): int { $r = $a ?? [9]; return $r[1]; } \
+         $src = [1, 2, 3]; \
+         $t = 0; \
+         for ($i = 0; $i < 200; $i++) { $t = $t + g($src); } \
+         echo $t, '|', $src[1], '|', count($src);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "400|2|3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "the unbox takes its own payload reference, so nothing may be left live: {}",
+        out.stderr
+    );
+}
+
+/// Coalescing a nullable object with `new` (`$o ??= new Box()`, `$o = $o ?? new Box()`) leaves
+/// the object itself in `$o`, not the boxed cell that held `?Box`: every member access after it
+/// read the cell as the object and crashed or answered garbage (#1628). The unbox is taken by a
+/// `?Box` parameter both null and not, a nullable call result and a nullable property (`a`-`d`),
+/// and by a nullable callable coalesced with a closure (`h`). Object (`g`) and callable (`j`)
+/// null defaults preserve both the null input and the original non-null value.
+/// A local merged from a ternary (`e`) and `?:` (`f`) keep a `Mixed` temp and pin the unchanged
+/// neighbouring paths. Runs over a loop under `--heap-debug`.
+#[test]
+fn test_null_coalesce_nullable_object_with_new_keeps_the_object() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box {
+    public array $list = [1, 2, 3];
+    public int $n = 7;
+    public ?Box $next = null;
+    public function items(): array { return $this->list; }
+}
+function find(int $n): ?Box { return $n > 0 ? new Box() : null; }
+function a(?Box $o): int { $o ??= new Box(); return $o->n + count($o->items()); }
+function b(?Box $o): int { $o = $o ?? new Box(); return $o->list[2]; }
+function c(int $n): int { $o = find($n) ?? new Box(); return $o->n; }
+function d(Box $h): int { $x = $h->next ?? new Box(); return $x->n; }
+function e(?Box $o, int $n): int { $x = $n > 0 ? $o : new Box(); $x ??= new Box(); return $x->n; }
+function f(?Box $o): int { $x = $o ?: new Box(); return $x->n; }
+function g(?Box $o): string { $x = $o ?? null; return $x === null ? "null" : (string) $x->n; }
+function h(?callable $cb): string { $cb2 = $cb ?? fn() => "dflt"; return $cb2(); }
+function j(?callable $cb): string { $cb2 = $cb ?? null; return $cb2 === null ? "null" : $cb2(); }
+$total = 0;
+$tail = "";
+for ($i = 0; $i < 20 + ($argc > 5 ? 1 : 0); $i++) {
+    $total += a(null) + a(new Box()) + b(null) + b(new Box()) + c(0) + c(1) + d(new Box()) + e(null, 1) + e(new Box(), 0) + f(null) + f(new Box());
+    $tail = g(null) . g(new Box()) . h(null) . h(fn() => "cb") . j(null) . j(fn() => "kept");
+}
+echo $total, " ", $tail, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1500 null7dfltcbnullkept\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget};
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, TypeExpr};
 use crate::parser::stmt::parse_name;
 use crate::span::Span;
 
@@ -58,8 +58,22 @@ pub(super) fn parse_expr_bp(
     // linux-aarch64 was thin enough that adding a handful of locals to parser
     // frames tipped it over.
     stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || {
-        parse_expr_bp_inner(tokens, pos, min_bp)
+        parse_expr_bp_inner(tokens, pos, min_bp, None)
     })
+}
+
+/// Identifies whether the prefix operand increments an append or a property of its null value.
+pub(super) enum PrefixIncrementTarget { Regular, Append, AppendProperty }
+
+/// Parses a prefix increment operand with write context for its outer append dimension.
+pub(super) fn parse_prefix_increment_operand(
+    tokens: &[SpannedToken], pos: &mut usize,
+) -> Result<(Expr, PrefixIncrementTarget), CompileError> {
+    let mut appended = PrefixIncrementTarget::Regular;
+    let expression = stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || {
+        parse_expr_bp_inner(tokens, pos, 35, Some(&mut appended))
+    })?;
+    Ok((expression, appended))
 }
 
 /// The actual Pratt loop behind the stack-growth guard of [`parse_expr_bp`].
@@ -67,6 +81,7 @@ fn parse_expr_bp_inner(
     tokens: &[SpannedToken],
     pos: &mut usize,
     min_bp: u8,
+    mut prefix_increment: Option<&mut PrefixIncrementTarget>,
 ) -> Result<Expr, CompileError> {
     let mut lhs = parse_prefix(tokens, pos)?;
 
@@ -83,6 +98,11 @@ fn parse_expr_bp_inner(
             Token::PlusPlus | Token::MinusMinus => {
                 let span = tokens[*pos].1.span;
                 let increment = tokens[*pos].0 == Token::PlusPlus;
+                if let Some(error) = super::append_writes::lower_null_property_write(&lhs, None, span) {
+                    *pos += 1;
+                    lhs = error;
+                    continue;
+                }
                 match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
                     lhs.clone(),
                     increment,
@@ -103,6 +123,20 @@ fn parse_expr_bp_inner(
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
                 *pos += 1;
+                if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBracket)) {
+                    lhs = super::append_writes::parse_append_write(
+                        lhs, tokens, pos, span, prefix_increment.is_some(),
+                    )?;
+                    if let Some(appended) = prefix_increment.as_mut() {
+                        if !matches!(tokens.get(*pos).map(|(token, _)| token),
+                            Some(Token::Arrow | Token::QuestionArrow)) {
+                            **appended = PrefixIncrementTarget::Append;
+                            return Ok(lhs);
+                        }
+                        **appended = PrefixIncrementTarget::AppendProperty;
+                    }
+                    continue;
+                }
                 let index = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
                     return Err(CompileError::new(span, "Expected ']'"));
@@ -189,6 +223,10 @@ fn parse_expr_bp_inner(
                     ObjectMember::Named(member_name) => member_name,
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                            if super::append_writes::is_null_append_receiver(&lhs)
+                                || super::append_writes::is_null_append_property(&lhs) {
+                                return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+                            }
                             *pos += 1; // consume '('
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
@@ -238,8 +276,35 @@ fn parse_expr_bp_inner(
                         continue;
                     }
                 };
-                let member_name = member;
+                // `$box->map<string>($f)` — a generic METHOD call that writes its type argument
+                // instead of leaving it to inference. Recognized exactly like the function form:
+                // a balanced argument list followed by `(`, which the comparison reading cannot
+                // be (`<` is non-associative in PHP 8, so php-src rejects the chain outright).
+                //
+                // The arguments go into the method NAME, because that is already the spelling a
+                // call site gets once inference has chosen them — `generics::methods` renames it
+                // to `map<string>` — so the written form arrives where the inferred form lands.
+                let member_name = match crate::parser::stmt::type_arguments_end(tokens, *pos) {
+                    Some(after)
+                        if tokens.get(after).map(|(token, _)| token) == Some(&Token::LParen) =>
+                    {
+                        let args = crate::parser::stmt::parse_type_arguments_only(
+                            tokens, pos, arrow_span,
+                        )?;
+                        let rendered = args
+                            .iter()
+                            .map(crate::generics::describe_type)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{}<{}>", member, rendered)
+                    }
+                    _ => member,
+                };
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                    if super::append_writes::is_null_append_receiver(&lhs)
+                        || super::append_writes::is_null_append_property(&lhs) {
+                        return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+                    }
                     *pos += 1;
                     if parse_first_class_callable_parens(tokens, pos)? {
                         if nullsafe {
@@ -364,6 +429,10 @@ fn parse_expr_bp_inner(
             continue;
         }
 
+        if prefix_increment.is_none() && super::append_writes::is_null_append_property(&lhs)
+            && assignment_bp(&tokens[*pos].0).is_none() {
+            return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+        }
         if tokens[*pos].0 == Token::InstanceOf {
             let instanceof_bp = 35;
             if instanceof_bp < min_bp {
@@ -398,6 +467,14 @@ fn parse_expr_bp_inner(
             // Widen only the END so the span covers through the value expression;
             // the start stays on the operator token, keeping diagnostics anchored.
             let span = span.merge(rhs.span);
+            if super::append_writes::is_null_append_property(&lhs) {
+                if matches!(op, AssignmentOperator::NullCoalesce) {
+                    return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+                }
+                lhs = super::append_writes::lower_null_property_write(&lhs, Some(&rhs), span)
+                    .expect("recognized null append property chain");
+                continue;
+            }
             if is_non_local_assignment_target(&lhs) {
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 
@@ -532,6 +609,9 @@ fn parse_expr_bp_inner(
         }
     }
 
+    if prefix_increment.is_none() && super::append_writes::is_null_append_property(&lhs) {
+        return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+    }
     Ok(lhs)
 }
 
@@ -617,7 +697,7 @@ fn parse_object_member(
 
 /// Represents the specific assignment operator encountered during parsing.
 #[derive(Debug, Clone, PartialEq)]
-enum AssignmentOperator {
+pub(super) enum AssignmentOperator {
     Assign,
     Compound(BinOp),
     NullCoalesce,
@@ -649,7 +729,7 @@ pub(in crate::parser) fn reject_named_args_in_dynamic_call(
 /// Returns `None` for non-assignment tokens. For recognized tokens, returns
 /// `(AssignmentOperator, left_bp, right_bp)` with binding powers `(7, 6)`,
 /// enforcing right-associativity (rhs binds tighter than lhs).
-fn assignment_bp(token: &Token) -> Option<(AssignmentOperator, u8, u8)> {
+pub(super) fn assignment_bp(token: &Token) -> Option<(AssignmentOperator, u8, u8)> {
     let op = match token {
         Token::Assign => AssignmentOperator::Assign,
         Token::PlusAssign => AssignmentOperator::Compound(BinOp::Add),
@@ -752,12 +832,24 @@ fn parse_instanceof_target(
                 *pos += 1;
                 InstanceOfTarget::Expr(Box::new(inner))
             }
-            _ => InstanceOfTarget::Name(parse_name(
-                tokens,
-                pos,
-                span,
-                "Expected class or interface name after 'instanceof'",
-            )?),
+            _ => {
+                let name = parse_name(
+                    tokens,
+                    pos,
+                    span,
+                    "Expected class or interface name after 'instanceof'",
+                )?;
+                match generic_instanceof_arguments(tokens, pos) {
+                    Some(end) => {
+                        let (_, args) = crate::parser::stmt::parse_inherited_name_at(
+                            tokens, pos, span, &name,
+                        )?;
+                        debug_assert_eq!(*pos, end, "type argument list consumed to its recognized end");
+                        InstanceOfTarget::Generic(TypeExpr::GenericClass { name, args })
+                    }
+                    None => InstanceOfTarget::Name(name),
+                }
+            }
         }
     };
     // An argument list straight after the target is a call of it, which PHP's grammar has no
@@ -777,6 +869,42 @@ fn parse_instanceof_target(
         return Err(called_instanceof_target_error(metadata.span));
     }
     Ok(target)
+}
+
+/// Recognizes `instanceof Box<int>` without stealing `($x instanceof Box) < BAR > $y`.
+///
+/// This is the one generic mention with no disambiguating token after it. `new Box<int>(` has
+/// its `(` and `Box<int>::` has its `::`, but `instanceof Name < … >` is followed by whatever
+/// the surrounding expression continues with — and a comparison chain against two constants is
+/// the same token sequence.
+///
+/// So the list is only read as type arguments when what FOLLOWS it cannot begin an expression.
+/// `instanceof Box<int>;` and `instanceof Box<int> && $y` are unambiguous; `instanceof Box < A >
+/// $y` still parses as two comparisons, because `$y` could be an operand. That keeps every
+/// program that parses today parsing the same way, and only claims the sequences PHP has no
+/// reading for.
+///
+/// Measured: php-src REJECTS `$x instanceof Foo < BAR > $z` outright — `<` is non-associative
+/// in PHP 8, so the chain is `syntax error, unexpected token ">"`. The conservative rule
+/// therefore gives up nothing a PHP program could have meant; it only declines to reinterpret
+/// a sequence this parser happens to accept more loosely than php-src does.
+fn generic_instanceof_arguments(tokens: &[SpannedToken], pos: &mut usize) -> Option<usize> {
+    let end = crate::parser::stmt::type_arguments_end(tokens, *pos)?;
+    match tokens.get(end).map(|(token, _)| token) {
+        None
+        | Some(Token::Semicolon)
+        | Some(Token::RParen)
+        | Some(Token::Comma)
+        | Some(Token::RBracket)
+        | Some(Token::RBrace)
+        | Some(Token::AndAnd)
+        | Some(Token::OrOr)
+        | Some(Token::Question)
+        | Some(Token::QuestionQuestion)
+        | Some(Token::Colon)
+        | Some(Token::DoubleArrow) => Some(end),
+        _ => None,
+    }
 }
 
 /// Rejects an `instanceof` target whose variable chain contains a call (issue #1454).

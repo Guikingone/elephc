@@ -74,6 +74,8 @@ pub(super) fn emit_strip_tags_aarch64(emitter: &mut Emitter) {
     emit_st(emitter, "cmp x3, x9");
     emit_st(emitter, "b.hs __rt_strip_tags_init");
     emit_st(emitter, "ldrb w4, [x1, x3]");
+    // PHP's strstr-based allow lookup ends at the first NUL, not the PHP string length.
+    emit_st(emitter, "cbz w4, __rt_strip_tags_allow_end");
     emit_st(emitter, "cmp w4, #65");
     emit_st(emitter, "b.lo __rt_strip_tags_lc_store");
     emit_st(emitter, "cmp w4, #90");
@@ -84,6 +86,8 @@ pub(super) fn emit_strip_tags_aarch64(emitter: &mut Emitter) {
     emit_st(emitter, "add x3, x3, #1");
     emit_st(emitter, "b __rt_strip_tags_lc_allow");
 
+    emitter.label("__rt_strip_tags_allow_end");
+    emit_st(emitter, "str x3, [x29, #-80]");
     emitter.label("__rt_strip_tags_init");
     emit_st(emitter, "str xzr, [x29, #-96]");
     emit_st(emitter, "str xzr, [x29, #-104]");
@@ -395,7 +399,7 @@ fn emit_state2_aarch64(emitter: &mut Emitter) {
     emit_st(emitter, "b __rt_strip_tags_advance");
     emitter.label("__rt_strip_tags_s2_xml");
     emit_st(emitter, "cmp x21, #4");
-    emit_st(emitter, "b.lo __rt_strip_tags_advance");
+    emit_st(emitter, "b.ls __rt_strip_tags_advance");
     emit_st(emitter, "sub x10, x21, #1");
     emit_st(emitter, "ldrb w9, [x19, x10]");
     emit_st(emitter, "orr w9, w9, #32");

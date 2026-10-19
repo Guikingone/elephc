@@ -54,7 +54,7 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
-│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,web,version}_prelude*
+│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,xml,web,version}_prelude*
 │              │  Injects only the compiler-owned PHP surfaces required by
 │              │  resolved source usage, forced bridge flags, or --web.
 └─────┬────────┘
@@ -74,6 +74,12 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌──────────────┐
+│ Object casts │  src/object_cast_prelude*
+│              │  Injects stdClass declarations for object casts after autoload.
+└─────┬────────┘
+      │
+      ▼
 ┌──────────────┐
 │ Function args│  src/func_args/
 │  desugaring  │  Rewrites func_num_args/get_args/get_arg into a hidden
@@ -96,9 +102,10 @@ PHP source (.php)
       │
       ▼
 ┌─────────┐
-│  Type    │  src/types/
+│  Type    │  src/types/ + src/generics.rs
 │  Checker │  traits.rs, checker/mod.rs, checker/builtins/, checker/functions/, warnings/
-│          │  Validates types, computes packed layouts, collects warnings, returns CheckResult
+│          │  Specializes reachable templates to a fixed point, validates types,
+│          │  computes packed layouts, collects warnings, returns CheckResult
 └────┬─────┘
      │
      ▼
@@ -264,6 +271,7 @@ src/
 ├── lib.rs                     Public module exports
 ├── main.rs                    CLI binary entry point
 ├── cli.rs                     Command-line option parsing
+├── repl/                      Interactive `elephc repl` session: parsing, cached native host, and history
 ├── pipeline.rs                Frontend/backend compilation pipeline
 │   └── artifact_io.rs         Generated-artifact write policy: preflight destination
 │                              validation and O_EXCL-staged atomic replacement
@@ -279,13 +287,17 @@ src/
 │   ├── doctor.rs              Read-only project/artifact/cache-size diagnostics
 │   ├── prune.rs               Explicit stale-fingerprint and abandoned-staging cleanup
 │   ├── resolver.rs            Read-only compile requirement to exact archive resolution
-│   └── recipes/               Reviewed PCRE2, zlib, OpenSSL, nghttp2, libssh2, curl, and libxml2 source-build recipes
+│   └── recipes/               Reviewed PCRE2, zlib, OpenSSL, nghttp2, libssh2, curl, Oniguruma, and libxml2 source-build recipes
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
 ├── builtins/                  AOT `builtin!` bindings: checker/EIR semantics joined to `elephc-builtin-contract`
 ├── builtin_metadata.rs        Public builtin metadata snapshots for parity tests and external audits
 ├── string_bytes.rs            Parser string-literal payload → PHP runtime bytes conversion
+├── docblock.rs                Per-file generic PHPDoc annotation application
+├── docblock/                  Declaration binding and generic member annotations
+├── generics.rs                Type-checking and specialization fixed point
+├── generics/                  Class/method/constructor specialization, scope keys, variance
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
@@ -306,7 +318,7 @@ src/
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination, declaration reachability pruning
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
-├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
+├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, scalar local promotion, immutable integer-local loads, checked-integer sinking, canonical loop optimization, integer range and induction-variable analysis, numeric-chain fusion, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, concat scratch-state optimization, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation with cost-aware constant rematerialization
 ├── codegen/                   Active EIR to target assembly backend
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
 ├── runtime_cache.rs           Cached shared runtime object preparation
@@ -398,8 +410,11 @@ src/
 │   ├── frame.rs               EIR frame layout and local/temporary slots
 │   ├── frame/                 Frame-layout unit tests
 │   ├── block_emit.rs          Basic-block scheduling and emission
+│   ├── block_layout.rs        Hot/cold block order and compare-and-branch fusion
+│   ├── parallel_moves.rs      Direct scalar moves for integer, boolean, and float block arguments
+│   ├── machine_peephole.rs    Late cleanup of redundant moves, reloads, and jumps to the next label
 │   ├── lower_inst.rs          EIR instruction lowering dispatcher
-│   ├── lower_inst/            Target-aware instruction, typed runtime-target, callable, object, ownership, and conversion lowerers
+│   ├── lower_inst/            Target-aware instruction, typed runtime-target, callable, object, ownership, conversion, and constant-multiply strength-reduction lowerers
 │   ├── lower_inst/runtime_calls.rs Typed RuntimeCallTarget dispatcher with no PHP-name lookup
 │   ├── lower_inst/runtime_functions/ Bounded RuntimeFnId backend implementation groups
 │   ├── lower_term.rs          EIR terminator lowering
@@ -475,7 +490,7 @@ src/
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
 │       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (103 top-level files + 68 nested helpers)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (204 top-level files + 7 nested target/debug helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (206 top-level files + 7 nested target/debug helpers)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (126 top-level files + 1 nested response-metadata helper)
@@ -486,11 +501,11 @@ src/
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (22 files)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (45 top-level files + 43 nested files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (46 top-level files + 44 nested files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
 │       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (17 files)
-│       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
+│       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers, including shared PHP offset conversion (4 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
 │
@@ -504,10 +519,12 @@ crates/
 ├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-curl/               Static libcurl easy, multi, share, callback, and multipart bridge
+├── elephc-generics/           Shared structural generic type terms, binding, and variance for AOT compilation and Magician
 ├── elephc-iconv/              Charset-conversion and RFC 2047 MIME bridge staticlib behind PHP `iconv*()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-instr/              Exact profiling instrumentation runtime
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
+├── elephc-mbstring/           Shared mbstring engine and native bridge with managed Oniguruma-backed mbregex
 ├── elephc-monitoring-contract/ Typed monitoring policy shared by the compiler and every bridge
 ├── elephc-pcntl/              Unix process control, wait, exec, priority, and signal bridge staticlib
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude

@@ -13,11 +13,14 @@ use crate::support::*;
 
 #[path = "optimizer/switch_fallthrough.rs"]
 mod switch_fallthrough;
+#[path = "optimizer/bcmath_number.rs"]
+mod bcmath_number;
 
 #[path = "optimizer/boxed_array_snapshots.rs"]
 mod boxed_array_snapshots;
 mod implode_effects;
 mod spread_effects;
+mod strip_tags_effects;
 
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
@@ -33,6 +36,8 @@ mod control_flow_normalization;
 mod checked_int_sink;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
+#[path = "optimizer/concat_reset.rs"]
+mod concat_reset;
 #[path = "optimizer/eir_common_subexpression.rs"]
 mod eir_common_subexpression;
 #[path = "optimizer/dead_code_elimination.rs"]
@@ -61,6 +66,8 @@ mod peephole;
 mod property_receiver_ownership;
 #[path = "optimizer/read_result_cleanup.rs"]
 mod read_result_cleanup;
+#[path = "optimizer/fresh_mixed_transfer.rs"]
+mod fresh_mixed_transfer;
 #[path = "optimizer/release_local_slot.rs"]
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
@@ -73,3 +80,11 @@ mod memory_model_propagation;
 mod mem2reg;
 #[path = "optimizer/warning_globals.rs"]
 mod warning_globals;
+
+#[path = "optimizer/loop_optimization.rs"]
+mod loop_optimization;
+mod rematerialization;
+mod machine_peepholes;
+
+#[path = "optimizer/tail_call.rs"]
+mod tail_call;

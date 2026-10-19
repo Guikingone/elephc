@@ -31,6 +31,8 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+mod object_comparisons;
+pub(super) use object_comparisons::lower_object_comparison_dispatch;
 pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
@@ -99,8 +101,10 @@ pub(crate) fn lower_main(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -235,8 +239,10 @@ pub(crate) fn lower_user_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -357,8 +363,10 @@ pub(crate) fn lower_class_method(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -472,8 +480,10 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &bind_kill_sites,
@@ -598,8 +608,10 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &bind_kill_sites,
@@ -714,8 +726,10 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -1078,8 +1092,10 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -1200,6 +1216,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.builtin_call_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
+        &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -1359,6 +1376,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.builtin_call_types,
             &check_result.boxed_reference_promotion_sites,
             &check_result.first_class_builtin_call_types,
+            &check_result.generic_call_sites,
             &check_result.loop_storage_types,
             &check_result.string_incdec_locals,
             &check_result.local_bind_kill_sites,
@@ -1582,8 +1600,10 @@ fn lower_closure_function_with_signature(
         parent.packed_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
+
         parent.boxed_reference_promotion_sites,
         parent.first_class_builtin_call_types,
+        parent.generic_call_sites,
         parent.loop_storage_types,
         parent.string_incdec_locals,
         parent.bind_kill_sites,
@@ -1634,11 +1654,13 @@ fn lower_body_into_function(
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+
     boxed_reference_promotion_sites: &std::collections::HashMap<
         (String, Span),
         std::collections::HashSet<String>,
     >,
     first_class_builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    generic_call_sites: &std::collections::HashMap<(String, Span), String>,
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
@@ -1699,8 +1721,10 @@ fn lower_body_into_function(
         packed_classes,
         throw_access_sites,
         builtin_call_types,
+
         boxed_reference_promotion_sites,
         first_class_builtin_call_types,
+        generic_call_sites,
         loop_storage_types,
         string_incdec_locals,
         bind_kill_sites,
@@ -1759,13 +1783,13 @@ fn lower_body_into_function(
         ctx.privatize_container_param(name, php_type, None);
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
-    if let Some(class) = property_initializers {
-        super::property_initializers::lower(&mut ctx, class);
-    } else if !super::throwable_constructors::lower(&mut ctx) {
-        for stmt in body {
-            crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
+    ctx.lower_with_final_string_append_storage(|ctx| {
+        if let Some(class) = property_initializers {
+            super::property_initializers::lower(ctx, class);
+        } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
+            crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
         }
-    }
+    });
     terminate_open_block(&mut ctx);
     // Cleanup-only loads must follow the final frame representation after every
     // source-order store has had a chance to widen its local slot.
@@ -1809,6 +1833,8 @@ fn seed_recursive_closure_binding(
             signature: binding.signature,
             captures,
             return_alias: binding.return_alias,
+            loop_guarded: false,
+            numeric_loop_guarded: false,
         },
     );
 }

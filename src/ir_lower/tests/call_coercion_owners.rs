@@ -104,8 +104,7 @@ fn assert_final_operand_root_spans_call(
 }
 
 /// Merged callable storage is extracted and rooted before positional, named and spread calls.
-#[test]
-fn merged_callable_parameters_have_owned_descriptor_storage_on_all_targets() {
+fn merged_callable_parameters_have_owned_descriptor_storage(target: &str) {
     use crate::ir::{Op, Ownership};
     use crate::types::PhpType;
     let source = r#"<?php
@@ -121,61 +120,74 @@ function invokeMergedCallback(int $choice, string $code): void {
 }
 invokeMergedCallback($argc, "");
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let function = module.functions.iter().find(|f| f.name == "invokeMergedCallback").unwrap();
-        let extractions: Vec<_> = function.instructions.iter().filter(|inst| {
-            inst.op == Op::MixedUnbox && inst.result_php_type == PhpType::Callable
-        }).collect();
-        assert_eq!(extractions.len(), 3, "{target}: every call surface must repair the callable ABI");
-        for extraction in extractions {
-            let value = extraction.result.unwrap();
-            assert_eq!(function.value(value).unwrap().ownership, Ownership::Owned, "{target}");
-            let extraction_index = function.instructions.iter().position(|inst| {
-                inst.result == Some(value)
-            }).unwrap();
-            let call_index = function.instructions.iter().enumerate().skip(extraction_index + 1)
-                .find_map(|(index, inst)| (inst.op == Op::Call).then_some(index))
-                .expect("the extracted descriptor must be followed by its call");
-            let operand = function.instructions[call_index].operands[0];
-            let mut source = operand;
-            loop {
-                let crate::ir::ValueDef::Instruction { inst, .. } =
-                    function.value(source).unwrap().def
-                else {
-                    break;
-                };
-                let producer = function.instruction(inst).unwrap();
-                if !matches!(producer.op, Op::Acquire | Op::Borrow) {
-                    break;
-                }
-                source = producer.operands[0];
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let function = module.functions.iter().find(|f| f.name == "invokeMergedCallback").unwrap();
+    let extractions: Vec<_> = function.instructions.iter().filter(|inst| {
+        inst.op == Op::MixedUnbox && inst.result_php_type == PhpType::Callable
+    }).collect();
+    assert_eq!(extractions.len(), 3, "{target}: every call surface must repair the callable ABI");
+    for extraction in extractions {
+        let value = extraction.result.unwrap();
+        assert_eq!(function.value(value).unwrap().ownership, Ownership::Owned, "{target}");
+        let extraction_index = function.instructions.iter().position(|inst| {
+            inst.result == Some(value)
+        }).unwrap();
+        let call_index = function.instructions.iter().enumerate().skip(extraction_index + 1)
+            .find_map(|(index, inst)| (inst.op == Op::Call).then_some(index))
+            .expect("the extracted descriptor must be followed by its call");
+        let operand = function.instructions[call_index].operands[0];
+        let mut source = operand;
+        loop {
+            let crate::ir::ValueDef::Instruction { inst, .. } =
+                function.value(source).unwrap().def
+            else {
+                break;
+            };
+            let producer = function.instruction(inst).unwrap();
+            if !matches!(producer.op, Op::Acquire | Op::Borrow) {
+                break;
             }
-            assert_eq!(source, value, "{target}: final root must retain the extracted descriptor");
-            assert_final_operand_root_spans_call(
-                function,
-                call_index,
-                operand,
-                target,
-                "extracted callable descriptor",
-            );
-            assert_eq!(
-                function
-                    .instructions
-                    .iter()
-                    .filter(|inst| inst.op == Op::Release && inst.operands == [value])
-                    .count(),
-                1,
-                "{target}: extracted descriptor must transfer exactly once into its final root",
-            );
+            source = producer.operands[0];
         }
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(asm.contains("__rt_mixed_unbox"), "{target}");
+        assert_eq!(source, value, "{target}: final root must retain the extracted descriptor");
+        assert_final_operand_root_spans_call(
+            function,
+            call_index,
+            operand,
+            target,
+            "extracted callable descriptor",
+        );
+        assert_eq!(
+            function
+                .instructions
+                .iter()
+                .filter(|inst| inst.op == Op::Release && inst.operands == [value])
+                .count(),
+            1,
+            "{target}: extracted descriptor must transfer exactly once into its final root",
+        );
     }
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    assert!(asm.contains("__rt_mixed_unbox"), "{target}");
 }
+
+/// Gives each supported target its own normal CI timeout and failure attribution.
+macro_rules! merged_callable_target_case {
+    ($name:ident, $target:literal) => {
+        /// Verifies merged callable descriptor storage and unwind roots on one target.
+        #[test]
+        fn $name() { merged_callable_parameters_have_owned_descriptor_storage($target); }
+    };
+}
+
+merged_callable_target_case!(merged_callable_parameters_owned_macos_aarch64, "macos-aarch64");
+merged_callable_target_case!(merged_callable_parameters_owned_ios_arm64, "ios-arm64");
+merged_callable_target_case!(merged_callable_parameters_owned_ios_sim_arm64, "ios-sim-arm64");
+merged_callable_target_case!(merged_callable_parameters_owned_linux_aarch64, "linux-aarch64");
+merged_callable_target_case!(merged_callable_parameters_owned_linux_x86_64, "linux-x86_64");
 
 /// Statically resolved CUF, FCC and closure calls protect temporary arguments on every ABI.
 #[test]
@@ -217,9 +229,8 @@ echo staticCufOwner($argc), staticFccOwner($argc), staticClosureOwner($argc);
     }
 }
 
-/// Eval-backed class names detach their strings and retire both temporary owners on every target.
-#[test]
-fn eval_class_name_results_release_bridge_cells_and_strings_on_all_targets() {
+/// Checks eval class-name ownership for one independently scheduled target.
+fn assert_eval_class_name_results_release_bridge_cells_and_strings(target: &str) {
     use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
     let source = r#"<?php
 class BridgeNameBase {}
@@ -228,43 +239,57 @@ $source = 'return new BridgeNameChild();' . ' // ' . $argc;
 $object = eval($source);
 echo get_class($object), ":", get_parent_class($object);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let mut lookups = 0;
-        for function in &module.functions {
-            for call in &function.instructions {
-                if !matches!(call.immediate, Some(Immediate::RuntimeCall(
-                    RuntimeCallTarget::Function(RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
-                    | RuntimeCallTarget::ProfiledFunction {
-                        target: RuntimeFnId::GetClass | RuntimeFnId::GetParentClass, ..
-                    }
-                ))) { continue; }
-                lookups += 1;
-                assert!(function.instructions.iter().any(|inst| {
-                    inst.op == Op::Release && inst.operands == [call.result.unwrap()]
-                }), "{target}: each native class-name result has a release");
-            }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let mut lookups = 0;
+    for function in &module.functions {
+        for call in &function.instructions {
+            if !matches!(call.immediate, Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
+                | RuntimeCallTarget::ProfiledFunction {
+                    target: RuntimeFnId::GetClass | RuntimeFnId::GetParentClass, ..
+                }
+            ))) { continue; }
+            lookups += 1;
+            assert!(function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands == [call.result.unwrap()]
+            }), "{target}: each native class-name result has a release");
         }
-        assert_eq!(lookups, 2, "{target}");
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let calls: Vec<_> = asm.match_indices("__elephc_eval_object_class_name").collect();
-        assert_eq!(calls.len(), 2, "{target}: both Mixed operands must use the eval bridge");
-        for (offset, _) in calls {
-            let path = asm[offset..].split("eval_object_class_non_object").next().unwrap();
-            let persist = path.find("__rt_str_persist").expect("detach bridge string");
-            let release = path.find("__rt_decref_mixed").expect("release bridge result cell");
-            assert!(persist < release, "{target}: keep the copied bytes before releasing the cell");
-            assert!(!path.contains("__rt_mixed_box_bool"), "{target}: class names are not booleans");
-        }
+    }
+    assert_eq!(lookups, 2, "{target}");
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let calls: Vec<_> = asm.match_indices("__elephc_eval_object_class_name").collect();
+    assert_eq!(calls.len(), 2, "{target}: both Mixed operands must use the eval bridge");
+    for (offset, _) in calls {
+        let path = asm[offset..].split("eval_object_class_non_object").next().unwrap();
+        let persist = path.find("__rt_str_persist").expect("detach bridge string");
+        let release = path.find("__rt_decref_mixed").expect("release bridge result cell");
+        assert!(persist < release, "{target}: keep the copied bytes before releasing the cell");
+        assert!(!path.contains("__rt_mixed_box_bool"), "{target}: class names are not booleans");
     }
 }
 
-/// Echo retires widened-slot string copies while concrete parameter reads remain borrowed.
-#[test]
-fn echo_retires_widened_string_reads_but_preserves_concrete_borrows() {
+/// Gives each supported target its own unchanged nextest timeout budget.
+macro_rules! eval_class_name_target_test {
+    ($name:ident, $target:literal) => {
+        /// Eval class names release native strings and boxed bridge results on this target.
+        #[test]
+        fn $name() {
+            assert_eval_class_name_results_release_bridge_cells_and_strings($target);
+        }
+    };
+}
+
+eval_class_name_target_test!(eval_class_name_results_release_macos_aarch64, "macos-aarch64");
+eval_class_name_target_test!(eval_class_name_results_release_ios_arm64, "ios-arm64");
+eval_class_name_target_test!(eval_class_name_results_release_ios_sim_arm64, "ios-sim-arm64");
+eval_class_name_target_test!(eval_class_name_results_release_linux_aarch64, "linux-aarch64");
+eval_class_name_target_test!(eval_class_name_results_release_linux_x86_64, "linux-x86_64");
+
+/// Checks echo ownership for one target without combining five compiler cycles in one test.
+fn assert_echo_string_read_owners_for_target(target: &str) {
     use crate::ir::{Immediate, Op};
     use crate::types::PhpType;
     let source = r#"<?php
@@ -279,36 +304,64 @@ for ($i = 0; $i < 2; $i++) {
 function echoConcreteString(string $text): void { echo $text, $text; }
 echoConcreteString("borrowed");
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let mut detached_reads = 0;
-        let mut borrowed_reads = 0;
-        for function in &module.functions {
-            for echo in function.instructions.iter().filter(|inst| inst.op == Op::EchoValue) {
-                let value = echo.operands[0];
-                let Some(load) = function.instructions.iter().find(|inst| inst.result == Some(value)) else {
-                    continue;
-                };
-                if load.op != Op::LoadLocal || load.result_php_type != PhpType::Str { continue; }
-                let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
-                let released = function.instructions.iter().any(|inst| {
-                    inst.op == Op::Release && inst.operands == [value]
-                });
-                if function.locals[slot.as_raw() as usize].php_type.codegen_repr() == PhpType::Mixed {
-                    detached_reads += 1;
-                    assert!(released, "{target}: a widened string read owns its detached copy");
-                } else if function.name == "echoConcreteString" {
-                    borrowed_reads += 1;
-                    assert!(!released, "{target}: concrete string reads must retain their caller owner");
-                }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let mut detached_reads = 0;
+    let mut borrowed_reads = 0;
+    for function in &module.functions {
+        for echo in function.instructions.iter().filter(|inst| inst.op == Op::EchoValue) {
+            let value = echo.operands[0];
+            let Some(load) = function.instructions.iter().find(|inst| inst.result == Some(value)) else {
+                continue;
+            };
+            if load.op != Op::LoadLocal || load.result_php_type != PhpType::Str { continue; }
+            let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
+            let released = function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands == [value]
+            });
+            if function.locals[slot.as_raw() as usize].php_type.codegen_repr() == PhpType::Mixed {
+                detached_reads += 1;
+                assert!(released, "{target}: a widened string read owns its detached copy");
+            } else if function.name == "echoConcreteString" {
+                borrowed_reads += 1;
+                assert!(!released, "{target}: concrete string reads must retain their caller owner");
             }
         }
-        assert!(detached_reads > 0 && borrowed_reads > 0, "{target}: both storage paths must be exercised");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
+    assert!(detached_reads > 0 && borrowed_reads > 0, "{target}: both storage paths must be exercised");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+}
+
+/// Echo retires widened reads and preserves concrete borrows on macOS AArch64.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_macos_aarch64() {
+    assert_echo_string_read_owners_for_target("macos-aarch64");
+}
+
+/// Echo retires widened reads and preserves concrete borrows on iOS devices.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_ios_arm64() {
+    assert_echo_string_read_owners_for_target("ios-arm64");
+}
+
+/// Echo retires widened reads and preserves concrete borrows on the iOS Simulator.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_ios_sim_arm64() {
+    assert_echo_string_read_owners_for_target("ios-sim-arm64");
+}
+
+/// Echo retires widened reads and preserves concrete borrows on Linux AArch64.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_linux_aarch64() {
+    assert_echo_string_read_owners_for_target("linux-aarch64");
+}
+
+/// Echo retires widened reads and preserves concrete borrows on Linux x86_64.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_linux_x86_64() {
+    assert_echo_string_read_owners_for_target("linux-x86_64");
 }
 
 /// Class-name metadata cannot keep a boxed object read alive after introspection finishes.

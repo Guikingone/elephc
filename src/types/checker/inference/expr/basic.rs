@@ -34,6 +34,9 @@ impl Checker {
             ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
+                if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
+                    return Ok(ty);
+                }
                 match ty {
                     PhpType::Int => {
                         if matches!(&inner.kind, ExprKind::IntLiteral(_)) {
@@ -46,6 +49,10 @@ impl Checker {
                     PhpType::Mixed | PhpType::Bool | PhpType::False | PhpType::Void => {
                         Ok(PhpType::Mixed)
                     }
+                    // Negating a counter is ordinary arithmetic — `$i = 4; $i++; echo -$i;` is
+                    // `-5` in php — and the union stays the union: negation cannot turn a float
+                    // into an int or the other way round.
+                    ref ty if ty.is_int_float_union() => Ok(ty.clone()),
                     _ => Err(CompileError::new(
                         expr.span,
                         "Cannot negate a non-numeric value",
@@ -62,6 +69,7 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
+                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
                 Some(PhpType::Int) => Ok(PhpType::Mixed),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 // PHP's string increment can change the value's type (`"9"++` is
@@ -77,6 +85,10 @@ impl Checker {
                 Some(PhpType::Bool) | Some(PhpType::False) | Some(PhpType::Void) => {
                     Ok(PhpType::Int)
                 }
+                // What a PREVIOUS `++` left behind: an int that may have promoted at the
+                // overflow boundary. Incrementing it again stays `int|float`, and refusing it
+                // would make the second `$i++` in a row a compile error.
+                Some(ty) if ty.is_int_float_union() => Ok(ty.clone()),
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -87,6 +99,7 @@ impl Checker {
                 )),
             },
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
+                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
                 | Some(PhpType::False)
@@ -102,6 +115,8 @@ impl Checker {
                 }
                 // The post-forms yield the float the local held before the update.
                 Some(PhpType::Float) => Ok(PhpType::Float),
+                // See the pre-form arm: this is the type a previous `++` produced.
+                Some(ty) if ty.is_int_float_union() => Ok(ty.clone()),
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -254,6 +269,11 @@ impl Checker {
                             // promotes to hash at runtime. Return the element type
                             // widened to Mixed so ?? / isset / reads type-check.
                             Ok(PhpType::Mixed)
+                        } else if **elem_ty == PhpType::Never {
+                            // Never describes the element type of an empty indexed array,
+                            // not a non-returning read. String keys keep the dynamic hash
+                            // shape above so nested append write-back can auto-vivify them.
+                            Ok(PhpType::Void)
                         } else {
                             Ok(*elem_ty.clone())
                         }
@@ -311,7 +331,9 @@ impl Checker {
                                 }
                                 PhpType::Buffer(elem_ty) => {
                                     saw_indexable_member = true;
-                                    if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
+                                    if !matches!(idx_ty, PhpType::Int | PhpType::Mixed)
+                                        && !idx_ty.is_int_float_union()
+                                    {
                                         first_index_error =
                                             first_index_error.or(Some("Buffer index must be integer"));
                                         continue;
@@ -340,7 +362,9 @@ impl Checker {
                         }
                     }
                     PhpType::Buffer(elem_ty) => {
-                        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
+                        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed)
+                            && !idx_ty.is_int_float_union()
+                        {
                             return Err(CompileError::new(
                                 expr.span,
                                 "Buffer index must be integer",
@@ -429,18 +453,9 @@ impl Checker {
                     CastType::Float => PhpType::Float,
                     CastType::String => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
-                    CastType::Array
-                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
-                    PhpType::AssocArray {
-                        key: Box::new(PhpType::Str),
-                        value: Box::new(PhpType::Mixed),
-                    },
-                    CastType::Array
-                        if matches!(
-                            source_ty.codegen_repr(),
-                            PhpType::Mixed | PhpType::Union(_)
-                        ) => PhpType::Mixed,
-                    CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+                    // Shared with EIR lowering so the static type always names the storage
+                    // the lowered conversion produces.
+                    CastType::Array => crate::types::array_cast_result_type(&source_ty),
                     // `(object)` is the identity on an object, so the static class survives the
                     // cast; a runtime-typed source may already hold an unrelated class, which
                     // only `mixed` can describe. Every other source becomes a fresh stdClass.
@@ -476,5 +491,5 @@ impl Checker {
 /// `int`, `float`, `bool`, `null`, `string`, and boxed `mixed` locals all have an increment
 /// path; everything else (arrays, objects, buffers, pointers) reaches this diagnostic.
 fn increment_type_error(name: &str, ty: &PhpType) -> String {
-    format!("Cannot increment/decrement ${} of type {:?}", name, ty)
+    format!("Cannot increment/decrement ${} of type {}", name, ty)
 }

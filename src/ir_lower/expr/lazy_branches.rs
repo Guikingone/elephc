@@ -87,7 +87,8 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // class is only known at run time needs the runtime-name form to carry that mode.
         let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
         let object = lower_expr(ctx, object);
-        if property_can_be_uninitialized(ctx, object.value, property) {
+        if property_can_be_uninitialized(ctx, object.value, property)
+            || union_hook_probe_class(ctx, object.value, property).is_some() {
             return lower_initialized_property_value(ctx, object, property, value);
         }
         if needs_probe {
@@ -117,6 +118,12 @@ pub(super) fn null_coalesce_result_type(
 ) -> PhpType {
     let value_ty = strip_void_from_union(ctx.builder.value_php_type(value)).codegen_repr();
     let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+    // `$o ?? null` can still be null. An object or callable slot has no null of its own, so a
+    // default that may be null keeps the merge nullable (boxed) instead of letting the non-null
+    // side's slot type win and then reading the stored null back as an object.
+    if matches!(value_ty, PhpType::Object(_) | PhpType::Callable) && php_type_allows_null(&default_ty) {
+        return nullable_aware_branch_merge_type(&value_ty, &default_ty);
+    }
     wider_type_for_merge(&value_ty, &default_ty)
 }
 

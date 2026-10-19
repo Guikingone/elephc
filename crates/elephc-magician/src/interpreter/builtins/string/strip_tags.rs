@@ -8,6 +8,7 @@
 //! - Implements PHP 8.5 `strip_tags(string $string, array|string|null $allowed_tags = null)`.
 //! - HTML comments and PHP tags are always stripped; they cannot be allow-listed.
 //! - The state machine is a port of php-src `php_strip_tags_ex` / `php_tag_find`.
+//! - Direct hooks own and retire evaluated operands; value hooks borrow their inputs.
 
 eval_builtin! {
     contract: "strip_tags",
@@ -25,18 +26,14 @@ pub(in crate::interpreter) fn eval_builtin_strip_tags(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [value] => {
-            let value = eval_expr(value, context, scope, values)?;
-            eval_strip_tags_result(value, None, context, values)
-        }
-        [value, allowed] => {
-            let value = eval_expr(value, context, scope, values)?;
-            let allowed = eval_expr(allowed, context, scope, values)?;
-            eval_strip_tags_result(value, Some(allowed), context, values)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
+    let operands = match args {
+        [value] => vec![value],
+        [value, allowed] => vec![value, allowed],
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    with_eval_operands(&operands, context, scope, values, |args, context, _, values| {
+        eval_strip_tags_values_result(args, context, values)
+    })
 }
 
 /// Applies PHP `strip_tags()` to already-evaluated arguments.
@@ -63,8 +60,8 @@ pub(in crate::interpreter) fn eval_strip_tags_result(
     let allow = match allowed {
         None => None,
         Some(allowed) if values.is_null(allowed)? => None,
-        Some(allowed) if values.is_array_like(allowed)? => {
-            Some(eval_strip_tags_allow_from_array(allowed, values)?)
+        Some(allowed) if matches!(values.type_tag(allowed)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) => {
+            Some(eval_strip_tags_allow_from_array(allowed, context, values)?)
         }
         Some(allowed) if values.type_tag(allowed)? == EVAL_TAG_STRING => {
             let bytes = values.string_bytes(allowed)?;
@@ -74,6 +71,8 @@ pub(in crate::interpreter) fn eval_strip_tags_result(
                 Some(bytes)
             }
         }
+        // Eval's coercive scalar strings contain no tag delimiters and permit no tags.
+        Some(allowed) if matches!(values.type_tag(allowed)?, EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL) => None,
         Some(allowed) => {
             let given = eval_strip_tags_type_name(values.type_tag(allowed)?);
             return eval_throw_type_error(
@@ -91,18 +90,26 @@ pub(in crate::interpreter) fn eval_strip_tags_result(
 /// Builds PHP's `<tag><tag>` allow string from an array of tag names.
 fn eval_strip_tags_allow_from_array(
     array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
     let len = values.array_len(array)?;
     let mut allow = Vec::new();
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
-        let tag = values.array_get(array, key)?;
-        let tag = values.cast_string(tag)?;
-        let tag = values.string_bytes(tag)?;
-        allow.push(b'<');
-        allow.extend_from_slice(&tag);
-        allow.push(b'>');
+        with_eval_value_lease(key, context, values, |key, context, values| {
+            let tag = values.array_get(array, key)?;
+            with_eval_value_lease(tag, context, values, |tag, context, values| {
+                let rendered = eval_string_context_value(tag.borrowed(), context, values)?;
+                with_eval_value_lease(rendered, context, values, |rendered, _, values| {
+                    let bytes = values.string_bytes(rendered)?;
+                    allow.push(b'<');
+                    allow.extend_from_slice(&bytes);
+                    allow.push(b'>');
+                    Ok(())
+                })
+            })
+        })?;
     }
     Ok(allow)
 }
@@ -135,6 +142,8 @@ fn php_tag_find(tag: &[u8], allow: &[u8]) -> bool {
     if tag.is_empty() {
         return false;
     }
+    // php_tag_find uses strstr, so embedded NUL bytes terminate the allow-list.
+    let allow = &allow[..allow.iter().position(|byte| *byte == 0).unwrap_or(allow.len())];
     let mut norm = Vec::with_capacity(tag.len() + 1);
     let mut state = 0;
     let mut index = 0;
@@ -303,7 +312,7 @@ fn php_strip_tags(input: &[u8], allow: Option<&[u8]>) -> Vec<u8> {
                         }
                     }
                     b'l' | b'L'
-                        if index >= 4
+                        if index > 4
                             && matches!(input[index - 1], b'm' | b'M')
                             && matches!(input[index - 2], b'x' | b'X')
                             && input[index - 3] == b'?'
@@ -384,6 +393,19 @@ fn php_strip_tags_collect(allow: Option<&[u8]>, tag: &mut Vec<u8>, byte: u8) {
 #[cfg(test)]
 mod tests {
     use super::{php_strip_tags, php_tag_find};
+
+    /// Matches PHP's offset-sensitive XML recognition and NUL-terminated allow-list lookup.
+    #[test]
+    fn php_strip_tags_review_xml_and_nul_boundaries() {
+        assert_eq!(php_strip_tags(b"<?xml version=\"1.0\"><b>keep</b>", None), b"");
+        assert_eq!(php_strip_tags(b"x<?xml version=\"1.0\"><b>keep</b>", None), b"xkeep");
+        assert_eq!(
+            php_strip_tags(b"<b>x</b><p>y</p>", Some(b"<p>\0<b>")),
+            b"x<p>y</p>"
+        );
+        assert!(!php_tag_find(b"<b>", b"<p>\0<b>"));
+        assert!(!php_tag_find(b"<b>", b"\0<b>"));
+    }
 
     /// Verifies the default path strips tags, comments, PHP, and NUL bytes.
     #[test]

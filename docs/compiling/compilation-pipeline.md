@@ -41,7 +41,7 @@ Physical source (.php or .lfc)
   -> func-args          desugar func_num_args/get_args/get_arg to a hidden variadic
   -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest
   -> opt-fold           seed CLI superglobals + AST constant folding
-  -> typecheck          Type checker / warnings
+  -> typecheck          Type checking, generic specialization, and warnings
   -> exports-scan       collect #[Export] functions (cdylib)
   -> opt-prop           AST constant propagation
   -> opt-post           prune constant control flow
@@ -71,7 +71,9 @@ Physical source (.php or .lfc)
   each freshly parsed PHP-mode AST is audited and every elephc-only construct is
   reported before any later pass runs. Included and autoloaded files are
   classified where they are parsed (inside resolve / autoload-run); LFC and
-  compiler-injected source are exempt.
+  compiler-injected source are exempt. Supported generic PHPDoc annotations are
+  applied per physical file after this audit, so annotated PHP remains accepted
+  in strict mode while its templates still drive compilation.
 - **conditional compilation** — `ifdef` branches are resolved using the symbols
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
@@ -91,8 +93,12 @@ Physical source (.php or .lfc)
   desugaring, replaces the placeholder OPcache manifest with the complete
   entry/include/autoload file set before constant folding and emits any preload
   warning against that complete set.
-- **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
-  validates types and emits warnings. By default an untyped local may retype
+- **typecheck**: the [Type Checker](../internals/the-type-checker.md) runs with
+  `src/generics.rs` to a specialization fixed point. Each reachable template
+  becomes an ordinary concrete declaration before AST optimization and EIR
+  lowering. This work shares the `typecheck` timing label; it has no separate
+  backend pass. The checker validates types and emits warnings. By default an
+  untyped local may retype
   (with a warning) instead of failing; with
   [`--strict-locals`](cli-reference.md#strict-locals-mode) an incompatible
   local retype is a compile error instead.
@@ -120,17 +126,19 @@ behind a flag.
   [The EIR Design](../internals/the-ir.md).
 - **ir-opt** — the [EIR optimization passes](optimization.md#eir-optimization-passes)
   run a fixed-point driver over each function: identity arithmetic folding,
-  local peephole rewrites, immutable-local load classification, checked-integer
-  sinking, boxed checked-numeric chain fusion, constant folding,
+  local peephole rewrites, scalar local promotion, immutable-local load classification, checked-integer
+  sinking, canonical loop optimization, integer range and induction-variable analysis, boxed checked-numeric
+  chain fusion, constant folding,
   common-subexpression elimination,
   loop-invariant code motion, CFG-aware dead-instruction elimination, dead-store
-  elimination, and branch simplification. In
+  elimination, branch simplification, and concat scratch-state optimization. In
   debug/test builds the function is re-validated after every pass. This phase
   can be turned off with [`--no-ir-opt`](optimization.md#eir-optimization-passes).
 - **ir-print** — only present with [`--emit-ir`](output-and-diagnostics.md#--emit-ir);
   formats the optimized or unoptimized EIR textual form, prints it to stdout,
   and stops before runtime preparation or code generation.
-- **codegen** — EIR is lowered to target assembly through the default backend.
+- **codegen** — EIR is lowered to target assembly through the default backend,
+  including late target-aware instruction selection and machine peepholes.
   See [The Code Generator](../internals/the-codegen.md).
 - **write-asm / source-map** — the generated assembly and optional source-map
   sidecar are materialized before runtime-object preparation.

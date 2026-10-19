@@ -18,6 +18,26 @@ use super::super::super::Checker;
 use super::merge_match_arm_result_type;
 use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
 
+/// Returns what a local holds after `++`/`--`, or `None` when the update cannot retype it.
+///
+/// An `int` becomes `int|float`, because PHP promotes at the boundary — `PHP_INT_MAX++` is
+/// `float(9.223372036854776E+18)` in php-src and in elephc — and NOT `mixed`, which is what this
+/// used to say. The difference is not cosmetic: `mixed` is the top type, so every value derived
+/// from a counter became `mixed` too, and `for ($i = 0; …) { $out[] = $i; }` could not even be
+/// DESCRIBED as a list of numbers. `int|float` keeps the same boxed storage (`codegen_repr` maps
+/// both to `Mixed`) while saying something true, which is what a diagnostic and a downstream
+/// inference can both use.
+///
+/// A `string` stays `mixed`: `"9"++` is `int(10)`, `"a"++` is `"b"` and `""++` is `"1"`, so the
+/// result genuinely spans three types and none of them is knowable here.
+fn incremented_local_type(current: Option<&PhpType>) -> Option<PhpType> {
+    match current {
+        Some(PhpType::Int) => Some(PhpType::Union(vec![PhpType::Int, PhpType::Float])),
+        Some(PhpType::Str) => Some(PhpType::Mixed),
+        _ => None,
+    }
+}
+
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
     ///
@@ -83,10 +103,8 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                // `int` can overflow to float and `string` can become int/float
-                // (`"9"++` is `int(10)`), so the local is dynamically typed afterwards.
-                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
-                    env.insert(name.clone(), PhpType::Mixed);
+                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                    env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
             }
@@ -95,8 +113,8 @@ impl Checker {
                 let result_ty = self.infer_type(expr, env)?;
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.
-                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
-                    env.insert(name.clone(), PhpType::Mixed);
+                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                    env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
             }
@@ -300,7 +318,7 @@ impl Checker {
                             }
                             continue;
                         }
-                        if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
+                        if preg_output_type(builtin_name, arg, idx).is_some()
                             || pcntl_output_type(builtin_name, arg, idx).is_some()
                             || xml_struct_output_type(builtin_name, arg, idx).is_some()
                             || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
@@ -329,14 +347,12 @@ impl Checker {
                 // The callee may mutate any reachable object; drop property narrowings. (The
                 // call's own argument checking above still saw them.)
                 Self::purge_property_narrowings(env);
-                if builtin_name.eq_ignore_ascii_case("preg_match") {
-                    if let Some(arg) = expanded_args.get(2) {
+                for (idx, arg) in expanded_args.iter().enumerate() {
+                    if let Some(output_ty) = preg_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
-                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                            env.insert(name.clone(), output_ty);
                         }
                     }
-                }
-                for (idx, arg) in expanded_args.iter().enumerate() {
                     if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), PhpType::Mixed);
@@ -758,6 +774,20 @@ fn output_variable(arg: &Expr) -> Option<&String> {
         ExprKind::NamedArg { value, .. } => output_variable(value),
         _ => None,
     }
+}
+
+/// Identifies regex output parameters independently of named-argument source order.
+fn preg_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType> {
+    let element = match php_symbol_key(builtin).as_str() {
+        "preg_match" => PhpType::Str,
+        "preg_match_all" => PhpType::Mixed,
+        _ => return None,
+    };
+    let matches = match &arg.kind {
+        ExprKind::NamedArg { name, .. } => name == "matches",
+        _ => index == 2,
+    };
+    matches.then(|| PhpType::Array(Box::new(element)))
 }
 
 /// Returns the post-call type of a write-only PCNTL output argument, when applicable.

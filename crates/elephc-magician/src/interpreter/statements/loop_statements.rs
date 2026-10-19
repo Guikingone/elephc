@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Break/continue control, foreach array/object/iterator traversal, and key materialization are preserved.
+//! - By-value foreach owns its evaluated receiver through every body exit and retires it afterward.
 
 use super::*;
 
@@ -154,8 +155,8 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let array = eval_expr(array, context, scope, values)?;
-    match values.type_tag(array)? {
+    let array = eval_owned_expr(array, context, scope, values)?;
+    let result = (|| match values.type_tag(array)? {
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
             execute_foreach_array_stmt(array, key_name, value_name, body, context, scope, values)
         }
@@ -163,7 +164,9 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
             execute_foreach_object_stmt(array, key_name, value_name, body, context, scope, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
-    }
+    })();
+    let released = eval_release_value(context, values, array);
+    result.and_then(|control| released.map(|()| control))
 }
 
 /// Executes `foreach` over a PHP array value using insertion-order runtime hooks.

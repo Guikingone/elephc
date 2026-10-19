@@ -53,8 +53,11 @@ the materialization required for the statically known reads and writes.
 Interpreter fallback parses dynamic source into EvalIR. Exact source strings
 up to 64 KiB share a process-wide FIFO cache of 256 immutable parse results;
 larger fragments bypass the cache. The cache avoids repeated tokenization and
-parsing, but execution remains interpreted and scope/context state is never
-cached. Force-linking with `--with-eval` also increases binary size even if no
+parsing, but execution remains interpreted. Repeated native function activations
+also share an immutable catalog of the module's native callable signatures,
+class metadata and constants. Each thread retains up to eight module catalogs;
+activation scopes, dynamic declarations, references, handlers and materialized
+default values remain separate. Force-linking with `--with-eval` also increases binary size even if no
 call ultimately requires fallback.
 
 ## Quick start
@@ -127,8 +130,8 @@ ABI. AOT literals without writes skip scope materialization when they need no
 caller values or can receive read-only values as direct EIR parameters. Known
 writes use the same core scope cells from an internal EIR function.
 
-Because a scope cell is always boxed `Mixed`, a local read or written inside
-`eval()` may change type freely — `eval('$a = 1; $a = "ciao"; echo $a;')`
+Because a scope cell is always boxed `Mixed`, an untyped local read or written inside
+`eval()` may change type freely: `eval('$a = 1; $a = "ciao"; echo $a;')`
 compiles and runs the same in every mode. This is unrelated to
 [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode), which
 only tightens the AOT checker's monomorphic-local rule for ordinary compiled
@@ -337,6 +340,24 @@ Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier
 `call_user_func_array()` callbacks can pass indexed or string-keyed argument
 containers to eval-declared functions.
+
+## Generics
+
+Magician supports native generic declarations and the supported PHPStan/Psalm annotations from
+[Generics](../beyond-php/generics.md#generics-in-magician). Functions, classes, interfaces, traits,
+methods, and constructors specialize lazily from written type arguments or evaluated argument
+types. Templates and concrete specializations persist across eval calls and runtime includes.
+
+Bounds, defaults, variance, structural array contracts, typed callable signatures, and substituted
+typed locals are checked at runtime. Binding and specialized contract failures throw catchable
+`TypeError` values. Generic classes have distinct names and static state per specialization.
+Class and constructor arguments may be written together, such as `Pair<int, string>`, before
+any inferred instantiation, including in parent references. Typed arrays validate float and bool
+keys as their stored integer type, following PHP array-key normalization.
+Native syntax requires ordinary mode; PHPDoc templates also work under `--strict-php`.
+
+Specialization reuses the existing call binder and boxed value ABI. It does not change the
+supported expression subset or give interpreted calls AOT's native storage representation.
 
 ## Classes and objects
 
@@ -810,6 +831,10 @@ for those APIs, including `PropertyHookType::cases()`, `from()`, and
 and bridge-supported generated/AOT instance and static property values, bypass
 public/protected/private visibility like PHP reflection, route concrete eval
 property hooks through their accessors, and still reject readonly writes.
+Readonly storage retained over a setter-only abstract contract may have a broader
+type than the setter, matching native declarations even with a generated/AOT
+parent. A retained abstract setter validates its original argument type without
+initializing that storage, including through `ReflectionProperty::setValue()`.
 `ReflectionProperty::getRawValue()` and `setRawValue()` are supported for
 eval-declared backed instance properties, including backed property hooks, and
 for bridge-supported generated/AOT instance properties. Raw access bypasses
@@ -966,6 +991,8 @@ value, return `false`, and emit the same suppressible duplicate-constant warning
 as AOT `define()`.
 
 Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
+the Termwind-facing `LIBXML_NOERROR` / `LIBXML_COMPACT` / `LIBXML_HTML_NODEFDTD` /
+`LIBXML_NOBLANKS` / `LIBXML_NOXMLDECL` flags,
 `PHP_INT_MAX`, `INF`, `NAN`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
 `PATHINFO_*`, `PHP_URL_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `COUNT_*`, and the supported
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
@@ -1026,7 +1053,7 @@ where listed below unless a note says otherwise.
 > elephc-extension builtins below — the whole "Raw memory and buffers" row plus
 > `class_attribute_names()`, `class_attribute_args()`, and
 > `class_get_attributes()` — do not exist inside eval'd code either: calling one
-> is a runtime fatal like any unknown function, and
+> is a runtime fatal for the unavailable extension, and
 > `function_exists()`/`is_callable()` report them as missing, matching the PHP
 > interpreter.
 
@@ -1051,6 +1078,12 @@ where listed below unless a note says otherwise.
 | Constants | `define()`, `defined()` |
 
 ## Builtin notes
+
+An undefined direct function call throws a catchable `Error` with
+`Call to undefined function name()`. Function lookup fails before its arguments
+are evaluated. Namespace fallback and imported function aliases report the resolved
+missing name. Known builtins whose required capability or prelude is unavailable
+retain their existing runtime diagnostics.
 
 A builtin called with an argument count PHP refuses throws a catchable
 `ArgumentCountError` with PHP's message (`strlen() expects exactly 1 argument,
@@ -1117,7 +1150,8 @@ fatals. Native non-eval regex codegen remains PCRE2-backed as documented in
 Eval JSON support covers null, booleans, integers, floats, strings, indexed
 arrays, associative arrays, and `stdClass` dynamic properties. `json_encode()`
 supports zero flags plus the documented `JSON_HEX_*`,
-`JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`, `JSON_FORCE_OBJECT`,
+`JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`,
+`JSON_UNESCAPED_LINE_TERMINATORS`, `JSON_FORCE_OBJECT`,
 `JSON_NUMERIC_CHECK`, `JSON_PARTIAL_OUTPUT_ON_ERROR`, `JSON_PRETTY_PRINT`,
 `JSON_PRESERVE_ZERO_FRACTION`, `JSON_INVALID_UTF8_IGNORE`,
 `JSON_INVALID_UTF8_SUBSTITUTE`, and `JSON_THROW_ON_ERROR` flags. `json_decode()`
@@ -1125,6 +1159,24 @@ and `json_validate()` support PHP-compatible depth handling, malformed UTF-8
 ignore/substitute modes where applicable, `JSON_BIGINT_AS_STRING` for
 overflowing integer tokens in `json_decode()`, and `JsonException` through
 `JSON_THROW_ON_ERROR`.
+
+Both unescaped flags are required to keep U+2028 and U+2029 literal. Backed enum
+cases encode as their integer or string value. Enum `JsonSerializable` callbacks
+run before either default enum rule, and their returned value is encoded
+recursively with the outer flags. Unit enums without custom serialization fail
+with `JSON_ERROR_NON_BACKED_ENUM` (11), or encode as `0` when partial output is
+requested. A serializer returning its enum receiver exposes `name`, then the
+backing `value` when present. This also works for native enum cases passed into
+eval, with the same depth and pretty-print rules as eval-declared cases.
+
+When an encoded result exceeds the depth limit, eval returns `false` and records
+`JSON_ERROR_DEPTH`, or throws a catchable `JsonException` with `JSON_THROW_ON_ERROR`.
+Partial output takes precedence over throwing and keeps the encoded tree while
+recording the depth error. Owned serializer results and traversal reads are
+released on success and failure.
+Invalid UTF-8 array keys still allow their associated values and later callbacks to run.
+If a callback throws after a partial JSON failure, the caller can inspect that
+JSON error after catching the callback's exception.
 
 Eval local filesystem calls operate on host filesystem paths and support the
 implemented stream-wrapper paths, including `file://`, `php://memory`,

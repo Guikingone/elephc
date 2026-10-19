@@ -66,8 +66,11 @@ fn check_source_with_defines_and_options(
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: the object-cast prelude is injected past name resolution,
     // so a `(object)` cast has the helper it is lowered to and a program that declares that
@@ -79,7 +82,14 @@ fn check_source_with_defines_and_options(
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check_with_options(&ast, options).map_err(|e| e.message.clone())?;
+    // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
+    // CLASS is instantiated by that driver, not by the checker, so a plain `check_with_options`
+    // here would hand the checker a template and report `Unknown type: T` in place of whatever
+    // the test is actually about.
+    elephc::generics::monomorphize(ast, |program, bounds| {
+        types::check_with_options_and_bounds(program, options, bounds)
+    })
+    .map_err(|e| e.message.clone())?;
     Ok(())
 }
 
@@ -90,13 +100,19 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::autoload::collect_aliases(ast)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check(&ast)
+    let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {
+        types::check_with_options_and_bounds(program, types::CheckOptions::default(), bounds)
+    })?;
+    Ok(result)
 }
 
 /// Resolves files error for this module.
@@ -230,6 +246,7 @@ fn expect_no_warning(src: &str, unexpected_substr: &str) {
 
 macro_rules! expect_builtin_arity_error {
     ($test_name:ident, $src:expr, $expected:expr) => {
+        /// Verifies the builtin arity diagnostic supplied by this fixture.
         #[test]
         fn $test_name() {
             expect_error($src, $expected);
@@ -269,6 +286,8 @@ mod syntax;
 mod recovery;
 #[path = "error_tests/warnings.rs"]
 mod warnings;
+#[path = "error_tests/core_symbols.rs"]
+mod core_symbols;
 #[path = "error_tests/type_system.rs"]
 mod type_system;
 #[path = "error_tests/reference_detach.rs"]
@@ -277,12 +296,16 @@ mod reference_detach;
 mod exceptions_enums_magic;
 #[path = "error_tests/classes_traits.rs"]
 mod classes_traits;
+#[path = "error_tests/generics_review.rs"]
+mod generics_review;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
 #[path = "error_tests/strict_php.rs"]
 mod strict_php;
 #[path = "error_tests/math_builtins.rs"]
 mod math_builtins;
+#[path = "error_tests/bcmath_number.rs"]
+mod bcmath_number;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
 #[path = "error_tests/mbstring.rs"]
@@ -291,6 +314,8 @@ mod mbstring;
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]
 mod array_builtins;
+#[path = "error_tests/registry_arity.rs"]
+mod registry_arity;
 #[path = "error_tests/callables.rs"]
 mod callables;
 #[path = "error_tests/never.rs"]
@@ -432,6 +457,6 @@ fn test_error_yield_from_rejects_non_generator_call() {
 function not_gen(): int { return 1; }
 function gen() { yield from not_gen(); }
 ",
-        "yield from expects an array literal or Generator, got Int",
+        "yield from expects an array literal or Generator, got int",
     );
 }

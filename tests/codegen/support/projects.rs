@@ -198,7 +198,33 @@ pub(crate) fn compile_cli_file_with_flags_expect_failure(source: &str, flags: &[
     String::from_utf8(compile_out.stderr).unwrap()
 }
 
-/// Compiles and runs one CLI fixture with optional managed-PCRE2 project setup.
+/// Compiles a CLI fixture with flags, asserts it SUCCEEDS, and returns the compiler's stderr.
+///
+/// `--report-generics` and `--timings` write to stderr on a successful compile, which
+/// `compile_cli_file_and_run_with_flags` discards while returning only the binary's stdout.
+/// This keeps the compiler's own stream for assertion without running the produced binary.
+pub(crate) fn compile_cli_file_with_flags_capturing_stderr(source: &str, flags: &[&str]) -> String {
+    let dir = make_cli_test_dir("elephc_cli_test_stderr");
+
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).unwrap();
+
+    let mut compile_cmd = elephc_cli_command(&dir);
+    for flag in flags {
+        compile_cmd.arg(flag);
+    }
+    compile_cmd.arg(&php_path);
+    let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
+    assert!(
+        compile_out.status.success(),
+        "elephc CLI failed: {}",
+        String::from_utf8_lossy(&compile_out.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    String::from_utf8(compile_out.stderr).unwrap()
+}
+/// Compiles and executes a CLI fixture with definitions and optional managed PCRE2.
 fn compile_cli_file_and_run_with_native(
     source: &str,
     defines: &[&str],
@@ -327,6 +353,8 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+    let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
+        .expect("autoload DOM prelude injection failed");
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
@@ -505,6 +533,8 @@ fn compile_and_run_files_with_defines_per_argv(
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
+        .expect("autoload DOM prelude injection failed");
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
@@ -650,10 +680,13 @@ pub(crate) fn check_files_diagnostics(
         let resolved = elephc::name_resolver::resolve(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::func_args::desugar(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::optimize::fold_constants(resolved);
+        // No generic instantiation runs on this path, so the checker has nothing to answer and
+        // no templates to infer from: the fixture compiles the program as written.
         let check_result = elephc::types::check_with_target_and_options(
             &resolved,
             target(),
             elephc::types::CheckOptions { strict_locals },
+            &elephc::generics::GenericContext::default(),
         )
         .map_err(|e| e.message.clone())?;
         Ok(check_result

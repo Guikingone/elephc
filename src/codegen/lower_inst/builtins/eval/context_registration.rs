@@ -20,20 +20,37 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
     register_eval_regex_provider(ctx);
+    // -- attach this module's immutable catalog to a fresh activation context --
+    let catalog = ctx.data.add_private_identity("L__elephc_eval_native_catalog");
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &catalog,
+    );
     let symbol = ctx
         .emitter
         .target
-        .extern_symbol("__elephc_eval_context_new");
+        .extern_symbol("__elephc_eval_context_new_with_native_catalog");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
+    let registered = ctx.next_label("eval_native_catalog_registered");
+    load_eval_context_local_to_arg(ctx, offset, 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_native_catalog_ready");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &registered);
+    // -- register and publish metadata only on this thread's catalog miss --
     register_eval_declared_symbols(ctx, offset);
     register_eval_native_global_constants(ctx, offset)?;
     register_eval_native_user_constants(ctx, offset);
     register_eval_native_functions(ctx, offset)?;
     register_eval_native_method_signatures(ctx, offset);
+    load_eval_context_local_to_arg(ctx, offset, 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_publish_native_catalog");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    ctx.emitter.label(&registered);
     // The runtime's `__rt_closure_bind` is shared by eval-free programs, so it reaches the
-    // generated adapter wrapper through a slot the first eval context fills. Stored last: the
-    // registration helpers above still expect the fresh context handle in the result register.
+    // generated adapter wrapper through a slot each new context fills. Install it on both
+    // cache hits and misses, since a host can enter a different loaded module between calls.
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_symbol_address(
         ctx.emitter,
@@ -80,6 +97,10 @@ fn register_eval_native_global_constant(
     value: &ExprKind,
     ty: &PhpType,
 ) -> Result<()> {
+    if name == "PHP_BINARY" {
+        register_eval_executable_constant(ctx, context_offset, name, "__elephc_eval_register_native_global_constant");
+        return Ok(());
+    }
     let (kind, word, string_value) = eval_native_global_constant_abi_value(value, ty)?;
     register_eval_native_scalar_constant(
         ctx,
@@ -91,6 +112,26 @@ fn register_eval_native_global_constant(
         "__elephc_eval_register_native_global_constant",
     );
     Ok(())
+}
+
+/// Registers the running executable path under either a Core name or a user alias.
+fn register_eval_executable_constant(
+    ctx: &mut FunctionContext<'_>, context_offset: usize, name: &str, symbol: &str,
+) {
+    abi::emit_call_label(ctx.emitter, "__rt_php_binary");
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    emit_eval_constant_name_args(ctx, name);
+    let target = ctx.emitter.target;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), NATIVE_GLOBAL_CONSTANT_STRING);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 5), 8);
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol(symbol));
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
 }
 
 /// Registers the AOT user-declared constant inventory with a newly allocated eval context.
@@ -117,6 +158,10 @@ pub(super) fn register_eval_native_user_constants(
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (name, value, ty) in entries {
+        if crate::types::predefined_constants::is_executable_path_alias(&value, &ctx.module.global_constants) {
+            register_eval_executable_constant(ctx, context_offset, &name, "__elephc_eval_register_native_user_constant");
+            continue;
+        }
         let Some(encoded) = eval_native_user_constant_value(&value, &ty) else {
             continue;
         };
@@ -645,3 +690,7 @@ pub(super) fn register_eval_declared_symbol_name(
     let symbol = ctx.emitter.target.extern_symbol(symbol_name);
     abi::emit_call_label(ctx.emitter, &symbol);
 }
+
+#[cfg(test)]
+#[path = "native_catalog_tests.rs"]
+mod native_catalog_tests;

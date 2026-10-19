@@ -80,6 +80,9 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     emit_st(emitter, "cmp r8, rcx");
     emit_st(emitter, "jae __rt_strip_tags_init_x86");
     emit_st(emitter, "movzx eax, BYTE PTR [rsi + r8]");
+    // PHP's strstr-based allow lookup ends at the first NUL, not the PHP string length.
+    emit_st(emitter, "test al, al");
+    emit_st(emitter, "jz __rt_strip_tags_allow_end_x86");
     emit_st(emitter, "cmp al, 65");
     emit_st(emitter, "jb __rt_strip_tags_lc_store_x86");
     emit_st(emitter, "cmp al, 90");
@@ -90,6 +93,8 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     emit_st(emitter, "add r8, 1");
     emit_st(emitter, "jmp __rt_strip_tags_lc_allow_x86");
 
+    emitter.label("__rt_strip_tags_allow_end_x86");
+    emit_st(emitter, "mov QWORD PTR [rbp - 80], r8");
     emitter.label("__rt_strip_tags_init_x86");
     emit_st(emitter, "xor eax, eax");
     emit_st(emitter, "mov QWORD PTR [rbp - 96], rax");
@@ -383,7 +388,7 @@ fn emit_state2_x86(emitter: &mut Emitter) {
     emit_st(emitter, "jmp __rt_strip_tags_advance_x86");
     emitter.label("__rt_strip_tags_s2_xml_x86");
     emit_st(emitter, "cmp r14, 4");
-    emit_st(emitter, "jb __rt_strip_tags_advance_x86");
+    emit_st(emitter, "jbe __rt_strip_tags_advance_x86");
     emit_st(emitter, "movzx eax, BYTE PTR [r12 + r14 - 1]");
     emit_st(emitter, "or al, 32");
     emit_st(emitter, "cmp al, 109");

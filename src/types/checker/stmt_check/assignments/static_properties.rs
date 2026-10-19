@@ -76,7 +76,9 @@ pub(super) fn check_static_property_array_push(
 ) -> Result<(), CompileError> {
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
-    if target.dynamic_eval_target || target.prop_ty.is_php_array() {
+    if target.dynamic_eval_target || target.prop_ty.is_php_array()
+        || matches!(&target.prop_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("WeakMap"))
+    {
         return Ok(());
     }
     let updated_prop_ty = match target.prop_ty {
@@ -155,6 +157,10 @@ pub(super) fn check_static_property_array_assign(
             return Ok(());
         }
     }
+    // See `is_php_array_key_type` in the property path: a boxed index has no `array_set`
+    // lowering — `array_set index PHP type Mixed`, which is what a genuinely `mixed` index gets
+    // here too — so accepting `int|float` would only move the refusal into the backend and lose
+    // the clearer message.
     if normalized_idx_ty != PhpType::Int && normalized_idx_ty != PhpType::Mixed {
         return Err(CompileError::new(span, "Array index must be integer"));
     }
@@ -214,7 +220,16 @@ fn resolve_static_property_assignment_target(
     property: &str,
     span: Span,
 ) -> Result<StaticPropertyAssignmentTarget, CompileError> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     let class_name = match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
         StaticReceiver::Self_ => checker
             .current_class

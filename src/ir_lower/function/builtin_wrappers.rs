@@ -72,7 +72,7 @@ pub(crate) fn lower_array_merge_callable(
 }
 
 /// Applies ordinary parameter ownership and exceptional cleanup to a synthetic callable body.
-fn lower_builtin_callable_body(
+pub(super) fn lower_builtin_callable_body(
     module: &mut Module,
     label: &str,
     signature: &FunctionSig,
@@ -121,6 +121,9 @@ fn lower_builtin_callable_body(
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        &Default::default(),
+        // One more empty site map: the merge with core-align left this wrapper lowering with two
+        // independent site tables to forward, and a builtin wrapper has neither.
         &Default::default(),
         &Default::default(),
         label.to_string(),

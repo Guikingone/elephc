@@ -38,6 +38,7 @@ mod public_args;
 mod reference_args;
 mod reference_return;
 mod string_return;
+mod tagged_args;
 
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
@@ -148,6 +149,8 @@ struct InvokerEmitContext {
     php_return_status: bool,
     /// Resolved parameter defaults for this body, indexed like `FunctionSig::params`.
     defaults: InvokerDefaults,
+    /// The declared literal parameter currently being decoded, before ABI coercion.
+    literal_parameter: Option<(usize, String)>,
 }
 
 impl InvokerEmitContext {
@@ -169,12 +172,21 @@ impl InvokerEmitContext {
             defaults,
             mbstring_operation: None,
             mbstring_variable_ref_warnings: false,
+            literal_parameter: None,
         }
     }
 
     /// Returns the resolved default for one parameter index, if it was materializable.
     fn resolved_default(&self, index: usize) -> Option<InvokerDefaultValue> {
         self.defaults.get(index).cloned().flatten()
+    }
+
+    /// Selects a declared false/null contract without narrowing inferred parameter defaults.
+    fn select_literal_parameter(&mut self, sig: &FunctionSig, index: usize) {
+        self.literal_parameter = sig.params.get(index)
+            .filter(|(_, ty)| sig.declared_params.get(index).copied().unwrap_or(false)
+                && matches!(ty, PhpType::False | PhpType::Void))
+            .map(|(name, _)| (index, name.clone()));
     }
 
     /// Allocates a deterministic local label for generated branches.
@@ -637,6 +649,7 @@ fn emit_loaded_indexed_array_callback_call(
     let mut arg_types = Vec::new();
     // -- marshal each visible regular from the indexed container --
     for index in 0..shape.visible_regular {
+        ctx.select_literal_parameter(sig, index);
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
@@ -679,6 +692,8 @@ fn emit_loaded_indexed_array_callback_call(
         ctx.argument_owners.record_pushed(index, &pushed_ty, emitter);
         arg_types.push(pushed_ty);
     }
+
+    ctx.literal_parameter = None;
 
     if shape.hidden_argc {
         // The invoker synthesizes argc from the container length; it never consumes a user slot.
@@ -837,6 +852,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- marshal each visible regular via hash lookup --
     for index in 0..shape.visible_regular {
+        ctx.select_literal_parameter(sig, index);
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let param_name = sig.params.get(index).map(|(name, _)| name.as_str());
@@ -892,6 +908,7 @@ fn emit_loaded_assoc_array_callback_call(
         arg_types.push(pushed_ty);
     }
 
+    ctx.literal_parameter = None;
     if shape.hidden_argc {
         public_args::push_arg_count_from_reg(emitter, count_reg);
         arg_types.push(PhpType::Int);
@@ -1676,7 +1693,7 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
             abi::emit_load_int_immediate(emitter, temp_reg, 2);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
         }
-        PhpType::Str => {
+        PhpType::Str | PhpType::TaggedScalar => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
             abi::emit_store_to_address(emitter, ptr_reg, cell_reg, 0);
@@ -1712,7 +1729,7 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
             abi::emit_load_int_immediate(emitter, temp_reg, 9);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
         }
-        PhpType::TaggedScalar | PhpType::Void | PhpType::Never => {
+        PhpType::Void | PhpType::Never => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
             abi::emit_store_zero_to_address(emitter, cell_reg, 8);
@@ -2469,13 +2486,17 @@ fn push_default_value_arg(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    let owned_runtime_string = matches!(ctx.resolved_default(index),
+        Some(InvokerDefaultValue::Scalar { kind: crate::codegen::const_default_values::CONST_DEFAULT_EXECUTABLE_PATH, .. }));
     let source_ty = emit_default_to_result(index, target_ty, emitter, ctx, data);
-    let pushed_ty = if source_ty.is_refcounted()
+    let pushed_ty = if (source_ty.is_refcounted() || owned_runtime_string)
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
         && source_ty.codegen_repr() != PhpType::Mixed
     {
         emit_box_current_owned_value_as_mixed(emitter, &source_ty);
         PhpType::Mixed
+    } else if owned_runtime_string && target_ty.is_none_or(|ty| ty.codegen_repr() == PhpType::Str) {
+        source_ty
     } else {
         // Heap defaults are newly allocated, not borrowed from the argument container.
         owned_value_args::coerce(emitter, ctx, data, &source_ty, target_ty).0
@@ -2610,6 +2631,10 @@ fn coerce_current_value_to_target(
     target_ty: Option<&PhpType>,
 ) -> (PhpType, bool) {
     let source_repr = source_ty.codegen_repr();
+    if target_ty.is_some_and(|target| target.codegen_repr() == PhpType::TaggedScalar) {
+        tagged_args::coerce(emitter, ctx, source_ty);
+        return (PhpType::TaggedScalar, false);
+    }
     if source_repr != PhpType::Callable
         && target_ty.is_some_and(|target| target.codegen_repr() == PhpType::Callable)
     {
@@ -2668,6 +2693,9 @@ fn coerce_result_to_type(
                     Arch::X86_64 => emitter.instruction("mov rax, rdi"),        // move the unboxed container pointer into the integer result
                 }
             }
+            PhpType::Void => {
+                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+            }
             PhpType::Mixed | PhpType::Union(_) => {}
             _ => {}
         }
@@ -2689,7 +2717,7 @@ fn coerce_result_to_type(
 
 /// Returns true if the invoker can coerce this source/target pair.
 fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
-    if target_ty.codegen_repr() == PhpType::Callable {
+    if matches!(target_ty.codegen_repr(), PhpType::Callable | PhpType::TaggedScalar) {
         return true;
     }
     if source_ty == target_ty {
@@ -2707,6 +2735,7 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
+                | PhpType::Void
                 | PhpType::Mixed
                 | PhpType::Union(_)
         );
@@ -2778,6 +2807,13 @@ fn emit_empty_string_result(emitter: &mut Emitter) {
 
 /// Releases a preserved Mixed value after coercion.
 fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: &PhpType) {
+    if matches!(pushed_ty.codegen_repr(), PhpType::Void | PhpType::Never) {
+        // Null has no pushed result slot; the preserved source is already at the stack top.
+        abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
+        abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        return;
+    }
     abi::emit_push_result_value(emitter, pushed_ty);
     abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
     abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
@@ -2785,13 +2821,18 @@ fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: 
     abi::emit_release_temporary_stack(emitter, 16);
 }
 
-/// Restores a pushed result value after releasing another value.
+/// Restores a pushed result using the registers for its own ABI representation.
 fn restore_pushed_value_after_release(emitter: &mut Emitter, pushed_ty: &PhpType) {
     match pushed_ty.codegen_repr() {
         PhpType::Float => abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter)),
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
+        }
+        PhpType::TaggedScalar => {
+            let payload = abi::int_result_reg(emitter);
+            let tag = crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter);
+            abi::emit_pop_reg_pair(emitter, payload, tag);
         }
         PhpType::Void | PhpType::Never => {}
         _ => abi::emit_pop_reg(emitter, abi::int_result_reg(emitter)),
@@ -2924,7 +2965,8 @@ fn restore_concat_offset_after_nested_call(
 /// such a call raises `Unknown named parameter $<name>`, which is a PHP-visible diagnostic the
 /// program can catch, instead of corrupting the collector.
 pub(crate) fn variadic_collector_accepts_named_entries(sig: &FunctionSig) -> bool {
-    crate::types::signatures::variadic_storage_accepts_named_entries(sig)
+    !crate::func_args::sig_collects_surplus_args(sig)
+        && crate::types::signatures::variadic_storage_accepts_named_entries(sig)
 }
 
 /// Returns the element type a variadic collector's storage holds, for BOTH container shapes.

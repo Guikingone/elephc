@@ -19,7 +19,7 @@ use super::{
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
-    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
+    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, SERIALIZABLE_RESULT_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
     CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
@@ -29,7 +29,8 @@ use super::{
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
     STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
-    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
+    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_PROPERTY_ASSIGN_PREFIX,
+    UNSER_TYPE_GIVEN_SUFFIX,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -118,6 +119,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _serialization_denied_suffix\n_serialization_denied_suffix:\n    .ascii {SERIALIZATION_DENIED_SUFFIX:?}\n"
     ));
+    out.push_str(&format!(".globl _serializable_result_suffix\n_serializable_result_suffix:\n    .ascii {SERIALIZABLE_RESULT_SUFFIX:?}\n"));
     out.push_str(&format!(
         ".globl _unserialization_denied_prefix\n_unserialization_denied_prefix:\n    .ascii {UNSERIALIZATION_DENIED_PREFIX:?}\n"
     ));
@@ -160,7 +162,28 @@ pub(crate) fn emit_runtime_data_fixed(
             ".globl {label}\n{label}:\n    .ascii {name:?}\n"
         ));
     }
+    // A hydrated property TypeError spells a bool value as its literal `true`/`false`
+    // (unlike the argument-type diagnostics, which spell the type as `bool`).
+    out.push_str(".globl _unser_type_true\n_unser_type_true:\n    .ascii \"true\"\n");
+    out.push_str(".globl _unser_type_false\n_unser_type_false:\n    .ascii \"false\"\n");
+    out.push_str(&format!(
+        ".globl _unser_property_assign_prefix\n_unser_property_assign_prefix:\n    .ascii {UNSER_PROPERTY_ASSIGN_PREFIX:?}\n"
+    ));
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    // `{pointer, length}` rows naming a rejected SPL offset's type, the shape of
+    // `_class_name_entries`; see `runtime::spl::offset_convert`.
+    out.push_str(".p2align 3\n.globl _spl_offset_type_rows\n_spl_offset_type_rows:\n");
+    for (symbol, len) in crate::codegen_support::runtime::spl::SPL_OFFSET_TYPE_ROWS {
+        out.push_str(&format!("    .quad {symbol}\n    .quad {len}\n"));
+    }
+    out.push_str(&format!(
+        ".globl _spl_float_string_prefix\n_spl_float_string_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _spl_float_string_suffix\n_spl_float_string_suffix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_SUFFIX
+    ));
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
     out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
     out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
@@ -287,6 +310,8 @@ pub(crate) fn emit_runtime_data_fixed(
     // policy/depth fields through _unser_context. Capacity bounds the per-call object/value
     // count; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
+    out.push_str(&comm_directive("_ser_legacy_active", 8, target));
+    out.push_str(&comm_directive("_unser_legacy_active", 8, target));
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
     out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
@@ -504,6 +529,11 @@ pub(crate) fn emit_runtime_data_fixed(
         target,
     ));
     out.push_str(&comm_directive(
+        "_obj_weak_reference_index",
+        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 8,
+        target,
+    ));
+    out.push_str(&comm_directive(
         "_obj_handle_free",
         crate::codegen_support::runtime::object_handle_free_slots(heap_size) * 4,
         target,
@@ -586,9 +616,15 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_json_validate_len", 8, target));
     out.push_str(&comm_directive("_json_decode_assoc", 8, target));
     out.push_str(&comm_directive("_json_error_source_ptr", 8, target));
+    out.push_str(&comm_directive("_json_error_source_len", 8, target));
+    out.push_str(&comm_directive("_json_error_candidate_ptr", 8, target));
     out.push_str(&comm_directive("_json_error_location_active", 8, target));
     out.push_str(&comm_directive("_json_error_line", 8, target));
     out.push_str(&comm_directive("_json_error_column", 8, target));
+    // Diagnostic counters for the deferred location scan. Valid decodes leave
+    // both at zero; a recorded decode error increments them once.
+    out.push_str(&comm_directive("_json_error_scan_count", 8, target));
+    out.push_str(&comm_directive("_json_error_scan_bytes", 8, target));
     // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
     // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
     // "this block never acquired a handle".
@@ -717,6 +753,10 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_spl_dll_shift_empty_msg", "Can't shift from an empty datastructure"),
         ("_spl_dll_peek_empty_msg", "Can't peek at an empty datastructure"),
         (
+            "_spl_dll_frozen_mode_msg",
+            "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen",
+        ),
+        (
             "_spl_dll_add_range_msg",
             "SplDoublyLinkedList::add(): Argument #1 ($index) is out of range",
         ),
@@ -733,20 +773,20 @@ pub(crate) fn emit_runtime_data_fixed(
             "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) is out of range",
         ),
         (
-            "_spl_dll_offset_exists_type_msg",
-            "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_exists_type_prefix",
+            "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, ",
         ),
         (
-            "_spl_dll_offset_get_type_msg",
-            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_get_type_prefix",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, ",
         ),
         (
-            "_spl_dll_offset_set_type_msg",
-            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, non-int given",
+            "_spl_dll_offset_set_type_prefix",
+            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, ",
         ),
         (
-            "_spl_dll_offset_unset_type_msg",
-            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_unset_type_prefix",
+            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, ",
         ),
         (
             "_spl_fixed_construct_size_msg",
@@ -756,10 +796,8 @@ pub(crate) fn emit_runtime_data_fixed(
             "_spl_fixed_set_size_msg",
             "SplFixedArray::setSize(): Argument #1 ($size) must be greater than or equal to 0",
         ),
-        (
-            "_spl_fixed_offset_type_msg",
-            "Cannot access offset of type non-int on SplFixedArray",
-        ),
+        ("_spl_fixed_offset_type_prefix", "Cannot access offset of type "),
+        ("_spl_fixed_offset_type_suffix", " on SplFixedArray"),
         ("_spl_fixed_offset_range_msg", "Index invalid or out of range"),
         (
             "_spl_fixed_from_array_keys_msg",
@@ -1030,6 +1068,20 @@ pub(crate) fn emit_runtime_data_fixed(
     // helpers call through these slots so unrelated programs never reference the
     // optional elephc-bcmath archive.
     for slot in [
+        "_elephc_bcmath_number_add_fn",
+        "_elephc_bcmath_number_ceil_fn",
+        "_elephc_bcmath_number_comp_fn",
+        "_elephc_bcmath_number_create_fn",
+        "_elephc_bcmath_number_div_fn",
+        "_elephc_bcmath_number_divmod_fn",
+        "_elephc_bcmath_number_floor_fn",
+        "_elephc_bcmath_number_mod_fn",
+        "_elephc_bcmath_number_mul_fn",
+        "_elephc_bcmath_number_pow_fn",
+        "_elephc_bcmath_number_powmod_fn",
+        "_elephc_bcmath_number_round_fn",
+        "_elephc_bcmath_number_sqrt_fn",
+        "_elephc_bcmath_number_sub_fn",
         "_elephc_bcmath_add_fn",
         "_elephc_bcmath_sub_fn",
         "_elephc_bcmath_mul_fn",

@@ -110,9 +110,11 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        context,
         values,
     );
     frame.bind_scope(&function_scope);
+    frame.set_sensitive_parameters(function.parameter_attributes(), function.parameter_is_variadic());
     context.push_function_args(frame);
     let result = binding_result.and_then(|()| execute_statements(function.body(), context, &mut function_scope, values));
     let persist_result = persist_static_locals(
@@ -455,9 +457,11 @@ fn eval_closure_with_optional_binding(
         &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        context,
         values,
     );
     frame.bind_scope(&function_scope);
+    frame.set_sensitive_parameters(function.parameter_attributes(), function.parameter_is_variadic());
     context.push_function_args_with_backtrace(
         frame,
         backtrace_class,
@@ -661,7 +665,7 @@ fn visit_static_var_declarations(
             | EvalStmt::Foreach { body, .. }
             | EvalStmt::For { body, .. }
             | EvalStmt::While { body, .. } => visit_static_var_declarations(body, seen, visitor),
-            EvalStmt::FunctionDecl { .. } => {}
+            EvalStmt::FunctionDecl { .. } | EvalStmt::GenericDecl(_) => {}
             EvalStmt::If {
                 then_branch,
                 else_branch,
@@ -725,6 +729,7 @@ fn visit_static_var_declarations(
             | EvalStmt::StaticPropertyIncDec { .. }
             | EvalStmt::StaticPropertyReferenceBind { .. }
             | EvalStmt::StaticPropertySet { .. }
+            | EvalStmt::TypedVar { .. }
             | EvalStmt::StoreVar { .. }
             | EvalStmt::Throw(_)
             | EvalStmt::TraitDecl(_)

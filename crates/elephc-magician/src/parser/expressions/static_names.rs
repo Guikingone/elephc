@@ -55,9 +55,10 @@ impl Parser {
                 self.advance();
                 Ok(EvalExpr::ClassNameFetch { class_name })
             }
-            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
+            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen | TokenKind::Less) => {
                 let method = method.clone();
                 self.advance();
+                let method = self.parse_written_name(method, false)?;
                 if self.consume_first_class_callable_marker() {
                     return Ok(EvalExpr::StaticMethodCallable {
                         class_name,
@@ -151,9 +152,10 @@ impl Parser {
                     class_name: Box::new(class_name),
                 })
             }
-            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
+            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen | TokenKind::Less) => {
                 let method = method.clone();
                 self.advance();
+                let method = self.parse_written_name(method, false)?;
                 if self.consume_first_class_callable_marker() {
                     return Ok(Self::dynamic_static_method_callable_expr(
                         class_name,
@@ -267,7 +269,10 @@ impl Parser {
         &mut self,
         allow_relative_keywords: bool,
     ) -> Result<ParsedQualifiedName, EvalParseError> {
-        let name = self.parse_qualified_name()?;
+        let type_index = self.pos;
+        let mut name = self.parse_qualified_name()?;
+        if !name.absolute { self.mark_type_parameter_use(type_index, &name.name); }
+        name.name = self.parse_written_name(name.name, true)?;
         if self.class_reference_name_is_reserved(&name, allow_relative_keywords) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
@@ -305,26 +310,24 @@ impl Parser {
         self.resolve_class_name(name)
     }
 
-    /// Builds a call expression, adding namespace fallback for unqualified names.
+    /// Preserves call spelling for diagnostics and adds namespace fallback for unqualified names.
     pub(in crate::parser) fn call_expr(&self, name: String, args: Vec<EvalCallArg>) -> EvalExpr {
-        if let Some(imported) = self.imports.resolve_function(&name) {
+        let (base, suffix) = name.find('<').map_or((name.as_str(), ""), |index| (&name[..index], &name[index..]));
+        if let Some(imported) = self.imports.resolve_function(base) {
             return EvalExpr::Call {
-                name: imported.to_ascii_lowercase(),
+                name: format!("{imported}{suffix}"),
                 args,
             };
         }
-        let fallback_name = name.to_ascii_lowercase();
         if self.namespace.is_empty() {
             EvalExpr::Call {
-                name: fallback_name,
+                name,
                 args,
             }
         } else {
             EvalExpr::NamespacedCall {
-                name: self
-                    .qualify_name_in_current_namespace(&name)
-                    .to_ascii_lowercase(),
-                fallback_name,
+                name: self.qualify_name_in_current_namespace(&name),
+                fallback_name: name,
                 args,
             }
         }
@@ -356,8 +359,12 @@ impl Parser {
 
     /// Resolves a class name through active imports before namespace qualification.
     pub(in crate::parser) fn resolve_class_name(&self, name: ParsedQualifiedName) -> String {
-        if name.absolute {
+        if name.absolute || self.type_parameters.contains(&name.name) {
             return name.name;
+        }
+        if let Some((base, suffix)) = name.name.split_once('<') {
+            let resolved = self.imports.resolve_class(base).unwrap_or_else(|| self.qualify_name_in_current_namespace(base));
+            return format!("{resolved}<{suffix}");
         }
         if let Some(imported) = self.imports.resolve_class(&name.name) {
             return imported;

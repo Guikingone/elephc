@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers strip_tags subjects and string, null or array allow-lists.
+//! Lowers strip_tags subjects and string, null, array, or weak scalar allow-lists.
 //!
 //! Called from:
 //! - The typed string runtime-function dispatcher.
@@ -7,6 +7,7 @@
 //! Key details:
 //! - Boxed and concrete arrays share checked dense-value normalization.
 //! - Temporary array owners are retired after joining; all targets share ABI helpers.
+//! - Strict callers reject scalar allow-lists before the strip helper is invoked.
 
 use super::*;
 
@@ -76,6 +77,19 @@ fn lower_strip_tags_allow(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             lower_strip_tags_allow_from_array(ctx, inst, allowed)
         }
         PhpType::Mixed | PhpType::Union(_) => lower_strip_tags_allow_mixed(ctx, inst, allowed),
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+            if !strip_tags_strict_types(inst) =>
+        {
+            // Weak scalar conversion cannot produce a <tag>, so its allow-list is empty.
+            emit_empty_allow_string(ctx);
+            Ok(())
+        }
+        PhpType::Bool | PhpType::False => {
+            ctx.load_value_to_result(allowed)?;
+            let register = abi::int_result_reg(ctx.emitter);
+            emit_strip_tags_bool_type_error(ctx, register);
+            Ok(())
+        }
         other => {
             super::super::super::exceptions::emit_type_error(
                 ctx,
@@ -84,6 +98,30 @@ fn lower_strip_tags_allow(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             Ok(())
         }
     }
+}
+
+/// Retains the caller's per-file scalar binding mode at this builtin boundary.
+fn strip_tags_strict_types(inst: &Instruction) -> bool {
+    matches!(inst.immediate, Some(Immediate::RuntimeCall(
+        crate::ir::RuntimeCallTarget::ProfiledFunction { strict_types: Some(true), .. }
+    )))
+}
+
+/// Names PHP's true/false argument kinds when a strict union rejects a boolean.
+fn emit_strip_tags_bool_type_error(ctx: &mut FunctionContext<'_>, register: &str) {
+    let from_true = ctx.next_label("strip_tags_allow_true_error");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {}, {}", register, from_true)); // select PHP's true kind without losing the boolean payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", register, register)); // inspect the rejected boolean value, not its Mixed tag
+            ctx.emitter.instruction(&format!("jne {}", from_true));             // distinguish true from false in the union TypeError
+        }
+    }
+    super::super::super::exceptions::emit_type_error(ctx, &strip_tags_allow_type_error("false"));
+    ctx.emitter.label(&from_true);
+    super::super::super::exceptions::emit_type_error(ctx, &strip_tags_allow_type_error("true"));
 }
 
 /// Writes a zero-length allow-list into the string-result registers.
@@ -203,6 +241,14 @@ fn lower_strip_tags_allow_mixed(
             ctx.emitter.instruction(&format!("b.eq {}", from_null));            // null allow-list strips every tag
             ctx.emitter.instruction("cmp x0, #1");                              // Mixed tag 1 is string
             ctx.emitter.instruction(&format!("b.eq {}", from_string));          // borrow the string payload as the allow-list
+            if !strip_tags_strict_types(inst) {
+                ctx.emitter.instruction("cmp x0, #0");                          // weak integer strings cannot contain an allowed tag
+                ctx.emitter.instruction(&format!("b.eq {}", from_null));        // render the accepted numeric allow-list as empty
+                ctx.emitter.instruction("cmp x0, #2");                          // weak float strings cannot contain an allowed tag
+                ctx.emitter.instruction(&format!("b.eq {}", from_null));        // render the accepted numeric allow-list as empty
+                ctx.emitter.instruction("cmp x0, #3");                          // weak boolean strings cannot contain an allowed tag
+                ctx.emitter.instruction(&format!("b.eq {}", from_null));        // render the accepted boolean allow-list as empty
+            }
             ctx.emitter.instruction("cmp x0, #4");                              // Mixed tag 4 is an indexed array
             ctx.emitter.instruction(&format!("b.eq {}", from_array));           // join array values into `<tag><tag>`
             ctx.emitter.instruction("cmp x0, #5");                              // Mixed tag 5 is an associative array
@@ -227,6 +273,14 @@ fn lower_strip_tags_allow_mixed(
             ctx.emitter.instruction(&format!("je {}", from_null));              // null allow-list strips every tag
             ctx.emitter.instruction("cmp rax, 1");                              // Mixed tag 1 is string
             ctx.emitter.instruction(&format!("je {}", from_string));            // borrow the string payload as the allow-list
+            if !strip_tags_strict_types(inst) {
+                ctx.emitter.instruction("cmp rax, 0");                          // weak integer strings cannot contain an allowed tag
+                ctx.emitter.instruction(&format!("je {}", from_null));          // render the accepted numeric allow-list as empty
+                ctx.emitter.instruction("cmp rax, 2");                          // weak float strings cannot contain an allowed tag
+                ctx.emitter.instruction(&format!("je {}", from_null));          // render the accepted numeric allow-list as empty
+                ctx.emitter.instruction("cmp rax, 3");                          // weak boolean strings cannot contain an allowed tag
+                ctx.emitter.instruction(&format!("je {}", from_null));          // render the accepted boolean allow-list as empty
+            }
             ctx.emitter.instruction("cmp rax, 4");                              // Mixed tag 4 is an indexed array
             ctx.emitter.instruction(&format!("je {}", from_array));             // join array values into `<tag><tag>`
             ctx.emitter.instruction("cmp rax, 5");                              // Mixed tag 5 is an associative array
@@ -285,10 +339,7 @@ fn emit_strip_tags_mixed_type_error(ctx: &mut FunctionContext<'_>) {
                 &strip_tags_allow_type_error("float"),
             );
             ctx.emitter.label(&bool_l);
-            super::super::super::exceptions::emit_type_error(
-                ctx,
-                &strip_tags_allow_type_error("bool"),
-            );
+            emit_strip_tags_bool_type_error(ctx, "x1");
             ctx.emitter.label(&object_l);
             super::super::super::exceptions::emit_type_error(
                 ctx,
@@ -326,10 +377,7 @@ fn emit_strip_tags_mixed_type_error(ctx: &mut FunctionContext<'_>) {
                 &format!("{prefix}float{suffix}"),
             );
             ctx.emitter.label(&bool_l);
-            super::super::super::exceptions::emit_type_error(
-                ctx,
-                &format!("{prefix}bool{suffix}"),
-            );
+            emit_strip_tags_bool_type_error(ctx, "rdi");
             ctx.emitter.label(&object_l);
             super::super::super::exceptions::emit_type_error(
                 ctx,

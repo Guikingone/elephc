@@ -321,6 +321,19 @@ pub(super) fn bridge_lib_for_flag(flag: &str) -> Option<&'static str> {
         .map(|bridge| bridge.lib_name)
 }
 
+/// Applies normal source freshness rules to a bridge retained by the REPL executable cache.
+pub(super) fn cached_archive_is_current(name: &str, archive: &Path) -> bool {
+    let Some(bridge) = BRIDGES.iter().find(|bridge| bridge.lib_name == name) else {
+        return false;
+    };
+    let Some(filename) = archive.file_name().and_then(|name| name.to_str()) else { return false; };
+    if let Some(directory) = std::env::var_os(bridge.env_var) {
+        return Path::new(&directory).join(filename) == archive;
+    }
+    if bridge.find_named_archive(filename).as_deref() != Some(archive) { return false; }
+    bridge.find_workspace().is_none_or(|workspace| !bridge.sources_are_newer_than(&workspace, archive))
+}
+
 /// Returns all accepted `--with-<flag>` suffixes in stable table order.
 pub(super) fn crate_flag_names() -> Vec<&'static str> {
     BRIDGES.iter().map(|bridge| bridge.flag_name).collect()
@@ -644,11 +657,7 @@ fn any_file_newer_than(directory: &Path, instant: std::time::SystemTime) -> bool
 /// sibling crate changes every time someone edits it while an ordinary registry dependency is
 /// a fixed download.
 ///
-/// That leaves one hole, and it is real rather than theoretical: the workspace root redirects
-/// `mysql` to `vendor/mysql-28.0.0` through `[patch.crates-io]`, and `elephc-pdo` names it by
-/// VERSION, so nothing here sees the vendored tree. Editing it does not mark
-/// `libelephc_pdo.a` stale. Closing that means resolving patches, not just reading manifests;
-/// until then `cargo build -p elephc-pdo` after such an edit is the manual refresh.
+/// Workspace-root registry patches are not resolved here.
 ///
 /// Manifest sections that cannot be read, parsed, or understood contribute nothing — this
 /// decides whether to SPAWN CARGO, and an unreadable manifest is not evidence of an edit.
