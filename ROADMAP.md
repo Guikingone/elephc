@@ -1144,7 +1144,7 @@ real-world validation rather than by speculative pass work.
 - [ ] Null-terminated string convention for C interop (owned string results currently include a convenience trailing NUL, but pointer/length remains the authoritative binary-safe ABI)
 - [ ] `pkg-config` generation
 - [ ] FFI documentation for C, Rust, Python, Go
-- [ ] Apple notarization for direct downloads (codesign + notarytool)
+- [x] Apple notarization for direct downloads (codesign + notarytool)
 
 ### curl follow-ups
 
