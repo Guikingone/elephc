@@ -57,8 +57,45 @@ no-op.
 
 ## Running a suite
 
-Until the `elephc test` subcommand lands, a suite is an ordinary program with an explicit
-driver: one `Runner`, one call per test, and the runner's verdict as the exit code.
+`elephc test` compiles the suite into a native binary and runs it:
+
+```text
+$ elephc test
+ok   App\Tests\CounterTest::testStartsAtZero (1 assertion)
+ok   App\Tests\CounterTest::testIncrements (1 assertion)
+
+OK (2 tests, 2 assertions)
+```
+
+What it does, in order:
+
+1. Collects every `*Test.php` and `*Test.lfc` file under the path (`tests` by default),
+   recursively and in sorted order; a file path is taken as is.
+2. Finds the project root: the nearest directory, starting at the path itself, with a
+   `composer.json`. Its `autoload` and `autoload-dev` sections resolve project and test
+   classes, so `Ivory\Tests\` mapped to `tests/` under `autoload-dev` is all a project
+   declares.
+3. Compiles a virtual entry that requires those files, with the testing runtime forced in.
+   After autoloading, when every class the tests extend is known, it discovers the test
+   classes: every concrete class whose ancestry reaches `Elephc\Testing\TestCase` (the
+   PHPUnit alias included), in declaration order. A test is a public, non-static method
+   whose name starts with `test` or that carries a `#[Test]` attribute; inherited test
+   methods run on the concrete class after its own.
+4. Appends the driver below to the program, builds the binary under the per-user cache,
+   runs it with your working directory, and exits with the suite's exit code.
+
+`--filter PATTERN` keeps the tests whose `Class::method` contains the pattern, before
+compilation. Compile options after the path (`--strict-php`, `--with-<crate>`,
+`--heap-size`, `--php-version`, `--define`, `--ini`) reach the compiler; output modes
+and `--target` are refused. An empty run (no test files, no test classes, a filter that
+matches nothing) is an error, not a green build. See the
+[CLI reference](../compiling/cli-reference.md#test-runner-command) for the full table.
+
+### Driving a suite by hand
+
+The driver `elephc test` synthesizes is ordinary PHP, and a suite can be an ordinary
+program with that driver written out: one `Runner`, one call per test, the runner's
+verdict as the exit code. This is what `examples/testing/main.php` does.
 
 ```php
 <?php
@@ -85,7 +122,7 @@ OK (2 tests, 2 assertions)
 
 The test is passed as a closure rather than by name on purpose: declaration reachability
 compiles only what the program reaches, and `$case->testIncrements()` inside the closure is
-what keeps the method in the binary. `elephc test` will synthesize exactly this driver from
+what keeps the method in the binary. `elephc test` synthesizes exactly this driver from
 the classes it discovers.
 
 `Runner::run()` records one of three outcomes per test and prints one line for it:
@@ -167,8 +204,9 @@ and currently answers `false`, so the assertion would fail every time; write
 
 ## Limits
 
-- One instance of a test class serves every test method in a hand-written driver; `setUp()`
-  reinitializes state before each test, as the example above relies on.
+- One instance of a test class serves every test method; `setUp()` reinitializes state
+  before each test, as the example above relies on. A fresh instance per test, as PHPUnit
+  creates, is planned with data providers.
 - A native fatal (buffer out of bounds, null pointer dereference, FFI segfault) ends the
   process: the runner cannot report it as a failure yet. Per-test process isolation is the
   next step of the plan.

@@ -24,6 +24,7 @@ mod cli;
 mod repl;
 mod strict_php;
 mod testing;
+mod testing_command;
 mod strict_php_source_guards;
 mod lfc;
 mod benchmarks;

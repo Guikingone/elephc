@@ -14,7 +14,7 @@ design, and this document is its single source of truth. Code Journal plan
 - [ ] 1. Runtime library: `Elephc\Testing\TestCase`, `Elephc\Testing\Runner`, the
       `PHPUnit\Framework\TestCase` alias, usable from a hand-written entry; Ivory's
       suite ported onto it as the acceptance test
-- [ ] 2. `elephc test` subcommand: test-file discovery, synthesized entry, project
+- [x] 2. `elephc test` subcommand: test-file discovery, synthesized entry, project
       root and Composer resolution, compile-time test discovery inside the compiler,
       `--filter`
 - [ ] 3. Isolation: one forked child per test on the executable hosts, fatals and

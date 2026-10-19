@@ -29,6 +29,7 @@
 
 mod build;
 mod detect;
+pub mod discover;
 #[cfg(test)]
 mod fragments;
 

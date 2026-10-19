@@ -285,6 +285,10 @@ elephc hello.lfc
 elephc repl
 elephc repl --php-version 8.4 --no-history
 
+# Compile the test suite under tests/ to a native binary and run it
+elephc test
+elephc test tests/Unit --filter CounterTest --strict-php
+
 # Print the compiler version
 elephc --version
 elephc -V
@@ -557,6 +561,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Environment**: `getenv()` answers a single variable or the whole environment, `putenv()` sets and removes, and `$_ENV` / `$_SERVER` carry the process environment plus `$_SERVER['argv']` in ordinary CLI programs
 - **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
 - **Generics**: compile-time specialization of functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables; native syntax is rejected by `--strict-php`, while supported PHPDoc templates affect compilation in both modes. See [Generics](docs/beyond-php/generics.md).
+- **Testing**: a native test runtime inside the compiler (`Elephc\Testing\TestCase` with a PHPUnit-compatible assertion subset, `Runner`, and a `PHPUnit\Framework\TestCase` alias so plain-PHP suites compile unchanged) and `elephc test`, which discovers the test classes under a path at compile time, builds the suite into a native binary, and runs it. See [Testing](docs/beyond-php/testing.md).
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
 </details>

@@ -20,13 +20,15 @@ elephc --version
 elephc native <COMMAND> [OPTIONS]
 elephc monitor <PROGRAM> [OPTIONS]
 elephc repl [OPTIONS]
+elephc test [PATH] [OPTIONS] [COMPILE OPTIONS]
 ```
 
 For compilation, except for `--help` and `--version`, exactly one positional argument is required:
 the path to tagged `.php` or tagless `.lfc` source. The binary is written next
 to it, named after the source without its extension.
-Only an exact first argument of `native`, `monitor`, or `repl` selects a subcommand
-family. Source files with those names must use an explicit path such as `./repl`.
+Only an exact first argument of `native`, `monitor`, `repl`, or `test` selects a
+subcommand family. Source files with those names must use an explicit path such as
+`./repl`.
 
 ## Interactive REPL
 
@@ -50,6 +52,32 @@ on first use and reused from the existing per-user cache root. See
 The session runs on the current supported desktop host, so `--target` and artifact
 output modes are not accepted. Piped input uses the same session semantics without
 prompts or history.
+
+## Test runner command
+
+`elephc test` compiles the test suite under a path into a native binary and runs it.
+See [Testing](../beyond-php/testing.md) for the runtime API, the discovery rules, and
+the report format.
+
+| Argument or flag | Meaning |
+|---|---|
+| `PATH` | A directory walked recursively for `*Test.php` and `*Test.lfc` files, or one such file. Default: `tests`. |
+| `--filter PATTERN` | Run only the tests whose `Class::method` contains `PATTERN` (case-sensitive substring). Also accepts `--filter=PATTERN`. Filtered-out tests are not compiled. |
+| `--help`, `-h` | Show the subcommand usage. |
+| compile options | `--strict-php`, `--with-<crate>`, `--heap-size`, `--php-version`, `--define`, `--ini`, `--quiet`, and the other ordinary options are forwarded to the compiler. |
+
+The project root is the nearest directory, starting at `PATH` itself, that holds a
+`composer.json`; both its `autoload` and `autoload-dev` sections resolve project and
+test classes. The binary is built under the per-user cache
+(`$XDG_CACHE_HOME/elephc/test/` or `~/.cache/elephc/test/`), never beside the
+sources, and runs with the caller's working directory and inherited stdio.
+
+Output modes (`--emit-ir`, `--emit-asm`, `--emit`, `--check`), `--target`, and the
+web flags are rejected: the runner always builds and runs a host executable. The
+exit code is the suite's: `0` when every test passed, the runner's `1` on failures
+or errors, `128 + signal` when the suite died of a signal, and `1` for a compile
+or usage error (including an empty run: no test files, no test classes, or a
+`--filter` that matches nothing).
 
 ## Native dependency commands
 
