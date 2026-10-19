@@ -1,11 +1,9 @@
 # Repository plans and working specifications
 
-Reviewed on 2026-10-19 against release code candidate `df57a9800f`. This index
-distinguishes remaining work, retained specifications and active release
-evidence. Implementation status comes from source and recorded integration
-evidence; this cleanup ran no tests or behavioral probes. Release evidence was
-subsequently refreshed to `0842fca95e` and the approved changelog applied with
-the selected 2026-10-20 release date.
+Reviewed on 2026-10-19 against code candidate `df57a9800f`. This index
+distinguishes remaining work and retained specifications. Implementation status
+comes from source and recorded integration evidence; this cleanup ran no tests
+or behavioral probes.
 
 ## Active follow-up work
 
@@ -30,17 +28,6 @@ integration. It was deliberately moved into `.plans` and is still referenced by
 the SwiftUI examples. Keep its stable path; it is a working specification with
 separate host/device qualification and library-boundary follow-ups.
 
-## Active release evidence
-
-| Artifact | Purpose / state |
-|---|---|
-| [0.27.4 changelog audit](release-0.27.4-changelog-audit.md) | Complete integration ledger and 26 approved release bullets, applied to CHANGELOG.md for 2026-10-20. |
-| [0.27.4 verification](release-0.27.4-verification.md) | Static verification, permitted build evidence and disclosed validation limits. |
-| [0.27.4 static inventory](release-0.27.4-static-inventory.json) | Machine-readable inventory supporting the verification record. |
-
-These artifacts record the completed, approved release preparation and its
-validation limits. Test execution remains skipped by user request.
-
 ## Retained source reproducers
 
 [Mbstring/eval probe inventory](mbstring-probes/README.md) describes all 12
@@ -58,6 +45,9 @@ recoverable from Git commit `819d3d3908`, for example:
 ```bash
 git show 819d3d3908:.plans/<original-filename>.md
 ```
+
+The completed 0.27.4 release-preparation records were retired after approval;
+their final contents remain available at Git commit `7e6ca24785`.
 
 Use permanent `docs/` pages for shipped contracts and update live references
 when retiring a plan. Preserve immutable historical learning records. New or
