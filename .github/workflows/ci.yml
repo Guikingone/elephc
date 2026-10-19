@@ -186,37 +186,6 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh macos-aarch64)" \
             cargo test -p elephc-xml
 
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Materialize the complete curl chain once in this prerequisite job. The
-        # cross-run cache avoids repeated cold downloads, while the workflow
-        # artifact below provides the same-run handoff to the four curl shards.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            curl-native-macos-aarch64-
-
-      - name: Materialize managed native curl
-        run: |
-          ./target/debug/elephc native install --locked \
-            --target macos-aarch64 \
-            --manifest-path examples/curl-get/elephc.toml
-
-      - name: Pack managed native curl cache
-        run: |
-          tar -C "$HOME/.cache/elephc" -czf \
-            "$RUNNER_TEMP/managed-native-curl-macos-aarch64.tar.gz" native
-
-      - name: Upload managed native curl cache
-        uses: actions/upload-artifact@v7
-        with:
-          name: managed-native-curl-macos-aarch64
-          path: ${{ runner.temp }}/managed-native-curl-macos-aarch64.tar.gz
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
       - name: Upload test archive
         uses: actions/upload-artifact@v7
         with:
@@ -365,36 +334,6 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
             cargo test -p elephc-xml
 
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Seed the cross-run cache before packaging the same-run artifact below,
-        # so a cold key causes one source build instead of four concurrent ones.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            curl-native-linux-x86_64-
-
-      - name: Materialize managed native curl
-        run: |
-          ./target/debug/elephc native install --locked \
-            --target linux-x86_64 \
-            --manifest-path examples/curl-get/elephc.toml
-
-      - name: Pack managed native curl cache
-        run: |
-          tar -C "$HOME/.cache/elephc" -czf \
-            "$RUNNER_TEMP/managed-native-curl-linux-x86_64.tar.gz" native
-
-      - name: Upload managed native curl cache
-        uses: actions/upload-artifact@v7
-        with:
-          name: managed-native-curl-linux-x86_64
-          path: ${{ runner.temp }}/managed-native-curl-linux-x86_64.tar.gz
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
       - name: Upload test archive
         uses: actions/upload-artifact@v7
         with:
@@ -534,36 +473,6 @@ jobs:
         run: |
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-aarch64)" \
             cargo test -p elephc-xml
-
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Seed the cross-run cache before packaging the same-run artifact below,
-        # so a cold key causes one source build instead of four concurrent ones.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            curl-native-linux-aarch64-
-
-      - name: Materialize managed native curl
-        run: |
-          ./target/debug/elephc native install --locked \
-            --target linux-aarch64 \
-            --manifest-path examples/curl-get/elephc.toml
-
-      - name: Pack managed native curl cache
-        run: |
-          tar -C "$HOME/.cache/elephc" -czf \
-            "$RUNNER_TEMP/managed-native-curl-linux-aarch64.tar.gz" native
-
-      - name: Upload managed native curl cache
-        uses: actions/upload-artifact@v7
-        with:
-          name: managed-native-curl-linux-aarch64
-          path: ${{ runner.temp }}/managed-native-curl-linux-aarch64.tar.gz
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
 
       - name: Upload test archive
         uses: actions/upload-artifact@v7
@@ -1489,18 +1398,226 @@ jobs:
           bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
 
+  # The curl shards need the managed libcurl/libssh2/nghttp2/openssl/zlib chain,
+  # which only they consume. It used to be materialized inside the archive jobs,
+  # where a cold cache added ~5 minutes to the critical path of every shard on the
+  # platform; these jobs build it off the critical path, in parallel with the
+  # ordinary shards, from the elephc binary the archive already carries.
+  curl-native-macos-aarch64:
+    name: Managed Native curl (macos-aarch64)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download test archive
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate archived cargo-nextest
+        id: validate_archived_nextest
+        continue-on-error: true
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Remove invalid cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/cargo-nextest"
+
+      - name: Retry cargo-nextest artifact download
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate retried cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Extract the elephc binary
+        # The archive carries target/debug/elephc next to the test binaries (see the
+        # archive notes in .config/nextest.toml); only the binary is needed here.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Cross-run cache keyed on the committed lock plus the recipe sources that
+        # decide what gets built; a cold key costs one source build here instead of
+        # four concurrent ones in the shards.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-macos-aarch64-
+
+      - name: Materialize managed native curl
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/curl-get/elephc.toml
+
+      - name: Pack managed native curl cache
+        run: |
+          tar -C "$HOME/.cache/elephc" -czf \
+            "$RUNNER_TEMP/managed-native-curl-macos-aarch64.tar.gz" native
+
+      - name: Upload managed native curl cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-native-curl-macos-aarch64
+          path: ${{ runner.temp }}/managed-native-curl-macos-aarch64.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  curl-native-linux-x86_64:
+    name: Managed Native curl (linux-x86_64)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download test archive
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Extract the elephc binary
+        # The archive carries target/debug/elephc next to the test binaries (see the
+        # archive notes in .config/nextest.toml); only the binary is needed here.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Cross-run cache keyed on the committed lock plus the recipe sources that
+        # decide what gets built; a cold key costs one source build here instead of
+        # four concurrent ones in the shards.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-linux-x86_64-
+
+      - name: Materialize managed native curl
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/curl-get/elephc.toml
+
+      - name: Pack managed native curl cache
+        run: |
+          tar -C "$HOME/.cache/elephc" -czf \
+            "$RUNNER_TEMP/managed-native-curl-linux-x86_64.tar.gz" native
+
+      - name: Upload managed native curl cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-native-curl-linux-x86_64
+          path: ${{ runner.temp }}/managed-native-curl-linux-x86_64.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  curl-native-linux-aarch64:
+    name: Managed Native curl (linux-aarch64)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download test archive
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Extract the elephc binary
+        # The archive carries target/debug/elephc next to the test binaries (see the
+        # archive notes in .config/nextest.toml); only the binary is needed here.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Cross-run cache keyed on the committed lock plus the recipe sources that
+        # decide what gets built; a cold key costs one source build here instead of
+        # four concurrent ones in the shards.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-linux-aarch64-
+
+      - name: Materialize managed native curl
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/curl-get/elephc.toml
+
+      - name: Pack managed native curl cache
+        run: |
+          tar -C "$HOME/.cache/elephc" -czf \
+            "$RUNNER_TEMP/managed-native-curl-linux-aarch64.tar.gz" native
+
+      - name: Upload managed native curl cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-native-curl-linux-aarch64
+          path: ${{ runner.temp }}/managed-native-curl-linux-aarch64.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
   # curl fixtures each link the elephc_curl bridge against a real, managed
   # libcurl/libssh2/nghttp2/openssl/zlib build (see
   # tests/codegen/support/curl_native.rs) that the
   # ordinary shards' machines don't provision, so give them their own jobs that
-  # consume the exact native cache packed by their prerequisite build job. The build
-  # job also caches it across runs by the committed lock and recipe sources. This
+  # consume the exact native cache packed by their prerequisite curl-native job,
+  # which also caches it across runs by the committed lock and recipe sources. This
   # dedicated matrix exercises target callback trampolines, the combined
   # elephc_magician + elephc_curl link shape, and managed-native materialization inside
   # the Linux CI container.
   curl-codegen-tests-macos-aarch64:
     name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-macos-aarch64
+    needs: [build-archive-macos-aarch64, curl-native-macos-aarch64]
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -1598,7 +1715,7 @@ jobs:
 
   curl-codegen-tests-linux-x86_64:
     name: Curl Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-x86_64
+    needs: [build-archive-linux-x86_64, curl-native-linux-x86_64]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     container:
@@ -1676,7 +1793,7 @@ jobs:
 
   curl-codegen-tests-linux-aarch64:
     name: Curl Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-aarch64
+    needs: [build-archive-linux-aarch64, curl-native-linux-aarch64]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     container:
@@ -2566,6 +2683,9 @@ jobs:
       - curl-codegen-tests-macos-aarch64
       - curl-codegen-tests-linux-x86_64
       - curl-codegen-tests-linux-aarch64
+      - curl-native-macos-aarch64
+      - curl-native-linux-x86_64
+      - curl-native-linux-aarch64
       - curl-ios-compile-link
       - xml-ios-compile-link
       - eval-codegen-tests-macos-aarch64
@@ -2616,6 +2736,9 @@ jobs:
           test "${{ needs.curl-codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.curl-codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.curl-codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.curl-native-macos-aarch64.result }}" = "success"
+          test "${{ needs.curl-native-linux-x86_64.result }}" = "success"
+          test "${{ needs.curl-native-linux-aarch64.result }}" = "success"
           test "${{ needs.curl-ios-compile-link.result }}" = "success"
           test "${{ needs.xml-ios-compile-link.result }}" = "success"
           test "${{ needs.eval-codegen-tests-macos-aarch64.result }}" = "success"
