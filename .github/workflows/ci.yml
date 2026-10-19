@@ -141,10 +141,21 @@ jobs:
         run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target macos-aarch64
 
       - name: Archive test binaries
+        # Two archives from one build: the workspace archive for the non-codegen,
+        # CLI and web shards, and a codegen-only one (codegen_tests, the elephc
+        # binary, and the bridge staticlibs from the include list) for the 40-odd
+        # codegen/eval/pdo/curl shards, which never run the other 130 test
+        # binaries and otherwise download and extract them anyway. The macOS
+        # shards take cargo-nextest from the artifact too (no install step there),
+        # so both artifacts carry it.
         run: |
           cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
           (cd "$RUNNER_TEMP" && shasum -a 256 cargo-nextest > cargo-nextest.sha256)
+          mkdir -p "$RUNNER_TEMP/codegen-archive"
+          cargo nextest archive --profile ci -p elephc --test codegen_tests \
+            --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
+          cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
 
       - name: Run doctests
         # Doctests cannot run from a nextest archive, so run them here where the
@@ -194,6 +205,14 @@ jobs:
             ${{ runner.temp }}/nextest-archive.tar.zst
             ${{ runner.temp }}/cargo-nextest
             ${{ runner.temp }}/cargo-nextest.sha256
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload codegen test archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-codegen-macos-aarch64
+          path: ${{ runner.temp }}/codegen-archive
           retention-days: 1
           if-no-files-found: error
 
@@ -292,7 +311,12 @@ jobs:
         run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-x86_64
 
       - name: Archive test binaries
-        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+        # Two archives from one build; see the macOS job for why.
+        run: |
+          cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          mkdir -p "$RUNNER_TEMP/codegen-archive"
+          cargo nextest archive --profile ci -p elephc --test codegen_tests \
+            --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
 
       - name: Run doctests
         # Doctests cannot run from a nextest archive, so run them here where the
@@ -339,6 +363,14 @@ jobs:
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}/nextest-archive.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload codegen test archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-codegen-linux-x86_64
+          path: ${{ runner.temp }}/codegen-archive
           retention-days: 1
           if-no-files-found: error
 
@@ -432,7 +464,12 @@ jobs:
         run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-aarch64
 
       - name: Archive test binaries
-        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+        # Two archives from one build; see the macOS job for why.
+        run: |
+          cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          mkdir -p "$RUNNER_TEMP/codegen-archive"
+          cargo nextest archive --profile ci -p elephc --test codegen_tests \
+            --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
 
       - name: Run doctests
         # Doctests cannot run from a nextest archive, so run them here where the
@@ -479,6 +516,14 @@ jobs:
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}/nextest-archive.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload codegen test archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-codegen-linux-aarch64
+          path: ${{ runner.temp }}/codegen-archive
           retention-days: 1
           if-no-files-found: error
 
@@ -1001,7 +1046,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -1018,7 +1063,7 @@ jobs:
         if: steps.validate_archived_nextest.outcome == 'failure'
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -1106,7 +1151,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-x86_64
+          name: nextest-archive-codegen-linux-x86_64
           path: ${{ runner.temp }}
 
       - name: Cache managed native libxml2
@@ -1189,7 +1234,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-aarch64
+          name: nextest-archive-codegen-linux-aarch64
           path: ${{ runner.temp }}
 
       - name: Cache managed native libxml2
@@ -1273,7 +1318,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -1290,7 +1335,7 @@ jobs:
         if: steps.validate_archived_nextest.outcome == 'failure'
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -1336,7 +1381,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-x86_64
+          name: nextest-archive-codegen-linux-x86_64
           path: ${{ runner.temp }}
 
       - name: Run PDO codegen shard in one process
@@ -1377,7 +1422,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-aarch64
+          name: nextest-archive-codegen-linux-aarch64
           path: ${{ runner.temp }}
 
       - name: Run PDO codegen shard in one process
@@ -1414,7 +1459,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -1431,7 +1476,7 @@ jobs:
         if: steps.validate_archived_nextest.outcome == 'failure'
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -1498,7 +1543,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-x86_64
+          name: nextest-archive-codegen-linux-x86_64
           path: ${{ runner.temp }}
 
       - name: Extract the elephc binary
@@ -1560,7 +1605,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-aarch64
+          name: nextest-archive-codegen-linux-aarch64
           path: ${{ runner.temp }}
 
       - name: Extract the elephc binary
@@ -1645,7 +1690,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -1662,7 +1707,7 @@ jobs:
         if: steps.validate_archived_nextest.outcome == 'failure'
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -1745,7 +1790,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-x86_64
+          name: nextest-archive-codegen-linux-x86_64
           path: ${{ runner.temp }}
 
       - name: Extract test archive
@@ -1823,7 +1868,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-aarch64
+          name: nextest-archive-codegen-linux-aarch64
           path: ${{ runner.temp }}
 
       - name: Extract test archive
@@ -2012,7 +2057,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -2029,7 +2074,7 @@ jobs:
         if: steps.validate_archived_nextest.outcome == 'failure'
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-macos-aarch64
+          name: nextest-archive-codegen-macos-aarch64
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -2097,7 +2142,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-x86_64
+          name: nextest-archive-codegen-linux-x86_64
           path: ${{ runner.temp }}
 
       - name: Extract test archive
@@ -2157,7 +2202,7 @@ jobs:
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
         with:
-          name: nextest-archive-linux-aarch64
+          name: nextest-archive-codegen-linux-aarch64
           path: ${{ runner.temp }}
 
       - name: Extract test archive
