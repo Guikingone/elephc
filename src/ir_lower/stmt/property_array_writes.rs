@@ -21,7 +21,28 @@ pub(super) fn lower_property_array_push(
         object: Box::new(object.clone()), property: property.into(),
     }, span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
-    let object = lower_expr(ctx, object);
+    let mut roots = Vec::new();
+    let (mut receiver, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+        let value = lower_rooted_property_write_operand(ctx, value, &mut roots);
+        let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, value, span);
+        (receiver, value)
+    } else {
+        let object = lower_expr(ctx, object);
+        let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        let value = lower_rooted_property_write_operand(ctx, value, &mut roots);
+        receiver.place_above_operand_roots(ctx, &roots, span);
+        (receiver, value)
+    };
+    receiver.narrow_for_array(ctx, property, &[value.value], span);
+    lower_property_array_push_value(ctx, receiver.value, property, value, span);
+    receiver.finish(ctx, span);
+    retire_property_write_roots(ctx, roots, span);
+}
+
+/// Mutates the array property while the caller holds its receiver lease.
+fn lower_property_array_push_value(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, value: LoweredValue, span: Span,
+) {
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
         lower_php_array_property_write(ctx, object, property, None, value, span, false);
         return;
@@ -40,7 +61,6 @@ pub(super) fn lower_property_array_push(
         );
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::ArrayPush,
             vec![property_value.value, value.value],
@@ -65,7 +85,6 @@ pub(super) fn lower_property_array_push(
         return;
     }
 
-    let value = lower_expr(ctx, value);
     let data = ctx.intern_string(property);
     ctx.emit_void(
         Op::RuntimeCall,
@@ -140,7 +159,80 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     span: Span,
     key_already_diagnosed: bool,
 ) {
-    let object = lower_expr(ctx, object);
+    let mut roots = Vec::new();
+    let (mut receiver, index, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+        let (index, value) = lower_rooted_property_write_key_and_value(ctx, index, value, &mut roots);
+        let receiver = crate::ir_lower::expr::lower_static_property_write_chain_with_operands(
+            ctx, object, &[index.value, value.value], span);
+        (receiver, index, value)
+    } else {
+        let object = lower_expr(ctx, object);
+        let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        let (index, value) = lower_rooted_property_write_key_and_value(ctx, index, value, &mut roots);
+        receiver.place_above_operand_roots(ctx, &roots, span);
+        (receiver, index, value)
+    };
+    receiver.narrow_for_array(ctx, property, &[index.value, value.value], span);
+    lower_property_array_assign_value(ctx, receiver.value, property, index, value, span, key_already_diagnosed);
+    receiver.finish(ctx, span);
+    retire_property_write_roots(ctx, roots, span);
+}
+
+/// Lowers one operand into an unwind-visible owner and lends a borrowed view to the writer.
+fn lower_rooted_property_write_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    roots: &mut Vec<LocalSlotId>,
+) -> LoweredValue {
+    let value = lower_expr(ctx, expr);
+    let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);
+    let Some(root) = root else {
+        return value;
+    };
+    roots.push(root);
+    let ty = ctx.builder.value_php_type(value.value);
+    let borrowed = ctx.emit_value(
+        Op::Borrow,
+        vec![value.value],
+        None,
+        ty,
+        Op::Borrow.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    borrowed
+}
+
+/// Preserves PHP's variable-key timing while rooting every evaluated write operand immediately.
+fn lower_rooted_property_write_key_and_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    index: &Expr,
+    value: &Expr,
+    roots: &mut Vec<LocalSlotId>,
+) -> (LoweredValue, LoweredValue) {
+    if matches!(index.kind, ExprKind::Variable(_)) {
+        let value = lower_rooted_property_write_operand(ctx, value, roots);
+        return (lower_rooted_property_write_operand(ctx, index, roots), value);
+    }
+    let index = lower_rooted_property_write_operand(ctx, index, roots);
+    let value = lower_rooted_property_write_operand(ctx, value, roots);
+    (index, value)
+}
+
+/// Releases rooted operands after the receiver lease and write have both completed.
+fn retire_property_write_roots(
+    ctx: &mut LoweringContext<'_, '_>, roots: Vec<LocalSlotId>, span: Span,
+) {
+    for root in roots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
+    }
+}
+
+/// Mutates the indexed property while the caller holds its receiver lease.
+fn lower_property_array_assign_value(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, index: LoweredValue,
+    value: LoweredValue, span: Span, key_already_diagnosed: bool,
+) {
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
         lower_php_array_property_write(
             ctx,
@@ -171,8 +263,6 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         let index =
             coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &property_ty, value, Some(span));
@@ -217,8 +307,6 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         ctx.emit_void(
             Op::HashSet,
             vec![property_value.value, index.value, value.value],
@@ -257,7 +345,14 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
         );
         // Object offsetSet borrows its operands just like a local boxed writer.
         // Reuse its evaluation order and unwind roots for fresh keys and values.
-        array_write_core::lower_boxed_array_set(ctx, property_value, index, value, span, false);
+        array_write_core::lower_boxed_array_set_values(
+            ctx,
+            property_value,
+            index,
+            value,
+            span,
+            false,
+        );
         return;
     }
 
@@ -265,8 +360,6 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
     // rule; sharing the helper is what keeps the two from answering differently for
     // the same source line.
-    let (index, value) =
-        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
     let data = ctx.intern_string(property);
     ctx.emit_void(
         Op::RuntimeCall,
@@ -284,8 +377,8 @@ fn lower_php_array_property_write(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
     property: &str,
-    index: Option<&Expr>,
-    value: &Expr,
+    index: Option<LoweredValue>,
+    value: LoweredValue,
     span: Span,
     key_already_diagnosed: bool,
 ) {
@@ -299,8 +392,7 @@ fn lower_php_array_property_write(
         Some(span),
     );
     ctx.builder.set_value_ownership(array.value, Ownership::Borrowed);
-    let value = if let Some(index) = index {
-        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+    if let Some(index) = index {
         ctx.emit_void(
             Op::RuntimeCall,
             vec![array.value, index.value, value.value],
@@ -309,9 +401,7 @@ fn lower_php_array_property_write(
             Some(span),
         );
         release_persisted_string_operand(ctx, index, span);
-        value
     } else {
-        let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![array.value, value.value],
@@ -319,8 +409,7 @@ fn lower_php_array_property_write(
             Op::MixedArrayAppend.default_effects(),
             Some(span),
         );
-        value
-    };
+    }
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
