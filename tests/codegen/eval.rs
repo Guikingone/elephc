@@ -5495,7 +5495,6 @@ echo defined("COUNT_RECURSIVE") ? "C" : "bad";');
     assert_eq!(out, "4:2:3:6:2:3:C");
 }
 
-/// Verifies eval can dispatch raw pointer and buffer extension builtins through the bridge.
 /// Verifies the eval float pointer builtins store the exact double: a value with 17 significant
 /// digits survives `ptr_write_f64()`/`ptr_read_f64()` inside `eval()` bit for bit (the eval runtime
 /// must read the float payload, not its 14-digit string form), `ptr_write_f32()` rounds to the
@@ -5521,6 +5520,7 @@ return "";');
     assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\n");
 }
 
+/// Verifies eval can dispatch raw pointer and buffer extension builtins through the bridge.
 #[test]
 fn test_eval_dispatches_raw_memory_builtins() {
     let out = compile_and_run(
