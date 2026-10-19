@@ -695,3 +695,44 @@ fn test_cli_test_filter_never_hides_a_failing_provider() {
     assert_eq!(code, 1, "a failing provider fails the run even when the filter names another test");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A cleanup failure after a skipped or incomplete test is the test's outcome: the skip
+/// cannot hide a broken tearDown() and turn the run green. A cleanup failure after a test
+/// failure is still discarded in favor of that failure.
+#[test]
+fn test_cli_test_cleanup_failure_is_not_hidden_by_a_skip() {
+    let dir = make_cli_test_dir("elephc_cli_test_cleanup_after_skip");
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(
+        dir.join("tests/CleanupTest.php"),
+        r#"<?php
+use Elephc\Testing\TestCase;
+final class CleanupTest extends TestCase {
+    protected function tearDown(): void {
+        $this->assertTrue(false, 'cleanup broke');
+    }
+    public function testSkipped(): void { $this->markTestSkipped('not here'); }
+    public function testIncomplete(): void { $this->markTestIncomplete('later'); }
+    public function testFails(): void { $this->assertSame(1, 2); }
+}
+"#,
+    )
+    .unwrap();
+    let (stdout, stderr, code) = run_test_command(&dir, &[]);
+    assert_eq!(
+        stdout,
+        "FAIL CleanupTest::testSkipped\n\
+         \x20    cleanup broke\n\
+         \x20    Failed asserting that false is true.\n\
+         FAIL CleanupTest::testIncomplete\n\
+         \x20    cleanup broke\n\
+         \x20    Failed asserting that false is true.\n\
+         FAIL CleanupTest::testFails\n\
+         \x20    Failed asserting that 2 is identical to 1.\n\
+         \n\
+         Tests: 3, Assertions: 4, Failures: 3, Errors: 0.\n",
+        "the tearDown() assertion after testFails is discarded but still counted: {stderr}"
+    );
+    assert_eq!(code, 1);
+    let _ = fs::remove_dir_all(&dir);
+}

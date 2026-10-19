@@ -248,9 +248,10 @@ Tests: 4, Assertions: 12, Failures: 1, Errors: 1, Skipped: 1.
 ```
 
 `tearDown()` always runs after a `setUp()` that succeeded, whatever the test did. When
-the test already failed, an exception thrown by `tearDown()` is discarded, so cleanup can
-never turn a failure into a pass or a skip; when the test passed, that exception is the
-test's outcome. A user
+the test failed or errored, an exception thrown by `tearDown()` is discarded, so cleanup
+can never turn a failure into a pass or a skip; when the test passed, was skipped or was
+incomplete, that exception is the test's outcome, so a broken cleanup cannot hide behind
+a skip. A user
 message given to an assertion is printed on its own line above the assertion text, as
 PHPUnit prints it.
 

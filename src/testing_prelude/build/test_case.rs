@@ -12,9 +12,11 @@
 //!   `synthetic_class::transcribe`; `testing_prelude::oracle_tests` compares the built class
 //!   against that parse node by node, so a change here must keep the PHP form in step.
 //! - Method ORDER is the PHP source order: the oracle zips the two method lists.
-//! - `tearDown()` always runs after a successful `setUp()`. When the test already failed, an
-//!   exception from `tearDown()` is discarded so it cannot replace the test's outcome (a
-//!   failure turned into a SKIP would pass the run); otherwise it is the test's outcome.
+//! - `tearDown()` always runs after a successful `setUp()`. When the test failed or errored,
+//!   an exception from `tearDown()` is discarded so it cannot replace that outcome (a
+//!   failure turned into a SKIP would pass the run). After a skip or an incomplete, and
+//!   after a pass, an exception from `tearDown()` IS the test's outcome, so a broken
+//!   cleanup can never hide behind a skip.
 //!   The failure is rethrown from the `catch` rather than kept in a null-initialised local:
 //!   rethrowing such a local crashes on the success path (journal task 9b79d5e5).
 //! - `__elephc_invoke` rethrows the runtime's own outcomes (failure, skipped, incomplete)
@@ -96,6 +98,15 @@ fn method_elephc_run_test() -> MethodBuilder {
                 s_expr(e_method_call(e_this(), "__elephc_invoke", vec![e_var("test")])),
             ], vec![
                 (vec!["\\Throwable"], Some("thrown"), vec![
+                    s_if(
+                        e_binop(e_instance_of(e_var("thrown"), "SkippedTestError"), BinOp::Or, e_instance_of(e_var("thrown"), "IncompleteTestError")),
+                        vec![
+                            s_expr(e_method_call(e_this(), "tearDown", vec![])),
+                            s_throw(e_var("thrown")),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_expr(e_method_call(e_this(), "__elephc_tear_down_after_failure", vec![])),
                     s_throw(e_var("thrown")),
                 ]),

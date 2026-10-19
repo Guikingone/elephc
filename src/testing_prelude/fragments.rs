@@ -55,6 +55,10 @@ abstract class TestCase
         try {
             $this->__elephc_invoke($test);
         } catch (\Throwable $thrown) {
+            if ($thrown instanceof SkippedTestError || $thrown instanceof IncompleteTestError) {
+                $this->tearDown();
+                throw $thrown;
+            }
             $this->__elephc_tear_down_after_failure();
             throw $thrown;
         }
