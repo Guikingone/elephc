@@ -5496,6 +5496,31 @@ echo defined("COUNT_RECURSIVE") ? "C" : "bad";');
 }
 
 /// Verifies eval can dispatch raw pointer and buffer extension builtins through the bridge.
+/// Verifies the eval float pointer builtins store the exact double: a value with 17 significant
+/// digits survives `ptr_write_f64()`/`ptr_read_f64()` inside `eval()` bit for bit (the eval runtime
+/// must read the float payload, not its 14-digit string form), `ptr_write_f32()` rounds to the
+/// same single compiled code produces, and an int value is converted. Identity comparisons keep
+/// the check independent of how `var_dump()` formats floats.
+#[test]
+fn test_eval_float_pointer_builtins_keep_full_precision() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('$buf = buffer_new(4);
+$payload = ptr_offset($buf, 16);
+ptr_write_f64($payload, 1.2345678901234567);
+var_dump(ptr_read_f64($payload) === 1.2345678901234567);
+ptr_write_f32($payload, 1.2345678901234567);
+var_dump(ptr_read_f32($payload) === 1.2345678806304932);
+$three = 3;
+ptr_write_f64($payload, $three);
+var_dump(ptr_read_f64($payload) === 3.0);
+buffer_free($buf);
+return "";');
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\n");
+}
+
 #[test]
 fn test_eval_dispatches_raw_memory_builtins() {
     let out = compile_and_run(

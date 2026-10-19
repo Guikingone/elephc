@@ -5,7 +5,8 @@
 //! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
-//! - Converts the value to a PHP float, then stores it as an IEEE 754 double through the raw pointer.
+//! - Casts the value to a PHP float and reads its exact payload bits (no string round
+//!   trip), then stores it as an IEEE 754 double through the raw pointer.
 
 use std::ptr;
 
@@ -52,7 +53,7 @@ fn eval_ptr_write_f64_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let address = super::ptr::eval_non_null_pointer(pointer, values)?;
-    let value = eval_float_value(value, values)?;
+    let value = super::ptr_set::eval_exact_float_payload(value, values)?;
     unsafe { ptr::write_unaligned(address.cast::<f64>(), value) };
     values.null()
 }
