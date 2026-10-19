@@ -13,9 +13,12 @@ use crate::ir::PhpTypePredicate;
 
 /// Checks boxed receivers without inspecting a nonexistent readonly property slot.
 pub(super) fn guard_readonly_write_receiver(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, value: LoweredValue,
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &super::property_write_receiver::PropertyWriteReceiver,
+    value: LoweredValue,
     property: &str, span: Span,
 ) {
+    let object = receiver.value;
     if ctx.builder.value_php_type(object.value).codegen_repr() != PhpType::Mixed {
         return;
     }
@@ -55,23 +58,25 @@ pub(super) fn guard_readonly_write_receiver(
                 else_target: false_arm, else_args: Vec::new(),
             });
             ctx.builder.position_at_end(true_arm);
-            reject_receiver(ctx, object, value, property, "true", span);
+            reject_receiver(ctx, receiver, value, property, "true", span);
             ctx.builder.position_at_end(false_arm);
-            reject_receiver(ctx, object, value, property, "false", span);
+            reject_receiver(ctx, receiver, value, property, "false", span);
         } else {
-            reject_receiver(ctx, object, value, property, name, span);
+            reject_receiver(ctx, receiver, value, property, name, span);
         }
         ctx.builder.position_at_end(next);
     }
-    reject_receiver(ctx, object, value, property, "unknown", span);
+    reject_receiver(ctx, receiver, value, property, "unknown", span);
     ctx.builder.position_at_end(accepted);
 }
 
 /// Retires evaluated owners and raises the ordinary assignment Error for the invalid receiver.
 fn reject_receiver(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, value: LoweredValue,
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &super::property_write_receiver::PropertyWriteReceiver,
+    value: LoweredValue,
     property: &str, receiver_type: &str, span: Span,
 ) {
-    super::instance_property_writes::lower_readonly_write_error(ctx, object, value,
+    super::instance_property_writes::lower_readonly_write_error(ctx, receiver.clone(), value,
         &format!("Attempt to assign property \"{property}\" on {receiver_type}"), span);
 }
