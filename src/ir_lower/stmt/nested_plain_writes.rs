@@ -86,7 +86,7 @@ fn emit_store(
     key: LoweredValue, value: LoweredValue, index: &Expr, span: Span,
 ) {
     if super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {
-        super::nested_scalar_writes::lower_nested_set(ctx, parent, key, value, span);
+        super::nested_scalar_writes::lower_nested_set(ctx, parent, key, value, span, false);
     }
 }
 

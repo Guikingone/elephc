@@ -9,6 +9,17 @@
 //! - String parents preserve reference markers and publish their stored child before leaf writes.
 
 use super::*;
+
+/// Writes an expression's captured nested update without repeating its key diagnoses.
+pub(crate) fn lower_nested_array_assign_after_read(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    lower_nested_array_assign_inner(ctx, target, value, span, true);
+}
+
 /// Lowers a nested array assignment that already carries an expression target.
 pub(super) fn lower_nested_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -456,7 +467,8 @@ fn lower_nested_array_assign_inner(
         // so the shape is checked and anything else keeps the original order. Constant
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
-        let deferred = nested_target_is_all_bare_variables(target);
+        let deferred = nested_target_is_all_bare_variables(target)
+            || nested_target_has_static_root(target);
         let mut roots = Vec::new();
         let mut root_operand = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
             let (operand, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, operand, span);
@@ -494,7 +506,14 @@ fn lower_nested_array_assign_inner(
         if !super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {
             return;
         }
-        super::nested_scalar_writes::lower_nested_set(ctx, parent, key, value, span);
+        super::nested_scalar_writes::lower_nested_set(
+            ctx,
+            parent,
+            key,
+            value,
+            span,
+            key_already_diagnosed,
+        );
         // The boxed writer borrows all three operands and retains or copies the stored value.
         // Roots also retire computed Mixed values and keep earlier operands safe if a later
         // operand or the write throws into a same-frame catch.
@@ -512,6 +531,15 @@ fn lower_nested_array_assign_inner(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Recognizes static roots independently of their already captured dimension expressions.
+fn nested_target_has_static_root(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => nested_target_has_static_root(array),
+        _ => false,
+    }
 }
 
 /// Lowers the parent chain of a nested array assignment with write-context
@@ -569,7 +597,9 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
     // runtime wrapper and store the possibly reallocated container back.
     if let ExprKind::Variable(name) = &array.kind {
         let name = name.clone();
-        if let Some(parent) = lower_local_parent_fetch_for_write(ctx, &name, index, expr) {
+        if let Some(parent) = lower_local_parent_fetch_for_write(
+            ctx, &name, index, expr, key_already_diagnosed,
+        ) {
             return parent;
         }
     }
@@ -615,15 +645,17 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
 /// context, the possibly promoted/reallocated container is stored back into
 /// the local, and the guaranteed-present element is re-read as the parent
-/// cell. Every key shape keeps selected scalar storage attached, and keys are evaluated once.
+/// cell. Every key shape keeps selected scalar storage attached, keys are evaluated once,
+/// and a captured compound diagnosis is reused.
 /// Returns `None` for receiver or key shapes without a concrete lowering.
 pub(super) fn lower_local_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     index: &Expr,
     parent_expr: &Expr,
+    key_already_diagnosed: bool,
 ) -> Option<LoweredValue> {
-    lower_local_parent_fetch_for_write_inner(ctx, name, index, parent_expr, false)
+    lower_local_parent_fetch_for_write_inner(ctx, name, index, parent_expr, key_already_diagnosed)
 }
 
 /// Reuses an update's converted numeric dimension without issuing a duplicate warning.
@@ -644,7 +676,9 @@ fn lower_local_parent_fetch_for_write_inner(
                         // Syntactic inference defaults variables/calls to integer keys. Their
                         // lowered values are authoritative, and must not be coerced to zero.
                         if ctx.is_ref_bound_local(name) && elem_ty.codegen_repr() == PhpType::Mixed {
-                            let cell = lower_indexed_parent_fetch_for_write(ctx, name, array, key, span);
+                            let cell = lower_indexed_parent_fetch_for_write(
+                                ctx, name, array, key, span, key_already_diagnosed,
+                            );
                             crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
                             return Some(cell);
                         }
@@ -672,7 +706,7 @@ fn lower_local_parent_fetch_for_write_inner(
                         Some(index.span),
                         key_already_diagnosed,
                     );
-                    Some(lower_indexed_parent_fetch_for_write(ctx, name, array, key, span))
+                    Some(lower_indexed_parent_fetch_for_write(ctx, name, array, key, span, key_already_diagnosed))
                 }
                 PhpType::Float | PhpType::Bool => {
                     let array = ctx.load_local(name, Some(span));
@@ -683,7 +717,7 @@ fn lower_local_parent_fetch_for_write_inner(
                         Some(index.span),
                         key_already_diagnosed,
                     );
-                    Some(lower_indexed_parent_fetch_for_write(ctx, name, array, key, span))
+                    Some(lower_indexed_parent_fetch_for_write(ctx, name, array, key, span, key_already_diagnosed))
                 }
                 PhpType::Str if elem_ty.codegen_repr() == PhpType::Mixed
                     && ctx.is_ref_bound_local(name) => {
@@ -691,7 +725,9 @@ fn lower_local_parent_fetch_for_write_inner(
                     // parent can promote storage, but must not reinterpret marker payloads.
                     let array = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
-                    let cell = lower_indexed_parent_fetch_for_write(ctx, name, array, key, span);
+                    let cell = lower_indexed_parent_fetch_for_write(
+                        ctx, name, array, key, span, key_already_diagnosed,
+                    );
                     release_persisted_string_operand(ctx, key, span);
                     Some(cell)
                 }
@@ -738,13 +774,18 @@ fn lower_indexed_parent_fetch_for_write(
     array: LoweredValue,
     key: LoweredValue,
     span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
     ctx.prepare_mutated_local_owner(name, array, ensured_ty.clone(), Some(span));
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![array.value, key.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        Some(Immediate::RuntimeCall(if key_already_diagnosed {
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+        } else {
+            RuntimeCallTarget::ArrayFetchForWrite
+        })),
         ensured_ty.clone(),
         effects_lookup::runtime_effects(),
         Some(span),
@@ -764,7 +805,8 @@ fn lower_indexed_parent_fetch_for_write(
 /// possibly reallocated hash back into the local (the previous owner was
 /// already released by `prepare_mutated_local_owner`), and re-reads the
 /// stored cell (retained by `Op::HashGetForWrite`) as the parent of the leaf write.
-pub(super) fn lower_hash_parent_fetch_for_write(
+/// An earlier read's key diagnosis is preserved during this relocation.
+fn lower_hash_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     hash_value: LoweredValue,

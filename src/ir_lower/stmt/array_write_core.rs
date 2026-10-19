@@ -293,15 +293,26 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value_value, span);
         return;
     }
+    lower_concrete_array_set_values(
+        ctx, array_value, index_value, value_value, span, key_already_diagnosed,
+    );
+}
+
+/// Stores evaluated operands after concrete storage promotion and scalar coercion are complete.
+pub(super) fn lower_concrete_array_set_values(
+    ctx: &mut LoweringContext<'_, '_>, array: LoweredValue,
+    index: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
+) {
+    let op = array_set_op(array.ir_type);
     ctx.emit_void(
         op,
-        vec![array_value.value, index_value.value, value_value.value],
+        vec![array.value, index.value, value.value],
         (op == Op::HashSet && key_already_diagnosed).then_some(Immediate::Bool(true)),
         op.default_effects(),
         Some(span),
     );
-    release_persisted_string_operand(ctx, index_value, span);
-    release_persisted_string_operand(ctx, value_value, span);
+    release_persisted_string_operand(ctx, index, span);
+    release_persisted_string_operand(ctx, value, span);
 }
 
 /// Roots and retires operands borrowed by the boxed writer, including on same-frame catches.
@@ -333,6 +344,38 @@ pub(super) fn lower_boxed_array_set(
         let index = lower_operand(ctx, index);
         (index, lower_operand(ctx, value))
     };
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![array.value, index.value, value.value],
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
+        Op::RuntimeCall.default_effects(),
+        Some(span),
+    );
+    for root in roots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
+    }
+}
+
+/// Stores operands that the caller already evaluated while preserving boxed-writer unwind roots.
+pub(super) fn lower_boxed_array_set_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: LoweredValue,
+    index: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    let mut roots = Vec::new();
+    let mut root = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
+        let (operand, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, operand, span);
+        if let Some(owner) = owner {
+            roots.push(owner);
+        }
+        operand
+    };
+    let array = root(ctx, array);
+    let index = root(ctx, index);
+    let value = root(ctx, value);
     ctx.emit_void(
         Op::RuntimeCall,
         vec![array.value, index.value, value.value],

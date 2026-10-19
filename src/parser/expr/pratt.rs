@@ -17,6 +17,7 @@ use crate::span::Span;
 
 use super::assignment_targets::{
     AssignmentExpressionLowerer, is_assignment_expression_target, is_non_local_assignment_target,
+    delayed_static_assignment_target,
 };
 use super::calls::parse_first_class_callable_parens;
 use super::parse_args;
@@ -475,22 +476,28 @@ fn parse_expr_bp_inner(
                     .expect("recognized null append property chain");
                 continue;
             }
+            if op == AssignmentOperator::Assign {
+                lhs = super::plain_assignment_expression(lhs, rhs, span);
+                continue;
+            }
             if is_non_local_assignment_target(&lhs) {
+                if let AssignmentOperator::Compound(op) = op {
+                    lhs = super::compound_assignment_expression(lhs, op, rhs, span);
+                    continue;
+                }
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 
                 let mut lowerer = AssignmentExpressionLowerer::new(span);
                 let target = lowerer.stabilize_non_local_target(lhs, &rhs);
                 let conditional_value_temp =
                     null_coalesce_assign.then(|| lowerer.reserve_value_temp());
+                let delayed_static_write = delayed_static_assignment_target(&target);
                 let rhs = if null_coalesce_assign {
                     rhs
+                } else if delayed_static_write {
+                    lowerer.bind_result_value(rhs)
                 } else {
                     lowerer.bind_value(&target, rhs)
-                };
-                let target = if matches!(op, AssignmentOperator::Compound(_)) {
-                    lowerer.snapshot_update_dimension(target)
-                } else {
-                    target
                 };
                 let (value, result_target) = match op {
                     AssignmentOperator::Assign => (rhs.clone(), rhs),
@@ -503,16 +510,7 @@ fn parse_expr_bp_inner(
                         );
                         (value, target.clone())
                     }
-                    AssignmentOperator::Compound(op) => {
-                        let value = assignment_value(
-                            target.clone(),
-                            AssignmentOperator::Compound(op),
-                            rhs,
-                            span,
-                        );
-                        let result_value = lowerer.bind_result_value(value);
-                        (result_value.clone(), result_value)
-                    }
+                    AssignmentOperator::Compound(_) => unreachable!("compound expressions use the shared builder"),
                 };
                 let prelude = lowerer.finish();
                 lhs = Expr::new(

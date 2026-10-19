@@ -654,7 +654,7 @@ pub(crate) fn root_owned_call_operand(
 }
 
 /// Makes a rooted operand visible even to a catch that preserves the current PHP activation.
-pub(super) fn register_owned_call_operand(
+pub(crate) fn register_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
     slot: crate::ir::LocalSlotId,
     span: Span,
@@ -702,6 +702,7 @@ pub(crate) fn retire_owned_call_operand(
 /// The pin does NOT move ownership. The slot receives a plain `OwnedTemp` store, which retains
 /// nothing, so the SSA temporary keeps its single reference and its ordinary post-instruction
 /// release stays correct on the normal path.
+#[derive(Clone)]
 pub(crate) struct PinnedInFlightOwner {
     /// Hidden `OwnedTemp` the operand pointer is parked in for the throwing window.
     temp_name: String,
