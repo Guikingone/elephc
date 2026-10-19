@@ -7,6 +7,7 @@
 //! Key details:
 //! - Declaration-only tests use the full frontend, not executable reachability pruning.
 //! - Every target must emit the same catchable error and valid default paths.
+//! - Static compound RHS effects precede the deferred error from the element read.
 
 use crate::codegen::platform::Target;
 use std::path::Path;
@@ -34,6 +35,9 @@ echo $numbers->bare, $numbers->nullable, $numbers->exact, $numbers->coerced, Num
 echo (new ReflectionProperty('NumericDefaults', 'nullable'))->getDefaultValue();
 echo (new ReflectionClass('NumericDefaults'))->getDefaultProperties()['shared'];
 echo Consumer::class;
+function eagerCompoundValue(): int { echo 'rhs'; return 2; }
+try { Consumer::$names[0] += eagerCompoundValue(); }
+catch (Error $error) { echo 'compound-default'; }
 $bad = new ReflectionProperty(Consumer::class, 'bad');
 echo $bad->hasDefaultValue();
 try { $bad->getDefaultValue(); } catch (Error $error) { echo $error->getMessage(); }
@@ -346,4 +350,29 @@ try { Consumer::staticValue(value: 9); } catch (Error $error) { echo 'bad'; }
     assert_eq!(optimized.iter().filter(|statement| {
         matches!(&statement.kind, crate::parser::ast::StmtKind::Try { catches, .. } if !catches.is_empty())
     }).count(), 2);
+}
+
+/// Production DCE retains an eager compound RHS exception before the deferred property Error.
+#[test]
+fn property_default_compound_review_metadata_catch_reachability() {
+    for update in ["+=", ".="] {
+        let source = format!(r#"<?php
+trait Values {{ public string $bad = parent::class; }}
+class Consumer {{ use Values; public static array $items = [1]; }}
+function value(): int {{ throw new RuntimeException('rhs'); }}
+try {{ Consumer::$items[0] {update} value(); }}
+catch (RuntimeException $error) {{ echo 'rhs'; }}
+catch (Error $error) {{ echo 'default'; }}
+"#);
+        let parsed = crate::parser::parse(&crate::lexer::tokenize(&source).unwrap()).unwrap();
+        let check = crate::types::check(&parsed).unwrap();
+        let optimizer = crate::optimize::PostTypecheckOptimizer::new_with_type_metadata(
+            &parsed, &check.functions, &check.classes, &check.interfaces,
+        );
+        let optimized = optimizer.eliminate_dead_code(parsed, check.local_binding_decision_spans());
+        assert!(optimized.iter().any(|statement| matches!(&statement.kind,
+            crate::parser::ast::StmtKind::Try { catches, .. } if catches.iter().any(|catch|
+                catch.exception_types.iter().any(|name| name == "RuntimeException")))),
+            "{update}: retain the RHS exception handler: {optimized:?}");
+    }
 }

@@ -234,15 +234,22 @@ pub(super) fn lower_static_property_array_assign(
     value: &Expr,
     span: Span,
 ) {
-    if has_deferred_default_error(ctx, receiver) {
-        let index = lower_expr(ctx, index);
-        let value = lower_expr(ctx, value);
-        raise_deferred_default_error(ctx, receiver, &[index, value], span);
-        return;
-    }
     let update = desugared_element_update(value, span, |read| {
         reads_static_property_array_element(read, receiver, property, index)
     });
+    if has_deferred_default_error(ctx, receiver) {
+        let index = lower_expr(ctx, index);
+        // An eager compound settles its RHS before the failing element read.
+        // Plain assignments and lazy coalescing retain their original expression semantics.
+        let value = if matches!(&update, Some(ElementUpdate::Compound)) {
+            let ExprKind::BinaryOp { right, .. } = &value.kind else { unreachable!() };
+            lower_expr(ctx, right)
+        } else {
+            lower_expr(ctx, value)
+        };
+        raise_deferred_default_error(ctx, receiver, &[index, value], span);
+        return;
+    }
     if matches!(&update, Some(ElementUpdate::Compound))
         && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
     {
