@@ -2373,7 +2373,7 @@
     "xml",
     "zval-pack"
   ],
-  "candidate_sha": "df57a9800f4fb61bd4e876f0ddf309b9d08109f2",
+  "candidate_sha": "0842fca95e7a68c3f7542d291430d02e0199a122",
   "base_sha": "132b4da6f74da2da0956bc25026a9d5570f49689",
   "tests_executed": false,
   "test_count_method": "Literal #[test] declarations in tracked integration Rust sources; macro-generated cases are not expanded.",
@@ -2384,5 +2384,46 @@
     "undocumented_literal_runtime_helpers": [],
     "literal_fixed_bss_symbols": 234,
     "undocumented_literal_bss_symbols": []
+  },
+  "initial_verification_candidate_sha": "df57a9800f4fb61bd4e876f0ddf309b9d08109f2",
+  "approved_release_date": "2026-10-20",
+  "source_reconciliation": {
+    "from_tag": "v0.27.3",
+    "from_sha": "132b4da6f74da2da0956bc25026a9d5570f49689",
+    "head_sha": "0842fca95e7a68c3f7542d291430d02e0199a122",
+    "github_verified": true,
+    "pull_request_count": 38,
+    "direct_commit_count": 5,
+    "total_commit_count": 305,
+    "accounted_commit_count": 305,
+    "integration_count": 43,
+    "unaccounted_commits": [],
+    "errors": []
+  },
+  "rebase_delta_verification": {
+    "from_sha": "df57a9800f4fb61bd4e876f0ddf309b9d08109f2",
+    "head_sha": "0842fca95e7a68c3f7542d291430d02e0199a122",
+    "pull_requests": [
+      1902
+    ],
+    "introduced_commit_count": 4,
+    "changed_paths": [
+      ".github/actions/notarize-macos/action.yml",
+      ".github/actions/notarize-macos/notarize.sh",
+      ".github/scripts/test_notarize_macos.py",
+      ".github/workflows/ci.yml",
+      ".github/workflows/nightly.yml",
+      ".github/workflows/release.yml",
+      "ROADMAP.md"
+    ],
+    "static_checks": [
+      "four YAML documents parsed",
+      "bash -n on notarization helper",
+      "Python AST parsed with 17 unexecuted fixture methods",
+      "strip/sign/package/verification order reviewed"
+    ],
+    "tests_executed": false,
+    "build_repeated": false,
+    "actual_apple_notarization_verified": false
   }
 }

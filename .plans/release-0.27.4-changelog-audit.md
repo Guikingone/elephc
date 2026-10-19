@@ -1,19 +1,22 @@
 # Release changelog audit: 0.27.4
 
-Range: `v0.27.3` (`132b4da6f74da2da0956bc25026a9d5570f49689`)..`df57a9800f4fb61bd4e876f0ddf309b9d08109f2`.
-Coverage: **37 PRs, 5 direct commits, 301 total commits; 0 unresolved**.
+Range: `v0.27.3` (`132b4da6f74da2da0956bc25026a9d5570f49689`)..`0842fca95e7a68c3f7542d291430d02e0199a122`.
+Coverage: **38 PRs, 5 direct commits, 305 total commits; 0 unresolved**.
 
-Target version: **0.27.4**, confirmed by the user. Proposed release date: **2026-10-19**.
-Candidate is the refreshed main snapshot selected at the start of this task. Local report,
+Target version: **0.27.4**, confirmed by the user. Approved release date: **2026-10-20**.
+Candidate is the refreshed main snapshot selected after the rebase. Local report,
 documentation and draft commits are preparation-only additions and are not silently
 included in the main source inventory. No tests or benchmarks were executed.
+The user approved the changelog proposal, including the newly merged macOS
+notarization work, on 2026-10-19 and explicitly selected the next day as its date.
 
-## Proposed features and improvements
+## Approved features and improvements
 
 - **F01.** Added immutable `BcMath\Number` objects with decimal methods, arithmetic and comparison operators, serialization, and matching native-object behavior in `eval()`.
 - **F02.** Added missing PHP 8.5 Core classes and constants, including `WeakReference`, `WeakMap`, `Serializable`, `ErrorException`, enum interfaces, and runtime `PHP_BINARY`, in compiled and `eval()` code.
 - **F03.** Added a pay-for-use DOM HTML fragment walker for Termwind-style rendering, including `DOMDocument::loadHTML()`, node traversal, attributes, and `saveXML()`; this remains an HTML-only subset.
 - **F04.** Added `JSON_UNESCAPED_LINE_TERMINATORS` and `JSON_ERROR_NON_BACKED_ENUM`, with corresponding line-separator and enum encoding behavior, including enum `JsonSerializable` overrides, in compiled and `eval()` code.
+- **F05.** Added Developer ID signing and required Apple notarization for macOS release and nightly binaries before packaging and publication.
 - **I01.** Added bounded-stack lowering for eligible direct self- and mutually tail-recursive scalar functions, preserving each public entry point and argument evaluation order.
 - **I02.** Reduced duplicate code and immutable data for equivalent generic instantiations while preserving nominal identities and callable contracts, and added `--report-generics`.
 - **I03.** Improved eligible same-local string append by reusing unique capacity and growing geometrically while preserving copy-on-write for shared values.
@@ -25,7 +28,7 @@ included in the main source inventory. No tests or benchmarks were executed.
 - **I09.** Reduced mbstring bridge and executable size by sharing one immutable encoding catalog instead of duplicating codec tables.
 - **I10.** Improved JSON parsing by deferring source-location scans until an error and avoiding legacy string decoding for non-string tokens.
 
-## Proposed fixes
+## Approved fixes
 
 - **X01.** Fixed literal `false` and `null` parameter contracts across inherited methods and runtime callables so invalid arguments raise `TypeError` before coercion or receiver mutation.
 - **X02.** Fixed `(array)` casts of scalar, string, null, packed-array, mixed, and union values, including returns declared as `array`.
@@ -92,12 +95,18 @@ reverts or unexplained duplicate integrations in the reconciled range.
 | [#1703](https://github.com/illegalstudio/elephc/pull/1703)<br>`879ffa4b490951862b789560c85ff45fe7150fdf` | Delay pure static object receiver traversal until after RHS while preserving computed-key order and null errors. | None in 0.27.4 | include | X07 | [src/codegen/lower_inst/mixed_array_runtime.rs](../src/codegen/lower_inst/mixed_array_runtime.rs); [tests/codegen/objects/nullable_dispatch.rs](../tests/codegen/objects/nullable_dispatch.rs); [docs/internals/memory-model.md](../docs/internals/memory-model.md) |
 | [#1891](https://github.com/illegalstudio/elephc/pull/1891)<br>`df57a9800f4fb61bd4e876f0ddf309b9d08109f2` | Normalize extern bool results to the low byte before storing on both ABIs. | None in 0.27.4 | include | X11 | [src/codegen/lower_inst/externs.rs](../src/codegen/lower_inst/externs.rs); [tests/codegen/ffi/mod.rs](../tests/codegen/ffi/mod.rs); [docs/beyond-php/extern.md](../docs/beyond-php/extern.md) |
 
-## Open decisions
+| [#1902](https://github.com/illegalstudio/elephc/pull/1902)<br>`0842fca95e7a68c3f7542d291430d02e0199a122` | Sign the stripped macOS compiler, require Apple Accepted status, and verify the packaged executable signature/bytes before publishing release or nightly archives. | None in 0.27.4 | include | F05 | [notarization action](../.github/actions/notarize-macos/action.yml); [helper](../.github/actions/notarize-macos/notarize.sh); [release workflow](../.github/workflows/release.yml); [nightly workflow](../.github/workflows/nightly.yml); [static fixture review](../.github/scripts/test_notarize_macos.py) |
 
-- All 42 integrations have a final include/omit classification. There are 33 included
+## Decisions and approval
+
+- All 43 integrations have a final include/omit classification. There are 34 included
   PR sources and 9 omitted sources: 4 PRs and all 5 direct commits. No source needs
-  an individual semantic decision. The only pending decision is approval of this
-  complete 25-bullet draft before editing CHANGELOG.md.
+  an individual semantic decision. The user approved the original 25 bullets plus
+  the new notarization outcome, for 26 bullets dated 2026-10-20.
+- PR #1902 changes only CI/packaging and the roadmap. Its four introduced commits
+  account for the complete delta from the earlier candidate. YAML, shell syntax,
+  Python AST and workflow-order checks passed; none of its 17 fixtures ran here.
+  Real Developer ID trust and Apple acceptance remain unverified by this task.
 - PR #896 also aligns rustls manifests with the already updated 0.27.3 lockfile.
   This does not support repeating the previous release's security bulletin.
 - No percentages, benchmark speedups, new test results, full DOM compatibility,
@@ -107,10 +116,10 @@ reverts or unexplained duplicate integrations in the reconciled range.
 ## Application checklist
 
 - [x] Verify stable GitHub release, ancestry and full candidate SHA.
-- [x] Reconcile 301 commits with zero errors/unaccounted commits.
-- [x] Inspect all 37 PRs and 5 direct integrations; assign every source.
+- [x] Reconcile 305 commits with zero errors/unaccounted commits.
+- [x] Inspect all 38 PRs and 5 direct integrations; assign every source.
 - [x] Preserve the empty Unreleased section and the existing 0.27.3 notes.
-- [ ] Obtain approval for the exact draft above.
-- [ ] Insert the approved 25 bullets under `## [0.27.4] - 2026-10-19`.
+- [x] Obtain approval for the draft and the added notarization outcome; record the selected release date.
+- [ ] Insert the approved 26 bullets under `## [0.27.4] - 2026-10-20`.
 - [ ] Point Unreleased at `v0.27.4...HEAD` and add the `v0.27.3...v0.27.4` compare link.
 - [ ] Check the bounded diff, bullet count and preparation commit history.

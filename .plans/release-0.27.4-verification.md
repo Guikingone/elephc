@@ -8,10 +8,10 @@
 
 ## Scope and evidence
 
-Date: 2026-10-19. Checkout: `release/0.27.4`, initially clean.
+Verification date: 2026-10-19. Approved release date: 2026-10-20. Checkout: `release/0.27.4`, initially clean.
 Published base: `v0.27.3`, commit `132b4da6f74da2da0956bc25026a9d5570f49689`.
-Candidate: `df57a9800f4fb61bd4e876f0ddf309b9d08109f2`, equal to refreshed
-`origin/main` when the audit started. Local release-preparation commits are
+Candidate: `0842fca95e7a68c3f7542d291430d02e0199a122`, equal to refreshed
+`origin/main` after the rebase. Local release-preparation commits are
 tracked separately and do not expand that shipped-code range.
 
 GitHub's latest stable release endpoint and `gh release list` both identify
@@ -19,25 +19,42 @@ GitHub's latest stable release endpoint and `gh release list` both identify
 main but refused to replace the moving local `nightly` tag; the stable base and
 candidate were verified independently without replacing that tag.
 
-The bundled release inventory reconciled 37 merged PRs and 5 direct commits,
-covering all 301 commits with zero errors and zero unaccounted commits. All PRs
+The bundled release inventory reconciled 38 merged PRs and 5 direct commits,
+covering all 305 commits with zero errors and zero unaccounted commits. All PRs
 target main and their merge commits are reachable from the candidate. The
-semantic ledger and 25 proposed bullets are in
-[the changelog audit](release-0.27.4-changelog-audit.md). All 42 source rows have
-an include/omit decision; only approval to apply the draft remains pending.
+semantic ledger and 26 approved bullets are in
+[the changelog audit](release-0.27.4-changelog-audit.md). All 43 source rows have
+an include/omit decision. Approval and the 2026-10-20 release date are recorded;
+application is the remaining step.
 
 The user requested verification, documentation updates, then final changelog
 preparation, with progressive commits and no test execution. The changelog
-inventory prerequisite was performed first; final changelog approval and writing
-remain the last phase. Package versions, tags and publishing are outside scope.
+inventory prerequisite was performed first; final changelog writing remains
+the last phase after the received approval. Package versions, tags and publishing are outside scope.
+
+## Rebase delta verification
+
+The earlier code snapshot was `df57a9800f4fb61bd4e876f0ddf309b9d08109f2`.
+PR #1902 adds four commits touching seven CI/roadmap paths, with no changes to
+compiler, runtime, builtin contracts, generated references or examples. Prior
+build and source-inventory evidence below remains scoped to that snapshot;
+no build or test was repeated for this CI-only delta.
+
+Static checks passed for the composite action and three workflow YAML files,
+`bash -n` on the helper, Python AST parsing of its 17 unexecuted fixtures, and
+strip/sign/package/signature-verification ordering. Release and nightly jobs
+require explicit Apple Accepted status and verify that the archived binary
+matches the signed bytes before upload. Actual Developer ID trust and Apple
+notarization acceptance require the real distribution job; this task makes no
+new runtime or signing-service success claim.
 
 ## Pre-release verification report
 
 ### 0. Release changelog
 
-Status: PENDING APPROVAL. Source reconciliation passes: 37 PRs, 5 direct
-commits, 301 total commits, 0 unresolved. `[Unreleased]` is empty. The numbered
-0.27.4 section is not written before approval.
+Status: APPROVED, APPLICATION PENDING. Source reconciliation passes: 38 PRs,
+5 direct commits, 305 total commits, 0 unresolved. `[Unreleased]` is empty.
+The approved numbered section will contain 26 bullets dated 2026-10-20.
 
 ### 1. README
 
@@ -154,7 +171,7 @@ Cross-target execution and regression freedom are therefore not newly verified.
 Release ready: NOT YET ESTABLISHED.
 
 1. Documentation updates and non-test audits are complete.
-2. Approve, apply and commit the numbered changelog with complete traceability.
+2. Apply and commit the approved numbered changelog with complete traceability.
 3. Resolve or explicitly accept the direct-wrapper coverage gaps before claiming
    exhaustive coverage; retain the distinction between static presence and
    executed verification. This task intentionally provides no new test result.
