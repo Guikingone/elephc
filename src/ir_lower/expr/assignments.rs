@@ -19,6 +19,9 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(result) = super::append_updates::lower(ctx, value, prelude) {
+        return result;
+    }
     if let Some(result) = lower_weak_map_incdec_expression(ctx, target, value, result_target, prelude, expr) {
         return result;
     }

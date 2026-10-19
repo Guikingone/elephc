@@ -409,11 +409,10 @@ pub(super) fn release_rewritten_property_value_after_retaining_store(
 pub(super) fn property_store_keeps_independent_ref(property_ty: &PhpType, value_ty: &PhpType) -> bool {
     let property_ty = property_ty.codegen_repr();
     let value_ty = value_ty.codegen_repr();
-    if matches!((&property_ty, &value_ty), (PhpType::Mixed, PhpType::Mixed)) {
-        return false;
-    }
+    // Mixed slots retain when EIR owns source cleanup, including a release on a readonly
+    // error sibling. Keep a normal-path release and an unwind pin instead of assuming adoption.
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_))
-        && matches!(property_ty, PhpType::Int | PhpType::Bool | PhpType::Float)
+        && matches!(property_ty, PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::TaggedScalar)
     {
         return true;
     }
