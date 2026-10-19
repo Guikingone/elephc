@@ -19,6 +19,7 @@ mod enum_review_runtime_args;
 #[path = "types/enum_argument_boundaries.rs"]
 mod enum_argument_boundaries;
 mod enum_result_owner_review;
+mod enum_omission_review;
 #[path = "types/enum_keyed_review.rs"]
 mod enum_keyed_review;
 #[path = "types/type_annotations.rs"]

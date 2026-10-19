@@ -9,6 +9,7 @@
 //! - Binding validates keys before parameter-order types, defaults and positional shortages.
 //! - Ordinary method dispatch still owns reference-return adoption and argument cleanup.
 //! - Hidden argument-count and collector slots use the same physical signature contract.
+//! - Named holes require a later supplied regular parameter; trailing omissions report counts.
 
 use super::*;
 use super::enum_argument_guards::{concat, guard_parameter, guard_variadic_element, throw_message};
@@ -291,9 +292,15 @@ fn throw_missing(
     index: usize, required: usize, argc: &str, named: &str, span: Span,
 ) {
     let flag = ctx.load_local(named, Some(span));
+    let later = lower_expr(ctx, &Expr::new(ExprKind::BinaryOp {
+        left: Box::new(variable(argc, span)), op: BinOp::Gt,
+        right: Box::new(literal_int(index as i64, span)),
+    }, span));
+    let hole = ctx.emit_value(Op::IBitAnd, vec![flag.value, later.value], None,
+        PhpType::Bool, Op::IBitAnd.default_effects(), Some(span));
     let name = ctx.builder.create_named_block("enum.unpack.missing.named", Vec::new());
     let position = ctx.builder.create_named_block("enum.unpack.missing.positional", Vec::new());
-    conditional(ctx, flag.value, name, position);
+    conditional(ctx, hole.value, name, position);
     ctx.builder.position_at_end(name);
     throw_message(ctx, "ArgumentCountError", literal_string(&format!(
         "{class}::{method}(): Argument #{} (${}) not passed", index + 1, signature.params[index].0,

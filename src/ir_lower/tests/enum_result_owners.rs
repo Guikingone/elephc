@@ -22,8 +22,10 @@ enum H implements J { case A; public function f(int $a = 1, int $b): string { re
 function good(): int { return 3; }
 function missing_int(I $value): int { return $value->f(...[good()]); }
 function missing_string(J $value): string { return $value->f(...[good()]); }
+function missing_runtime(I $value, array $args): int { return $value->f(...$args); }
 try { missing_int(G::A); } catch (ArgumentCountError $e) { echo $e->getMessage(); }
 try { missing_string(H::A); } catch (ArgumentCountError $e) { echo $e->getMessage(); }
+try { missing_runtime(G::A, ['a' => 1]); } catch (ArgumentCountError $e) { echo $e->getMessage(); }
 "#;
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),
