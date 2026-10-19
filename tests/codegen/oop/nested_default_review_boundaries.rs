@@ -154,13 +154,20 @@ fn test_nested_default_review_boundaries_selected_static_error_no_ir_opt() {
 #[test]
 fn test_nested_default_review_boundaries_invalid_spread() {
     check(r#"<?php
+class SpreadBox {}
 class InvalidSpread {
     const ENABLED = true;
     public static function value(array $items = [...(self::ENABLED ? 42 : [parent::A])]): array { return $items; }
 }
+class InvalidObjectSpread {
+    const ENABLED = true;
+    public static function value(array $items = [...(self::ENABLED ? new SpreadBox() : [parent::A])]): array { return $items; }
+}
 function run(string $source): mixed { return eval($source); }
 echo run('try { InvalidSpread::value(); } catch (Error $e) { return $e->getMessage(); }');
-"#, "Only arrays can be unpacked in constant expression");
+echo '|';
+echo run('try { InvalidObjectSpread::value(); } catch (Error $e) { return $e->getMessage(); }');
+"#, "Only arrays can be unpacked in constant expression|Only arrays can be unpacked in constant expression");
 }
 
 /// Nonarray spread errors stay catchable with EIR optimization disabled.

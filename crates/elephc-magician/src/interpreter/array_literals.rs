@@ -69,7 +69,7 @@ pub(super) fn eval_assoc_array(
             if let Some(source) = native_default_array_spread(element) {
                 let source = eval_owned_expr(source, context, scope, values)?;
                 operands.push(source);
-                if !values.is_array_like(source)? {
+                if !matches!(values.type_tag(source)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
                     return throwables::eval_throw_error("Only arrays can be unpacked in constant expression", context, values);
                 }
                 let len = values.array_len(source)?;
