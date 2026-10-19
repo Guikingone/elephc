@@ -120,6 +120,33 @@ impl PropertyWriteReceiver {
             crate::ir_lower::expr::pin_in_flight_owners(ctx, &owners, span));
     }
 
+    /// Moves already published operands below this receiver's records in the unwind stack.
+    pub(crate) fn place_above_operand_roots(
+        &mut self,
+        ctx: &mut LoweringContext<'_, '_>,
+        operands: &[crate::ir::LocalSlotId],
+        span: Span,
+    ) {
+        if operands.is_empty() {
+            return;
+        }
+        for operand in operands.iter().rev() {
+            crate::ir_lower::expr::unregister_owned_call_operand(ctx, *operand, span);
+        }
+        crate::ir_lower::expr::unpin_in_flight_owners(
+            ctx,
+            std::mem::take(&mut self.pins),
+            span,
+        );
+        for operand in operands {
+            crate::ir_lower::expr::register_owned_call_operand(ctx, *operand, span);
+        }
+        let owners = self.owners.iter().map(|owner| owner.value).collect::<Vec<_>>();
+        self.pins = ctx.with_independent_write_receiver(|ctx| {
+            crate::ir_lower::expr::pin_in_flight_owners(ctx, &owners, span)
+        });
+    }
+
     /// Retires the unwind record and releases precisely the receiver's independent lease.
     pub(crate) fn finish(self, ctx: &mut LoweringContext<'_, '_>, span: Span) {
         crate::ir_lower::expr::unpin_in_flight_owners(ctx, self.pins, span);

@@ -654,7 +654,7 @@ pub(crate) fn root_owned_call_operand(
 }
 
 /// Makes a rooted operand visible even to a catch that preserves the current PHP activation.
-pub(super) fn register_owned_call_operand(
+pub(crate) fn register_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
     slot: crate::ir::LocalSlotId,
     span: Span,
