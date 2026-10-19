@@ -573,18 +573,24 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # More than 9,000 selected tests exceed a single serial job's 45-minute budget.
-  # Eight partitions keep the slowest hash buckets near ten minutes while each runner
-  # remains serial and bounded.
+  # The non-codegen binaries split into two cost classes. The CLI-driven suites
+  # (opcache_*, eval_*, php_profile_*, extension_loaded_tests,
+  # php_version_surface_tests) spawn the elephc binary to build whole eval-capable
+  # programs and take 20-170s each; on the October 2026 main baseline 264 such
+  # tests consumed 76% of the macOS non-codegen time while 11,400 sub-second tests
+  # consumed the rest. Hash partitioning spread both classes over every shard, so
+  # each of eight serial shards ran 20-32 minutes. The CLI suites now run in their
+  # own `cli-tests-*` jobs below; the remaining sub-second tests fit four shards
+  # at one test per core.
   non-codegen-tests-macos-aarch64:
-    name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/8)
+    name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
 
@@ -624,21 +630,21 @@ jobs:
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
-            --partition hash:${{ matrix.shard }}/8 \
+            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
+            --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 1
+            -j 3
 
   non-codegen-tests-linux-x86_64:
-    name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/8)
+    name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4]
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -658,21 +664,21 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
-            --partition hash:${{ matrix.shard }}/8 \
+            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
+            --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 1
+            -j 4
 
   non-codegen-tests-linux-aarch64:
-    name: Non-Codegen Tests (linux-aarch64 ${{ matrix.shard }}/8)
+    name: Non-Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4]
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -692,11 +698,145 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
-            --partition hash:${{ matrix.shard }}/8 \
+            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
+            --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 1
+            -j 4
+
+  cli-tests-macos-aarch64:
+    name: CLI Eval Tests (macos-aarch64 ${{ matrix.shard }}/6)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install test-only native providers
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate archived cargo-nextest
+        id: validate_archived_nextest
+        continue-on-error: true
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Remove invalid cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/cargo-nextest"
+
+      - name: Retry cargo-nextest artifact download
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate retried cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Run CLI eval tests
+        # Every test here spawns `target/debug/elephc` to build a program whose
+        # eval() keeps the whole builtin catalog reachable, so each one is a
+        # multi-second compile plus link. Two at a time keeps the compiler's
+        # memory and the runner's cores in check while halving the serial span.
+        run: |
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
+            --partition hash:${{ matrix.shard }}/6 \
+            --status-level pass \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 2
+
+  cli-tests-linux-x86_64:
+    name: CLI Eval Tests (linux-x86_64 ${{ matrix.shard }}/6)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download test archive
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run CLI eval tests
+        # Every test here spawns `target/debug/elephc` to build a program whose
+        # eval() keeps the whole builtin catalog reachable, so each one is a
+        # multi-second compile plus link. Two at a time keeps the compiler's
+        # memory and the runner's cores in check while halving the serial span.
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
+            --partition hash:${{ matrix.shard }}/6 \
+            --status-level pass \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 2
+
+  cli-tests-linux-aarch64:
+    name: CLI Eval Tests (linux-aarch64 ${{ matrix.shard }}/6)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download test archive
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run CLI eval tests
+        # Every test here spawns `target/debug/elephc` to build a program whose
+        # eval() keeps the whole builtin catalog reachable, so each one is a
+        # multi-second compile plus link. Two at a time keeps the compiler's
+        # memory and the runner's cores in check while halving the serial span.
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
+            --partition hash:${{ matrix.shard }}/6 \
+            --status-level pass \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 2
 
   web-tests-macos-aarch64:
     name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
@@ -906,7 +1046,7 @@ jobs:
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+            -j 3
 
   codegen-tests-linux-x86_64:
     name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
@@ -977,7 +1117,7 @@ jobs:
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+            -j 4
 
   codegen-tests-linux-aarch64:
     name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
@@ -1048,7 +1188,7 @@ jobs:
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+            -j 4
 
   # PDO fixtures all inject the same large standard-library prelude. Running a
   # deterministic shard in one libtest process lets parser/runtime/bridge caches
@@ -2216,6 +2356,9 @@ jobs:
       - non-codegen-tests-macos-aarch64
       - non-codegen-tests-linux-x86_64
       - non-codegen-tests-linux-aarch64
+      - cli-tests-macos-aarch64
+      - cli-tests-linux-x86_64
+      - cli-tests-linux-aarch64
       - web-tests-macos-aarch64
       - web-tests-linux-x86_64
       - web-tests-linux-aarch64
@@ -2251,6 +2394,9 @@ jobs:
           test "${{ needs.non-codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.non-codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.non-codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.cli-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.cli-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.cli-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.web-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.web-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.web-tests-linux-aarch64.result }}" = "success"
