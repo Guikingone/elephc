@@ -803,8 +803,8 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_heap_kind` | Return the uniform heap-kind tag for a heap-backed pointer | `x0` = pointer | `x0` = kind |
 | `__rt_array_new` | Create indexed array with header | `x0` = capacity, `x1` = elem_size | `x0` = array ptr |
 | `__rt_array_clone_shallow` | Clone indexed array storage for copy-on-write splitting, retaining nested heap children as needed | `x0` = array | `x0` = new array |
-| `__rt_array_to_mixed` | Convert an indexed array's live slots to boxed Mixed cells and stamp the array metadata as mixed | `x0` = array | `x0` = same array |
-| `__rt_array_to_mixed_shared` | Convert the payload already selected by a pending append, preserving callback-retained views of that write instead of separating again | `x0` = selected array | `x0` = same array |
+| `__rt_array_to_mixed` | Convert an indexed array's live slots to boxed Mixed cells and stamp the array metadata as mixed | `x0` = array, `x1` = current value_type tag | `x0` = unique array |
+| `__rt_array_to_mixed_shared` | Convert the payload already selected by a pending append, preserving callback-retained views of that write instead of separating again | `x0` = selected array, `x1` = current value_type tag | `x0` = same array |
 | `__rt_array_ensure_unique` | Split a shared indexed array before mutation | `x0` = array | `x0` = unique array |
 | `__rt_array_grow` | Ensure uniqueness and double array capacity, extending a unique bump-tail allocation in place when possible or falling back to allocate-copy-free growth | `x0` = array | `x0` = grown array |
 | `__rt_array_free_deep` | Free array storage and release nested heap-backed elements | `x0` = array | — |
