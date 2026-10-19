@@ -526,9 +526,6 @@ final class Runner
         if ($signal === 6) {
             return ' (SIGABRT)';
         }
-        if ($signal === 7) {
-            return ' (SIGBUS)';
-        }
         if ($signal === 8) {
             return ' (SIGFPE)';
         }

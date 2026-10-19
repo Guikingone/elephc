@@ -294,14 +294,6 @@ pub(super) fn decl_runner() -> Stmt {
                         None,
                     ),
                     s_if(
-                        e_binop(e_var("signal"), BinOp::StrictEq, e_int(7)),
-                        vec![
-                            s_return(e_str(" (SIGBUS)")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
                         e_binop(e_var("signal"), BinOp::StrictEq, e_int(8)),
                         vec![
                             s_return(e_str(" (SIGFPE)")),

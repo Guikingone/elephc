@@ -74,12 +74,15 @@ pub struct DriverOptions {
     pub junit: Option<String>,
 }
 
-/// One test method as declared: name, parameter count, and providers.
+/// One test method as declared: name, parameter count, providers, and whether it ends in a
+/// variadic parameter (with its span for the diagnostic that rejects it under a provider).
 #[derive(Clone)]
 struct MethodInfo {
     name: String,
     parameter_count: usize,
     providers: Vec<String>,
+    variadic: bool,
+    span: Span,
 }
 
 /// A class declaration as discovery sees it: its test methods, own and trait-supplied.
@@ -145,6 +148,8 @@ pub fn discover(
                     name: method.name.clone(),
                     parameter_count: method.params.len(),
                     providers: data_providers(method),
+                    variadic: method.variadic.is_some(),
+                    span: method.span,
                 })
                 .collect(),
         })
@@ -164,6 +169,20 @@ pub fn discover(
         }
         declared_classes += 1;
         for method in inherited_tests(class, &classes, &by_key) {
+            if method.variadic && !method.providers.is_empty() {
+                // A row's tail would have to be spread into the variadic, which the backend
+                // cannot do with a runtime array; dropping it would let the test pass on
+                // data it never saw.
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "{}::{} takes a variadic parameter and has a data provider: \
+                         elephc test passes provider rows by position and cannot fill a \
+                         variadic parameter from them. Declare one parameter per row element.",
+                        class.name, method.name
+                    ),
+                ));
+            }
             tests.push(DiscoveredTest {
                 class: class.name.clone(),
                 method: method.name,
@@ -453,8 +472,9 @@ fn has_attribute(method: &ClassMethod, name: &str) -> bool {
 }
 
 /// The providers named by the method's `#[DataProvider('method')]` attributes, in
-/// declaration order: the first argument of each, which must be a string literal. Any other
-/// shape is ignored; a method with no provider runs once as usual.
+/// declaration order: the first argument of each, a string literal given positionally or as
+/// PHPUnit's named `methodName:` argument. Any other shape is ignored; a method with no
+/// provider runs once as usual.
 fn data_providers(method: &ClassMethod) -> Vec<String> {
     method
         .attributes
@@ -468,6 +488,12 @@ fn data_providers(method: &ClassMethod) -> Vec<String> {
         })
         .filter_map(|attribute| match attribute.args.first().map(|arg| &arg.kind) {
             Some(ExprKind::StringLiteral(name)) => Some(name.clone()),
+            Some(ExprKind::NamedArg { name, value }) if name.eq_ignore_ascii_case("methodName") => {
+                match &value.kind {
+                    ExprKind::StringLiteral(method) => Some(method.clone()),
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .collect()
@@ -690,6 +716,46 @@ final class BetaTest extends TestCase { public function testOne(): void {} }
              \x20   $__elephc_runner->runWithData($__elephc_case_2, 'testAdds', fn() => $__elephc_case_2->testAdds($__elephc_args_2[0], $__elephc_args_2[1]), $__elephc_key_2);\n\
              }\n\
              exit($__elephc_runner->finish());\n"
+        );
+    }
+
+    /// PHPUnit's named form `#[DataProvider(methodName: 'rows')]` names the provider too.
+    #[test]
+    fn named_method_name_argument_names_the_provider() {
+        let program = resolved(
+            r#"<?php
+use Elephc\Testing\TestCase;
+final class T extends TestCase {
+    public static function rows(): array { return [[1, 1]]; }
+    #[DataProvider(methodName: 'rows')]
+    public function testAdds(int $a, int $b): void {}
+}
+"#,
+        );
+        let tests = discover(&program, None).expect("discovery");
+        assert_eq!(tests[0].providers, vec!["rows".to_string()]);
+    }
+
+    /// A provider test with a variadic parameter is a diagnostic, not a silently truncated
+    /// call that would pass on data it never received.
+    #[test]
+    fn variadic_provider_tests_are_rejected() {
+        let program = resolved(
+            r#"<?php
+use Elephc\Testing\TestCase;
+final class T extends TestCase {
+    public static function rows(): array { return [[1, 2, 3]]; }
+    #[DataProvider('rows')]
+    public function testOnlyFirst(int $a, int ...$rest): void {}
+    public function testPlainVariadic(int ...$rest): void {}
+}
+"#,
+        );
+        let error = discover(&program, None).unwrap_err();
+        assert!(
+            error.message.contains("T::testOnlyFirst takes a variadic parameter and has a data provider"),
+            "{}",
+            error.message
         );
     }
 

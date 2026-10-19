@@ -155,7 +155,11 @@ Providers run whenever a `--filter` is given, because the filter may name one of
 sets, so a failing provider is reported, and fails the run, whatever the filter.
 
 The row's elements are passed by position, one per declared parameter, so a row must
-supply every parameter: the compiler cannot spread a run-time array into a typed call.
+supply every parameter: the compiler cannot spread a run-time array into a typed call. For
+the same reason a test with a data provider cannot end in a variadic parameter; discovery
+reports that as a compile error rather than calling the test without the row's tail. The
+provider may be named positionally, `#[DataProvider('rows')]`, or with PHPUnit's named
+argument, `#[DataProvider(methodName: 'rows')]`.
 
 ### Expected exceptions, skipped and incomplete tests
 

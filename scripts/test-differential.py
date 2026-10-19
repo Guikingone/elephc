@@ -32,9 +32,15 @@ from pathlib import Path
 NORMALIZED = {"failure": "failed", "error": "error", "skipped": "skipped"}
 
 
-def parse_junit(path: Path) -> dict[tuple[str, str], str]:
-    """Maps ``(classname, name)`` to the normalized outcome for every testcase in a JUnit file."""
-    outcomes: dict[tuple[str, str], str] = {}
+def parse_junit(path: Path) -> dict[tuple[str, str, int], str]:
+    """Maps ``(classname, name, occurrence)`` to the normalized outcome of every testcase.
+
+    The occurrence index keeps repeated names apart: two providers on one test, both with
+    list rows, report ``testX with data set #0`` twice, and keying on the name alone would
+    let the second outcome overwrite the first.
+    """
+    outcomes: dict[tuple[str, str, int], str] = {}
+    seen: dict[tuple[str, str], int] = {}
     root = ElementTree.parse(path).getroot()
     for case in root.iter("testcase"):
         classname = case.get("class") or case.get("classname") or ""
@@ -45,7 +51,10 @@ def parse_junit(path: Path) -> dict[tuple[str, str], str]:
             if tag in NORMALIZED:
                 outcome = NORMALIZED[tag]
                 break
-        outcomes[(classname.replace(".", "\\"), name)] = outcome
+        base = (classname.replace(".", "\\"), name)
+        occurrence = seen.get(base, 0)
+        seen[base] = occurrence + 1
+        outcomes[(base[0], base[1], occurrence)] = outcome
     return outcomes
 
 
@@ -99,12 +108,16 @@ def main() -> int:
 
     mismatches = []
     for key, outcome in sorted(expected.items()):
-        label = f"{key[0]}::{key[1]}"
+        label = f"{key[0]}::{key[1]}" + (f" (occurrence {key[2] + 1})" if key[2] else "")
         if key not in actual:
             mismatches.append(f"{label}: phpunit={outcome}, elephc=not run")
         elif actual[key] != outcome:
             mismatches.append(f"{label}: phpunit={outcome}, elephc={actual[key]}")
-    elephc_only = sorted(f"{key[0]}::{key[1]}" for key in actual if key not in expected)
+    elephc_only = sorted(
+        f"{key[0]}::{key[1]}" + (f" (occurrence {key[2] + 1})" if key[2] else "")
+        for key in actual
+        if key not in expected
+    )
 
     print()
     print(f"compared {len(expected)} PHPUnit tests against {len(actual)} elephc tests")

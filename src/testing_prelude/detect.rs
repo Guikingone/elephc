@@ -55,7 +55,12 @@ fn name_is_testing_class(name: &Name) -> bool {
 /// Returns whether a static receiver names a testing class (`TestCase::class`, ...).
 /// `self`, `static`, and `parent` never resolve to one at this position.
 fn receiver_refs_testing(receiver: &StaticReceiver) -> bool {
-    matches!(receiver, StaticReceiver::Named(name) if name_is_testing_class(name))
+    match receiver {
+        StaticReceiver::Named(name) => name_is_testing_class(name),
+        // `Box<TestCase>::of()`: the head and the type arguments are both class positions.
+        StaticReceiver::Generic(type_expr) => type_refs_testing(type_expr),
+        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => false,
+    }
 }
 
 /// Returns whether an `instanceof` target references a testing class, recursing into
@@ -124,6 +129,7 @@ fn params_ref_testing(params: &[(String, Option<TypeExpr>, Option<Expr>, bool)])
 /// or any conflict-resolution adaptation.
 fn trait_use_refs_testing(trait_use: &TraitUse) -> bool {
     trait_use.trait_names.iter().any(name_is_testing_class)
+        || trait_use.type_args.iter().flatten().any(type_refs_testing)
         || trait_use.adaptations.iter().any(|adaptation| match adaptation {
             TraitAdaptation::Alias { trait_name, .. } => {
                 trait_name.as_ref().is_some_and(name_is_testing_class)
@@ -459,6 +465,11 @@ fn stmt_refs_testing(stmt: &Stmt) -> bool {
             try_body.iter().any(stmt_refs_testing)
                 || catches.iter().any(|catch| {
                     catch.exception_types.iter().any(name_is_testing_class)
+                        || catch
+                            .exception_type_args
+                            .iter()
+                            .flatten()
+                            .any(type_refs_testing)
                         || catch.body.iter().any(stmt_refs_testing)
                 })
                 || finally_body
@@ -664,6 +675,9 @@ mod tests {
             "<?php class Wrapper<T> { } class Adapter extends Wrapper<\\Elephc\\Testing\\TestCase> {}",
             "<?php class Holder { public const ?\\Elephc\\Testing\\TestCase SAMPLE = null; }",
             "<?php function &make(): mixed { static $x = 1; return $x; } $alias =& \\Elephc\\Testing\\Runner::make();",
+            "<?php class Box<T> { public static ?T $value = null; } Box<\\Elephc\\Testing\\AssertionFailedError>::$value = null;",
+            "<?php trait Holder<T> { public ?T $value = null; } class Case_ { use Holder<\\Elephc\\Testing\\TestCase>; }",
+            "<?php class Box<T> { } try { } catch (Box<\\Elephc\\Testing\\AssertionFailedError> $e) { }",
         ] {
             assert!(program_uses_testing(&parse(source)), "missed: {source}");
         }
