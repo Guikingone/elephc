@@ -80,6 +80,7 @@ mod superglobals;
 #[allow(dead_code)]
 mod synthetic_class;
 mod termination;
+mod testing_prelude;
 mod timings;
 mod types;
 mod tz_prelude;

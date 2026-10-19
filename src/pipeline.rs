@@ -410,6 +410,14 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
+    // Inject the testing runtime (`Elephc\Testing\TestCase`, `Runner`, the PHPUnit alias)
+    // only when the program references it, so ordinary binaries never carry the runner.
+    // Declaration-only and order-independent like the hash prelude; `elephc test` forces it.
+    crate::progress::phase("testing-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    timings.record_since("testing-prelude", phase_started);
+
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
     // the internal `__elephc_curl_*` builtins) only when the program references that
     // surface, so non-curl binaries never declare `CurlHandle`, never link
