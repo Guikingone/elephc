@@ -77,6 +77,10 @@ pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         pushed_arg_bytes += temp_slot_size(&pushed_ty);
     }
 
+    // The checker caps extern calls at 8 integer and 8 float arguments, so on AArch64 (Linux
+    // and Apple alike) every argument travels in x0-x7/d0-d7 and the natural-size stack packing
+    // of Apple's ABI is never reached. On x86_64 SysV the spilled 7th and 8th integer arguments
+    // occupy eightbyte stack slots whatever width they declare, so word slots are correct there.
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &c_param_types, 0);
     let overflow_bytes = abi::materialize_outgoing_c_abi_args(ctx.emitter, &assignments);
