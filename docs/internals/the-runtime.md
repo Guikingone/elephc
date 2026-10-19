@@ -1115,6 +1115,12 @@ The runtime also resets the concat-buffer cursor before the final `longjmp`, so 
 
 **Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_integer_tree/`, `system/json_pretty.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.
 
+The structural decoder trims each borrowed token once. Numbers, literals and
+containers consume that raw slice directly. Only a string token that has passed
+validation enters `__rt_json_decode` for unescaping, avoiding another trim and
+legacy-decoder call for every scalar or nested container. Both architecture
+emitters preserve the same numeric overflow, error and ownership boundaries.
+
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
 | Routine | What it does | Input | Output |
