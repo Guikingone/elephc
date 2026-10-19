@@ -12,9 +12,13 @@
 //!   allow length means "strip every tag". Output is a fresh string in the
 //!   target string-result registers, reserved through `__rt_concat_reserve`.
 //! - HTML comments and PHP tags are always stripped and cannot be allow-listed.
+//! - Oversized output reservations stay transient until string persistence adopts them.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::strings::concat_scratch::CONCAT_BUF_CAPACITY;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 
 mod aarch64;
 mod x86_64;
@@ -28,7 +32,55 @@ pub fn emit_strip_tags(emitter: &mut Emitter) {
     aarch64::emit_strip_tags_aarch64(emitter);
 }
 
-/// Emits one strip_tags helper instruction.
-pub(super) fn emit_st(emitter: &mut Emitter, inst: &str) {
-    emitter.instruction(inst);                                                  // PHP strip_tags state-machine instruction
+/// Marks only heap-backed reservations as temporary so persistence can adopt them.
+pub(super) fn emit_mark_reserved_result_temporary(emitter: &mut Emitter) {
+    let ready = "__rt_strip_tags_reservation_ready";
+    // -- retain scratch semantics, but transfer oversized reservations to their consumer --
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+            emitter.instruction("sub x10, x0, x9");                             // classify the reservation by its unsigned offset from concat scratch
+            abi::emit_load_int_immediate(emitter, "x11", CONCAT_BUF_CAPACITY as i64);
+            emitter.instruction("cmp x10, x11");                                // scratch reservations do not own a heap header
+            emitter.instruction(&format!("b.lo {}", ready));                    // leave scratch storage untagged for ordinary persistence
+            abi::emit_load_int_immediate(emitter, "x9", CONCAT_TEMP_HEAP_KIND as i64);
+            emitter.instruction("str x9, [x0, #-8]");                           // let string persistence adopt this sole heap reservation instead of copying it
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+            emitter.instruction("mov r11, rax");                                // preserve the output pointer while classifying its reservation
+            emitter.instruction("sub r11, r10");                                // an unsigned out-of-window offset identifies owned heap fallback storage
+            emitter.instruction(&format!("cmp r11, {}", CONCAT_BUF_CAPACITY));  // scratch reservations do not own a heap header
+            emitter.instruction(&format!("jb {}", ready));                      // leave scratch storage untagged for ordinary persistence
+            abi::emit_load_int_immediate(emitter, "r10",
+                crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND) as i64);
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // let string persistence adopt the sole heap reservation with its required kind marker
+        }
+    }
+    emitter.label(ready);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every target marks heap fallbacks after reservation but before saving the output pair.
+    #[test]
+    fn strip_tags_heap_output_is_adoptable_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_strip_tags(&mut emitter);
+            let assembly = emitter.output();
+            let (reserve, mark, save) = if target.arch == Arch::AArch64 {
+                ("bl __rt_concat_reserve", "str x9, [x0, #-8]", "str x0, [x29, #-40]")
+            } else {
+                ("call __rt_concat_reserve", "mov QWORD PTR [rax - 8], r10", "mov QWORD PTR [rbp - 40], rax")
+            };
+            assert!(assembly.find(reserve).unwrap() < assembly.find(mark).unwrap(), "{name}");
+            assert!(assembly.find(mark).unwrap() < assembly.find(save).unwrap(), "{name}");
+            assert!(assembly.contains("__rt_strip_tags_reservation_ready"), "{name}: guard scratch pointers");
+        }
+    }
 }

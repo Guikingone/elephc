@@ -166,7 +166,16 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
         _ => Err(EvalStatus::RuntimeFatal),
     })();
     let released = eval_release_value(context, values, array);
-    result.and_then(|control| released.map(|()| control))
+    match (result, released) {
+        (Ok(control), Ok(())) => Ok(control),
+        (Err(status), _) => Err(status),
+        (Ok(control), Err(status)) => {
+            if let EvalControl::Return(value) | EvalControl::Throw(value) = control {
+                let _ = eval_release_value(context, values, value);
+            }
+            Err(status)
+        }
+    }
 }
 
 /// Executes `foreach` over a PHP array value using insertion-order runtime hooks.

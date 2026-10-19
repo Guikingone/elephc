@@ -16,8 +16,11 @@ function stripWith(mixed $allow): string {
     return strip_tags('<p>A</p><b>B</b>', $allow);
 }
 class AllowedTag { public function __toString(): string { return '<p>'; } }
+class ThrowingTag { public function __toString(): string { throw new Exception('tag'); } }
 echo stripWith(['key' => 'p']);
 echo stripWith(new AllowedTag());
+try { echo stripWith([new ThrowingTag()]); } catch (Throwable $error) { echo 'caught'; }
+echo stripWith([str_repeat('p', 70000 + $argc)]);
 echo strip_tags('<>x', []), strip_tags('<>x', ['']);
 echo strip_tags('<>x', [null]), strip_tags('<>x', [false]);
 echo strip_tags('<>x', ['tag' => '']);
@@ -27,6 +30,8 @@ echo strip_tags('<>x', ['tag' => '']);
     assert!(assembly.contains("__rt_array_to_mixed"), "{target}: normalize packed scalar slots");
     assert!(assembly.contains("__rt_decref_array"), "{target}: retire the normalized owner");
     assert!(assembly.contains("__rt_strip_tags"), "{target}");
+    assert!(assembly.contains("__rt_cleanup_call_operand_owner"), "{target}: protect normalized owners over callbacks");
+    assert!(assembly.contains("__rt_heap_free_safe"), "{target}: retire owned allow-list strings");
     if target.ends_with("x86_64") {
         assert!(assembly.lines().collect::<Vec<_>>().windows(2).any(|pair|
             pair[0].contains("test r8, r8")

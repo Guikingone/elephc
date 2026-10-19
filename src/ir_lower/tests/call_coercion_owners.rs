@@ -540,14 +540,19 @@ fn user_callable_argument_owners_are_unwind_visible_on_all_targets() {
     use crate::ir::Op;
     let source = r#"<?php
 function runOwnedCallback(callable $callback): void { $callback(); }
+function runStringCallback(callable $callback): string { return $callback(); }
 function preserveCallback(callable $callback): callable { return $callback; }
 function callbackOwnerCaller(int $seed): void {
     runOwnedCallback(function() use ($seed): void { echo $seed; });
+}
+function callbackStringCaller(int $seed): string {
+    return runStringCallback(function() use ($seed): string { return (string) $seed; });
 }
 function callbackAliasCaller(int $seed): callable {
     return preserveCallback(function() use ($seed): void { echo $seed; });
 }
 callbackOwnerCaller($argc);
+echo callbackStringCaller($argc);
 $callback = callbackAliasCaller($argc);
 $callback();
 "#;
@@ -556,15 +561,20 @@ $callback();
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
-        let owner = module.functions.iter().find(|f| f.name == "callbackOwnerCaller").unwrap();
-        let call = owner.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
-        assert_final_operand_root_spans_call(
-            owner,
-            call,
-            owner.instructions[call].operands[0],
-            target,
-            "owned callback argument",
-        );
+        for (name, detail) in [
+            ("callbackOwnerCaller", "owned callback argument"),
+            ("callbackStringCaller", "callable argument independent from string result"),
+        ] {
+            let owner = module.functions.iter().find(|f| f.name == name).unwrap();
+            let call = owner.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+            assert_final_operand_root_spans_call(
+                owner,
+                call,
+                owner.instructions[call].operands[0],
+                target,
+                detail,
+            );
+        }
         let alias = module.functions.iter().find(|f| f.name == "callbackAliasCaller").unwrap();
         assert!(!alias.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner),
             "{target}: a single aliasing argument transfers directly to the returned value");

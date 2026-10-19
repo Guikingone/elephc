@@ -1,6 +1,6 @@
 ---
 title: "strip_tags()"
-description: "Strips HTML and PHP tags from a string. Optional allowed_tags is a string like \"<p><a>\" or an array of tag names. Weak callers also coerce scalars and Stringable objects; strict callers require array|string|null."
+description: "Strips HTML and PHP tags from a string. Optional `$allowed_tags` is a string like `\"<p><a>\"` or an array of tag names. Weak callers also coerce scalars and Stringable objects; strict callers require `array|string|null`."
 sidebar:
   order: 922
 ---
@@ -11,7 +11,7 @@ sidebar:
 function strip_tags(string $string, array|string|null $allowed_tags = null): string
 ```
 
-Strips HTML and PHP tags from a string. Optional allowed_tags is a string like "<p><a>" or an array of tag names. Weak callers also coerce scalars and Stringable objects; strict callers require array|string|null.
+Strips HTML and PHP tags from a string. Optional `$allowed_tags` is a string like `"<p><a>"` or an array of tag names. Weak callers also coerce scalars and Stringable objects; strict callers require `array|string|null`.
 
 **Parameters**:
 - `$string` (`string`)
@@ -26,11 +26,17 @@ Strips HTML and PHP tags from a string. Optional allowed_tags is a string like "
 
 **Examples**:
 
+```php
 echo strip_tags("<p>Hello <b>World</b></p>");
+```
 
+```php
 echo strip_tags("<p>Hello <b>World</b></p>", "<p>");
+```
 
+```php
 echo strip_tags("<p>Hello <b>World</b></p>", ["p"]);
+```
 
 ## Internals
 

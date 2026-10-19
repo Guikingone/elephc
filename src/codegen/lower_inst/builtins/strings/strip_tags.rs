@@ -26,6 +26,19 @@ pub(crate) fn lower_strip_tags(ctx: &mut FunctionContext<'_>, inst: &Instruction
             inst.operands.len()
         )));
     }
+    let owns_allow = if let Some(allowed) = inst.operands.get(1) {
+        matches!(ctx.value_php_type(*allowed)?.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_))
+    } else {
+        false
+    };
+    if owns_allow {
+        abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+        let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+        abi::emit_temporary_stack_address(ctx.emitter, owner_address, 0);
+        abi::emit_store_zero_to_address(ctx.emitter, owner_address, 0);
+        abi::emit_push_call_operand_owner(ctx.emitter, owner_address, false);
+    }
     let subject = expect_operand(inst, 0)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -46,6 +59,15 @@ pub(crate) fn lower_strip_tags(ctx: &mut FunctionContext<'_>, inst: &Instruction
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_strip_tags");
+    if owns_allow {
+        abi::emit_pop_call_operand_owner(ctx.emitter);
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
     store_if_result(ctx, inst)
 }
 
@@ -176,24 +198,12 @@ fn lower_strip_tags_allow_from_array(
     // strings still contribute a tag, so preserve this independently of join length.
     abi::emit_load_from_address(ctx.emitter, count_reg, array_reg, 0);
     abi::emit_push_reg(ctx.emitter, count_reg);
-    if let Some(value_ty) = hash_copy {
-        let array_reg = match ctx.emitter.target.arch {
-            Arch::AArch64 => "x3",
-            Arch::X86_64 => "rdx",
-        };
-        abi::emit_push_reg(ctx.emitter, array_reg);
-        abi::emit_call_label(ctx.emitter, runtime_label);
-        abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(value_ty)));
-        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-        abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
-        abi::emit_release_temporary_stack(ctx.emitter, 16);
-    } else {
-        abi::emit_call_label(ctx.emitter, runtime_label);
-    }
+    super::implode_owners::emit_owned_implode(ctx, runtime_label, hash_copy);
     abi::emit_pop_reg(ctx.emitter, count_reg);
     emit_wrap_allow_string(ctx);
+    // The caller parked the subject above its cleanup record and owner slot.
+    let owner_offset = 16 + abi::CALL_OPERAND_OWNER_RECORD_BYTES;
+    abi::emit_store_to_sp(ctx.emitter, string_ptr_reg(ctx), owner_offset);
     Ok(())
 }
 
@@ -204,32 +214,14 @@ fn emit_wrap_allow_string(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbz x5, {}", done));              // only an empty array has no allowed tags
-            let (lt_label, lt_len) = ctx.data.add_string(b"<");
-            ctx.emitter.instruction("mov x3, x1");                              // pass the joined tags as concat's right operand
-            ctx.emitter.instruction("mov x4, x2");                              // pass the joined length as concat's right operand
-            abi::emit_symbol_address(ctx.emitter, "x1", &lt_label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", lt_len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_concat");
-            let (gt_label, gt_len) = ctx.data.add_string(b">");
-            abi::emit_symbol_address(ctx.emitter, "x3", &gt_label);
-            abi::emit_load_int_immediate(ctx.emitter, "x4", gt_len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_concat");
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("test r8, r8");                             // distinguish an empty array from one empty rendered element
             ctx.emitter.instruction(&format!("jz {}", done));                   // skip wrapping only when the source array has no elements
-            let (lt_label, lt_len) = ctx.data.add_string(b"<");
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the joined tags as concat's right operand
-            ctx.emitter.instruction("mov rsi, rdx");                            // pass the joined length as concat's right operand
-            abi::emit_symbol_address(ctx.emitter, "rax", &lt_label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", lt_len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_concat");
-            let (gt_label, gt_len) = ctx.data.add_string(b">");
-            abi::emit_symbol_address(ctx.emitter, "rdi", &gt_label);
-            abi::emit_load_int_immediate(ctx.emitter, "rsi", gt_len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_concat");
         }
     }
+    super::strip_tags_owners::emit_owned_allow_concat(ctx, b"<", true);
+    super::strip_tags_owners::emit_owned_allow_concat(ctx, b">", false);
     ctx.emitter.label(&done);
 }
 
