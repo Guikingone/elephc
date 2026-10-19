@@ -15,7 +15,11 @@
 //!   naming the signal or exit code, and the run continues; a failed fork is an ERROR too,
 //!   never an unprotected in-process run. `--no-isolation` runs the test in-process.
 //! - The child writes its outcome record (`status\nassertions\nmessage`) to a `tempnam()`
-//!   file the parent reads after `pcntl_waitpid`. A file, not a pipe: a process the test
+//!   file the parent reads with `file()` after `pcntl_waitpid`. Not `file_get_contents()`:
+//!   with a non-literal path the compiler must assume a `phar://` or `https://` URL and
+//!   links the TLS and PHAR bridges plus zlib and bzip2 into every test binary, which fails
+//!   on a host without libbz2. `file()` reads local files only and needs nothing, at the cost
+//!   of a known one-block leak per call (journal task 93012677). A file, not a pipe: a process the test
 //!   forks and leaves running inherits a pipe's write end and would keep the parent's read
 //!   from ever reaching EOF, while the parent waits only for its direct child.
 //! - `rows()` calls a data provider inside a `try`: a provider that throws (or returns a
@@ -248,9 +252,9 @@ pub(super) fn decl_runner() -> Stmt {
                     ),
                     s_assign("status", e_int(0)),
                     s_expr(e_call("pcntl_waitpid", vec![e_var("pid"), e_var("status")])),
-                    s_assign("payload", e_call("file_get_contents", vec![e_var("path")])),
+                    s_assign("lines", e_call("file", vec![e_var("path")])),
                     s_expr(e_call("unlink", vec![e_var("path")])),
-                    s_assign("record", e_ternary(e_call("is_string", vec![e_var("payload")]), e_var("payload"), e_str(""))),
+                    s_assign("record", e_ternary(e_binop(e_var("lines"), BinOp::StrictEq, e_bool(false)), e_str(""), e_call("implode", vec![e_str(""), e_var("lines")]))),
                     s_if(
                         e_binop(e_binop(e_binop(e_var("record"), BinOp::StrictNotEq, e_str("")), BinOp::And, e_call("pcntl_wifexited", vec![e_var("status")])), BinOp::And, e_binop(e_call("pcntl_wexitstatus", vec![e_var("status")]), BinOp::StrictEq, e_int(0))),
                         vec![

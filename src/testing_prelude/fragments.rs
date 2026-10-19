@@ -509,9 +509,9 @@ final class Runner
         }
         $status = 0;
         pcntl_waitpid($pid, $status);
-        $payload = file_get_contents($path);
+        $lines = file($path);
         unlink($path);
-        $record = is_string($payload) ? $payload : '';
+        $record = $lines === false ? '' : implode('', $lines);
         if ($record !== '' && pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0) {
             return $record;
         }

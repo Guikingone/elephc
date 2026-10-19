@@ -414,8 +414,10 @@ $t->testIt();
 }
 
 /// The whole report path (boxed `mixed` operands, failure strings, caught exceptions, the
-/// closure per test, and the forked isolation with its result file) leaves a clean heap
-/// under heap debugging, in the parent and in every child.
+/// closure per test) leaves a clean heap under heap debugging. Isolation is off: the
+/// isolated parent reads each outcome file with `file()`, which leaks one block per call
+/// (journal task 93012677), and `file_get_contents()` is not an option there because a non-literal
+/// path makes every test binary link bzip2. That is the builtin's bug, not the runner's.
 #[test]
 fn test_suite_leaves_a_clean_heap() {
     let out = compile_and_run_with_heap_debug(&format!(
@@ -445,7 +447,7 @@ final class SuiteTest extends TestCase
 }}
 
 namespace {{
-$runner = new \Elephc\Testing\Runner();
+$runner = new \Elephc\Testing\Runner(false);
 $case = new App\Tests\SuiteTest();
 
 $runner->run($case, 'testPasses', fn() => $case->testPasses());
@@ -464,7 +466,39 @@ $runner->finish();
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert!(
         !out.stderr.contains("leak summary: live_blocks"),
-        "every process, parent and isolated children, must be leak-free: {}",
+        "the runner must be leak-free: {}",
         out.stderr
     );
+}
+
+/// A program that uses the runtime links no compression or TLS library: the isolated runner
+/// reads its outcome file with `file()`, not `file_get_contents()`, whose non-literal path
+/// conservatively requires the TLS and PHAR bridges plus zlib and bzip2. Requiring them made
+/// every `elephc test` binary fail to link on a host without libbz2.
+#[test]
+fn test_runtime_requires_no_compression_or_tls_libraries() {
+    let dir = make_cli_test_dir("elephc_testing_link_requirements");
+    let (_, _, requirements) = compile_source_to_asm_with_options(
+        r#"<?php
+final class T extends \Elephc\Testing\TestCase {
+    public function testIt(): void { $this->assertTrue(true); }
+}
+$runner = new \Elephc\Testing\Runner(true, 60, '', 'report.xml');
+$case = new T();
+$runner->run($case, 'testIt', fn() => $case->testIt());
+exit($runner->finish());
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    for library in ["bz2", "z", "elephc_tls"] {
+        assert!(
+            !requirements.iter().any(|name| name == library),
+            "the testing runtime must not require {library}: {:?}",
+            &*requirements
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
