@@ -78,15 +78,18 @@ What it does, in order:
    declares. An installed `phpunit/phpunit`, and the packages only it requires (read from
    `vendor/composer/installed.json`), are left out of the index: the compiler provides
    that namespace itself, and PHPUnit's own `autoload.files` entry would otherwise pull
-   the real runner into the compile. Every other dev dependency stays available.
+   the real runner into the compile. A package PHPUnit shares with the project or with
+   another dependency stays, as does every other dev dependency.
 3. Compiles a virtual entry that requires those files, with the testing runtime forced in.
    After autoloading, when every class the tests extend is known, it discovers the test
    classes: every concrete class whose ancestry reaches `Elephc\Testing\TestCase` (the
    PHPUnit alias included), in declaration order. A test is a public, non-static method
-   whose name starts with `test` or that carries a `#[Test]` attribute; inherited test
-   methods run on the concrete class after its own.
-4. Appends the driver below to the program, builds the binary under the per-user cache,
-   runs it with your working directory, and exits with the suite's exit code.
+   whose name starts with `test` or that carries a `#[Test]` attribute; methods supplied
+   by traits count (with `insteadof`, `as` aliases and visibility changes applied), and
+   inherited test methods run on the concrete class after its own.
+4. Appends the driver below to the program, builds the binary under the per-user cache
+   in a directory of its own (so concurrent runs never share a binary), runs it with your
+   working directory, and exits with the suite's exit code.
 
 `--filter PATTERN` keeps the tests whose `Class::method` contains the pattern, before
 compilation. Compile options after the path (`--strict-php`, `--with-<crate>`,
@@ -98,8 +101,8 @@ matches nothing) is an error, not a green build. See the
 ### Isolation
 
 Every test runs in a forked child by default. The runner forks, the child runs
-`setUp()`, the test and `tearDown()`, writes its outcome through a socket pair and exits;
-the parent reads the outcome, waits for the child and prints the line. What this buys:
+`setUp()`, the test and `tearDown()`, writes its outcome to a temporary file and exits;
+the parent waits for the child, reads the outcome and prints the line. What this buys:
 
 - A native fatal (a buffer index out of bounds, a null pointer dereference, a segfault in
   FFI code) ends only that child. The parent reports `ERROR` with the exit code or the
@@ -108,6 +111,10 @@ the parent reads the outcome, waits for the child and prints the line. What this
 - A test that never returns is ended by `pcntl_alarm` after `--timeout` seconds (default
   60, `0` disables) and reported as `Test exceeded the timeout of 60 seconds`.
 - Every test starts from a fresh process state, on top of its fresh instance.
+- A process the test forks and leaves running cannot stall the run: the parent waits for
+  its direct child only, and nothing the descendant inherits keeps it waiting.
+- When the fork itself fails (a host at its process limit), the test is reported as an
+  `ERROR` rather than run unprotected in the runner's process.
 
 `--no-isolation` runs every test in the runner's own process: faster, and what a debugger
 wants, but a native fatal then ends the whole run with the fatal's exit code. The
@@ -140,6 +147,10 @@ final class ParserTest extends TestCase
     }
 }
 ```
+
+A test may carry several `#[DataProvider]` attributes; it then runs once per row of each,
+in attribute order. A provider that throws, or returns something other than an array, is
+reported as that test's `ERROR` (`The data provider failed: ...`) and the run continues.
 
 The row's elements are passed by position, one per declared parameter, so a row must
 supply every parameter: the compiler cannot spread a run-time array into a typed call.
@@ -174,6 +185,9 @@ from `.lfc` files PHPUnit cannot parse, are listed and never fail the comparison
 `--junit FILE` writes a JUnit XML report: one `<testcase>` per run test with its class,
 name and duration, `<failure>`, `<error>` and `<skipped>` children for the other outcomes,
 and the totals on the `<testsuite>`. The file is resolved against the working directory.
+Control characters XML forbids are replaced with `?` and invalid UTF-8 is substituted, so
+a binary failure message cannot corrupt the report. A report that cannot be written (a
+missing directory, no permission) is reported on stderr and makes the run exit `1`.
 
 ### Driving a suite by hand
 
@@ -227,7 +241,10 @@ fail the run.
 Tests: 4, Assertions: 12, Failures: 1, Errors: 1, Skipped: 1.
 ```
 
-`tearDown()` always runs after a `setUp()` that succeeded, whatever the test did. A user
+`tearDown()` always runs after a `setUp()` that succeeded, whatever the test did. When
+the test already failed, an exception thrown by `tearDown()` is discarded, so cleanup can
+never turn a failure into a pass or a skip; when the test passed, that exception is the
+test's outcome. A user
 message given to an assertion is printed on its own line above the assertion text, as
 PHPUnit prints it.
 

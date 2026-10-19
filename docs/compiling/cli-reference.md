@@ -73,7 +73,9 @@ The project root is the nearest directory, starting at `PATH` itself, that holds
 `composer.json`; both its `autoload` and `autoload-dev` sections resolve project and
 test classes. The binary is built under the per-user cache
 (`$XDG_CACHE_HOME/elephc/test/` or `~/.cache/elephc/test/`), never beside the
-sources, and runs with the caller's working directory and inherited stdio. By
+sources, in a directory of its own per invocation that is removed after the run,
+so concurrent runs of one project never share a binary. It runs with the caller's
+working directory and inherited stdio. By
 default every test runs in a forked child: a native fatal, a signal, or a timeout
 in one test is reported as that test's error and the run continues.
 

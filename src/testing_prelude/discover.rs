@@ -27,28 +27,37 @@
 //!   really matches; the runner applies the same filter to those labels.
 //! - ONE INSTANCE PER TEST, as PHPUnit creates: inline property initializers start fresh
 //!   for every test, not only what `setUp()` resets.
-//! - A `#[DataProvider('name')]` test runs once per row of the static provider `name()`;
-//!   the driver passes the row's elements BY INDEX, one per declared parameter, because the
-//!   backend does not spread a runtime array into a typed call (journal 88d26b54).
+//! - A `#[DataProvider('name')]` test runs once per row of the static provider `name()`,
+//!   and once per row of EACH provider when it declares several; the driver passes the row's
+//!   elements BY INDEX, one per declared parameter, because the backend does not spread a
+//!   runtime array into a typed call (journal 88d26b54). Provider calls go through
+//!   `Runner::rows()`, so a provider that throws is that test's ERROR, not the suite's end.
+//! - Test methods supplied by TRAITS count: trait bodies are only merged into classes during
+//!   type checking, after this pass, so the merge is reproduced here for the test rule:
+//!   nested trait uses, `insteadof` exclusions, `as` aliases (an alias is a second method
+//!   name) and `as` visibility changes, with a class's own methods overriding trait ones.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, ExprKind, Program, Stmt, StmtKind, Visibility};
+use crate::names::Name;
+use crate::parser::ast::{
+    ClassMethod, ExprKind, Program, Stmt, StmtKind, TraitAdaptation, TraitUse, Visibility,
+};
 use crate::span::Span;
 
 /// The canonical root every test class descends from (the PHPUnit alias is its subclass).
 const TEST_CASE_ROOT: &str = "Elephc\\Testing\\TestCase";
 
 /// One discovered test: the class as declared, the method name, its declared parameter
-/// count, and the static data provider it draws rows from, when it has one.
+/// count, and the static data providers it draws rows from (empty for a plain test).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiscoveredTest {
     pub class: String,
     pub method: String,
     pub parameter_count: usize,
-    pub provider: Option<String>,
+    pub providers: Vec<String>,
 }
 
 /// Runner options the driver bakes into the `Runner` constructor call.
@@ -65,20 +74,35 @@ pub struct DriverOptions {
     pub junit: Option<String>,
 }
 
-/// One test method as declared: name, parameter count, and provider.
+/// One test method as declared: name, parameter count, and providers.
 #[derive(Clone)]
 struct MethodInfo {
     name: String,
     parameter_count: usize,
-    provider: Option<String>,
+    providers: Vec<String>,
 }
 
-/// A class declaration as discovery sees it.
+/// A class declaration as discovery sees it: its test methods, own and trait-supplied.
 struct ClassInfo {
     name: String,
     parent: Option<String>,
     is_abstract: bool,
     tests: Vec<MethodInfo>,
+}
+
+/// A class as declared, before its trait uses are merged: own methods and trait uses.
+struct RawClass {
+    name: String,
+    parent: Option<String>,
+    is_abstract: bool,
+    methods: Vec<ClassMethod>,
+    trait_uses: Vec<TraitUse>,
+}
+
+/// A trait as declared: its own methods and the traits it uses in turn.
+struct RawTrait {
+    methods: Vec<ClassMethod>,
+    trait_uses: Vec<TraitUse>,
 }
 
 /// Appends the synthesized driver for every discovered test to `program`.
@@ -105,8 +129,26 @@ pub fn discover(
     program: &Program,
     filter: Option<&str>,
 ) -> Result<Vec<DiscoveredTest>, CompileError> {
-    let mut classes = Vec::new();
-    collect_classes(program, &mut classes);
+    let mut raw_classes = Vec::new();
+    let mut traits = HashMap::new();
+    collect_declarations(program, &mut raw_classes, &mut traits);
+    let classes: Vec<ClassInfo> = raw_classes
+        .iter()
+        .map(|class| ClassInfo {
+            name: class.name.clone(),
+            parent: class.parent.clone(),
+            is_abstract: class.is_abstract,
+            tests: merged_methods(&class.methods, &class.trait_uses, &traits)
+                .iter()
+                .filter(|method| is_test_method(method))
+                .map(|method| MethodInfo {
+                    name: method.name.clone(),
+                    parameter_count: method.params.len(),
+                    providers: data_providers(method),
+                })
+                .collect(),
+        })
+        .collect();
     let by_key: HashMap<String, usize> = classes
         .iter()
         .enumerate()
@@ -126,7 +168,7 @@ pub fn discover(
                 class: class.name.clone(),
                 method: method.name,
                 parameter_count: method.parameter_count,
-                provider: method.provider,
+                providers: method.providers,
             });
         }
     }
@@ -146,7 +188,8 @@ pub fn discover(
     }
     if let Some(pattern) = filter {
         tests.retain(|test| {
-            test.provider.is_some() || format!("{}::{}", test.class, test.method).contains(pattern)
+            !test.providers.is_empty()
+                || format!("{}::{}", test.class, test.method).contains(pattern)
         });
         if tests.is_empty() {
             return Err(CompileError::new(
@@ -213,9 +256,13 @@ fn descends_from_root(
     false
 }
 
-/// Collects class declarations in declaration order, descending into the wrappers an
-/// included or conditionally declared file leaves around them.
-fn collect_classes(statements: &[Stmt], classes: &mut Vec<ClassInfo>) {
+/// Collects class and trait declarations in declaration order, descending into the
+/// wrappers an included or conditionally declared file leaves around them.
+fn collect_declarations(
+    statements: &[Stmt],
+    classes: &mut Vec<RawClass>,
+    traits: &mut HashMap<String, RawTrait>,
+) {
     for statement in statements {
         match &statement.kind {
             StmtKind::ClassDecl {
@@ -223,41 +270,162 @@ fn collect_classes(statements: &[Stmt], classes: &mut Vec<ClassInfo>) {
                 extends,
                 is_abstract,
                 methods,
+                trait_uses,
                 ..
-            } => classes.push(ClassInfo {
+            } => classes.push(RawClass {
                 name: name.clone(),
                 parent: extends.as_ref().map(|parent| parent.as_canonical()),
                 is_abstract: *is_abstract,
-                tests: methods
-                    .iter()
-                    .filter(|method| is_test_method(method))
-                    .map(|method| MethodInfo {
-                        name: method.name.clone(),
-                        parameter_count: method.params.len(),
-                        provider: data_provider(method),
-                    })
-                    .collect(),
+                methods: methods.clone(),
+                trait_uses: trait_uses.clone(),
             }),
+            StmtKind::TraitDecl {
+                name,
+                methods,
+                trait_uses,
+                ..
+            } => {
+                traits.insert(
+                    php_symbol_key(name),
+                    RawTrait {
+                        methods: methods.clone(),
+                        trait_uses: trait_uses.clone(),
+                    },
+                );
+            }
             StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. }
-            | StmtKind::NamespaceBlock { body, .. } => collect_classes(body, classes),
+            | StmtKind::NamespaceBlock { body, .. } => collect_declarations(body, classes, traits),
             StmtKind::If {
                 then_body,
                 elseif_clauses,
                 else_body,
                 ..
             } => {
-                collect_classes(then_body, classes);
+                collect_declarations(then_body, classes, traits);
                 for (_, body) in elseif_clauses {
-                    collect_classes(body, classes);
+                    collect_declarations(body, classes, traits);
                 }
                 if let Some(body) = else_body {
-                    collect_classes(body, classes);
+                    collect_declarations(body, classes, traits);
                 }
             }
             _ => {}
         }
     }
+}
+
+/// The methods a class or trait ends up with: its own, then those its traits supply that
+/// it does not declare itself, with `insteadof` exclusions, `as` aliases and `as` visibility
+/// changes applied. Trait uses nest; a trait cycle or an unknown trait contributes nothing.
+fn merged_methods(
+    own: &[ClassMethod],
+    trait_uses: &[TraitUse],
+    traits: &HashMap<String, RawTrait>,
+) -> Vec<ClassMethod> {
+    merged_methods_guarded(own, trait_uses, traits, &mut HashSet::new())
+}
+
+/// [`merged_methods`] with the set of traits already on the expansion path, so a cycle stops.
+fn merged_methods_guarded(
+    own: &[ClassMethod],
+    trait_uses: &[TraitUse],
+    traits: &HashMap<String, RawTrait>,
+    expanding: &mut HashSet<String>,
+) -> Vec<ClassMethod> {
+    let mut merged: Vec<ClassMethod> = own.to_vec();
+    let mut declared: HashSet<String> = own.iter().map(|m| php_symbol_key(&m.name)).collect();
+    for trait_use in trait_uses {
+        for trait_name in &trait_use.trait_names {
+            let trait_key = php_symbol_key(trait_name.as_canonical().trim_start_matches('\\'));
+            let Some(raw) = traits.get(&trait_key) else {
+                continue;
+            };
+            if !expanding.insert(trait_key.clone()) {
+                continue;
+            }
+            let supplied =
+                merged_methods_guarded(&raw.methods, &raw.trait_uses, traits, expanding);
+            expanding.remove(&trait_key);
+            for method in supplied {
+                // `insteadof` drops the method under its own name only: an `as` alias of
+                // the excluded method still reaches the class, as in PHP.
+                let excluded = excluded_by_insteadof(trait_use, trait_name, &method.name);
+                let (original, aliases) = adapted_methods(trait_use, trait_name, method);
+                let kept = (!excluded).then_some(original).into_iter().chain(aliases);
+                for adapted in kept {
+                    if declared.insert(php_symbol_key(&adapted.name)) {
+                        merged.push(adapted);
+                    }
+                }
+            }
+        }
+    }
+    merged
+}
+
+/// Whether an `insteadof` rule in this use drops `method` as supplied by `trait_name`.
+fn excluded_by_insteadof(trait_use: &TraitUse, trait_name: &Name, method: &str) -> bool {
+    trait_use.adaptations.iter().any(|adaptation| match adaptation {
+        TraitAdaptation::InsteadOf {
+            method: chosen,
+            instead_of,
+            ..
+        } => {
+            chosen.eq_ignore_ascii_case(method)
+                && instead_of.iter().any(|excluded| same_trait(excluded, trait_name))
+        }
+        TraitAdaptation::Alias { .. } => false,
+    })
+}
+
+/// The method as the class sees it after this use's `as` rules: the original (with any
+/// visibility-only change applied) and one copy per alias, carrying the alias's visibility.
+fn adapted_methods(
+    trait_use: &TraitUse,
+    trait_name: &Name,
+    method: ClassMethod,
+) -> (ClassMethod, Vec<ClassMethod>) {
+    let mut original = method.clone();
+    let mut aliases = Vec::new();
+    for adaptation in &trait_use.adaptations {
+        let TraitAdaptation::Alias {
+            trait_name: scope,
+            method: target,
+            alias,
+            visibility,
+        } = adaptation
+        else {
+            continue;
+        };
+        if !target.eq_ignore_ascii_case(&method.name)
+            || scope.as_ref().is_some_and(|scope| !same_trait(scope, trait_name))
+        {
+            continue;
+        }
+        match alias {
+            Some(alias) => {
+                let mut copy = method.clone();
+                copy.name = alias.clone();
+                if let Some(visibility) = visibility {
+                    copy.visibility = visibility.clone();
+                }
+                aliases.push(copy);
+            }
+            None => {
+                if let Some(visibility) = visibility {
+                    original.visibility = visibility.clone();
+                }
+            }
+        }
+    }
+    (original, aliases)
+}
+
+/// Whether two spellings name the same trait, ignoring case and a leading `\`.
+fn same_trait(left: &Name, right: &Name) -> bool {
+    php_symbol_key(left.as_canonical().trim_start_matches('\\'))
+        == php_symbol_key(right.as_canonical().trim_start_matches('\\'))
 }
 
 /// A test method is public, non-static, concrete, and named `test*` or attributed `#[Test]`.
@@ -284,24 +452,25 @@ fn has_attribute(method: &ClassMethod, name: &str) -> bool {
     })
 }
 
-/// The provider named by a `#[DataProvider('method')]` attribute: its first argument, which
-/// must be a string literal. Any other shape is ignored, so the method runs once as usual.
-fn data_provider(method: &ClassMethod) -> Option<String> {
-    method.attributes.iter().find_map(|group| {
-        group.attributes.iter().find_map(|attribute| {
-            let is_provider = attribute
+/// The providers named by the method's `#[DataProvider('method')]` attributes, in
+/// declaration order: the first argument of each, which must be a string literal. Any other
+/// shape is ignored; a method with no provider runs once as usual.
+fn data_providers(method: &ClassMethod) -> Vec<String> {
+    method
+        .attributes
+        .iter()
+        .flat_map(|group| group.attributes.iter())
+        .filter(|attribute| {
+            attribute
                 .name
                 .last_segment()
-                .is_some_and(|segment| segment.eq_ignore_ascii_case("DataProvider"));
-            if !is_provider {
-                return None;
-            }
-            match attribute.args.first().map(|arg| &arg.kind) {
-                Some(ExprKind::StringLiteral(name)) => Some(name.clone()),
-                _ => None,
-            }
+                .is_some_and(|segment| segment.eq_ignore_ascii_case("DataProvider"))
         })
-    })
+        .filter_map(|attribute| match attribute.args.first().map(|arg| &arg.kind) {
+            Some(ExprKind::StringLiteral(name)) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Renders the driver: one runner built with the options, a fresh instance per test (or per
@@ -317,23 +486,25 @@ pub fn driver_source(tests: &[DiscoveredTest], options: &DriverOptions) -> Strin
     for (index, test) in tests.iter().enumerate() {
         let class = &test.class;
         let method = &test.method;
-        match &test.provider {
-            None => source.push_str(&format!(
+        if test.providers.is_empty() {
+            source.push_str(&format!(
                 "$__elephc_case_{index} = new \\{class}();\n\
                  $__elephc_runner->run($__elephc_case_{index}, '{method}', fn() => $__elephc_case_{index}->{method}());\n"
-            )),
-            Some(provider) => {
-                let arguments = (0..test.parameter_count)
-                    .map(|position| format!("$__elephc_args_{index}[{position}]"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                source.push_str(&format!(
-                    "foreach (\\{class}::{provider}() as $__elephc_key_{index} => $__elephc_args_{index}) {{\n\
-                     \x20   $__elephc_case_{index} = new \\{class}();\n\
-                     \x20   $__elephc_runner->runWithData($__elephc_case_{index}, '{method}', fn() => $__elephc_case_{index}->{method}({arguments}), $__elephc_key_{index});\n\
-                     }}\n"
-                ));
-            }
+            ));
+            continue;
+        }
+        let arguments = (0..test.parameter_count)
+            .map(|position| format!("$__elephc_args_{index}[{position}]"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let quoted_class = php_single_quoted(class);
+        for provider in &test.providers {
+            source.push_str(&format!(
+                "foreach ($__elephc_runner->rows('{quoted_class}', '{method}', fn() => \\{class}::{provider}()) as $__elephc_key_{index} => $__elephc_args_{index}) {{\n\
+                 \x20   $__elephc_case_{index} = new \\{class}();\n\
+                 \x20   $__elephc_runner->runWithData($__elephc_case_{index}, '{method}', fn() => $__elephc_case_{index}->{method}({arguments}), $__elephc_key_{index});\n\
+                 }}\n"
+            ));
         }
     }
     source.push_str("exit($__elephc_runner->finish());\n");
@@ -487,14 +658,14 @@ final class BetaTest extends TestCase { public function testOne(): void {} }
     }
 
     /// The driver bakes the options into the runner, instantiates a fresh object per test,
-    /// expands a provider test into a `foreach` over its rows with the elements passed by
-    /// index, and exits with the runner's verdict.
+    /// expands a provider test into one `foreach` per provider over `Runner::rows()` with the
+    /// elements passed by index, and exits with the runner's verdict.
     #[test]
     fn driver_source_has_the_documented_shape() {
         let tests = vec![
-            DiscoveredTest { class: "App\\Tests\\AlphaTest".into(), method: "testOne".into(), parameter_count: 0, provider: None },
-            DiscoveredTest { class: "App\\Tests\\AlphaTest".into(), method: "testTwo".into(), parameter_count: 0, provider: None },
-            DiscoveredTest { class: "BetaTest".into(), method: "testAdds".into(), parameter_count: 2, provider: Some("sums".into()) },
+            DiscoveredTest { class: "App\\Tests\\AlphaTest".into(), method: "testOne".into(), parameter_count: 0, providers: vec![] },
+            DiscoveredTest { class: "App\\Tests\\AlphaTest".into(), method: "testTwo".into(), parameter_count: 0, providers: vec![] },
+            DiscoveredTest { class: "BetaTest".into(), method: "testAdds".into(), parameter_count: 2, providers: vec!["sums".into(), "more".into()] },
         ];
         let options = DriverOptions {
             filter: Some("it's".into()),
@@ -510,7 +681,11 @@ final class BetaTest extends TestCase { public function testOne(): void {} }
              $__elephc_runner->run($__elephc_case_0, 'testOne', fn() => $__elephc_case_0->testOne());\n\
              $__elephc_case_1 = new \\App\\Tests\\AlphaTest();\n\
              $__elephc_runner->run($__elephc_case_1, 'testTwo', fn() => $__elephc_case_1->testTwo());\n\
-             foreach (\\BetaTest::sums() as $__elephc_key_2 => $__elephc_args_2) {\n\
+             foreach ($__elephc_runner->rows('BetaTest', 'testAdds', fn() => \\BetaTest::sums()) as $__elephc_key_2 => $__elephc_args_2) {\n\
+             \x20   $__elephc_case_2 = new \\BetaTest();\n\
+             \x20   $__elephc_runner->runWithData($__elephc_case_2, 'testAdds', fn() => $__elephc_case_2->testAdds($__elephc_args_2[0], $__elephc_args_2[1]), $__elephc_key_2);\n\
+             }\n\
+             foreach ($__elephc_runner->rows('BetaTest', 'testAdds', fn() => \\BetaTest::more()) as $__elephc_key_2 => $__elephc_args_2) {\n\
              \x20   $__elephc_case_2 = new \\BetaTest();\n\
              \x20   $__elephc_runner->runWithData($__elephc_case_2, 'testAdds', fn() => $__elephc_case_2->testAdds($__elephc_args_2[0], $__elephc_args_2[1]), $__elephc_key_2);\n\
              }\n\
@@ -518,8 +693,8 @@ final class BetaTest extends TestCase { public function testOne(): void {} }
         );
     }
 
-    /// A `#[DataProvider]` attribute names the provider; a filter keeps provider tests for
-    /// the runner to decide on their run-time labels.
+    /// Every `#[DataProvider]` attribute names a provider, in order; a filter keeps provider
+    /// tests for the runner to decide on their run-time labels.
     #[test]
     fn data_providers_are_discovered_and_survive_the_filter() {
         let program = resolved(
@@ -527,16 +702,18 @@ final class BetaTest extends TestCase { public function testOne(): void {} }
 use Elephc\Testing\TestCase;
 final class T extends TestCase {
     public static function sums(): array { return [[1, 2, 3]]; }
+    public static function more(): array { return [[2, 2, 4]]; }
     #[DataProvider('sums')]
+    #[DataProvider('more')]
     public function testAdds(int $a, int $b, int $sum): void {}
     public function testPlain(): void {}
 }
 "#,
         );
         let tests = discover(&program, None).expect("discovery");
-        assert_eq!(tests[0].provider.as_deref(), Some("sums"));
+        assert_eq!(tests[0].providers, vec!["sums".to_string(), "more".to_string()]);
         assert_eq!(tests[0].parameter_count, 3);
-        assert_eq!(tests[1].provider, None);
+        assert!(tests[1].providers.is_empty());
         let filtered = discover(&program, Some("testPlain")).expect("discovery");
         assert_eq!(
             filtered.iter().map(|test| test.method.as_str()).collect::<Vec<_>>(),
@@ -555,5 +732,47 @@ final class T extends TestCase {
         let appended = append_driver(program, &options()).expect("driver must append");
         // One runner assignment, one instance, one run call, one exit.
         assert_eq!(appended.len(), before + 4);
+    }
+
+    /// Test methods supplied by traits are discovered, through nested trait uses, with
+    /// `insteadof` exclusions, aliases, visibility changes, and the class's own override.
+    #[test]
+    fn trait_supplied_tests_are_discovered() {
+        let found = names(
+            r#"<?php
+use Elephc\Testing\TestCase;
+trait Base { public function testFromBase(): void {} }
+trait Shared {
+    use Base;
+    public function testShared(): void {}
+    public function testHidden(): void {}
+    public function helper(): void {}
+    public function testOverridden(): void {}
+}
+trait Other { public function testShared(): void {} }
+final class T extends TestCase {
+    use Shared, Other {
+        Shared::testShared insteadof Other;
+        Other::testShared as testOtherShared;
+        testHidden as private;
+        helper as public testAliasedHelper;
+    }
+    public function testOverridden(): void {}
+    public function testOwn(): void {}
+}
+"#,
+            None,
+        );
+        assert_eq!(
+            found,
+            vec![
+                "T::testOverridden",
+                "T::testOwn",
+                "T::testShared",
+                "T::testAliasedHelper",
+                "T::testFromBase",
+                "T::testOtherShared",
+            ]
+        );
     }
 }

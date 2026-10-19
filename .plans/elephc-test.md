@@ -261,8 +261,10 @@ needs.
 every executable host, so isolation is PHP code inside the prelude, not new
 runtime: the runner forks, the child runs the test and exits with a status that
 encodes the outcome, and the parent maps an abnormal status to `ERROR` with the
-signal name. Output and assertion counts cross the fork boundary through a pipe
-(`stream_socket_pair`) or, failing that, a temporary file. Timeouts use
+signal name. Output and assertion counts cross the fork boundary through a
+temporary file the parent reads after `pcntl_waitpid` (a pipe was the first design;
+a process the test forks and leaves running inherits a pipe's write end and stalls
+the parent's read, so the file won). A failed fork is an `ERROR`. Timeouts use
 `pcntl_alarm` in the child. `--no-isolation` disables it for speed and for
 debuggers. iOS targets are library-only and never run the runner.
 

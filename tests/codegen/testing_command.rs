@@ -385,9 +385,9 @@ final class SlowTest extends TestCase {
 fn test_cli_test_writes_a_junit_report() {
     let dir = make_cli_test_dir("elephc_cli_test_junit");
     write_lifecycle_project(&dir);
+    fs::create_dir_all(dir.join("out")).unwrap();
     let (_, stderr, code) = run_test_command(&dir, &["--junit", "out/report.xml", "--filter", "Fresh"]);
     assert_eq!(code, 0, "stderr: {stderr}");
-    fs::create_dir_all(dir.join("out")).ok();
     let (_, stderr, code) = run_test_command(&dir, &["--junit", "out/report.xml"]);
     assert_eq!(code, 1, "stderr: {stderr}");
     let report = fs::read_to_string(dir.join("out/report.xml")).expect("the report is written where the caller pointed");
@@ -497,5 +497,168 @@ fn test_cli_test_ignores_an_installed_phpunit() {
         "stderr: {stderr}"
     );
     assert_eq!(code, 0);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Writes a project exercising the review fixes: trait-supplied tests, several providers on
+/// one test, a provider that throws, a tearDown that throws after a failure, a binary failure
+/// message, and a test that leaves a forked descendant running.
+fn write_review_project(dir: &Path) {
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{ "autoload-dev": { "psr-4": { "App\\Tests\\": "tests/" } } }"#).unwrap();
+    fs::write(
+        dir.join("tests/SharedChecks.lfc"),
+        r#"namespace App\Tests;
+trait SharedChecks {
+    public function testFromTrait(): void { $this->assertTrue(true); }
+    public function helper(): void { $this->assertTrue(true); }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("tests/ReviewTest.lfc"),
+        r#"namespace App\Tests;
+use Elephc\Testing\TestCase;
+final class ReviewTest extends TestCase {
+    use SharedChecks { helper as public testAliasedHelper; }
+
+    private bool $skipInTearDown = false;
+
+    protected function tearDown(): void {
+        if ($this->skipInTearDown) {
+            $this->markTestSkipped('cleanup skip');
+        }
+    }
+
+    public static function small(): array { return ['one' => [1]]; }
+    public static function large(): array { return ['hundred' => [100]]; }
+    public static function broken(): array { throw new \RuntimeException('provider broke'); }
+
+    #[DataProvider('small')]
+    #[DataProvider('large')]
+    public function testPositive(int $n): void { $this->assertGreaterThan(0, $n); }
+
+    #[DataProvider('broken')]
+    public function testFromBrokenProvider(int $n): void { $this->assertSame(1, $n); }
+
+    public function testFailureSurvivesTearDown(): void {
+        $this->skipInTearDown = true;
+        $this->assertSame(1, 2);
+    }
+
+    public function testBinaryMessage(): void {
+        $this->fail("bad\0data");
+    }
+
+    public function testLeavesADescendant(): void {
+        file_put_contents(__DIR__ . '/descendant-started', (string) microtime(true));
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            usleep(3000000);
+            exit(0);
+        }
+        $this->assertTrue(true);
+    }
+
+    public function testRunsWhileTheDescendantLives(): void {
+        $started = (float) file_get_contents(__DIR__ . '/descendant-started');
+        $this->assertLessThan(2.0, microtime(true) - $started);
+    }
+}
+"#,
+    )
+    .unwrap();
+}
+
+/// Trait-supplied tests (and aliases) are discovered, every provider of a test runs, a
+/// provider that throws is that test's ERROR and the suite continues, a tearDown that throws
+/// after a failure does not hide it, and a forked descendant does not block the runner.
+#[test]
+fn test_cli_test_review_fixes() {
+    let dir = make_cli_test_dir("elephc_cli_test_review_fixes");
+    write_review_project(&dir);
+    let (stdout, stderr, code) = run_test_command(&dir, &["--junit", "report.xml"]);
+    assert_eq!(
+        stdout,
+        "ok   App\\Tests\\ReviewTest::testPositive with data set \"one\" (1 assertion)\n\
+         ok   App\\Tests\\ReviewTest::testPositive with data set \"hundred\" (1 assertion)\n\
+         ERROR App\\Tests\\ReviewTest::testFromBrokenProvider\n\
+         \x20    The data provider failed: RuntimeException: provider broke\n\
+         FAIL App\\Tests\\ReviewTest::testFailureSurvivesTearDown\n\
+         \x20    Failed asserting that 2 is identical to 1.\n\
+         FAIL App\\Tests\\ReviewTest::testBinaryMessage\n\
+         \x20    bad\0data\n\
+         ok   App\\Tests\\ReviewTest::testLeavesADescendant (1 assertion)\n\
+         ok   App\\Tests\\ReviewTest::testRunsWhileTheDescendantLives (1 assertion)\n\
+         ok   App\\Tests\\ReviewTest::testFromTrait (1 assertion)\n\
+         ok   App\\Tests\\ReviewTest::testAliasedHelper (1 assertion)\n\
+         \n\
+         Tests: 9, Assertions: 7, Failures: 2, Errors: 1.\n",
+        "stderr: {stderr}"
+    );
+    assert_eq!(code, 1);
+    let report = fs::read_to_string(dir.join("report.xml")).expect("the report is written");
+    assert!(!report.contains('\0'), "XML 1.0 forbids NUL: {report:?}");
+    assert!(report.contains("<failure type=\"failure\">bad?data</failure>"), "{report}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A JUnit report that cannot be written is reported on stderr and fails an otherwise
+/// green run, instead of disappearing silently.
+#[test]
+fn test_cli_test_unwritable_junit_report_fails_the_run() {
+    let dir = make_cli_test_dir("elephc_cli_test_unwritable_junit");
+    write_review_project(&dir);
+    let (stdout, stderr, code) =
+        run_test_command(&dir, &["--filter", "testFromTrait", "--junit", "missing/dir/report.xml"]);
+    assert!(stdout.ends_with("OK (1 test, 1 assertion)\n"), "{stdout}");
+    assert!(stderr.contains("Could not write the JUnit report to"), "{stderr}");
+    assert_eq!(code, 1);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Two concurrent runs of one project with different filters each run their own binary.
+#[test]
+fn test_cli_test_concurrent_runs_do_not_share_a_binary() {
+    let dir = make_cli_test_dir("elephc_cli_test_concurrent");
+    write_project(&dir);
+    let spawn = |filter: &str| {
+        elephc_cli_command(&dir)
+            .args(["test", "--filter", filter])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("failed to start elephc test")
+    };
+    let counter = spawn("CounterTest::testStartsAtZero");
+    let strings = spawn("typedAssertions");
+    let counter = counter.wait_with_output().expect("counter run");
+    let strings = strings.wait_with_output().expect("strings run");
+    let counter_out = String::from_utf8_lossy(&counter.stdout);
+    let strings_out = String::from_utf8_lossy(&strings.stdout);
+    assert_eq!(counter_out, "ok   App\\Tests\\CounterTest::testStartsAtZero (1 assertion)\n\nOK (1 test, 1 assertion)\n");
+    assert_eq!(strings_out, "ok   App\\Tests\\Unit\\StringsTest::typedAssertions (2 assertions)\n\nOK (1 test, 2 assertions)\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A hand-written entry whose only reference to the runtime is inside an autoloaded class
+/// still gets the runtime: the post-autoload pass injects it.
+#[test]
+fn test_runtime_referenced_only_from_an_autoloaded_class() {
+    let dir = make_cli_test_dir("elephc_cli_test_autoloaded_runner");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{ "autoload": { "psr-4": { "App\\": "src/" } } }"#).unwrap();
+    fs::write(
+        dir.join("src/Suite.php"),
+        "<?php\nnamespace App;\nfinal class Suite {\n    public function run(): int {\n        $runner = new \\Elephc\\Testing\\Runner(false);\n        return $runner->finish();\n    }\n}\n",
+    )
+    .unwrap();
+    fs::write(dir.join("main.php"), "<?php\n$suite = new App\\Suite();\nexit($suite->run() === 1 ? 0 : 1);\n").unwrap();
+    let compile = elephc_cli_command(&dir).args(["main.php", "--quiet"]).output().expect("compile");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = std::process::Command::new(dir.join("main")).output().expect("run");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "\nNo tests executed!\n");
+    assert!(run.status.success());
     let _ = fs::remove_dir_all(&dir);
 }

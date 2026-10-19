@@ -10,10 +10,12 @@
 //! - The entry is VIRTUAL: `<root>/.elephc-test.lfc` is never written. Its directory is what
 //!   the Composer autoload registry reads, so `autoload` and `autoload-dev` from the root
 //!   `composer.json` resolve test and project classes without a second manifest.
-//! - The binary is built under the per-user cache (`<cache>/elephc/test/<project hash>/`),
-//!   never beside the sources: a suite leaves no artifacts in the project, and a compile
-//!   error (which ends the process inside the pipeline) leaks nothing but a cache entry that
-//!   the next run overwrites.
+//! - The binary is built under the per-user cache, never beside the sources, in a directory
+//!   of its own per invocation (`<cache>/elephc/test/<project hash>/<pid>/`): two concurrent
+//!   runs of one project, with different filters, can never run each other's binary. The
+//!   directory is removed after the run; one left behind by a compile error (which ends the
+//!   process inside the pipeline) or a crash is removed by the next run, which deletes every
+//!   sibling whose process is no longer alive.
 //! - Compile options after the path are the ordinary ones; output-mode and target flags are
 //!   refused up front because the runner always builds and runs a host executable.
 //! - Isolation, timeout, filter and the JUnit path are not compiler options: they are baked
@@ -76,7 +78,9 @@ fn run_inner(command: TestCommand) -> Result<i32, String> {
         .to_str()
         .ok_or("the project path is not valid UTF-8")?
         .to_string();
-    let build_dir = build_dir(&root);
+    let project_dir = project_build_dir(&root);
+    prune_abandoned_builds(&project_dir);
+    let build_dir = project_dir.join(std::process::id().to_string());
     std::fs::create_dir_all(&build_dir)
         .map_err(|error| format!("cannot create '{}': {error}", build_dir.display()))?;
     let output_stem = build_dir.join(OUTPUT_STEM);
@@ -109,9 +113,9 @@ fn run_inner(command: TestCommand) -> Result<i32, String> {
     crate::pipeline::compile_test(config, &entry_source, &output_stem, &options);
 
     let binary = build_dir.join(OUTPUT_STEM);
-    let status = Command::new(&binary)
-        .status()
-        .map_err(|error| format!("cannot run '{}': {error}", binary.display()))?;
+    let status = Command::new(&binary).status();
+    let _ = std::fs::remove_dir_all(&build_dir);
+    let status = status.map_err(|error| format!("cannot run '{}': {error}", binary.display()))?;
     Ok(exit_code(status))
 }
 
@@ -132,12 +136,89 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     1
 }
 
-/// The per-project build directory: one cache entry per project root, so repeated runs
-/// overwrite their own artifacts and different projects never collide.
-fn build_dir(root: &Path) -> PathBuf {
+/// The per-project parent of the per-invocation build directories, keyed by a hash of the
+/// project root so different projects never share one.
+fn project_build_dir(root: &Path) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     root.hash(&mut hasher);
     crate::runtime_cache::runtime_cache_dir()
         .join("test")
         .join(format!("{:016x}", hasher.finish()))
+}
+
+/// Removes the build directories under `project_dir` whose owning process (the directory's
+/// name is its pid) is no longer alive: what a compile error or a crash left behind.
+fn prune_abandoned_builds(project_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(project_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(pid) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if pid != std::process::id() as i32 && !process_is_alive(pid) {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+/// Whether a process with this pid exists: `kill(pid, 0)` succeeds, or fails only because
+/// the process belongs to someone else (`EPERM`).
+fn process_is_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 performs only the existence and permission check, delivering nothing.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit tests for the per-invocation build directories of `elephc test`.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - A pid far above any real pid stands for a process that no longer exists.
+
+    use super::*;
+
+    /// Pruning removes directories of dead processes and keeps the live one and anything
+    /// that is not a pid-named directory.
+    #[test]
+    fn prunes_only_directories_of_dead_processes() {
+        let project_dir = std::env::temp_dir().join(format!(
+            "elephc_test_prune_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&project_dir);
+        let dead = project_dir.join("2147483000");
+        let live = project_dir.join(std::process::id().to_string());
+        let other = project_dir.join("notes");
+        for dir in [&dead, &live, &other] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        prune_abandoned_builds(&project_dir);
+        assert!(!dead.exists(), "a dead process's build directory is removed");
+        assert!(live.exists(), "the running process's build directory is kept");
+        assert!(other.exists(), "a directory that is not a pid is left alone");
+        let _ = std::fs::remove_dir_all(&project_dir);
+    }
+
+    /// `kill(pid, 0)` reports this process alive and an impossible pid dead.
+    #[test]
+    fn process_liveness_check() {
+        assert!(process_is_alive(std::process::id() as i32));
+        assert!(!process_is_alive(2147483000));
+        assert!(!process_is_alive(0));
+    }
 }

@@ -350,6 +350,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         .expect("autoload DOM prelude injection failed");
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
+    let resolved = elephc::testing_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
+        .expect("testing prelude post-autoload injection failed");
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are

@@ -67,7 +67,9 @@ def main() -> int:
     project = args.project.resolve()
     # Both suites run inside PROJECT, so a relative binary path is resolved from here.
     elephc = str(Path(args.elephc).resolve()) if os.sep in args.elephc else args.elephc
-    phpunit = Path(args.phpunit) if args.phpunit else project / "vendor" / "bin" / "phpunit"
+    # Both suites run inside PROJECT, so explicit paths are resolved from the caller's
+    # directory first: a relative path would otherwise pass `exists()` here and then fail.
+    phpunit = Path(args.phpunit).resolve() if args.phpunit else project / "vendor" / "bin" / "phpunit"
     if not phpunit.exists():
         print(f"error: PHPUnit not found at {phpunit}; run `composer require --dev phpunit/phpunit` in {project}", file=sys.stderr)
         return 2
@@ -89,6 +91,11 @@ def main() -> int:
             return 2
         expected = parse_junit(reference)
         actual = parse_junit(compiled)
+
+    if not expected:
+        # An empty reference compares nothing: it would report every outcome as matching.
+        print("error: PHPUnit's report has no test cases; nothing to compare", file=sys.stderr)
+        return 2
 
     mismatches = []
     for key, outcome in sorted(expected.items()):

@@ -54,8 +54,19 @@ abstract class TestCase
         $this->setUp();
         try {
             $this->__elephc_invoke($test);
-        } finally {
+        } catch (\Throwable $thrown) {
+            $this->__elephc_tear_down_after_failure();
+            throw $thrown;
+        }
+        $this->tearDown();
+    }
+
+    private function __elephc_tear_down_after_failure(): void
+    {
+        try {
             $this->tearDown();
+        } catch (\Throwable) {
+            return;
         }
     }
 
@@ -394,6 +405,7 @@ final class Runner
     private int $timeout;
     private string $filter;
     private string $junit;
+    private bool $reportFailed = false;
     private array $results = [];
     private float $started;
 
@@ -409,6 +421,25 @@ final class Runner
     public function run(TestCase $case, string $name, callable $test): void
     {
         $this->runLabelled($case, $name, $test);
+    }
+
+    public function rows(string $class, string $name, callable $provider): array
+    {
+        try {
+            $rows = $provider();
+            if (is_array($rows)) {
+                return (array) $rows;
+            }
+            throw new \UnexpectedValueException('it returned ' . gettype($rows) . ', not an array');
+        } catch (\Throwable $error) {
+            $label = $class . '::' . $name;
+            if ($this->filter !== '' && !str_contains($label, $this->filter)) {
+                return [];
+            }
+            $this->tests++;
+            $this->record($class, $name, $label, "error\n0\nThe data provider failed: " . get_class($error) . ': ' . $error->getMessage(), 0.0);
+            return [];
+        }
     }
 
     public function runWithData(TestCase $case, string $name, callable $test, mixed $dataSet): void
@@ -455,29 +486,28 @@ final class Runner
 
     private function runIsolated(TestCase $case, callable $test): string
     {
-        $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        $path = tempnam(sys_get_temp_dir(), 'elephc-test-');
+        if ($path === false) {
+            return "error\n0\nCould not create the isolated test's result file";
+        }
         $pid = pcntl_fork();
         if ($pid === -1) {
-            fclose($pair[0]);
-            fclose($pair[1]);
-            return $this->execute($case, $test);
+            unlink($path);
+            return "error\n0\nCould not fork an isolated test process";
         }
         if ($pid === 0) {
-            fclose($pair[0]);
             if ($this->timeout > 0) {
                 pcntl_alarm($this->timeout);
             }
             $childRecord = $this->execute($case, $test);
-            fwrite($pair[1], $childRecord);
-            fclose($pair[1]);
+            file_put_contents($path, $childRecord);
             exit(0);
         }
-        fclose($pair[1]);
-        $payload = stream_get_contents($pair[0]);
-        fclose($pair[0]);
-        $record = is_string($payload) ? $payload : '';
         $status = 0;
         pcntl_waitpid($pid, $status);
+        $payload = file_get_contents($path);
+        unlink($path);
+        $record = is_string($payload) ? $payload : '';
         if ($record !== '' && pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0) {
             return $record;
         }
@@ -567,11 +597,11 @@ final class Runner
         if ($this->failures === 0 && $this->errors === 0) {
             if ($this->skipped === 0 && $this->incomplete === 0) {
                 echo 'OK (' . $this->tests . ($this->tests === 1 ? ' test, ' : ' tests, ') . $this->assertions . ($this->assertions === 1 ? ' assertion)' : ' assertions)') . "\n";
-                return 0;
+                return $this->reportFailed ? 1 : 0;
             }
             echo "OK, but there were issues!\n";
             echo 'Tests: ' . $this->tests . ', Assertions: ' . $this->assertions . $this->issueCounts() . '.' . "\n";
-            return 0;
+            return $this->reportFailed ? 1 : 0;
         }
         echo 'Tests: ' . $this->tests . ', Assertions: ' . $this->assertions . ', Failures: ' . $this->failures . ', Errors: ' . $this->errors . $this->issueCounts() . '.' . "\n";
         return 1;
@@ -609,16 +639,17 @@ final class Runner
         }
         $xml .= '  </testsuite>' . "\n";
         $xml .= '</testsuites>' . "\n";
-        file_put_contents($this->junit, $xml);
+        $written = file_put_contents($this->junit, $xml);
+        if (!is_int($written) || $written !== strlen($xml)) {
+            $this->reportFailed = true;
+            fwrite(STDERR, 'Could not write the JUnit report to ' . $this->junit . "\n");
+        }
     }
 
     private function xmlEscape(string $text): string
     {
-        $text = str_replace('&', '&amp;', $text);
-        $text = str_replace('<', '&lt;', $text);
-        $text = str_replace('>', '&gt;', $text);
-        $text = str_replace('"', '&quot;', $text);
-        return str_replace("'", '&apos;', $text);
+        $text = strtr($text, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", '?????????????????????????????');
+        return htmlspecialchars($text, ENT_XML1 | ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 }
 

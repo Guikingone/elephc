@@ -21,7 +21,8 @@
 //!   `cfg(test)` as the node-by-node parse-parity oracle.
 //! - PAY-FOR-USE. Injected only when `detect::program_uses_testing` finds a reference to the
 //!   `Elephc\Testing` namespace or to the PHPUnit alias, or when the caller forces it
-//!   (`elephc test`). The prelude carries only declarations, so prepending it is
+//!   (`elephc test`). A reference that only an autoloaded file carries is caught by
+//!   `inject_after_autoload`, which the pipeline runs after `autoload::run`. The prelude carries only declarations, so prepending it is
 //!   order-independent. Its declarations are recorded in the inventory group `testing`.
 //! - The report format the runner prints (`ok   Class::method (n assertions)`, `FAIL`,
 //!   `ERROR`, `OK (...)`, `Tests: ...`) is a stable surface consumed by Ivory's `make test`
@@ -76,6 +77,31 @@ fn inject_if_used_on_compiler_stack(
     inventory.record_program(INVENTORY_GROUP, &combined);
     combined.extend(program);
     combined
+}
+
+/// Injects the testing prelude after autoloading when a file the autoloader brought in is
+/// the first to reference the runtime (an entry calling a helper class that builds a
+/// `Runner`, for instance), and the pre-resolution pass therefore did not inject it.
+///
+/// The declarations are name-resolved on the way in, exactly as `autoload::run` resolves the
+/// files it splices, because this position is past the pipeline's own name resolution. A
+/// program that already carries the prelude (the `testing` inventory group exists) is
+/// returned unchanged.
+pub fn inject_after_autoload(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Result<Program, crate::errors::CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        if inventory.groups.contains_key(INVENTORY_GROUP)
+            || !detect::program_uses_testing(&program)
+        {
+            return Ok(program);
+        }
+        let mut combined = crate::name_resolver::resolve(testing_declarations())?;
+        inventory.record_program(INVENTORY_GROUP, &combined);
+        combined.extend(program);
+        Ok(combined)
+    })
 }
 
 /// Parses the PHP form of the prelude exactly as the compiler would at injection time; the
@@ -287,6 +313,24 @@ mod inventory_tests {
         let injected = inject_if_used(program.clone(), false, &mut inventory);
         assert_eq!(injected.len(), program.len());
         assert!(inventory.groups.get(INVENTORY_GROUP).is_none());
+    }
+
+    /// A reference that appears only after autoloading injects the resolved prelude once; a
+    /// program that already carries it is left alone.
+    #[test]
+    fn post_autoload_injection_fills_the_gap_once() {
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        let tokens = crate::lexer::tokenize(
+            "<?php namespace App; final class Suite { public function run(): int { $r = new \\Elephc\\Testing\\Runner(); return $r->finish(); } }",
+        )
+        .expect("tokenize");
+        let program = crate::name_resolver::resolve(crate::parser::parse(&tokens).expect("parse"))
+            .expect("resolve");
+        let injected = inject_after_autoload(program.clone(), &mut inventory).expect("inject");
+        assert!(injected.len() > program.len(), "the prelude is prepended");
+        assert!(inventory.groups.contains_key(INVENTORY_GROUP));
+        let again = inject_after_autoload(injected.clone(), &mut inventory).expect("inject");
+        assert_eq!(again.len(), injected.len(), "a second pass adds nothing");
     }
 
     /// A suite that imports the runtime class gets the prelude prepended.

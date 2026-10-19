@@ -657,6 +657,20 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     // `unsupported EIR backend feature: language construct __elephc_cast_object`. The
     // declarations are name-resolved on the way in, exactly as `autoload::run` resolves the
     // files it splices, because the position is past the pipeline's own name-resolution pass.
+    // The testing runtime, when only an autoloaded file references it: the pass before name
+    // resolution saw the entry and its includes, not the classes autoloading just spliced in.
+    crate::progress::phase("testing-autoload-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::testing_prelude::inject_after_autoload(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("testing-autoload-prelude", phase_started);
+
     crate::progress::phase("object-cast-prelude");
     let phase_started = Instant::now();
     let ast = match crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory) {

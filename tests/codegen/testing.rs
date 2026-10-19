@@ -414,9 +414,8 @@ $t->testIt();
 }
 
 /// The whole report path (boxed `mixed` operands, failure strings, caught exceptions, the
-/// closure per test) leaves a clean heap under heap debugging. Isolation is off: the
-/// `stream_socket_pair()` the forked path uses leaks its result array in the parent
-/// (journal task), which is the builtin's bug, not the runner's.
+/// closure per test, and the forked isolation with its result file) leaves a clean heap
+/// under heap debugging, in the parent and in every child.
 #[test]
 fn test_suite_leaves_a_clean_heap() {
     let out = compile_and_run_with_heap_debug(&format!(
@@ -446,7 +445,7 @@ final class SuiteTest extends TestCase
 }}
 
 namespace {{
-$runner = new \Elephc\Testing\Runner(false);
+$runner = new \Elephc\Testing\Runner();
 $case = new App\Tests\SuiteTest();
 
 $runner->run($case, 'testPasses', fn() => $case->testPasses());
@@ -463,4 +462,9 @@ $runner->finish();
     );
     assert!(out.stdout.contains("Tests: 3, Assertions: 4, Failures: 1, Errors: 1.\n"), "{}", out.stdout);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(
+        !out.stderr.contains("leak summary: live_blocks"),
+        "every process, parent and isolated children, must be leak-free: {}",
+        out.stderr
+    );
 }
