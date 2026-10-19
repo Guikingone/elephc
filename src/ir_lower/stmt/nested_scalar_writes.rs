@@ -14,10 +14,10 @@ use crate::ir::RuntimeFnId;
 /// Selects a string offset write or the existing array/object setter using the runtime parent.
 pub(super) fn lower_nested_set(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
-    key: LoweredValue, value: LoweredValue, span: Span,
+    key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
-        emit_set(ctx, parent, key, value, span);
+        emit_set(ctx, parent, key, value, span, key_already_diagnosed);
         return;
     }
     let string = predicate(ctx, parent, crate::ir::PhpTypePredicate::String, span);
@@ -45,9 +45,9 @@ pub(super) fn lower_nested_set(
     let empty = lower_expr(ctx, &Expr::new(ExprKind::ArrayLiteral(Vec::new()), span));
     replace_cell(ctx, parent, empty, span);
     crate::ir_lower::ownership::release_if_owned(ctx, empty, Some(span));
-    lower_false_write(ctx, parent, key, value, done, span);
+    lower_false_write(ctx, parent, key, value, done, span, key_already_diagnosed);
     ctx.builder.position_at_end(store);
-    emit_set(ctx, parent, key, value, span);
+    emit_set(ctx, parent, key, value, span, key_already_diagnosed);
     ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
     ctx.builder.position_at_end(done);
     ctx.restore_initialized_slots(initialized);
@@ -57,6 +57,7 @@ pub(super) fn lower_nested_set(
 fn lower_false_write(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     key: LoweredValue, value: LoweredValue, done: BlockId, span: Span,
+    key_already_diagnosed: bool,
 ) {
     let caught = ctx.builder.create_named_block("nested.write.false.handler.throw", Vec::new());
     let token = caught.as_raw() as i64;
@@ -64,7 +65,7 @@ fn lower_false_write(
         Op::TryPushHandler.default_effects(), Some(span));
     diagnostic(ctx, "Deprecated: Automatic conversion of false to array is deprecated\n", span);
     super::exceptions::emit_try_pop_handler(ctx, token, span);
-    emit_set(ctx, parent, key, value, span);
+    emit_set(ctx, parent, key, value, span, key_already_diagnosed);
     ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
 
     ctx.builder.position_at_end(caught);
@@ -89,7 +90,7 @@ fn lower_false_write(
     let rethrow = ctx.builder.create_named_block("nested.write.false.pending.rethrow", Vec::new());
     branch(ctx, direct, insert, check);
     ctx.builder.position_at_end(insert);
-    emit_set(ctx, parent, key, value, span);
+    emit_set(ctx, parent, key, value, span, key_already_diagnosed);
     ctx.builder.terminate(Terminator::Br { target: rethrow, args: Vec::new() });
     ctx.builder.position_at_end(check);
     let array = predicate(ctx, key, crate::ir::PhpTypePredicate::Array, span);
@@ -282,8 +283,9 @@ fn replace_cell(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, value: 
 
 /// Uses the unchanged native array/object setter for a non-string parent.
 fn emit_set(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
-    key: LoweredValue, value: LoweredValue, span: Span) {
-    ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value], None,
+    key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool) {
+    ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value],
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
         effects_lookup::runtime_effects(), Some(span));
 }
 
