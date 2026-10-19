@@ -10,6 +10,60 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// Discarded scoped prefix updates select one getter result for their read and write.
+#[test]
+fn test_static_receiver_prefix_getter_once() {
+    verify(r#"<?php
+class PrefixLeaf {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+}
+class PrefixRoot {
+    public int $reads = 0;
+    public ?PrefixLeaf $last = null;
+    public PrefixLeaf $child {
+        get { echo 'G'; $this->reads++; $this->last = new PrefixLeaf($this->reads * 10); return $this->last; }
+    }
+}
+class PrefixHolder {
+    public static ?PrefixRoot $root = null;
+    public static function update(): void {
+        ++self::$root->child->v;
+        echo ':', self::$root->last->v, ':', self::$root->reads, ';';
+        --static::$root->child->v;
+        echo ':', self::$root->last->v, ':', self::$root->reads, ';';
+    }
+}
+class PrefixDerived extends PrefixHolder {
+    public static function updateParent(): void {
+        ++parent::$root->child->v;
+        echo ':', parent::$root->last->v, ':', parent::$root->reads;
+    }
+}
+function prefixProperty(): string { echo 'N'; return 'v'; }
+PrefixHolder::$root = new PrefixRoot();
+++PrefixHolder::$root->child->v;
+echo ':', PrefixHolder::$root->last->v, ':', PrefixHolder::$root->reads, ';';
+--PrefixHolder::$root->child->v;
+echo ':', PrefixHolder::$root->last->v, ':', PrefixHolder::$root->reads, ';';
+PrefixHolder::update();
+PrefixDerived::updateParent();
+echo ';';
+++PrefixHolder::$root->child->{prefixProperty()};
+echo ':', PrefixHolder::$root->last->v, ':', PrefixHolder::$root->reads, ';';
+$name = 'v';
+--PrefixHolder::$root->child->$name;
+echo ':', PrefixHolder::$root->last->v, ':', PrefixHolder::$root->reads;
+PrefixHolder::$root = null;
+"#, "G:11:1;G:19:2;G:31:3;G:39:4;G:51:5;NG:61:6;G:69:7");
+}
+
+/// Scoped prefix receiver reuse also holds without EIR optimization.
+#[test]
+fn test_static_receiver_prefix_getter_once_no_ir_opt() {
+    without_ir_opt(test_static_receiver_prefix_getter_once);
+}
+
 /// Checks one array-interleaved static receiver with a fresh child on each legal reference getter.
 fn verify_compound_static_getter(receiver: &str, key: &str, statement: bool, nested: bool, expected: &str) {
     let target = format!("{receiver}->children[{key}]->v");

@@ -820,6 +820,17 @@ pub(crate) fn lower_postfix_incdec_assignment(
     };
     let one = Expr::new(ExprKind::IntLiteral(1), span);
 
+    if matches!(&lhs_expr.kind,
+        ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. }
+            if has_delayed_static_receiver(object))
+    {
+        // The expression path shares one static receiver between the read and write,
+        // including property hooks whose syntactically replayable reads return fresh objects.
+        let AssignmentOperator::Compound(op) = op else { unreachable!("incdec is a compound update"); };
+        let expression = crate::parser::expr::compound_assignment_expression(lhs_expr, op, one, span);
+        return Ok(Stmt::new(StmtKind::ExprStmt(expression), span));
+    }
+
     if !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_postfix_assignment(lhs_expr, op, one, span);
     }

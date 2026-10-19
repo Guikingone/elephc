@@ -481,6 +481,10 @@ fn parse_expr_bp_inner(
                 continue;
             }
             if is_non_local_assignment_target(&lhs) {
+                if let AssignmentOperator::Compound(op) = op {
+                    lhs = super::compound_assignment_expression(lhs, op, rhs, span);
+                    continue;
+                }
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 
                 let mut lowerer = AssignmentExpressionLowerer::new(span);
@@ -495,11 +499,6 @@ fn parse_expr_bp_inner(
                 } else {
                     lowerer.bind_value(&target, rhs)
                 };
-                let target = if matches!(op, AssignmentOperator::Compound(_)) {
-                    lowerer.snapshot_update_dimension(target)
-                } else {
-                    target
-                };
                 let (value, result_target) = match op {
                     AssignmentOperator::Assign => (rhs.clone(), rhs),
                     AssignmentOperator::NullCoalesce => {
@@ -511,16 +510,7 @@ fn parse_expr_bp_inner(
                         );
                         (value, target.clone())
                     }
-                    AssignmentOperator::Compound(op) => {
-                        let value = assignment_value(
-                            target.clone(),
-                            AssignmentOperator::Compound(op),
-                            rhs,
-                            span,
-                        );
-                        let result_value = lowerer.bind_result_value(value);
-                        (result_value.clone(), result_value)
-                    }
+                    AssignmentOperator::Compound(_) => unreachable!("compound expressions use the shared builder"),
                 };
                 let prelude = lowerer.finish();
                 lhs = Expr::new(

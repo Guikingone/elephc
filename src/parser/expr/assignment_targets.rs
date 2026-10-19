@@ -75,6 +75,27 @@ pub(crate) fn plain_assignment_expression(target: Expr, value: Expr, span: Span)
     )
 }
 
+/// Builds a compound expression whose captured dimensions are shared by its read and write.
+pub(crate) fn compound_assignment_expression(target: Expr, op: BinOp, rhs: Expr, span: Span) -> Expr {
+    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    let target = lowerer.stabilize_non_local_target(target, &rhs);
+    let rhs = if delayed_static_assignment_target(&target) {
+        lowerer.bind_result_value(rhs)
+    } else {
+        lowerer.bind_value(&target, rhs)
+    };
+    let target = lowerer.snapshot_update_dimension(target);
+    let value = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(target.clone()), op, right: Box::new(rhs),
+    }, span);
+    let result = lowerer.bind_result_value(value);
+    Expr::new(ExprKind::Assignment {
+        target: Box::new(target), value: Box::new(result.clone()),
+        result_target: Some(Box::new(result)), prelude: lowerer.finish(),
+        conditional_value_temp: None,
+    }, span)
+}
+
 /// Desugars `++$place` / `$place++` into a read-modify-write an expression can carry.
 ///
 /// The `Pre*`/`Post*` nodes hold a variable NAME, so a property, an array element, a static

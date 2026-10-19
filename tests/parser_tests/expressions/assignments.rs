@@ -158,15 +158,24 @@ fn test_parse_static_property_object_receiver_indexed_writes() {
     }
 }
 
-/// Scoped prefix updates use the same instance-property statement shape as postfix updates.
+/// Scoped prefix updates use the expression path that shares one property receiver.
 #[test]
 fn test_parse_static_property_object_receiver_prefix_statements() {
     for receiver in ["Holder", "self", "parent", "static"] {
         for operator in ["++", "--"] {
-            let source = format!("<?php {operator}{receiver}::$object->v;");
-            let statements = parse_source(&source);
-            assert!(matches!(&statements[0].kind, StmtKind::PropertyAssign { property, .. }
-                if property == "v"), "{source}: {:?}", statements[0]);
+            for tail in ["->v", "->child->v"] {
+                let source = format!("<?php {operator}{receiver}::$object{tail};");
+                let statements = parse_source(&source);
+                let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("{source}"); };
+                let ExprKind::Assignment { target, value, prelude, .. } = &expression.kind
+                    else { panic!("{source}"); };
+                assert!(matches!(&target.kind, ExprKind::PropertyAccess { property, .. }
+                    if property == "v"), "{source}: {:?}", statements[0]);
+                let ExprKind::Variable(result) = &value.kind else { panic!("{source}"); };
+                assert!(prelude.iter().any(|stmt| matches!(&stmt.kind,
+                    StmtKind::Assign { name, value: Expr { kind: ExprKind::BinaryOp { left, .. }, .. } }
+                        if name == result && left.as_ref() == target.as_ref())), "{source}");
+            }
         }
     }
 }
