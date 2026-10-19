@@ -332,6 +332,16 @@ impl AssignmentExpressionLowerer {
                         },
                         array_span,
                     ),
+                    Expr {
+                        kind: ExprKind::DynamicPropertyAccess { object, property },
+                        span: array_span,
+                    } => Expr::new(
+                        ExprKind::DynamicPropertyAccess {
+                            object: Box::new(self.stabilize_receiver(*object, rhs)),
+                            property: Box::new(self.stabilize_dimension_index(*property, rhs)),
+                        },
+                        array_span,
+                    ),
                     other @ Expr {
                         kind: ExprKind::ArrayAccess { .. },
                         ..
