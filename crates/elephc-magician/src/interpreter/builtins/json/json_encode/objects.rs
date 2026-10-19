@@ -1,28 +1,29 @@
 //! Purpose:
-//! Encodes eval objects and enum cases through their PHP JSON serialization rules.
+//! Classifies eval objects before the iterative JSON encoder traverses them.
 //!
 //! Called from:
-//! - The parent encoder's object value dispatch.
+//! - `super::traversal::EvalJsonTraversal::encode_object()`.
 //!
 //! Key details:
-//! - Enum jsonSerialize() takes precedence over backing scalars and the unit enum error.
-//! - Callback results and backing property reads are released after recursive encoding.
-//! - Serializer recursion uses object identity across distinct boxed handles.
+//! - Enum `jsonSerialize()` takes precedence over backing scalars and unit enum errors.
+//! - Native enum metadata uses property initialization when implicit interfaces are absent.
 
 use super::*;
 
-/// Encodes enum overrides before falling back to ordinary public object properties.
-pub(super) fn eval_json_encode_append_object(
+/// Selects the PHP JSON representation for one object value.
+pub(super) enum EvalJsonObjectEncoding {
+    Properties,
+    SerializableEnum,
+    BackedEnum(RuntimeCellHandle),
+    UnitEnum,
+}
+
+/// Classifies an object and acquires any owned backing scalar needed by traversal.
+pub(super) fn eval_json_object_encoding(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-    flags: i64,
-    depth_limit: usize,
-    depth: usize,
-    arrays_seen: &mut Vec<usize>,
-    error: &mut Option<EvalJsonEncodeError>,
-    output: &mut Vec<u8>,
-) -> EvalJsonEncodeResult {
+) -> Result<EvalJsonObjectEncoding, EvalStatus> {
     let is_enum = match dynamic_object_is_a(value, "UnitEnum", false, context, values)? {
         Some(is_enum) => is_enum,
         None => {
@@ -31,205 +32,24 @@ pub(super) fn eval_json_encode_append_object(
             values.enum_exists(&class_name)?
         }
     };
-    if is_enum {
-        let is_serializable = dynamic_object_is_a(value, "JsonSerializable", false, context, values)?
-            .map_or_else(|| values.object_is_a(value, "JsonSerializable", false), Ok)?;
-        if is_serializable {
-            return append_enum_serialization(
-                value, context, values, flags, depth_limit, depth, arrays_seen, error, output,
-            );
-        }
-        let is_backed = match dynamic_object_is_a(value, "BackedEnum", false, context, values)? {
-            Some(is_backed) => is_backed,
-            // Native enum value slots use declared property initialization metadata.
-            None => values.property_is_initialized(value, "value")?,
-        };
-        if is_backed {
-            let backing = eval_property_get_result(value, "value", context, values)?;
-            let encoded = eval_json_encode_append(
-                backing, context, values, flags, depth_limit, depth, arrays_seen, error, output,
-            );
-            return release_encoded_value(backing, encoded, context, values);
-        }
-        output.push(b'0');
-        return eval_json_encode_record_error(flags, error, EvalJsonEncodeError {
-            code: EVAL_JSON_ERROR_NON_BACKED_ENUM,
-            message: "Non-backed enums have no default serialization",
-        });
+    if !is_enum {
+        return Ok(EvalJsonObjectEncoding::Properties);
     }
-    append_properties(
-        value, context, values, flags, depth_limit, depth, arrays_seen, error, output,
-    )
-}
 
-/// Runs an enum serializer once and encodes its owned result without adding a container level.
-fn append_enum_serialization(
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-    flags: i64,
-    depth_limit: usize,
-    depth: usize,
-    arrays_seen: &mut Vec<usize>,
-    error: &mut Option<EvalJsonEncodeError>,
-    output: &mut Vec<u8>,
-) -> EvalJsonEncodeResult {
-    let identity = values.object_identity(value)? as usize;
-    if arrays_seen.contains(&identity) {
-        output.extend_from_slice(b"null");
-        return eval_json_encode_record_error(flags, error,
-            EvalJsonEncodeError { code: 6, message: "Recursion detected" });
+    let is_serializable = dynamic_object_is_a(value, "JsonSerializable", false, context, values)?
+        .map_or_else(|| values.object_is_a(value, "JsonSerializable", false), Ok)?;
+    if is_serializable {
+        return Ok(EvalJsonObjectEncoding::SerializableEnum);
     }
-    arrays_seen.push(identity);
-    let result = eval_method_call_result(value, "jsonSerialize", Vec::new(), context, values);
-    let encoded = match result {
-        Ok(result) => {
-            let encoded = (|| {
-                if values.type_tag(result)? == EVAL_TAG_OBJECT
-                    && values.object_identity(result)? as usize == identity
-                {
-                    // PHP exposes the properties when jsonSerialize() returns its receiver.
-                    let native_receiver = dynamic_object_is_a(
-                        result, "UnitEnum", false, context, values,
-                    )?.is_none();
-                    arrays_seen.pop();
-                    let encoded = if native_receiver {
-                        append_native_enum_properties(
-                            result, context, values, flags, depth_limit, depth, arrays_seen, error, output,
-                        )
-                    } else {
-                        append_properties(
-                            result, context, values, flags, depth_limit, depth, arrays_seen, error, output,
-                        )
-                    };
-                    arrays_seen.push(identity);
-                    encoded
-                } else {
-                    eval_json_encode_append(
-                        result, context, values, flags, depth_limit, depth, arrays_seen, error, output,
-                    )
-                }
-            })();
-            release_encoded_value(result, encoded, context, values)
-        }
-        Err(status) => Err(status.into()),
+
+    let is_backed = match dynamic_object_is_a(value, "BackedEnum", false, context, values)? {
+        Some(is_backed) => is_backed,
+        // Native enum value slots use declared property initialization metadata.
+        None => values.property_is_initialized(value, "value")?,
     };
-    arrays_seen.pop();
-    encoded
-}
-
-/// Reads native enum properties explicitly because its bridge iterator covers only stdClass.
-fn append_native_enum_properties(
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-    flags: i64,
-    depth_limit: usize,
-    depth: usize,
-    arrays_seen: &mut Vec<usize>,
-    error: &mut Option<EvalJsonEncodeError>,
-    output: &mut Vec<u8>,
-) -> EvalJsonEncodeResult {
-    let count = if values.property_is_initialized(value, "value")? { 2 } else { 1 };
-    if !eval_json_encode_enter_array(value, values, flags, arrays_seen, error, output)? {
-        return Ok(());
+    if is_backed {
+        return eval_property_get_result(value, "value", context, values)
+            .map(EvalJsonObjectEncoding::BackedEnum);
     }
-    let encoded = (|| {
-        let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
-        output.push(b'{');
-        if pretty { output.push(b'\n'); }
-        for (position, name) in ["name", "value"].iter().take(count).enumerate() {
-            if position > 0 {
-                output.push(b',');
-                if pretty { output.push(b'\n'); }
-            }
-            if pretty { eval_json_encode_pretty_indent(output, depth + 1); }
-            output.push(b'"');
-            output.extend_from_slice(name.as_bytes());
-            output.push(b'"');
-            eval_json_encode_append_colon(flags, output);
-            let property = eval_property_get_result(value, name, context, values)?;
-            let encoded = eval_json_encode_append(
-                property, context, values, flags, depth_limit, depth + 1, arrays_seen, error, output,
-            );
-            release_encoded_value(property, encoded, context, values)?;
-        }
-        if pretty {
-            output.push(b'\n');
-            eval_json_encode_pretty_indent(output, depth);
-        }
-        output.push(b'}');
-        eval_json_encode_check_depth(depth_limit, depth, flags, error)
-    })();
-    arrays_seen.pop();
-    encoded
-}
-
-/// Appends public properties when no enum override applies, including a serializer returning itself.
-fn append_properties(
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-    flags: i64,
-    depth_limit: usize,
-    depth: usize,
-    arrays_seen: &mut Vec<usize>,
-    error: &mut Option<EvalJsonEncodeError>,
-    output: &mut Vec<u8>,
-) -> EvalJsonEncodeResult {
-    if !eval_json_encode_enter_array(value, values, flags, arrays_seen, error, output)? {
-        return Ok(());
-    }
-    let encoded = (|| {
-        let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
-        output.push(b'{');
-        let len = values.object_property_len(value)?;
-        if pretty && len > 0 {
-            output.push(b'\n');
-        }
-        for position in 0..len {
-            if position > 0 {
-                output.push(b',');
-                if pretty {
-                    output.push(b'\n');
-                }
-            }
-            if pretty {
-                eval_json_encode_pretty_indent(output, depth + 1);
-            }
-            let key = values.object_property_iter_key(value, position)?;
-            let key_bytes = values.string_bytes(key).map_err(EvalJsonEncodeFailure::Runtime);
-            let key_bytes = release_encoded_value(key, key_bytes, context, values)?;
-            eval_json_encode_append_string(
-                &key_bytes,
-                flags & !EVAL_JSON_NUMERIC_CHECK,
-                EvalJsonStringPosition::Key,
-                error,
-                output,
-            )?;
-            eval_json_encode_append_colon(flags, output);
-            let property = std::str::from_utf8(&key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-            let element = values.property_get(value, property)?;
-            let encoded = eval_json_encode_append(
-                element,
-                context,
-                values,
-                flags,
-                depth_limit,
-                depth + 1,
-                arrays_seen,
-                error,
-                output,
-            );
-            release_encoded_value(element, encoded, context, values)?;
-        }
-        if pretty && len > 0 {
-            output.push(b'\n');
-            eval_json_encode_pretty_indent(output, depth);
-        }
-        output.push(b'}');
-        eval_json_encode_check_depth(depth_limit, depth, flags, error)
-    })();
-    arrays_seen.pop();
-    encoded
+    Ok(EvalJsonObjectEncoding::UnitEnum)
 }

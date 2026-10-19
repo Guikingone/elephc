@@ -251,3 +251,46 @@ fn test_dynamic_eval_json_enum_callback_error_state() {
 fn test_dynamic_eval_json_enum_callback_error_state_without_ir_opt() {
     without_ir_opt(assert_enum_json_callback_error_state);
 }
+
+/// Compiles deep runtime containers through the real eval bridge and checks PHP lengths.
+fn assert_deep_dynamic_eval_json_stack_safety() {
+    let source = r#"<?php
+$code = $argc > 1 ? '' : '
+$array = 1;
+for ($i = 0; $i < 2000; $i++) { $array = [$array]; }
+foreach ([0, JSON_PARTIAL_OUTPUT_ON_ERROR, JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_FORCE_OBJECT] as $flags) {
+    $result = json_encode($array, $flags, 1);
+    echo ($result === false ? "false" : strlen($result)) . ":" . json_last_error() . "\n";
+}
+$object = 1;
+for ($i = 0; $i < 2000; $i++) {
+    $next = new stdClass;
+    $next->next = $object;
+    $object = $next;
+}
+foreach ([0, JSON_PARTIAL_OUTPUT_ON_ERROR] as $flags) {
+    $result = json_encode($object, $flags, 1);
+    echo ($result === false ? "false" : strlen($result)) . ":" . json_last_error() . "\n";
+}
+echo "after";
+';
+eval($code);
+"#;
+    let expected = "false:1\n4001:1\n12001:1\nfalse:1\n18001:1\nafter";
+    assert_eq!(compile_and_run(source), expected);
+    let debug = compile_and_run_with_heap_debug(source);
+    assert!(debug.success, "{}", debug.stderr);
+    assert_eq!(debug.stdout, expected);
+}
+
+/// Dynamic eval encodes deeply nested arrays and objects without native stack recursion.
+#[test]
+fn test_dynamic_eval_json_deep_containers_keep_native_stack_bounded() {
+    assert_deep_dynamic_eval_json_stack_safety();
+}
+
+/// Optimizer-disabled builds use the same stack-safe JSON traversal.
+#[test]
+fn test_dynamic_eval_json_deep_containers_keep_native_stack_bounded_without_ir_opt() {
+    without_ir_opt(assert_deep_dynamic_eval_json_stack_safety);
+}
