@@ -63,3 +63,24 @@ unset($error);
 fn test_nested_default_compound_review_rhs_throw_no_ir_opt() {
     without_ir_opt(test_nested_default_compound_review_rhs_throw);
 }
+
+/// A fresh string index stays owned when the eager compound RHS throws before the class Error.
+#[test]
+fn test_nested_default_compound_review_string_index_throw() {
+    assert_compound(r#"<?php
+trait Values { public string $bad = parent::class; }
+class Consumer { use Values; public static array $items = [1]; }
+function makeKey(): string { echo 'k'; return str_repeat('x', 2); }
+function fail(): string { echo 'v'; throw new RuntimeException('rhs'); }
+try { Consumer::$items[makeKey()] .= fail(); }
+catch (RuntimeException $error) { echo $error->getMessage(); }
+catch (Error $error) { echo 'bad'; }
+unset($error);
+"#, "kvrhs");
+}
+
+/// Computed string index cleanup is unchanged without EIR optimization.
+#[test]
+fn test_nested_default_compound_review_string_index_throw_no_ir_opt() {
+    without_ir_opt(test_nested_default_compound_review_string_index_throw);
+}

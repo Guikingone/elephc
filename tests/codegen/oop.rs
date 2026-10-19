@@ -26,6 +26,7 @@ mod nested_default_review;
 mod nested_default_grok_scope;
 mod nested_default_review_boundaries;
 mod nested_default_compound_review;
+mod nested_default_numeric_review;
 #[path = "oop/readonly_initialization.rs"]
 mod readonly_initialization;
 #[path = "oop/callables/mod.rs"]

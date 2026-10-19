@@ -8,6 +8,7 @@
 //! - Magician parses this data once during registration, never calls a throwing native helper.
 //! - Explicit parentheses preserve the compiler AST's grouping and source evaluation order.
 //! - Names are fully qualified and strings are quoted without interpolation.
+//! - The smallest signed integer uses exact arithmetic to avoid an overflowing positive token.
 
 use super::*;
 use crate::parser::ast::{ArrayEntry, BinOp, CastType};
@@ -59,6 +60,8 @@ fn expression(expr: &Expr, context: &EvalNativeDefaultContext<'_>) -> Option<Str
     Some(match &expr.kind {
         ExprKind::Null => "null".to_string(),
         ExprKind::BoolLiteral(value) => value.to_string(),
+        ExprKind::IntLiteral(value) if *value == i64::MIN =>
+            "(-9223372036854775807 - 1)".to_string(),
         ExprKind::IntLiteral(value) => value.to_string(),
         ExprKind::FloatLiteral(value) if value.is_nan() => "\\NAN".to_string(),
         ExprKind::FloatLiteral(value) if value.is_infinite() =>
@@ -149,6 +152,19 @@ fn binary_operator(op: &BinOp) -> &'static str {
         BinOp::BitXor => "^", BinOp::ShiftLeft => "<<", BinOp::ShiftRight => ">>",
         BinOp::Spaceship => "<=>", BinOp::NullCoalesce => "??",
     }
+}
+
+/// Integer-min source uses only representable integer tokens when Magician parses it.
+#[cfg(test)]
+#[test]
+fn native_default_minimum_integer_source_round_trips() {
+    let module = Module::new(crate::codegen::platform::Target::parse("linux-x86_64").unwrap());
+    let context = EvalNativeDefaultContext::for_class(&module, "Defaults");
+    let expr = Expr::new(ExprKind::IntLiteral(i64::MIN), crate::span::Span::dummy());
+    let source = default_expression_source(&expr, &context).unwrap();
+    assert_eq!(source,
+        "return __elephc_default_lexical_scope('Defaults', (-9223372036854775807 - 1));");
+    elephc_magician::parser::parse_fragment(source.as_bytes()).expect("exact integer expression");
 }
 
 /// The encoder and decoder agree on nested spread selectors with explicit keys.
