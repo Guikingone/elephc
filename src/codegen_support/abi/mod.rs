@@ -70,9 +70,10 @@ pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbo
 pub use values::{
     emit_branch_if_equal_wide, emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero,
     emit_decref_if_refcounted,
-    emit_decref_preserving_exception,
+    emit_decref_preserving_exception, emit_extend_int_result,
     emit_float_result_to_int_result, emit_incref_if_refcounted, emit_int_result_to_float_result,
-    emit_jump, emit_load, emit_load_int_immediate, emit_php_float_to_int,
+    emit_jump, emit_load, emit_load_int_immediate, emit_normalize_narrow_int_arg,
+    emit_php_float_to_int,
     emit_release_local_ref_cell, emit_release_local_ref_cell_preserving_exception,
     emit_store, emit_unary_cleanup_preserving_exception, emit_write_stdout,
 };

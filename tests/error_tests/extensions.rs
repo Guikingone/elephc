@@ -155,6 +155,34 @@ fn test_error_extern_unknown_type() {
     );
 }
 
+/// Verifies that a C integer width elephc does not know is rejected like any other unknown C type.
+#[test]
+fn test_error_extern_unknown_int_width() {
+    expect_error(
+        "<?php extern function foo(i128 $x): int;",
+        "Unknown C type: i128",
+    );
+}
+
+/// Verifies that explicit C integer widths are rejected on extern class fields, which still use
+/// 8-byte slots.
+#[test]
+fn test_error_extern_class_field_rejects_int_width() {
+    expect_error(
+        "<?php extern class Bad { i32 $field; }",
+        "Extern class 'Bad' field $field uses an explicit C integer width",
+    );
+}
+
+/// Verifies that explicit C integer widths are rejected on extern globals.
+#[test]
+fn test_error_extern_global_rejects_int_width() {
+    expect_error(
+        "<?php extern global u8 $flag;",
+        "Extern global $flag uses an explicit C integer width",
+    );
+}
+
 /// Verifies that an empty extern block is rejected.
 #[test]
 fn test_error_extern_block_empty() {

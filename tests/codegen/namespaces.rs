@@ -65,7 +65,7 @@ echo strlen("bc");
 fn test_namespace_class_can_call_global_extern_function() {
     let out = compile_and_run(
         r#"<?php
-extern function getpid(): int;
+extern function getpid(): i32;
 
 namespace Demo\App;
 

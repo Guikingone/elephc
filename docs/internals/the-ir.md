@@ -252,11 +252,14 @@ back to a source declaration.
 ### C Type Mapping
 
 Extern declarations use `CType`. EIR preserves the C-facing type in
-`ExternDecl` metadata so the IR backend can use the correct C ABI helpers.
+`ExternDecl` metadata so the IR backend can use the correct C ABI helpers: the
+PHP type decides the storage, and the parallel `ExternAbiType` keeps the
+declared C width so the backend can normalize registers at the call boundary.
 
 | `CType` | EIR storage |
 |---|---|
 | `Int`, `Bool`, `Ptr`, `TypedPtr(_)`, `Callable` | `I64` |
+| `IntWidth(_)` (`i8`..`u32`, `u64`) | `I64`; the width lives in `ExternAbiType` and only drives sign/zero extension of returns and caller-side extension of narrow arguments. |
 | `Float` | `F64` |
 | `Str` | `I64` native C string pointer; PHP strings are converted at the boundary. |
 | `Void` | `Void` |
@@ -2033,7 +2036,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ClassProperty` / `PropertyHooks` | Class metadata, property layout, readonly/final/static flags, hooks, defaults, and attributes. |
 | `ClassConst` | Class/interface/trait constant metadata and value expression. |
 | `ClassMethod` | Separate `Function` plus method metadata and vtable/static dispatch metadata. |
-| `CType::Int`, `Float`, `Str`, `Bool`, `Void`, `Ptr`, `TypedPtr`, `Callable` | Extern ABI metadata consumed by `ExternCall`, extern globals, and callback trampolines. |
+| `CType::Int`, `IntWidth`, `Float`, `Str`, `Bool`, `Void`, `Ptr`, `TypedPtr`, `Callable` | Extern ABI metadata (`ExternAbiType`) consumed by `ExternCall`, extern globals, and callback trampolines. |
 | `ExternParam` | Extern function parameter metadata. |
 | `ExternField` | Extern class/struct field offset/type metadata. |
 | `PackedField` | Packed class field offset/type metadata. |

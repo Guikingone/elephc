@@ -12,19 +12,20 @@
 //!   immediately after the foreign call returns.
 //! - Callable extern parameters lower to C function pointers. Descriptor-backed
 //!   callables use generated trampolines when the callable signature is known.
-//! - Extern returns are normalized before the EIR store: a C `int` sign-extends from
-//!   32 bits and a C `bool` keeps only its low byte, because both ABIs leave the upper
-//!   return-register bits unspecified.
+//! - Extern returns are normalized before the EIR store from the declared C width: 64-bit
+//!   integers pass through, narrower integers sign- or zero-extend, and a C `bool` keeps only
+//!   its low byte, because both ABIs leave the upper return-register bits unspecified.
+//! - Integer arguments narrower than 32 bits are truncated and extended to 32 bits by the
+//!   caller, as Apple's arm64 ABI requires and clang assumes everywhere.
 
 use crate::codegen::abi;
 use crate::codegen::callable_descriptor;
-use crate::codegen::platform::Arch;
 use crate::codegen_support::DeferredExternCallbackTrampoline;
 use crate::ir::{
     ExternDecl, ExternParamDecl, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId,
 };
 use crate::names::{function_symbol, php_symbol_key};
-use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
+use crate::types::{callable_wrapper_sig, ExternAbiType, FunctionSig, PhpType};
 
 use super::super::context::FunctionContext;
 use super::{
@@ -82,7 +83,7 @@ pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let symbol = ctx.emitter.target.extern_symbol(&decl.name);
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
-    normalize_extern_return(ctx, &decl.return_php_type)?;
+    normalize_extern_return(ctx, &decl.return_php_type, decl.return_abi)?;
     release_borrowed_cstr_temps(ctx, string_arg_count, cleanup_bytes, &decl.return_php_type);
     store_if_result(ctx, inst)
 }
@@ -204,6 +205,9 @@ fn materialize_extern_arg(
                 param.name, expected, actual
             )))
         }
+    }
+    if let ExternAbiType::Int { bits, signed } = param.abi {
+        abi::emit_normalize_narrow_int_arg(ctx.emitter, bits, signed);
     }
     Ok(target_ty)
 }
@@ -533,15 +537,28 @@ fn extern_codegen_types_match(expected: &PhpType, actual: &PhpType) -> bool {
 }
 
 /// Normalizes extern return registers before storing the EIR result.
-fn normalize_extern_return(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) -> Result<()> {
+///
+/// Integer returns widen from the declared C width; a C `bool` keeps only its low byte, since
+/// both ABIs define nothing above it.
+fn normalize_extern_return(
+    ctx: &mut FunctionContext<'_>,
+    return_ty: &PhpType,
+    return_abi: ExternAbiType,
+) -> Result<()> {
     match return_ty.codegen_repr() {
         PhpType::Void => Ok(()),
         PhpType::Int => {
-            emit_sign_extend_i32_result(ctx);
+            let ExternAbiType::Int { bits, signed } = return_abi else {
+                return Err(CodegenIrError::unsupported(format!(
+                    "extern int return with ABI shape {:?}",
+                    return_abi
+                )));
+            };
+            abi::emit_extend_int_result(ctx.emitter, bits, signed);
             Ok(())
         }
         PhpType::Bool => {
-            emit_zero_extend_bool_result(ctx);
+            abi::emit_extend_int_result(ctx.emitter, 8, false);
             Ok(())
         }
         PhpType::Float | PhpType::Pointer(_) => Ok(()),
@@ -612,33 +629,6 @@ fn pop_ffi_return_value(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
         }
         _ => {
             abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        }
-    }
-}
-
-/// Sign-extends a C `int` return into the target integer result register.
-fn emit_sign_extend_i32_result(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("sxtw x0, w0");                             // sign-extend the C int return into PHP's 64-bit integer result
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("movsxd rax, eax");                         // sign-extend the C int return into PHP's 64-bit integer result
-        }
-    }
-}
-
-/// Zero-extends a C `bool` return into the target integer result register.
-///
-/// Both supported ABIs define only the low byte of a `bool` return; the upper register
-/// bits are whatever the callee left there, so PHP truthiness must never see them.
-fn emit_zero_extend_bool_result(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("and w0, w0, #0xff");                       // keep only the C bool byte; writing w0 clears the upper half of x0
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("movzx eax, al");                           // keep only the C bool byte; writing eax clears the upper half of rax
         }
     }
 }
