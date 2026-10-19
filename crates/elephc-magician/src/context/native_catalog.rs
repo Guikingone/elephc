@@ -91,7 +91,7 @@ impl ElephcEvalContext {
         self.native_catalog_registration_failed = true;
     }
 
-    /// Publishes only a complete generated catalog before any dynamic execution.
+    /// Publishes complete generated metadata before any declaration or metadata-dependent execution.
     pub(crate) fn publish_native_catalog(&mut self) -> bool {
         if self.native_catalog_generation == 0 || self.native_catalog_ready
             || self.native_catalog_registration_failed || !self.classes.is_empty()

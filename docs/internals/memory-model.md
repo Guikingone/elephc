@@ -369,6 +369,25 @@ slots, so the original dispatcher can release that array without a new handler.
 Hash-promoted storage, nonempty arrays, strings, objects, resources, reference
 cells, unknown tags, and other callbacks use the protected cleanup boundary.
 
+Dynamic eval creates its activation context before synchronizing the caller scope,
+but may postpone native catalog registration for a proven numeric-only fragment.
+The execution proof also requires every retained local and global scope value to
+be a trivial scalar, so context destruction cannot invoke a callback before an
+upgrade. Generated eval opts into a separate deferred-aware entry point; the
+existing execute ABI retains eager global-class synchronization.
+The proof accepts only straight-line numeric expressions, stores and returns with
+existing int/float cells (or fresh numeric locals). Undefined reads, nonnumeric
+values, reference/global/typed bindings, native symbol use, calls and other syntax
+require the complete catalog before PHP executes. Replacing a nonnumeric cell also
+fails the proof, because releasing it could invoke a destructor or callback.
+A guard before scope synchronization also requests metadata if replacing any old
+cell could invoke PHP, or if an indirect or typed binding needs validation. Both
+guards share one registration transaction. A later fragment upgrades the same
+context without replacing its scope or handlers.
+Until that upgrade, numeric-only execution also postpones global class imports, so
+native declarations retain their usual position before dynamic declarations in
+introspection. A completed catalog is still shared by module generation and thread.
+
 Interpreter value releases and native-call argument cleanup use a versioned
 release boundary with an owned Throwable accumulator. Releasing a group finishes
 every element and preserves earlier destructor exceptions in the resulting chain.

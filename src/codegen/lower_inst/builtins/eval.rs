@@ -60,6 +60,8 @@ const EVAL_RELOAD_THROWABLE_OFFSET: usize = 88;
 const EVAL_RELOAD_THROW_OWNER_OFFSET: usize = 96;
 const EVAL_RELOAD_VALUE_OWNER_OFFSET: usize = 144;
 const EVAL_SCOPE_ACCESS_MASK_OFFSET: usize = 192;
+/// Whether catalog registration must resume before scope flush or before interpreter entry.
+const EVAL_CATALOG_PHASE_OFFSET: usize = 200;
 const EVAL_BRIDGE_STACK_BYTES: usize = 208;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
@@ -247,6 +249,7 @@ mod inventories;
 mod symbol_queries;
 mod argument_results;
 mod context_registration;
+mod context_initialization;
 mod registration_collection;
 mod member_collection;
 mod signature_metadata;
@@ -280,6 +283,7 @@ use symbol_queries::*;
 use argument_results::*;
 #[allow(unused_imports)]
 use context_registration::*;
+use context_initialization::*;
 
 /// Returns the hidden eval-context local of this function, when it has one.
 ///

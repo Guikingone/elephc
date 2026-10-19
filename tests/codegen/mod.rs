@@ -83,6 +83,7 @@ mod arrays;
 mod calendar;
 mod call_counters;
 mod callables;
+mod eval_deferred_catalog;
 mod known_closure_loops;
 mod system;
 mod json;
