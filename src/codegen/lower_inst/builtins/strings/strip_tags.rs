@@ -16,8 +16,9 @@ use super::*;
 /// The runtime helper takes a subject string plus an already-normalized allow
 /// string (`"<p><a>"`). A missing, null, or empty allow-list becomes a zero
 /// length pair. Array allow-lists are joined with `><` and wrapped in `<>`,
-/// matching PHP 8.5's array form. Proven-invalid allow types raise PHP's
-/// `TypeError`; boxed Mixed/Union values are dispatched at runtime.
+/// including `<>` for a single empty element, matching PHP 8.5's array form.
+/// Proven-invalid allow types raise PHP's `TypeError`; boxed Mixed/Union values
+/// are dispatched at runtime.
 pub(crate) fn lower_strip_tags(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -52,7 +53,7 @@ pub(crate) fn lower_strip_tags(ctx: &mut FunctionContext<'_>, inst: &Instruction
 ///
 /// A missing or null argument becomes a zero-length pair so `__rt_strip_tags`
 /// strips every tag. Arrays are rendered through implode with glue `><` and
-/// then wrapped as `<...>` when the join is non-empty.
+/// then wrapped as `<...>` when the array has any elements, even an empty string.
 fn lower_strip_tags_allow(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 2 {
         emit_empty_allow_string(ctx);
@@ -167,6 +168,14 @@ fn lower_strip_tags_allow_from_array(
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
         }
     }
+    let (array_reg, count_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x5"),
+        Arch::X86_64 => ("rdx", "r8"),
+    };
+    // The normalized dense payload starts with its element count. Empty rendered
+    // strings still contribute a tag, so preserve this independently of join length.
+    abi::emit_load_from_address(ctx.emitter, count_reg, array_reg, 0);
+    abi::emit_push_reg(ctx.emitter, count_reg);
     if let Some(value_ty) = hash_copy {
         let array_reg = match ctx.emitter.target.arch {
             Arch::AArch64 => "x3",
@@ -183,16 +192,18 @@ fn lower_strip_tags_allow_from_array(
     } else {
         abi::emit_call_label(ctx.emitter, runtime_label);
     }
+    abi::emit_pop_reg(ctx.emitter, count_reg);
     emit_wrap_allow_string(ctx);
     Ok(())
 }
 
-/// Wraps a non-empty implode result as `<joined>` so array allow-lists match PHP.
+/// Wraps a non-empty array's join, even an empty string, using its saved count.
+/// The count is in `x5`/`r8`; the joined string remains in the string-result pair.
 fn emit_wrap_allow_string(ctx: &mut FunctionContext<'_>) {
     let done = ctx.next_label("strip_tags_allow_wrap_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x2, {}", done));              // empty joins stay an empty allow-list
+            ctx.emitter.instruction(&format!("cbz x5, {}", done));              // only an empty array has no allowed tags
             let (lt_label, lt_len) = ctx.data.add_string(b"<");
             ctx.emitter.instruction("mov x3, x1");                              // pass the joined tags as concat's right operand
             ctx.emitter.instruction("mov x4, x2");                              // pass the joined length as concat's right operand
@@ -205,8 +216,8 @@ fn emit_wrap_allow_string(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_concat");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test rdx, rdx"));                 // empty joins stay an empty allow-list
-            ctx.emitter.instruction(&format!("jz {}", done));                   // skip wrapping when implode produced no tags
+            ctx.emitter.instruction("test r8, r8");                             // distinguish an empty array from one empty rendered element
+            ctx.emitter.instruction(&format!("jz {}", done));                   // skip wrapping only when the source array has no elements
             let (lt_label, lt_len) = ctx.data.add_string(b"<");
             ctx.emitter.instruction("mov rdi, rax");                            // pass the joined tags as concat's right operand
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the joined length as concat's right operand

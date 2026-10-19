@@ -18,12 +18,25 @@ function stripWith(mixed $allow): string {
 class AllowedTag { public function __toString(): string { return '<p>'; } }
 echo stripWith(['key' => 'p']);
 echo stripWith(new AllowedTag());
+echo strip_tags('<>x', []), strip_tags('<>x', ['']);
+echo strip_tags('<>x', [null]), strip_tags('<>x', [false]);
+echo strip_tags('<>x', ['tag' => '']);
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__rt_array_to_mixed"), "{target}: normalize packed scalar slots");
     assert!(assembly.contains("__rt_decref_array"), "{target}: retire the normalized owner");
     assert!(assembly.contains("__rt_strip_tags"), "{target}");
+    if target.ends_with("x86_64") {
+        assert!(assembly.lines().collect::<Vec<_>>().windows(2).any(|pair|
+            pair[0].contains("test r8, r8")
+                && pair[1].contains("strip_tags_allow_wrap_done")),
+            "{target}: wrap according to array count, not rendered string length");
+    } else {
+        assert!(assembly.lines().any(|line|
+            line.contains("cbz x5,") && line.contains("strip_tags_allow_wrap_done")),
+            "{target}: wrap according to array count, not rendered string length");
+    }
     let wrapper = module.functions.iter().find(|function|
         function.name.eq_ignore_ascii_case("stripWith")).unwrap();
     assert!(wrapper.instructions.iter().any(|instruction|

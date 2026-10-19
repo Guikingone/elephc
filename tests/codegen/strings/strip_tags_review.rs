@@ -267,3 +267,35 @@ for ($i = 0; $i < 8; $i++) {
     assert_eq!(out.stdout, "<p>A</p>B|".repeat(8));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A single empty rendered array element allows `<>`, unlike an empty array.
+#[test]
+fn strip_tags_review_single_empty_allow_element() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function stripEmpty(mixed $allow): string { return strip_tags('<>x', $allow); }
+function callEmpty(callable $callback, mixed $allow): string { return $callback('<>x', $allow); }
+echo strip_tags('<>x', []), '|', strip_tags('<>x', ['']), '|';
+echo strip_tags('<>x', [null]), '|', strip_tags('<>x', [false]), '|';
+echo strip_tags('<>x', ['', '']), '|', strip_tags('<>x', ['tag' => '']), '|';
+foreach ([[], [''], [null], [false], ['', ''], ['tag' => '']] as $allow) {
+    echo strip_tags('<>x', $allow), '|', stripEmpty($allow), '|';
+    echo callEmpty(strip_tags(...), $allow), '|';
+}
+$source = $argc > 0 ? 'foreach ([[], [""], [null], [false], ["", ""], ["tag" => ""]] as $allow) {
+    echo strip_tags("<>x", $allow), "|", call_user_func("strip_tags", "<>x", $allow), "|";
+}' : '';
+eval($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    let direct = format!("x|{}", "<>x|".repeat(5));
+    let native = format!("x|x|x|{}", "<>x|".repeat(15));
+    let eval = format!("x|x|{}", "<>x|".repeat(10));
+    assert_eq!(out.stdout, format!("{direct}{native}{eval}"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Empty element preservation also holds without EIR optimization.
+#[test]
+fn strip_tags_review_single_empty_allow_element_no_ir_opt() {
+    without_ir_opt(strip_tags_review_single_empty_allow_element);
+}
