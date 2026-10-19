@@ -142,7 +142,14 @@ fn lower_nested_array_assign_inner(
         if !super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {
             return;
         }
-        super::nested_scalar_writes::lower_nested_set(ctx, parent, key, value, span);
+        super::nested_scalar_writes::lower_nested_set(
+            ctx,
+            parent,
+            key,
+            value,
+            span,
+            key_already_diagnosed,
+        );
         // The boxed writer borrows all three operands and retains or copies the stored value.
         // Roots also retire computed Mixed values and keep earlier operands safe if a later
         // operand or the write throws into a same-frame catch.

@@ -262,6 +262,41 @@ fn test_static_receiver_grok_direct_dynamic_array_plain_no_ir_opt() {
     without_ir_opt(test_static_receiver_grok_direct_dynamic_array_plain);
 }
 
+/// Dynamic property array updates diagnose each float key once, like literal properties.
+#[test]
+fn test_static_receiver_dynamic_float_key_warns_once() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Bag { public array $items = [1, 2]; public array $nested = [[1, 2], [3, 4]]; }
+class C { public static ?Bag $o = null; }
+function name(): string { return 'items'; }
+function nestedName(): string { return 'nested'; }
+set_error_handler(function(int $level, string $message): bool {
+    if ($level === E_DEPRECATED) { echo 'W'; }
+    return true;
+});
+C::$o = new Bag(); C::$o->{name()}[1.5] += 1; echo json_encode(C::$o->items), '|';
+C::$o = new Bag(); $name = 'items'; C::$o->$name[1.5] += 1; echo json_encode(C::$o->items), '|';
+C::$o = new Bag(); echo C::$o->{name()}[1.5]++, ':', json_encode(C::$o->items), '|';
+C::$o = new Bag(); echo ++C::$o->{name()}[1.5], ':', json_encode(C::$o->items), '|';
+C::$o = new Bag(); C::$o->{nestedName()}[1.5][0] += 1; echo json_encode(C::$o->nested);
+restore_error_handler(); C::$o = null;
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "W[1,3]|W[1,3]|W2:[1,3]|W3:[1,3]|W[[1,2],[4,4]]",
+        "{}",
+        out.stderr,
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Dynamic float-key diagnosis remains single-shot without EIR optimization.
+#[test]
+fn test_static_receiver_dynamic_float_key_warns_once_no_ir_opt() {
+    without_ir_opt(test_static_receiver_dynamic_float_key_warns_once);
+}
+
 /// Plain and compound dynamic-hop writes use the receiver installed by a single RHS hook.
 #[test]
 fn test_static_receiver_dynamic_review_hooks() {

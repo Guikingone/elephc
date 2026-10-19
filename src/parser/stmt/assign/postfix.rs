@@ -693,7 +693,10 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
 pub(crate) fn update_dimension_base_is_snapshotted(array: &Expr) -> bool {
     matches!(
         array.kind,
-        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+        ExprKind::Variable(_)
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
     )
 }
 

@@ -321,7 +321,7 @@ fn lower_non_local_assignment_write_with_diagnosed_key(
                     );
                     return;
                 }
-                ExprKind::ArrayAccess { .. } => {
+                ExprKind::DynamicPropertyAccess { .. } | ExprKind::ArrayAccess { .. } => {
                     crate::ir_lower::stmt::lower_nested_array_assign_after_read(
                         ctx, target, value, span,
                     );
@@ -356,7 +356,10 @@ fn compound_array_key_diagnosed_in_prelude(
     }
     if !matches!(
         &root.kind,
-        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+        ExprKind::Variable(_)
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
     ) {
         return false;
     }

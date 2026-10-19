@@ -121,6 +121,7 @@ pub(super) fn desugar_lvalue_incdec(
             &array.kind,
             ExprKind::Variable(_)
                 | ExprKind::PropertyAccess { .. }
+                | ExprKind::DynamicPropertyAccess { .. }
                 | ExprKind::StaticPropertyAccess { .. }
         ) {
             let old_name = crate::names::generated_local_name(&format!(
