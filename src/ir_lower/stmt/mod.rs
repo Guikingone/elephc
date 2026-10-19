@@ -54,6 +54,7 @@ mod exceptions;
 mod control_exit;
 mod declarations;
 mod instance_property_writes;
+mod readonly_receiver_guard;
 mod static_property_writes;
 mod property_array_writes;
 mod metadata_control;
@@ -232,7 +233,11 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         // before mutation; every other synthetic group keeps ordinary block lowering.
         StmtKind::Synthetic(body) => match nested_append::recognize(ctx, body) {
             Some(group) => nested_append::lower(ctx, &group, stmt.span),
-            None => lower_block(ctx, body),
+            None => {
+                if !lower_synthetic_readonly_coalesce(ctx, body) {
+                    lower_block(ctx, body);
+                }
+            }
         },
         StmtKind::Try {
             try_body,

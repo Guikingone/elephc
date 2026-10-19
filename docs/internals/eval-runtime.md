@@ -369,13 +369,15 @@ Float and bool keys use a temporary integer
 cell for contract validation; that cell is released on success and failure, while storage receives
 the original key so native normalization and diagnostics keep their existing operands. No new
 value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
-mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
-format 17 includes the retained templates, tokens, imports, structural types, typed locals, and
-the conservative caller-scope access mask,
-alongside preserved source spelling for direct and first-class function calls. It invalidates
+mode acceptance; `EvalProgram` records native syntax for rejection before execution. The current
+file-cache layout includes retained templates, tokens, imports, structural types, typed locals,
+and the conservative caller-scope access mask, alongside preserved source spelling for direct
+and first-class function calls and retained readonly setter contracts.
+`FORMAT_VERSION` in `crates/elephc-magician/src/script_cache/file_store.rs` identifies the complete
+serialized layout; incompatible entries are rejected before decoding. Format changes invalidate
 older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents and
 member annotations discarded after uppercase or mixed-case native class-like keywords.
-The preceding version also invalidated stored parse errors for valid comparisons after class references.
+Earlier format changes also invalidated stored parse errors for valid comparisons after class references.
 The format guard covers the combined serialized IR and its corresponding type sources.
 
 ## Parsing and cache
