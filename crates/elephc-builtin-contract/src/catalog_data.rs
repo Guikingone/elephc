@@ -32624,7 +32624,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "Strips HTML and PHP tags from a string. Optional allowed_tags is a string like \"<p><a>\" or an array of tag names.",
+        summary: "Strips HTML and PHP tags from a string. Optional allowed_tags is a string like \"<p><a>\" or an array of tag names. Weak callers also coerce scalars and Stringable objects; strict callers require array|string|null.",
         examples: &[
             "echo strip_tags(\"<p>Hello <b>World</b></p>\");",
             "echo strip_tags(\"<p>Hello <b>World</b></p>\", \"<p>\");",

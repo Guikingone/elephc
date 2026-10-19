@@ -559,6 +559,16 @@ the current pointer after every push, and it applies only to source elements who
 evaluation cannot be observed, because it interleaves element evaluation with
 callback invocation while PHP evaluates the whole source array first.
 
+Descriptor invocation also carries the physical caller's scalar-binding mode,
+independently of where a callable was created. Its hidden frame-owned profile
+preserves legacy weak class ids and global `-1`; strict profiles encode
+`-class_id - 3`, including global `-2`. The native boundary and invoker forward
+that same word across throws and nested calls. Source-sensitive builtin wrappers
+select strict or weak EIR paths from it, while the `clone()` wrapper decodes the
+original scope before checking hook visibility. No mutable global carries this
+state. Weak Stringable union preparation copies and roots the source cell before
+invoking `__toString()`, then retires both source and converted-string leases.
+
 Argument containers are published the same way whether they are built from a
 signature or not. A `call_user_func()` / `call_user_func_array()` container is
 rooted for its whole construction and reloaded from that slot after every

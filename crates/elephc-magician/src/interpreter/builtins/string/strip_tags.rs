@@ -71,6 +71,17 @@ pub(in crate::interpreter) fn eval_strip_tags_result(
                 Some(bytes)
             }
         }
+        Some(allowed) if values.type_tag(allowed)? == EVAL_TAG_OBJECT
+            && eval_object_has_to_string(allowed, context, values)? =>
+        {
+            let rendered = eval_string_context_value(allowed.borrowed(), context, values)?;
+            let mut allow = None;
+            with_eval_value_lease(rendered, context, values, |rendered, _, values| {
+                allow = Some(values.string_bytes(rendered)?);
+                Ok(())
+            })?;
+            allow
+        }
         // Eval's coercive scalar strings contain no tag delimiters and permit no tags.
         Some(allowed) if matches!(values.type_tag(allowed)?, EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL) => None,
         Some(allowed) => {

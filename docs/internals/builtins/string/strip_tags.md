@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strip_tags.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strip_tags.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `independent`
-- **Effects**: `static (0 declared effects)`
+- **Effects**: `static (18 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function strip_tags(string $string, mixed $allowed_tags = null): string
+function strip_tags(string $string, array|string|null $allowed_tags = null): string
 ```
 
 ## What the type checker enforces

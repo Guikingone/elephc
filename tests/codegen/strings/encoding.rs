@@ -11,6 +11,8 @@ use super::*;
 
 #[path = "strip_tags_review.rs"]
 mod strip_tags_review;
+#[path = "strip_tags_stringable.rs"]
+mod strip_tags_stringable;
 
 /// Verifies `ord()` returns the ASCII code 65 for a single uppercase "A".
 #[test]

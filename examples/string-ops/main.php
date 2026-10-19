@@ -192,6 +192,11 @@ echo "mb_strlen Shift-JIS: " . mb_strlen($legacyName, "SJIS") . "\n";
 echo "htmlspecialchars: " . htmlspecialchars("<b>bold</b>") . "\n";
 echo "strip_tags: " . strip_tags("<p>Hello <b>World</b></p>") . "\n";
 echo "strip_tags(allow): " . strip_tags("<p>Hello <b>World</b></p>", "<p>") . "\n";
+// Weak calls accept a Stringable allow-list; strict callers require the declared union.
+class HtmlAllowList {
+    public function __toString(): string { return "<p>"; }
+}
+echo "strip_tags(object): " . strip_tags("<p>Hello <b>World</b></p>", new HtmlAllowList()) . "\n";
 echo "urlencode: " . urlencode("hello world") . "\n";
 echo "base64: " . base64_encode("Hello") . "\n";
 // base64_decode() skips whitespace and tolerates missing padding; $strict = true
