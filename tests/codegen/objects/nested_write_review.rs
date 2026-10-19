@@ -348,3 +348,28 @@ restore_error_handler(); unset($items);
 fn test_nested_write_twelfth_review_local_incdec_semantics_no_ir_opt() {
     without_ir_opt(test_nested_write_twelfth_review_local_incdec_semantics);
 }
+
+/// Plain nested writes retain string-append and resource-parent errors after false handling.
+#[test]
+fn test_nested_write_rebase_scalar_parent_errors() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = ['AB'];
+try { $items[0][] = 'X'; }
+catch (Throwable $e) { echo get_class($e), ':', $e->getMessage(), '|'; }
+function hide_parent(mixed $value): mixed { return $value; }
+$resource = fopen('php://memory', 'r+');
+$parents = [hide_parent($resource)];
+try { $parents[0]['key'] = 1; }
+catch (Throwable $e) { echo get_class($e), ':', $e->getMessage(), '|'; }
+try { $parents[0][] = 1; }
+catch (Throwable $e) { echo get_class($e), ':', $e->getMessage(), '|'; }
+fclose($resource);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "Error:[] operator not supported for strings|",
+        "Error:Cannot use a scalar value as an array|",
+        "Error:Cannot use a scalar value as an array|",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

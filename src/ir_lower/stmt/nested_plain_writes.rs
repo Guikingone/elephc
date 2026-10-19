@@ -23,17 +23,15 @@ pub(super) fn lower_store(
         .map_or(target, |(_, write)| write);
     let ExprKind::ArrayAccess { array, index } = &target.kind else { unreachable!() };
     let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, array, span);
+    let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     let key = lower_expr(ctx, index);
     let (key, key_owner) = super::nested_array_writes::root_static_update_receiver(ctx, key, span);
     let pending = super::nested_false_errors::capture(ctx, parent, span);
     super::nested_false_errors::handle_pending(ctx, pending, Some(key), span, |ctx| {
-        ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value], None,
-            effects_lookup::runtime_effects(), Some(span));
+        emit_store(ctx, parent, key, value, index, span);
     });
-    guard_scalar_parent(ctx, parent, None, span);
-    ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value], None,
-        effects_lookup::runtime_effects(), Some(span));
+    emit_store(ctx, parent, key, value, index, span);
     retire_owner(ctx, key_owner, span);
     retire_owner(ctx, parent_owner, span);
     retire_owner(ctx, value_owner, span);
@@ -51,62 +49,61 @@ pub(super) fn lower_append(
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
         .map_or(target, |(_, write)| write);
     let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
+    let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     let pending = super::nested_false_errors::capture(ctx, parent, span);
     super::nested_false_errors::handle_pending(ctx, pending, None, span, |ctx| {
-        ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
-            Op::MixedArrayAppend.default_effects(), Some(span));
+        emit_append(ctx, parent, value, span);
     });
-    guard_scalar_parent(ctx, parent, None, span);
-    ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
-        Op::MixedArrayAppend.default_effects(), Some(span));
+    emit_append(ctx, parent, value, span);
     retire_owner(ctx, parent_owner, span);
     retire_owner(ctx, value_owner, span);
     super::nested_write_sources::retire(ctx, sources, span);
 }
 
-/// Rejects non-array scalar parents after false conversion, leaving string-offset handling intact.
-fn guard_scalar_parent(
-    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
-    string_error: Option<&str>, span: Span,
-) {
-    if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed { return; }
-    if let Some(message) = string_error {
-        let string = ctx.emit_value(Op::TypePredicate, vec![parent.value],
-            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)), PhpType::Bool,
-            Op::TypePredicate.default_effects(), Some(span));
-        let invalid = ctx.builder.create_named_block("nested.store.string.error", Vec::new());
-        let non_string = ctx.builder.create_named_block("nested.store.non-string", Vec::new());
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: string.value, then_target: invalid, then_args: Vec::new(),
-            else_target: non_string, else_args: Vec::new(),
-        });
-        ctx.builder.position_at_end(invalid);
-        lower_throw_access_error(ctx, message, span);
-        ctx.builder.position_at_end(non_string);
+/// Resolves boxed caller-reference markers before conversion or mutation of the selected cell.
+fn resolve_parent_for_write(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
+) -> LoweredValue {
+    if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
+        return parent;
     }
-    let boolean = ctx.emit_value(Op::TypePredicate, vec![parent.value],
-        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Bool)), PhpType::Bool,
-        Op::TypePredicate.default_effects(), Some(span));
-    let integer = ctx.emit_value(Op::TypePredicate, vec![parent.value],
-        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Int)), PhpType::Bool,
-        Op::TypePredicate.default_effects(), Some(span));
-    let float = ctx.emit_value(Op::TypePredicate, vec![parent.value],
-        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Float)), PhpType::Bool,
-        Op::TypePredicate.default_effects(), Some(span));
-    let numeric = ctx.emit_value(Op::IBitOr, vec![integer.value, float.value], None, PhpType::Bool,
-        Op::IBitOr.default_effects(), Some(span));
-    let scalar = ctx.emit_value(Op::IBitOr, vec![boolean.value, numeric.value], None, PhpType::Bool,
-        Op::IBitOr.default_effects(), Some(span));
-    let invalid = ctx.builder.create_named_block("nested.store.scalar.error", Vec::new());
-    let valid = ctx.builder.create_named_block("nested.store.parent", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: scalar.value, then_target: invalid, then_args: Vec::new(),
-        else_target: valid, else_args: Vec::new(),
-    });
-    ctx.builder.position_at_end(invalid);
-    lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
-    ctx.builder.position_at_end(valid);
+    let resolved = ctx.emit_owned_value(
+        Op::RuntimeCall,
+        vec![parent.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellResolveForWrite)),
+        PhpType::Mixed,
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+    resolved
+}
+
+/// Preserves string-offset writes and scalar errors after optional false conversion.
+fn emit_store(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
+    key: LoweredValue, value: LoweredValue, index: &Expr, span: Span,
+) {
+    if super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {
+        super::nested_scalar_writes::lower_nested_set(ctx, parent, key, value, span);
+    }
+}
+
+/// Rejects string and scalar append parents before dispatching the boxed append.
+fn emit_append(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
+    value: LoweredValue, span: Span,
+) {
+    if super::nested_write_guards::guard_nested_write_parent(ctx, parent, None, span) {
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![parent.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+    }
 }
 
 /// Fetches one child with balanced, unwind-visible input and result owners.
@@ -123,7 +120,9 @@ pub(super) fn fetch_parent(
         ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, null.value], None,
             effects_lookup::runtime_effects(), Some(span));
     });
-    guard_scalar_parent(ctx, receiver, Some("Cannot use string offset as an array"), span);
+    if !guard_fetched_parent(ctx, receiver, span) {
+        return receiver;
+    }
     let child = ctx.emit_value(Op::RuntimeCall, vec![receiver.value, key.value],
         Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
@@ -144,6 +143,87 @@ pub(super) fn fetch_parent(
     ctx.clear_owned_hidden_temp(&selected, Some(span));
     pop_owner(ctx, slot, span);
     child
+}
+
+/// Rejects strings and scalar values selected as intermediate write parents.
+fn guard_fetched_parent(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
+) -> bool {
+    let parent_ty = ctx.builder.value_php_type(parent.value).codegen_repr();
+    if parent_ty == PhpType::Str {
+        lower_throw_access_error(ctx, "Cannot use string offset as an array", span);
+        return false;
+    }
+    if matches!(parent_ty, PhpType::Int | PhpType::Float | PhpType::Resource(_)) {
+        lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
+        return false;
+    }
+    if !matches!(parent_ty, PhpType::Mixed | PhpType::Bool) {
+        return true;
+    }
+    let string = ctx.emit_value(
+        Op::TypePredicate,
+        vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)),
+        PhpType::Bool,
+        Op::TypePredicate.default_effects(),
+        Some(span),
+    );
+    let invalid_string = ctx.builder.create_named_block("nested.store.string.error", Vec::new());
+    let scalar_check = ctx.builder.create_named_block("nested.store.scalar.check", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: string.value,
+        then_target: invalid_string,
+        then_args: Vec::new(),
+        else_target: scalar_check,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(invalid_string);
+    lower_throw_access_error(ctx, "Cannot use string offset as an array", span);
+    ctx.builder.position_at_end(scalar_check);
+    let mut scalar = ctx.emit_value(
+        Op::TypePredicate,
+        vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Bool)),
+        PhpType::Bool,
+        Op::TypePredicate.default_effects(),
+        Some(span),
+    );
+    for predicate in [
+        crate::ir::PhpTypePredicate::Int,
+        crate::ir::PhpTypePredicate::Float,
+        crate::ir::PhpTypePredicate::Resource,
+    ] {
+        let other = ctx.emit_value(
+            Op::TypePredicate,
+            vec![parent.value],
+            Some(Immediate::TypePredicate(predicate)),
+            PhpType::Bool,
+            Op::TypePredicate.default_effects(),
+            Some(span),
+        );
+        scalar = ctx.emit_value(
+            Op::IBitOr,
+            vec![scalar.value, other.value],
+            None,
+            PhpType::Bool,
+            Op::IBitOr.default_effects(),
+            Some(span),
+        );
+    }
+    let invalid_scalar = ctx.builder.create_named_block("nested.store.scalar.error", Vec::new());
+    let valid = ctx.builder.create_named_block("nested.store.parent", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: scalar.value,
+        then_target: invalid_scalar,
+        then_args: Vec::new(),
+        else_target: valid,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(invalid_scalar);
+    lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
+    ctx.builder.position_at_end(valid);
+    true
 }
 
 /// Removes one topmost guard without invoking its value's destructor.
