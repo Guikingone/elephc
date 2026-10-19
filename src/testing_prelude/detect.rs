@@ -24,8 +24,8 @@
 use crate::names::Name;
 use crate::parser::ast::{
     CallableTarget, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    InstanceOfTarget, PackedField, StaticReceiver, Stmt, StmtKind, TraitAdaptation, TraitUse,
-    TypeExpr,
+    GenericDecl, InstanceOfTarget, PackedField, StaticReceiver, Stmt, StmtKind, TraitAdaptation,
+    TraitUse, TypeExpr, TypeParam,
 };
 
 /// The namespace the runtime lives in, compared case-insensitively against a name's full
@@ -146,17 +146,42 @@ fn class_property_refs_testing(property: &ClassProperty) -> bool {
         || property.default.as_ref().is_some_and(expr_refs_testing)
 }
 
-/// Returns whether a method's parameters, return type, or body reference the
-/// testing runtime.
+/// Returns whether a method's parameters (variadic element type included), type-parameter
+/// bounds and defaults, return type, or body reference the testing runtime.
 fn class_method_refs_testing(method: &ClassMethod) -> bool {
     params_ref_testing(&method.params)
+        || method.variadic_type.as_ref().is_some_and(type_refs_testing)
+        || type_params_ref_testing(&method.type_params)
         || method.return_type.as_ref().is_some_and(type_refs_testing)
         || method.body.iter().any(stmt_refs_testing)
 }
 
-/// Returns whether a class constant's initializer references the testing runtime.
+/// Returns whether a class constant's declared type or initializer references the testing
+/// runtime.
 fn class_const_refs_testing(constant: &ClassConst) -> bool {
-    expr_refs_testing(&constant.value)
+    constant.type_expr.as_ref().is_some_and(type_refs_testing)
+        || expr_refs_testing(&constant.value)
+}
+
+/// Returns whether any type parameter's bound or default names a testing class.
+fn type_params_ref_testing(type_params: &[TypeParam]) -> bool {
+    type_params.iter().any(|param| {
+        param.bound.as_ref().is_some_and(type_refs_testing)
+            || param.default.as_ref().is_some_and(type_refs_testing)
+    })
+}
+
+/// Returns whether a declaration's generic half names a testing class: its type-parameter
+/// bounds and defaults, the type arguments on its parent, or those on its interfaces.
+fn generics_ref_testing(generics: &Option<Box<GenericDecl>>) -> bool {
+    generics.as_ref().is_some_and(|generics| {
+        type_params_ref_testing(&generics.type_params)
+            || generics.extends_args.iter().any(type_refs_testing)
+            || generics
+                .interface_args
+                .iter()
+                .any(|args| args.iter().any(type_refs_testing))
+    })
 }
 
 /// Returns whether an enum case's backing-value expression references the testing
@@ -253,11 +278,13 @@ fn expr_refs_testing(expr: &Expr) -> bool {
         ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => expr_refs_testing(expr),
         ExprKind::Closure {
             params,
+            variadic_type,
             return_type,
             body,
             ..
         } => {
             params_ref_testing(params)
+                || variadic_type.as_ref().is_some_and(type_refs_testing)
                 || return_type.as_ref().is_some_and(type_refs_testing)
                 || body.iter().any(stmt_refs_testing)
         }
@@ -330,9 +357,11 @@ fn expr_refs_testing(expr: &Expr) -> bool {
 /// bypass detection.
 fn stmt_refs_testing(stmt: &Stmt) -> bool {
     match &stmt.kind {
+        // `$a =& Runner::make();`: the source is an expression and may name a class.
+        StmtKind::RefAssign { source, .. } => expr_refs_testing(source),
+
         // Statements with no class-name position and no child expr/stmt.
-        StmtKind::RefAssign { .. }
-        | StmtKind::IncludeOnceMark { .. }
+        StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
@@ -437,12 +466,16 @@ fn stmt_refs_testing(stmt: &Stmt) -> bool {
                     .is_some_and(|body| body.iter().any(stmt_refs_testing))
         }
         StmtKind::FunctionDecl {
+            type_params,
             params,
+            variadic_type,
             return_type,
             body,
             ..
         } => {
             params_ref_testing(params)
+                || variadic_type.as_ref().is_some_and(type_refs_testing)
+                || type_params_ref_testing(type_params)
                 || return_type.as_ref().is_some_and(type_refs_testing)
                 || body.iter().any(stmt_refs_testing)
         }
@@ -451,6 +484,7 @@ fn stmt_refs_testing(stmt: &Stmt) -> bool {
         StmtKind::ListUnpack { value, .. } => expr_refs_testing(value),
         StmtKind::StaticVar { init, .. } => expr_refs_testing(init),
         StmtKind::ClassDecl {
+            generics,
             extends,
             implements,
             trait_uses,
@@ -459,7 +493,8 @@ fn stmt_refs_testing(stmt: &Stmt) -> bool {
             constants,
             ..
         } => {
-            extends.as_ref().is_some_and(name_is_testing_class)
+            generics_ref_testing(generics)
+                || extends.as_ref().is_some_and(name_is_testing_class)
                 || implements.iter().any(name_is_testing_class)
                 || trait_uses.iter().any(trait_use_refs_testing)
                 || properties.iter().any(class_property_refs_testing)
@@ -467,34 +502,48 @@ fn stmt_refs_testing(stmt: &Stmt) -> bool {
                 || constants.iter().any(class_const_refs_testing)
         }
         StmtKind::EnumDecl {
+            generics,
             backing_type,
             cases,
+            implements,
+            trait_uses,
+            methods,
+            constants,
             ..
         } => {
-            backing_type.as_ref().is_some_and(type_refs_testing)
+            generics_ref_testing(generics)
+                || backing_type.as_ref().is_some_and(type_refs_testing)
                 || cases.iter().any(enum_case_refs_testing)
+                || implements.iter().any(name_is_testing_class)
+                || trait_uses.iter().any(trait_use_refs_testing)
+                || methods.iter().any(class_method_refs_testing)
+                || constants.iter().any(class_const_refs_testing)
         }
         StmtKind::PackedClassDecl { fields, .. } => fields.iter().any(packed_field_refs_testing),
         StmtKind::InterfaceDecl {
+            generics,
             extends,
             properties,
             methods,
             constants,
             ..
         } => {
-            extends.iter().any(name_is_testing_class)
+            generics_ref_testing(generics)
+                || extends.iter().any(name_is_testing_class)
                 || properties.iter().any(class_property_refs_testing)
                 || methods.iter().any(class_method_refs_testing)
                 || constants.iter().any(class_const_refs_testing)
         }
         StmtKind::TraitDecl {
+            generics,
             trait_uses,
             properties,
             methods,
             constants,
             ..
         } => {
-            trait_uses.iter().any(trait_use_refs_testing)
+            generics_ref_testing(generics)
+                || trait_uses.iter().any(trait_use_refs_testing)
                 || properties.iter().any(class_property_refs_testing)
                 || methods.iter().any(class_method_refs_testing)
                 || constants.iter().any(class_const_refs_testing)
@@ -600,6 +649,24 @@ mod tests {
         assert!(program_uses_testing(&parse(
             "<?php try { f(); } catch (\\Elephc\\Testing\\AssertionFailedError $e) { echo 1; }"
         )));
+    }
+
+    /// The positions an earlier walk skipped are detected: a variadic parameter's element
+    /// type (function, method, closure), an enum's methods, generic type arguments on a
+    /// parent, a class constant's declared type, and a by-reference assignment's source.
+    #[test]
+    fn detects_variadic_enum_generic_constant_and_ref_assign_positions() {
+        for source in [
+            "<?php function collect(\\Elephc\\Testing\\TestCase ...$cases): void {}",
+            "<?php class K { public function m(\\Elephc\\Testing\\TestCase ...$cases): void {} }",
+            "<?php $f = function (\\Elephc\\Testing\\TestCase ...$cases): void {};",
+            "<?php enum Color { case Red; public function make(): \\Elephc\\Testing\\Runner { return new \\Elephc\\Testing\\Runner(); } }",
+            "<?php class Wrapper<T> { } class Adapter extends Wrapper<\\Elephc\\Testing\\TestCase> {}",
+            "<?php class Holder { public const ?\\Elephc\\Testing\\TestCase SAMPLE = null; }",
+            "<?php function &make(): mixed { static $x = 1; return $x; } $alias =& \\Elephc\\Testing\\Runner::make();",
+        ] {
+            assert!(program_uses_testing(&parse(source)), "missed: {source}");
+        }
     }
 
     /// A user's own `TestCase`, bare or in another namespace, is not a trigger.

@@ -151,6 +151,8 @@ final class ParserTest extends TestCase
 A test may carry several `#[DataProvider]` attributes; it then runs once per row of each,
 in attribute order. A provider that throws, or returns something other than an array, is
 reported as that test's `ERROR` (`The data provider failed: ...`) and the run continues.
+Providers run whenever a `--filter` is given, because the filter may name one of their data
+sets, so a failing provider is reported, and fails the run, whatever the filter.
 
 The row's elements are passed by position, one per declared parameter, so a row must
 supply every parameter: the compiler cannot spread a run-time array into a typed call.
@@ -185,8 +187,8 @@ from `.lfc` files PHPUnit cannot parse, are listed and never fail the comparison
 `--junit FILE` writes a JUnit XML report: one `<testcase>` per run test with its class,
 name and duration, `<failure>`, `<error>` and `<skipped>` children for the other outcomes,
 and the totals on the `<testsuite>`. The file is resolved against the working directory.
-Control characters XML forbids are replaced with `?` and invalid UTF-8 is substituted, so
-a binary failure message cannot corrupt the report. A report that cannot be written (a
+Control characters XML forbids and bytes that are not valid UTF-8 are replaced with `?`,
+so a binary failure message cannot corrupt the report. A report that cannot be written (a
 missing directory, no permission) is reported on stderr and makes the run exit `1`.
 
 ### Driving a suite by hand

@@ -19,9 +19,16 @@
 //!   forks and leaves running inherits a pipe's write end and would keep the parent's read
 //!   from ever reaching EOF, while the parent waits only for its direct child.
 //! - `rows()` calls a data provider inside a `try`: a provider that throws (or returns a
-//!   non-array) is reported as an ERROR for that test and the suite continues.
-//! - A JUnit report that cannot be written is reported on stderr and fails the run.
-//!   `xmlEscape` replaces the C0 controls XML 1.0 forbids and substitutes invalid UTF-8.
+//!   non-array) is reported as an ERROR for that test, whatever `--filter` says (the filter
+//!   may name one of its data sets, which no longer exist), and the suite continues.
+//! - A JUnit report that cannot be written (a short write counts, since this compiler's
+//!   `file_put_contents()` returns -1 rather than false, journal task 1548b060) is reported
+//!   on stderr and fails the run. `xmlEscape` replaces the C0 controls XML 1.0 forbids and,
+//!   in `scrubUtf8`, every byte that is not valid UTF-8 (overlong forms, surrogates and
+//!   U+FFFE/U+FFFF included) with `?`: `htmlspecialchars()` here ignores `ENT_SUBSTITUTE`
+//!   (journal task dbef4868).
+//! - `tempnam()` returns an empty string rather than false when it fails, and the child
+//!   exits 1 unless its whole outcome record was written, so neither can pass for a result.
 //! - An escaping `AssertionFailedError` is a FAILURE, `SkippedTestError` a SKIP,
 //!   `IncompleteTestError` an INCOMPLETE, any other `Throwable` an ERROR; each keeps the
 //!   assertions the test made before it stopped. Skips and incompletes do not fail the run.
@@ -32,9 +39,10 @@
 use crate::parser::ast::{BinOp, CastType, Stmt, TypeExpr};
 use crate::synthetic_class::{
     class, e_array, e_binop, e_bool, e_call, e_cast, e_closure_call, e_const, e_float, e_index,
-    e_int, e_method_call, e_neg, e_new_fq, e_not, e_str, e_ternary, e_this, e_this_prop, e_var,
-    method, s_assign, s_echo, s_expr, s_foreach, s_if, s_prop_array_push, s_prop_assign,
-    s_return, s_return_void, s_throw, s_try, t_array, t_class, t_mixed,
+    e_int, e_method_call, e_neg, e_new_fq, e_not, e_post_inc, e_str, e_ternary, e_this,
+    e_this_prop, e_var, method, s_assign, s_continue, s_echo, s_expr, s_foreach, s_if,
+    s_prop_array_push, s_prop_assign, s_return, s_return_void, s_throw, s_try, s_while, t_array,
+    t_class, t_mixed,
 };
 
 /// Builds the final `Runner` class.
@@ -100,14 +108,6 @@ pub(super) fn decl_runner() -> Stmt {
                     ], vec![
                         (vec!["\\Throwable"], Some("error"), vec![
                             s_assign("label", e_binop(e_binop(e_var("class"), BinOp::Concat, e_str("::")), BinOp::Concat, e_var("name"))),
-                            s_if(
-                                e_binop(e_binop(e_this_prop("filter"), BinOp::StrictNotEq, e_str("")), BinOp::And, e_not(e_call("str_contains", vec![e_var("label"), e_this_prop("filter")]))),
-                                vec![
-                                    s_return(e_array(vec![])),
-                                ],
-                                vec![],
-                                None,
-                            ),
                             s_prop_assign(e_this(), "tests", e_binop(e_this_prop("tests"), BinOp::Add, e_int(1))),
                             s_expr(e_method_call(e_this(), "record", vec![e_var("class"), e_var("name"), e_var("label"), e_binop(e_binop(e_binop(e_str("error\n0\nThe data provider failed: "), BinOp::Concat, e_call("get_class", vec![e_var("error")])), BinOp::Concat, e_str(": ")), BinOp::Concat, e_method_call(e_var("error"), "getMessage", vec![])), e_float(0.0)])),
                             s_return(e_array(vec![])),
@@ -203,7 +203,7 @@ pub(super) fn decl_runner() -> Stmt {
                 .body(vec![
                     s_assign("path", e_call("tempnam", vec![e_call("sys_get_temp_dir", vec![]), e_str("elephc-test-")])),
                     s_if(
-                        e_binop(e_var("path"), BinOp::StrictEq, e_bool(false)),
+                        e_binop(e_binop(e_var("path"), BinOp::StrictEq, e_bool(false)), BinOp::Or, e_binop(e_var("path"), BinOp::StrictEq, e_str(""))),
                         vec![
                             s_return(e_str("error\n0\nCould not create the isolated test's result file")),
                         ],
@@ -232,7 +232,15 @@ pub(super) fn decl_runner() -> Stmt {
                                 None,
                             ),
                             s_assign("childRecord", e_method_call(e_this(), "execute", vec![e_var("case"), e_var("test")])),
-                            s_expr(e_call("file_put_contents", vec![e_var("path"), e_var("childRecord")])),
+                            s_assign("written", e_call("file_put_contents", vec![e_var("path"), e_var("childRecord")])),
+                            s_if(
+                                e_binop(e_not(e_call("is_int", vec![e_var("written")])), BinOp::Or, e_binop(e_var("written"), BinOp::StrictNotEq, e_call("strlen", vec![e_var("childRecord")]))),
+                                vec![
+                                    s_expr(e_call("exit", vec![e_int(1)])),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_expr(e_call("exit", vec![e_int(0)])),
                         ],
                         vec![],
@@ -514,7 +522,90 @@ pub(super) fn decl_runner() -> Stmt {
                 .returns(TypeExpr::Str)
                 .body(vec![
                     s_assign("text", e_call("strtr", vec![e_var("text"), e_str("\0\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}"), e_str("?????????????????????????????")])),
-                    s_return(e_call("htmlspecialchars", vec![e_var("text"), e_binop(e_binop(e_const("ENT_XML1"), BinOp::BitOr, e_const("ENT_QUOTES")), BinOp::BitOr, e_const("ENT_SUBSTITUTE")), e_str("UTF-8")])),
+                    s_return(e_call("htmlspecialchars", vec![e_method_call(e_this(), "scrubUtf8", vec![e_var("text")]), e_binop(e_const("ENT_XML1"), BinOp::BitOr, e_const("ENT_QUOTES")), e_str("UTF-8")])),
+                ]),
+        )
+        .method(
+            method("scrubUtf8")
+                .private()
+                .param("text", TypeExpr::Str)
+                .returns(TypeExpr::Str)
+                .body(vec![
+                    s_assign("clean", e_str("")),
+                    s_assign("length", e_call("strlen", vec![e_var("text")])),
+                    s_assign("i", e_int(0)),
+                    s_while(e_binop(e_var("i"), BinOp::Lt, e_var("length")), vec![
+                        s_assign("byte", e_call("ord", vec![e_index(e_var("text"), e_var("i"))])),
+                        s_if(
+                            e_binop(e_var("byte"), BinOp::Lt, e_int(128)),
+                            vec![
+                                s_assign("clean", e_binop(e_var("clean"), BinOp::Concat, e_index(e_var("text"), e_var("i")))),
+                                s_expr(e_post_inc("i")),
+                                s_continue(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("width", e_int(0)),
+                        s_assign("minimum", e_int(0)),
+                        s_if(
+                            e_binop(e_binop(e_var("byte"), BinOp::GtEq, e_int(194)), BinOp::And, e_binop(e_var("byte"), BinOp::LtEq, e_int(223))),
+                            vec![
+                                s_assign("width", e_int(2)),
+                                s_assign("minimum", e_int(128)),
+                            ],
+                            vec![
+                            (e_binop(e_binop(e_var("byte"), BinOp::GtEq, e_int(224)), BinOp::And, e_binop(e_var("byte"), BinOp::LtEq, e_int(239))), vec![
+                                s_assign("width", e_int(3)),
+                                s_assign("minimum", e_int(2048)),
+                            ]),
+                            (e_binop(e_binop(e_var("byte"), BinOp::GtEq, e_int(240)), BinOp::And, e_binop(e_var("byte"), BinOp::LtEq, e_int(244))), vec![
+                                s_assign("width", e_int(4)),
+                                s_assign("minimum", e_int(65536)),
+                            ]),
+                        ],
+                            None,
+                        ),
+                        s_if(
+                            e_binop(e_binop(e_var("width"), BinOp::StrictEq, e_int(0)), BinOp::Or, e_binop(e_binop(e_var("i"), BinOp::Add, e_var("width")), BinOp::Gt, e_var("length"))),
+                            vec![
+                                s_assign("clean", e_binop(e_var("clean"), BinOp::Concat, e_str("?"))),
+                                s_expr(e_post_inc("i")),
+                                s_continue(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("code", e_binop(e_var("byte"), BinOp::BitAnd, e_binop(e_int(255), BinOp::ShiftRight, e_binop(e_var("width"), BinOp::Add, e_int(1))))),
+                        s_assign("valid", e_bool(true)),
+                        s_assign("k", e_int(1)),
+                        s_while(e_binop(e_var("k"), BinOp::Lt, e_var("width")), vec![
+                            s_assign("next", e_call("ord", vec![e_index(e_var("text"), e_binop(e_var("i"), BinOp::Add, e_var("k")))])),
+                            s_if(
+                                e_binop(e_binop(e_var("next"), BinOp::BitAnd, e_int(192)), BinOp::StrictNotEq, e_int(128)),
+                                vec![
+                                    s_assign("valid", e_bool(false)),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_assign("code", e_binop(e_binop(e_var("code"), BinOp::ShiftLeft, e_int(6)), BinOp::BitOr, e_binop(e_var("next"), BinOp::BitAnd, e_int(63)))),
+                            s_expr(e_post_inc("k")),
+                        ]),
+                        s_if(
+                            e_binop(e_binop(e_binop(e_binop(e_binop(e_not(e_var("valid")), BinOp::Or, e_binop(e_var("code"), BinOp::Lt, e_var("minimum"))), BinOp::Or, e_binop(e_var("code"), BinOp::Gt, e_int(1114111))), BinOp::Or, e_binop(e_binop(e_var("code"), BinOp::GtEq, e_int(55296)), BinOp::And, e_binop(e_var("code"), BinOp::LtEq, e_int(57343)))), BinOp::Or, e_binop(e_var("code"), BinOp::StrictEq, e_int(65534))), BinOp::Or, e_binop(e_var("code"), BinOp::StrictEq, e_int(65535))),
+                            vec![
+                                s_assign("clean", e_binop(e_var("clean"), BinOp::Concat, e_str("?"))),
+                                s_expr(e_post_inc("i")),
+                                s_continue(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("clean", e_binop(e_var("clean"), BinOp::Concat, e_call("substr", vec![e_var("text"), e_var("i"), e_var("width")]))),
+                        s_assign("i", e_binop(e_var("i"), BinOp::Add, e_var("width"))),
+                    ]),
+                    s_return(e_var("clean")),
                 ]),
         )
         .build()

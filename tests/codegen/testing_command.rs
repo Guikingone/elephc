@@ -551,6 +551,10 @@ final class ReviewTest extends TestCase {
         $this->fail("bad\0data");
     }
 
+    public function testInvalidUtf8Message(): void {
+        $this->fail("bad\xFFbyte \xC3\xA9t\xC3\xA9");
+    }
+
     public function testLeavesADescendant(): void {
         file_put_contents(__DIR__ . '/descendant-started', (string) microtime(true));
         $pid = pcntl_fork();
@@ -589,18 +593,25 @@ fn test_cli_test_review_fixes() {
          \x20    Failed asserting that 2 is identical to 1.\n\
          FAIL App\\Tests\\ReviewTest::testBinaryMessage\n\
          \x20    bad\0data\n\
+         FAIL App\\Tests\\ReviewTest::testInvalidUtf8Message\n\
+         \x20    bad\u{FFFD}byte \u{e9}t\u{e9}\n\
          ok   App\\Tests\\ReviewTest::testLeavesADescendant (1 assertion)\n\
          ok   App\\Tests\\ReviewTest::testRunsWhileTheDescendantLives (1 assertion)\n\
          ok   App\\Tests\\ReviewTest::testFromTrait (1 assertion)\n\
          ok   App\\Tests\\ReviewTest::testAliasedHelper (1 assertion)\n\
          \n\
-         Tests: 9, Assertions: 7, Failures: 2, Errors: 1.\n",
+         Tests: 10, Assertions: 7, Failures: 3, Errors: 1.\n",
         "stderr: {stderr}"
     );
     assert_eq!(code, 1);
-    let report = fs::read_to_string(dir.join("report.xml")).expect("the report is written");
+    let bytes = fs::read(dir.join("report.xml")).expect("the report is written");
+    let report = String::from_utf8(bytes).expect("the report must be valid UTF-8");
     assert!(!report.contains('\0'), "XML 1.0 forbids NUL: {report:?}");
     assert!(report.contains("<failure type=\"failure\">bad?data</failure>"), "{report}");
+    assert!(
+        report.contains("<failure type=\"failure\">bad?byte \u{e9}t\u{e9}</failure>"),
+        "an invalid byte becomes `?` while valid UTF-8 is kept: {report}"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -609,9 +620,11 @@ fn test_cli_test_review_fixes() {
 #[test]
 fn test_cli_test_unwritable_junit_report_fails_the_run() {
     let dir = make_cli_test_dir("elephc_cli_test_unwritable_junit");
-    write_review_project(&dir);
-    let (stdout, stderr, code) =
-        run_test_command(&dir, &["--filter", "testFromTrait", "--junit", "missing/dir/report.xml"]);
+    write_project(&dir);
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &["--filter", "CounterTest::testStartsAtZero", "--junit", "missing/dir/report.xml"],
+    );
     assert!(stdout.ends_with("OK (1 test, 1 assertion)\n"), "{stdout}");
     assert!(stderr.contains("Could not write the JUnit report to"), "{stderr}");
     assert_eq!(code, 1);
@@ -660,5 +673,25 @@ fn test_runtime_referenced_only_from_an_autoloaded_class() {
     let run = std::process::Command::new(dir.join("main")).output().expect("run");
     assert_eq!(String::from_utf8_lossy(&run.stdout), "\nNo tests executed!\n");
     assert!(run.status.success());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A provider that throws is reported whatever the filter: when the filter names only a data
+/// set of that test, and when it names another test entirely. Discovery keeps provider tests
+/// whenever a filter is set, so dropping the failure would hide it or turn the run green.
+#[test]
+fn test_cli_test_filter_never_hides_a_failing_provider() {
+    let dir = make_cli_test_dir("elephc_cli_test_filter_provider_error");
+    write_review_project(&dir);
+    let (stdout, stderr, code) = run_test_command(&dir, &["--filter", "data set \"big\""]);
+    assert!(
+        stdout.contains("ERROR App\\Tests\\ReviewTest::testFromBrokenProvider\n     The data provider failed: RuntimeException: provider broke\n"),
+        "{stdout}\n{stderr}"
+    );
+    assert_eq!(code, 1);
+    let (stdout, stderr, code) = run_test_command(&dir, &["--filter", "testFromTrait"]);
+    assert!(stdout.contains("ok   App\\Tests\\ReviewTest::testFromTrait (1 assertion)\n"), "{stdout}");
+    assert!(stdout.contains("The data provider failed: RuntimeException: provider broke"), "{stdout}\n{stderr}");
+    assert_eq!(code, 1, "a failing provider fails the run even when the filter names another test");
     let _ = fs::remove_dir_all(&dir);
 }

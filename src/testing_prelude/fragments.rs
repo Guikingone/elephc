@@ -433,9 +433,6 @@ final class Runner
             throw new \UnexpectedValueException('it returned ' . gettype($rows) . ', not an array');
         } catch (\Throwable $error) {
             $label = $class . '::' . $name;
-            if ($this->filter !== '' && !str_contains($label, $this->filter)) {
-                return [];
-            }
             $this->tests++;
             $this->record($class, $name, $label, "error\n0\nThe data provider failed: " . get_class($error) . ': ' . $error->getMessage(), 0.0);
             return [];
@@ -487,7 +484,7 @@ final class Runner
     private function runIsolated(TestCase $case, callable $test): string
     {
         $path = tempnam(sys_get_temp_dir(), 'elephc-test-');
-        if ($path === false) {
+        if ($path === false || $path === '') {
             return "error\n0\nCould not create the isolated test's result file";
         }
         $pid = pcntl_fork();
@@ -500,7 +497,10 @@ final class Runner
                 pcntl_alarm($this->timeout);
             }
             $childRecord = $this->execute($case, $test);
-            file_put_contents($path, $childRecord);
+            $written = file_put_contents($path, $childRecord);
+            if (!is_int($written) || $written !== strlen($childRecord)) {
+                exit(1);
+            }
             exit(0);
         }
         $status = 0;
@@ -649,7 +649,58 @@ final class Runner
     private function xmlEscape(string $text): string
     {
         $text = strtr($text, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", '?????????????????????????????');
-        return htmlspecialchars($text, ENT_XML1 | ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        return htmlspecialchars($this->scrubUtf8($text), ENT_XML1 | ENT_QUOTES, 'UTF-8');
+    }
+
+    private function scrubUtf8(string $text): string
+    {
+        $clean = '';
+        $length = strlen($text);
+        $i = 0;
+        while ($i < $length) {
+            $byte = ord($text[$i]);
+            if ($byte < 128) {
+                $clean = $clean . $text[$i];
+                $i++;
+                continue;
+            }
+            $width = 0;
+            $minimum = 0;
+            if ($byte >= 194 && $byte <= 223) {
+                $width = 2;
+                $minimum = 128;
+            } elseif ($byte >= 224 && $byte <= 239) {
+                $width = 3;
+                $minimum = 2048;
+            } elseif ($byte >= 240 && $byte <= 244) {
+                $width = 4;
+                $minimum = 65536;
+            }
+            if ($width === 0 || $i + $width > $length) {
+                $clean = $clean . '?';
+                $i++;
+                continue;
+            }
+            $code = $byte & (255 >> ($width + 1));
+            $valid = true;
+            $k = 1;
+            while ($k < $width) {
+                $next = ord($text[$i + $k]);
+                if (($next & 192) !== 128) {
+                    $valid = false;
+                }
+                $code = ($code << 6) | ($next & 63);
+                $k++;
+            }
+            if (!$valid || $code < $minimum || $code > 1114111 || ($code >= 55296 && $code <= 57343) || $code === 65534 || $code === 65535) {
+                $clean = $clean . '?';
+                $i++;
+                continue;
+            }
+            $clean = $clean . substr($text, $i, $width);
+            $i = $i + $width;
+        }
+        return $clean;
     }
 }
 

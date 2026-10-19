@@ -8,7 +8,9 @@
 //! Key details:
 //! - A test file is a regular file named `*Test.php` or `*Test.lfc` (PHPUnit's default
 //!   suffix), found by a sorted recursive walk that skips dot-directories, so the order of
-//!   the run is the order of the paths and is stable across machines.
+//!   the run is the order of the paths and is stable across machines. A directory is
+//!   visited once by its canonical path: a symlink back into the tree (or a second link to
+//!   the same directory) is not walked again, so a loop cannot recurse forever.
 //! - The project root is the nearest directory, starting at the test path itself when it is
 //!   a directory, that holds a `composer.json`; without one, the working directory.
 //! - Required paths are absolute and single-quoted in the entry, so the entry's virtual
@@ -22,13 +24,24 @@ pub(super) fn collect_test_files(path: &Path) -> Result<Vec<PathBuf>, String> {
         return Ok(vec![absolute(path)?]);
     }
     let mut files = Vec::new();
-    walk(path, &mut files)?;
+    let mut visited = std::collections::HashSet::new();
+    walk(path, &mut files, &mut visited)?;
     files.sort();
+    files.dedup();
     Ok(files)
 }
 
-/// Recursively collects test files below `dir`, visiting entries in name order.
-fn walk(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+/// Recursively collects test files below `dir`, visiting entries in name order and each
+/// directory once by its canonical path.
+fn walk(
+    dir: &Path,
+    files: &mut Vec<PathBuf>,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) -> Result<(), String> {
+    let canonical = absolute(dir)?;
+    if !visited.insert(canonical) {
+        return Ok(());
+    }
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .map_err(|error| format!("cannot read '{}': {error}", dir.display()))?
         .map(|entry| entry.map(|entry| entry.path()))
@@ -42,7 +55,7 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
             .unwrap_or_default();
         if entry.is_dir() {
             if !name.starts_with('.') {
-                walk(&entry, files)?;
+                walk(&entry, files, visited)?;
             }
         } else if is_test_file(name) {
             files.push(absolute(&entry)?);
@@ -135,6 +148,19 @@ mod tests {
         assert_eq!(found, vec!["Unit/AlphaTest.lfc", "Unit/BetaTest.php", "ZTopTest.php"]);
         let single = collect_test_files(&dir.join("Unit/Helper.php")).expect("single file");
         assert_eq!(single.len(), 1, "an explicit file is taken as is");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symlink back to an ancestor is visited once: the walk terminates and each test file
+    /// is listed once.
+    #[test]
+    fn a_symlink_loop_is_walked_once() {
+        let dir = scratch("symlink_loop");
+        std::fs::create_dir_all(dir.join("Unit")).unwrap();
+        std::fs::write(dir.join("Unit/LoopTest.php"), "").unwrap();
+        std::os::unix::fs::symlink(&dir, dir.join("Unit/back")).unwrap();
+        let found = collect_test_files(&dir).expect("walk terminates");
+        assert_eq!(found.len(), 1, "{found:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
