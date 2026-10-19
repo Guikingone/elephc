@@ -91,4 +91,4 @@ Use [documented divergences](../docs/php/pdo.md#divergences-from-php-src) as the
 current gap list. Distinguish unintended differences from deliberate choices,
 such as not reproducing an upstream COPY-direction bug. Audit PHP-visible
 semantics and actual client-library limits before claiming complete parity.
-The original investigation is recoverable from `0316affac0`.
+The original investigation is recoverable from `819d3d3908`.

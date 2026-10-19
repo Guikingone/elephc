@@ -51,10 +51,10 @@ are preserved in a permanent regression or resolved with current evidence.
 
 The cleanup removed 46 completed/superseded planning records and merged the
 second Core log into its surviving backlog. The complete original collection is
-recoverable from Git commit `0316affac0`, for example:
+recoverable from Git commit `819d3d3908`, for example:
 
 ```bash
-git show 0316affac0:.plans/<original-filename>.md
+git show 819d3d3908:.plans/<original-filename>.md
 ```
 
 Use permanent `docs/` pages for shipped contracts and update live references
