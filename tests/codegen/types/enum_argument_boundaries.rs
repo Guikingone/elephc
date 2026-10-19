@@ -320,11 +320,25 @@ function run_holes(NamedHole $target): void {
     try { $target->value('invalid', c: later()); } catch (ArgumentCountError $e) { echo 'A|'; unset($e); }
     try { $target->value(...['a' => fractional(), 'c' => later()]); }
     catch (ArgumentCountError $e) { echo $e->getMessage(); unset($e); }
+    echo '|';
+    try { $target->value(...[fractional()], b: later()); }
+    catch (ArgumentCountError $e) { echo 'E:', $e->getMessage(); unset($e); }
+    echo '|';
+    try { $target->value(...['invalid'], b: later()); }
+    catch (TypeError $e) { echo 'E:', $e->getMessage(); unset($e); }
+    echo '|';
+    try { $target->value(...[], a: fractional()); }
+    catch (ArgumentCountError $e) { echo 'E:', $e->getMessage(); unset($e); }
 }
 run_holes(NamedHoleValue::A);
 restore_error_handler();
 "#);
-    assert_eq!(out, "FLA|FLA|SLA|FDA|FDA|LA|FLNamedHoleValue::value(): Argument #2 ($b) not passed");
+    assert_eq!(out, concat!(
+        "FLA|FLA|SLA|FDA|FDA|LA|FLNamedHoleValue::value(): Argument #2 ($b) not passed",
+        "|FLDE:Too few arguments to function NamedHoleValue::value(), 2 passed and exactly 3 expected",
+        "|LE:NamedHoleValue::value(): Argument #1 ($a) must be of type int, string given",
+        "|FDE:Too few arguments to function NamedHoleValue::value(), 1 passed and exactly 3 expected",
+    ));
 }
 
 /// Named-hole and missing-tail diagnostic ordering is identical without EIR optimization.

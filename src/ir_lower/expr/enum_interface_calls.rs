@@ -269,6 +269,21 @@ fn staged_argument_bindings(
         .unwrap_or_default()
 }
 
+/// Counts statically projectable values while retaining named-argument entries.
+fn statically_supplied_argument_count(args: &[Expr]) -> Option<usize> {
+    args.iter().try_fold(0usize, |count, arg| match &arg.kind {
+        ExprKind::Spread(inner) => match &inner.kind {
+            ExprKind::ArrayLiteral(items)
+                if !items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) =>
+            {
+                Some(count + items.len())
+            }
+            _ => None,
+        },
+        _ => Some(count + 1),
+    })
+}
+
 /// Maps shared binding failures to PHP's selected implementation exception and diagnostic.
 fn enum_argument_error(
     class: &str, method: &str, signature: &FunctionSig, args: &[Expr],
@@ -286,23 +301,23 @@ fn enum_argument_error(
                     name,
                 ).is_some_and(|index| index > param_idx)
             });
-            if !later_named_parameter
-                && !expanded.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
-            {
-                let required = crate::types::call_args::required_param_count(signature);
-                let bound = if required < crate::types::call_args::regular_param_count(signature) {
-                    "at least"
-                } else {
-                    "exactly"
-                };
-                return EnumArgumentError {
-                    exception_class: "ArgumentCountError",
-                    message: format!(
-                        "Too few arguments to function {class}::{method}(), {} passed and {bound} {required} expected",
-                        expanded.len(),
-                    ),
-                    guard_supplied_arguments: true,
-                };
+            if !later_named_parameter {
+                if let Some(provided) = statically_supplied_argument_count(&expanded) {
+                    let required = crate::types::call_args::required_param_count(signature);
+                    let bound = if required < crate::types::call_args::regular_param_count(signature) {
+                        "at least"
+                    } else {
+                        "exactly"
+                    };
+                    return EnumArgumentError {
+                        exception_class: "ArgumentCountError",
+                        message: format!(
+                            "Too few arguments to function {class}::{method}(), {} passed and {bound} {required} expected",
+                            provided,
+                        ),
+                        guard_supplied_arguments: true,
+                    };
+                }
             }
             (
                 "ArgumentCountError",
