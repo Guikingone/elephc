@@ -4,7 +4,7 @@
 - [x] Run static release checks and a warning-free build without running tests.
 - [x] Correct documentation and regenerate the builtin references.
 - [x] Present the audited changelog draft for approval.
-- [ ] Apply and commit the approved numbered release notes.
+- [x] Apply and commit the approved numbered release notes.
 
 ## Scope and evidence
 
@@ -24,13 +24,14 @@ covering all 305 commits with zero errors and zero unaccounted commits. All PRs
 target main and their merge commits are reachable from the candidate. The
 semantic ledger and 26 approved bullets are in
 [the changelog audit](release-0.27.4-changelog-audit.md). All 43 source rows have
-an include/omit decision. Approval and the 2026-10-20 release date are recorded;
-application is the remaining step.
+an include/omit decision. The approved 26 bullets are applied in CHANGELOG.md
+with the explicitly selected 2026-10-20 release date.
 
 The user requested verification, documentation updates, then final changelog
 preparation, with progressive commits and no test execution. The changelog
 inventory prerequisite was performed first; final changelog writing remains
-the last phase after the received approval. Package versions, tags and publishing are outside scope.
+the last phase after the received approval. Package versions, tags and publishing
+remain outside scope.
 
 ## Rebase delta verification
 
@@ -52,9 +53,10 @@ new runtime or signing-service success claim.
 
 ### 0. Release changelog
 
-Status: APPROVED, APPLICATION PENDING. Source reconciliation passes: 38 PRs,
-5 direct commits, 305 total commits, 0 unresolved. `[Unreleased]` is empty.
-The approved numbered section will contain 26 bullets dated 2026-10-20.
+Status: PASS. Source reconciliation covers 38 PRs, 5 direct commits and 305 total
+commits with 0 unresolved. `[Unreleased]` remains empty. The numbered 0.27.4
+section contains all 26 approved bullets, dated 2026-10-20, and the correct
+version compare link. All previous release notes are preserved.
 
 ### 1. README
 
@@ -168,10 +170,12 @@ Cross-target execution and regression freedom are therefore not newly verified.
 
 ## Release readiness
 
-Release ready: NOT YET ESTABLISHED.
+Requested release preparation: COMPLETE.
 
-1. Documentation updates and non-test audits are complete.
-2. Apply and commit the approved numbered changelog with complete traceability.
-3. Resolve or explicitly accept the direct-wrapper coverage gaps before claiming
-   exhaustive coverage; retain the distinction between static presence and
-   executed verification. This task intentionally provides no new test result.
+1. Documentation updates, source reconciliation and non-test audits are complete.
+2. The numbered changelog contains the 26 approved bullets with complete traceability
+   and the selected 2026-10-20 date.
+3. Tests remain skipped by explicit request. The direct-wrapper coverage gaps,
+   cross-target execution and actual Apple signing/notarization validation remain
+   disclosed limits. Static presence does not establish exhaustive runtime coverage
+   or a new regression-free result.

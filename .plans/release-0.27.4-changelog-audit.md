@@ -9,6 +9,7 @@ documentation and draft commits are preparation-only additions and are not silen
 included in the main source inventory. No tests or benchmarks were executed.
 The user approved the changelog proposal, including the newly merged macOS
 notarization work, on 2026-10-19 and explicitly selected the next day as its date.
+All 26 approved bullets are applied to CHANGELOG.md under that numbered section.
 
 ## Approved features and improvements
 
@@ -47,10 +48,10 @@ notarization work, on 2026-10-19 and explicitly selected the next day as its dat
 Every row was checked against GitHub merge metadata, changed paths, its first-parent
 integration diff, and source/test/documentation changes. Tests are evidence of intended
 coverage only; no historical pass claim is treated as a fresh result. Existing 0.27.4
-coverage is absent because the numbered section has not been created. There are no
-reverts or unexplained duplicate integrations in the reconciled range.
+coverage was absent at drafting; the approved 26 bullets now cover all included
+outcomes. There are no reverts or unexplained duplicate integrations in the range.
 
-| Source / integration SHA | Shipped behavior | Existing coverage | Decision | Proposed bullet | Evidence |
+| Source / integration SHA | Shipped behavior | Existing coverage | Decision | Release bullet | Evidence |
 |---|---|---|---|---|---|
 | Direct commit<br>`d032aaf87c5e752244507700c39e0c0592850a97` | Bump the compiler package to the already published 0.27.3. | Not applicable | omit | Version bookkeeping for the base release. | [Cargo.lock](../Cargo.lock); [Cargo.toml](../Cargo.toml) |
 | Direct commit<br>`d3542732744e46dbe623951d53ee0ddba4f2498e` | Refresh generated repository statistics, traffic and benchmark reports. | Not applicable | omit | Generated repository data, not a shipped behavior change. | [.github/traffic/clones-badge.svg](../.github/traffic/clones-badge.svg); [.github/traffic/clones.json](../.github/traffic/clones.json) |
@@ -120,6 +121,6 @@ reverts or unexplained duplicate integrations in the reconciled range.
 - [x] Inspect all 38 PRs and 5 direct integrations; assign every source.
 - [x] Preserve the empty Unreleased section and the existing 0.27.3 notes.
 - [x] Obtain approval for the draft and the added notarization outcome; record the selected release date.
-- [ ] Insert the approved 26 bullets under `## [0.27.4] - 2026-10-20`.
-- [ ] Point Unreleased at `v0.27.4...HEAD` and add the `v0.27.3...v0.27.4` compare link.
-- [ ] Check the bounded diff, bullet count and preparation commit history.
+- [x] Insert the approved 26 bullets under `## [0.27.4] - 2026-10-20`.
+- [x] Point Unreleased at `v0.27.4...HEAD` and add the `v0.27.3...v0.27.4` compare link.
+- [x] Check the bounded diff, bullet count and preparation commit history.

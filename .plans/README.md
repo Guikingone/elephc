@@ -3,7 +3,9 @@
 Reviewed on 2026-10-19 against release code candidate `df57a9800f`. This index
 distinguishes remaining work, retained specifications and active release
 evidence. Implementation status comes from source and recorded integration
-evidence; this cleanup ran no tests or behavioral probes.
+evidence; this cleanup ran no tests or behavioral probes. Release evidence was
+subsequently refreshed to `0842fca95e` and the approved changelog applied with
+the selected 2026-10-20 release date.
 
 ## Active follow-up work
 
@@ -32,12 +34,12 @@ separate host/device qualification and library-boundary follow-ups.
 
 | Artifact | Purpose / state |
 |---|---|
-| [0.27.4 changelog audit](release-0.27.4-changelog-audit.md) | Complete integration ledger and proposed release bullets; changelog application still awaits approval. |
+| [0.27.4 changelog audit](release-0.27.4-changelog-audit.md) | Complete integration ledger and 26 approved release bullets, applied to CHANGELOG.md for 2026-10-20. |
 | [0.27.4 verification](release-0.27.4-verification.md) | Static verification, permitted build evidence and disclosed validation limits. |
 | [0.27.4 static inventory](release-0.27.4-static-inventory.json) | Machine-readable inventory supporting the verification record. |
 
-The cleanup preserves these artifacts. It does not update the numbered release
-section or replace the release approval gate.
+These artifacts record the completed, approved release preparation and its
+validation limits. Test execution remains skipped by user request.
 
 ## Retained source reproducers
 
