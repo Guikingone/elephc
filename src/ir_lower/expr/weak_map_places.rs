@@ -38,23 +38,44 @@ pub(crate) fn lower_weak_map_incdec_stmt(
     value: &Expr,
     span: Span,
 ) -> bool {
-    let (left, increment) = match &value.kind {
+    let (left, increment, captures) = match &value.kind {
         ExprKind::BinaryOp { left, op, right } if implicit_increment_one(op, right, value.span) => {
-            (left.as_ref(), matches!(op, BinOp::Add))
+            (left.as_ref(), matches!(op, BinOp::Add), None)
         }
-        ExprKind::Assignment { prelude, .. } => {
-            let Some(Stmt { kind: StmtKind::Assign { value: read, .. }, .. }) = prelude.first()
+        ExprKind::Assignment { target, prelude, .. } => {
+            let Some(Stmt { kind: StmtKind::Assign { name: old, value: read }, .. }) = prelude.first()
                 else { return false; };
             let Some(crate::ir_lower::stmt::ElementUpdate::IncDec { increment }) =
                 crate::ir_lower::stmt::desugared_element_update(value, span, |target| target == read)
                 else { return false; };
-            (read, increment)
+            let ExprKind::Variable(new) = &target.kind else { return false; };
+            (read, increment, Some((old.as_str(), new.as_str())))
         }
         _ => return false,
     };
     let Some(variable) = begin_entry_update(ctx, left, span) else { return false; };
     let ExprKind::Variable(name) = &variable.kind else { unreachable!("entry alias is a local"); };
+    if let Some((old, _)) = captures {
+        let current = ctx.load_local(name, Some(span));
+        let ty = ctx.builder.value_php_type(current.value);
+        let borrowed = ctx.emit_value(
+            Op::Borrow,
+            vec![current.value],
+            None,
+            ty.clone(),
+            Op::Borrow.default_effects(),
+            Some(span),
+        );
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        let captured = crate::ir_lower::ownership::copy_assignment_value(ctx, borrowed, Some(span));
+        ctx.store_call_argument_local(old, captured, ty, Some(span));
+    }
     let result = lower_inc_dec(ctx, name, increment, false, value);
+    if let Some((_, new)) = captures {
+        let captured = crate::ir_lower::ownership::acquire_if_refcounted(ctx, result, Some(span));
+        let ty = ctx.builder.value_php_type(captured.value);
+        ctx.store_call_argument_local(new, captured, ty, Some(span));
+    }
     if ctx.value_needs_release_after_use(result) {
         crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
     }
