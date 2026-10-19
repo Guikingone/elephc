@@ -1163,6 +1163,12 @@ requested. A serializer returning its enum receiver exposes `name`, then the
 backing `value` when present. This also works for native enum cases passed into
 eval, with the same depth and pretty-print rules as eval-declared cases.
 
+When an encoded result exceeds the depth limit, eval returns `false` and records
+`JSON_ERROR_DEPTH`, or throws a catchable `JsonException` with `JSON_THROW_ON_ERROR`.
+Partial output takes precedence over throwing and keeps the encoded tree while
+recording the depth error. Owned serializer results and traversal reads are
+released on success and failure.
+
 Eval local filesystem calls operate on host filesystem paths and support the
 implemented stream-wrapper paths, including `file://`, `php://memory`,
 `data://`, `phar://`, plain `http://`, and eval-registered userspace wrappers.

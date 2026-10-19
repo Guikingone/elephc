@@ -10,6 +10,8 @@
 use super::super::*;
 use super::support::*;
 
+mod depth;
+
 /// Verifies dynamic builtin calls inside eval dispatch through runtime value hooks.
 #[test]
 fn execute_program_dispatches_simple_builtins() {
@@ -471,8 +473,13 @@ return json_encode(EvalJsonOwned::Ready, 0, 1);
         let program = parse_fragment(source.as_bytes()).expect("parse owned serializer result");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
-        let result = execute_program(&program, &mut scope, &mut values);
-        assert_eq!(result.is_err(), fail);
+        let result = execute_program(&program, &mut scope, &mut values)
+            .expect("JSON depth errors must return false rather than abort eval");
+        if fail {
+            assert_eq!(values.get(result), FakeValue::Bool(false));
+        } else {
+            assert_eq!(values.get(result), FakeValue::String("[1]".to_string()));
+        }
         let returned = values.values.iter().filter_map(|(id, value)| {
             let FakeValue::Array(children) = value else { return None; };
             let first = children.first()?;

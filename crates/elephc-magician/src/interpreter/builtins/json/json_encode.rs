@@ -12,8 +12,15 @@
 
 use super::super::super::*;
 
+mod errors;
 mod objects;
+mod ownership;
+use errors::{
+    EvalJsonEncodeFailure, EvalJsonEncodeResult, eval_json_encode_check_depth,
+    eval_json_encode_record_error,
+};
 use objects::eval_json_encode_append_object;
+use ownership::release_encoded_value;
 eval_builtin! {
     contract: "json_encode",
     area: Json,
@@ -102,7 +109,7 @@ fn eval_json_encode_result(
 
     let mut output = Vec::new();
     let mut error = None;
-    eval_json_encode_append(
+    match eval_json_encode_append(
         value,
         context,
         values,
@@ -112,7 +119,11 @@ fn eval_json_encode_result(
         &mut Vec::new(),
         &mut error,
         &mut output,
-    )?;
+    ) {
+        Ok(()) => {}
+        Err(EvalJsonEncodeFailure::Json(failure)) => error = Some(failure),
+        Err(EvalJsonEncodeFailure::Runtime(status)) => return Err(status),
+    }
     if let Some(error) = error {
         context.set_json_error(error.code, error.message);
         if flags & EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR == 0 {
@@ -138,7 +149,7 @@ fn eval_json_encode_append(
     arrays_seen: &mut Vec<usize>,
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
+) -> EvalJsonEncodeResult {
     match values.type_tag(value)? {
         EVAL_TAG_INT => output.extend_from_slice(&values.string_bytes(value)?),
         EVAL_TAG_FLOAT => {
@@ -198,7 +209,7 @@ fn eval_json_encode_append(
             )?;
         }
         EVAL_TAG_NULL | EVAL_TAG_RESOURCE => output.extend_from_slice(b"null"),
-        _ => return Err(EvalStatus::UnsupportedConstruct),
+        _ => return Err(EvalStatus::UnsupportedConstruct.into()),
     }
     Ok(())
 }
@@ -254,56 +265,64 @@ fn eval_json_encode_append_indexed_array(
     arrays_seen: &mut Vec<usize>,
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
-    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
-    let force_object = flags & EVAL_JSON_FORCE_OBJECT != 0;
-    let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
-    output.push(if force_object { b'{' } else { b'[' });
-    let len = values.array_len(value)?;
-    if pretty && len > 0 {
-        output.push(b'\n');
+) -> EvalJsonEncodeResult {
+    if !eval_json_encode_enter_array(value, values, flags, arrays_seen, error, output)? {
+        return Ok(());
     }
-    for position in 0..len {
-        if position > 0 {
-            output.push(b',');
-            if pretty {
-                output.push(b'\n');
+    let encoded = (|| {
+        let force_object = flags & EVAL_JSON_FORCE_OBJECT != 0;
+        let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
+        output.push(if force_object { b'{' } else { b'[' });
+        let len = values.array_len(value)?;
+        if pretty && len > 0 {
+            output.push(b'\n');
+        }
+        for position in 0..len {
+            if position > 0 {
+                output.push(b',');
+                if pretty {
+                    output.push(b'\n');
+                }
             }
-        }
-        if pretty {
-            eval_json_encode_pretty_indent(output, depth + 1);
-        }
-        let key = values.array_iter_key(value, position)?;
-        if force_object {
-            eval_json_encode_append_string(
-                &values.string_bytes(key)?,
-                flags & !EVAL_JSON_NUMERIC_CHECK,
-                EvalJsonStringPosition::Key,
+            if pretty {
+                eval_json_encode_pretty_indent(output, depth + 1);
+            }
+            if force_object {
+                let key = values.array_iter_key(value, position)?;
+                let key_bytes = values.string_bytes(key).map_err(EvalJsonEncodeFailure::Runtime);
+                let key_bytes = release_encoded_value(key, key_bytes, context, values)?;
+                eval_json_encode_append_string(
+                    &key_bytes,
+                    flags & !EVAL_JSON_NUMERIC_CHECK,
+                    EvalJsonStringPosition::Key,
+                    error,
+                    output,
+                )?;
+                eval_json_encode_append_colon(flags, output);
+            }
+            let element = values.array_iter_value(value, position)?;
+            let encoded = eval_json_encode_append(
+                element,
+                context,
+                values,
+                flags,
+                depth_limit,
+                depth + 1,
+                arrays_seen,
                 error,
                 output,
-            )?;
-            eval_json_encode_append_colon(flags, output);
+            );
+            release_encoded_value(element, encoded, context, values)?;
         }
-        let element = values.array_iter_value(value, position)?;
-        eval_json_encode_append(
-            element,
-            context,
-            values,
-            flags,
-            depth_limit,
-            depth + 1,
-            arrays_seen,
-            error,
-            output,
-        )?;
-    }
-    if pretty && len > 0 {
-        output.push(b'\n');
-        eval_json_encode_pretty_indent(output, depth);
-    }
-    output.push(if force_object { b'}' } else { b']' });
+        if pretty && len > 0 {
+            output.push(b'\n');
+            eval_json_encode_pretty_indent(output, depth);
+        }
+        output.push(if force_object { b'}' } else { b']' });
+        eval_json_encode_check_depth(depth_limit, depth, flags, error)
+    })();
     arrays_seen.pop();
-    Ok(())
+    encoded
 }
 
 /// Appends one associative eval array as a JSON object.
@@ -317,53 +336,61 @@ fn eval_json_encode_append_assoc(
     arrays_seen: &mut Vec<usize>,
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
-    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
-    let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
-    output.push(b'{');
-    let len = values.array_len(value)?;
-    if pretty && len > 0 {
-        output.push(b'\n');
+) -> EvalJsonEncodeResult {
+    if !eval_json_encode_enter_array(value, values, flags, arrays_seen, error, output)? {
+        return Ok(());
     }
-    for position in 0..len {
-        if position > 0 {
-            output.push(b',');
-            if pretty {
-                output.push(b'\n');
+    let encoded = (|| {
+        let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
+        output.push(b'{');
+        let len = values.array_len(value)?;
+        if pretty && len > 0 {
+            output.push(b'\n');
+        }
+        for position in 0..len {
+            if position > 0 {
+                output.push(b',');
+                if pretty {
+                    output.push(b'\n');
+                }
             }
+            if pretty {
+                eval_json_encode_pretty_indent(output, depth + 1);
+            }
+            let key = values.array_iter_key(value, position)?;
+            let key_bytes = values.string_bytes(key).map_err(EvalJsonEncodeFailure::Runtime);
+            let key_bytes = release_encoded_value(key, key_bytes, context, values)?;
+            eval_json_encode_append_string(
+                &key_bytes,
+                flags & !EVAL_JSON_NUMERIC_CHECK,
+                EvalJsonStringPosition::Key,
+                error,
+                output,
+            )?;
+            eval_json_encode_append_colon(flags, output);
+            let element = values.array_iter_value(value, position)?;
+            let encoded = eval_json_encode_append(
+                element,
+                context,
+                values,
+                flags,
+                depth_limit,
+                depth + 1,
+                arrays_seen,
+                error,
+                output,
+            );
+            release_encoded_value(element, encoded, context, values)?;
         }
-        if pretty {
-            eval_json_encode_pretty_indent(output, depth + 1);
+        if pretty && len > 0 {
+            output.push(b'\n');
+            eval_json_encode_pretty_indent(output, depth);
         }
-        let key = values.array_iter_key(value, position)?;
-        eval_json_encode_append_string(
-            &values.string_bytes(key)?,
-            flags & !EVAL_JSON_NUMERIC_CHECK,
-            EvalJsonStringPosition::Key,
-            error,
-            output,
-        )?;
-        eval_json_encode_append_colon(flags, output);
-        let element = values.array_iter_value(value, position)?;
-        eval_json_encode_append(
-            element,
-            context,
-            values,
-            flags,
-            depth_limit,
-            depth + 1,
-            arrays_seen,
-            error,
-            output,
-        )?;
-    }
-    if pretty && len > 0 {
-        output.push(b'\n');
-        eval_json_encode_pretty_indent(output, depth);
-    }
-    output.push(b'}');
+        output.push(b'}');
+        eval_json_encode_check_depth(depth_limit, depth, flags, error)
+    })();
     arrays_seen.pop();
-    Ok(())
+    encoded
 }
 
 /// Appends a JSON object colon, including pretty-print spacing when active.
@@ -382,22 +409,28 @@ fn eval_json_encode_pretty_indent(output: &mut Vec<u8>, depth: usize) {
     }
 }
 
-/// Records entry into one JSON array/object, rejecting depth overrun and recursion.
+/// Tracks payload identity across copied cells, emitting JSON null for a recursive container.
 fn eval_json_encode_enter_array(
     value: RuntimeCellHandle,
-    depth_limit: usize,
-    depth: usize,
+    values: &mut impl RuntimeValueOps,
+    flags: i64,
     arrays_seen: &mut Vec<usize>,
-) -> Result<(), EvalStatus> {
-    if depth >= depth_limit {
-        return Err(EvalStatus::RuntimeFatal);
+    error: &mut Option<EvalJsonEncodeError>,
+    output: &mut Vec<u8>,
+) -> EvalJsonEncodeResult<bool> {
+    let identity = if values.type_tag(value)? == EVAL_TAG_OBJECT {
+        values.object_identity(value)? as usize
+    } else {
+        values.raw_value_word(value)? as usize
+    };
+    if arrays_seen.contains(&identity) {
+        output.extend_from_slice(b"null");
+        eval_json_encode_record_error(flags, error,
+            EvalJsonEncodeError { code: 6, message: "Recursion detected" })?;
+        return Ok(false);
     }
-    let address = value.as_ptr() as usize;
-    if arrays_seen.contains(&address) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    arrays_seen.push(address);
-    Ok(())
+    arrays_seen.push(identity);
+    Ok(true)
 }
 
 /// Appends one JSON string with eval-supported PHP flag handling.
@@ -407,7 +440,7 @@ fn eval_json_encode_append_string(
     position: EvalJsonStringPosition,
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
+) -> EvalJsonEncodeResult {
     if flags & EVAL_JSON_NUMERIC_CHECK != 0 {
         if let Some(number) = eval_json_numeric_check_bytes(bytes) {
             output.extend_from_slice(&number);
@@ -422,15 +455,14 @@ fn eval_json_encode_append_string(
         }
     } else if flags & (EVAL_JSON_INVALID_UTF8_IGNORE | EVAL_JSON_INVALID_UTF8_SUBSTITUTE) == 0 {
         output.truncate(start_len);
-        *error = Some(EvalJsonEncodeError {
-            code: EVAL_JSON_ERROR_UTF8,
-            message: EVAL_JSON_UTF8_MESSAGE,
-        });
         match position {
             EvalJsonStringPosition::Value => output.extend_from_slice(b"null"),
             EvalJsonStringPosition::Key => output.extend_from_slice(b"\"\""),
         }
-        return Ok(());
+        return eval_json_encode_record_error(flags, error, EvalJsonEncodeError {
+            code: EVAL_JSON_ERROR_UTF8,
+            message: EVAL_JSON_UTF8_MESSAGE,
+        });
     } else {
         eval_json_encode_append_invalid_utf8_bytes(bytes, flags, output)?;
     }

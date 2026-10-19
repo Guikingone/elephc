@@ -22,7 +22,7 @@ pub(super) fn eval_json_encode_append_object(
     arrays_seen: &mut Vec<usize>,
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
+) -> EvalJsonEncodeResult {
     let is_enum = match dynamic_object_is_a(value, "UnitEnum", false, context, values)? {
         Some(is_enum) => is_enum,
         None => {
@@ -49,15 +49,13 @@ pub(super) fn eval_json_encode_append_object(
             let encoded = eval_json_encode_append(
                 backing, context, values, flags, depth_limit, depth, arrays_seen, error, output,
             );
-            let released = release_encoded_value(backing, context, values);
-            return encoded.and(released);
+            return release_encoded_value(backing, encoded, context, values);
         }
-        *error = Some(EvalJsonEncodeError {
+        output.push(b'0');
+        return eval_json_encode_record_error(flags, error, EvalJsonEncodeError {
             code: EVAL_JSON_ERROR_NON_BACKED_ENUM,
             message: "Non-backed enums have no default serialization",
         });
-        output.push(b'0');
-        return Ok(());
     }
     append_properties(
         value, context, values, flags, depth_limit, depth, arrays_seen, error, output,
@@ -75,12 +73,12 @@ fn append_enum_serialization(
     arrays_seen: &mut Vec<usize>,
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
+) -> EvalJsonEncodeResult {
     let identity = values.object_identity(value)? as usize;
     if arrays_seen.contains(&identity) {
-        *error = Some(EvalJsonEncodeError { code: 6, message: "Recursion detected" });
         output.extend_from_slice(b"null");
-        return Ok(());
+        return eval_json_encode_record_error(flags, error,
+            EvalJsonEncodeError { code: 6, message: "Recursion detected" });
     }
     arrays_seen.push(identity);
     let result = eval_method_call_result(value, "jsonSerialize", Vec::new(), context, values);
@@ -112,10 +110,9 @@ fn append_enum_serialization(
                     )
                 }
             })();
-            let released = release_encoded_value(result, context, values);
-            encoded.and(released)
+            release_encoded_value(result, encoded, context, values)
         }
-        Err(status) => Err(status),
+        Err(status) => Err(status.into()),
     };
     arrays_seen.pop();
     encoded
@@ -132,9 +129,11 @@ fn append_native_enum_properties(
     arrays_seen: &mut Vec<usize>,
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
+) -> EvalJsonEncodeResult {
     let count = if values.property_is_initialized(value, "value")? { 2 } else { 1 };
-    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
+    if !eval_json_encode_enter_array(value, values, flags, arrays_seen, error, output)? {
+        return Ok(());
+    }
     let encoded = (|| {
         let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
         output.push(b'{');
@@ -153,27 +152,17 @@ fn append_native_enum_properties(
             let encoded = eval_json_encode_append(
                 property, context, values, flags, depth_limit, depth + 1, arrays_seen, error, output,
             );
-            let released = release_encoded_value(property, context, values);
-            encoded.and(released)?;
+            release_encoded_value(property, encoded, context, values)?;
         }
         if pretty {
             output.push(b'\n');
             eval_json_encode_pretty_indent(output, depth);
         }
         output.push(b'}');
-        Ok(())
+        eval_json_encode_check_depth(depth_limit, depth, flags, error)
     })();
     arrays_seen.pop();
     encoded
-}
-
-/// Releases only an owned callback/property result, including after encoding fails.
-fn release_encoded_value(
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    if value.is_borrowed() { Ok(()) } else { eval_release_value(context, values, value) }
 }
 
 /// Appends public properties when no enum override applies, including a serializer returning itself.
@@ -187,53 +176,60 @@ fn append_properties(
     arrays_seen: &mut Vec<usize>,
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
-    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
-    let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
-    output.push(b'{');
-    let len = values.object_property_len(value)?;
-    if pretty && len > 0 {
-        output.push(b'\n');
+) -> EvalJsonEncodeResult {
+    if !eval_json_encode_enter_array(value, values, flags, arrays_seen, error, output)? {
+        return Ok(());
     }
-    for position in 0..len {
-        if position > 0 {
-            output.push(b',');
-            if pretty {
-                output.push(b'\n');
+    let encoded = (|| {
+        let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
+        output.push(b'{');
+        let len = values.object_property_len(value)?;
+        if pretty && len > 0 {
+            output.push(b'\n');
+        }
+        for position in 0..len {
+            if position > 0 {
+                output.push(b',');
+                if pretty {
+                    output.push(b'\n');
+                }
             }
+            if pretty {
+                eval_json_encode_pretty_indent(output, depth + 1);
+            }
+            let key = values.object_property_iter_key(value, position)?;
+            let key_bytes = values.string_bytes(key).map_err(EvalJsonEncodeFailure::Runtime);
+            let key_bytes = release_encoded_value(key, key_bytes, context, values)?;
+            eval_json_encode_append_string(
+                &key_bytes,
+                flags & !EVAL_JSON_NUMERIC_CHECK,
+                EvalJsonStringPosition::Key,
+                error,
+                output,
+            )?;
+            eval_json_encode_append_colon(flags, output);
+            let property = std::str::from_utf8(&key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+            let element = values.property_get(value, property)?;
+            let encoded = eval_json_encode_append(
+                element,
+                context,
+                values,
+                flags,
+                depth_limit,
+                depth + 1,
+                arrays_seen,
+                error,
+                output,
+            );
+            release_encoded_value(element, encoded, context, values)?;
         }
-        if pretty {
-            eval_json_encode_pretty_indent(output, depth + 1);
+        if pretty && len > 0 {
+            output.push(b'\n');
+            eval_json_encode_pretty_indent(output, depth);
         }
-        let key = values.object_property_iter_key(value, position)?;
-        let key_bytes = values.string_bytes(key)?;
-        eval_json_encode_append_string(
-            &key_bytes,
-            flags & !EVAL_JSON_NUMERIC_CHECK,
-            EvalJsonStringPosition::Key,
-            error,
-            output,
-        )?;
-        eval_json_encode_append_colon(flags, output);
-        let property = std::str::from_utf8(&key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let element = values.property_get(value, property)?;
-        eval_json_encode_append(
-            element,
-            context,
-            values,
-            flags,
-            depth_limit,
-            depth + 1,
-            arrays_seen,
-            error,
-            output,
-        )?;
-    }
-    if pretty && len > 0 {
-        output.push(b'\n');
-        eval_json_encode_pretty_indent(output, depth);
-    }
-    output.push(b'}');
+        output.push(b'}');
+        eval_json_encode_check_depth(depth_limit, depth, flags, error)
+    })();
     arrays_seen.pop();
-    Ok(())
+    encoded
 }

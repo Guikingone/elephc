@@ -86,3 +86,86 @@ fn test_dynamic_eval_json_enum_serializer_self_returns() {
 fn test_dynamic_eval_json_enum_serializer_self_returns_without_ir_opt() {
     without_ir_opt(assert_native_enum_self_return_output);
 }
+
+/// Checks depth failure recovery for both native and eval-declared serializer callbacks.
+fn assert_enum_json_depth_recovery() {
+    let source = r#"<?php
+enum NativeDepthResult implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { return [[1]]; }
+}
+$nativeCase = NativeDepthResult::Ready;
+$iterations = $argc > 1 ? (int)$argv[1] : 1;
+$heapOnly = $argc > 2;
+$code = $argc > 3 ? '' : '
+enum DynamicDepthResult implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { return [[1]]; }
+}
+$cases = [$nativeCase, DynamicDepthResult::Ready];
+$flagOptions = $heapOnly
+    ? [0, JSON_PARTIAL_OUTPUT_ON_ERROR, JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_THROW_ON_ERROR]
+    : [0, JSON_THROW_ON_ERROR, JSON_PARTIAL_OUTPUT_ON_ERROR, JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_THROW_ON_ERROR];
+for ($iteration = 0; $iteration < $iterations; $iteration++) {
+    foreach ($cases as $case) {
+        foreach ($flagOptions as $flags) {
+            try {
+                $result = json_encode($case, $flags, 1);
+                echo ($result === false ? "false" : $result) . ":" . json_last_error() . "\n";
+            } catch (JsonException $e) { echo "caught:" . $e->getCode() . "\n"; }
+            echo "after:" . json_encode(9) . "\n";
+        }
+    }
+}
+';
+eval($code);
+echo "done";
+"#;
+    let one_case = concat!(
+        "false:1\nafter:9\ncaught:1\nafter:9\n",
+        "[[1]]:1\nafter:9\n[[1]]:1\nafter:9\n",
+    );
+    let one_iteration = format!("{one_case}{one_case}");
+    let expected = format!("{one_iteration}done");
+    assert_eq!(compile_and_run(source), expected);
+    let outputs = compile_and_run_with_heap_debug_per_argv(
+        source, &[&["1"], &["1", "heap"], &["9", "heap"]],
+    );
+    assert!(outputs[0].success, "{}", outputs[0].stderr);
+    assert_eq!(outputs[0].stdout, expected);
+    let heap_case = "false:1\nafter:9\n[[1]]:1\nafter:9\n[[1]]:1\nafter:9\n";
+    let heap_iteration = format!("{heap_case}{heap_case}");
+    for (debug, count) in outputs[1..].iter().zip([1, 9]) {
+        assert!(debug.success, "{}", debug.stderr);
+        assert_eq!(debug.stdout, format!("{}done", heap_iteration.repeat(count)));
+    }
+    // Enum declarations retain a fixed baseline. Exception retention is tested separately
+    // from traversal ownership, so this repetition check uses non-throwing JSON modes.
+    let live_counts = |stderr: &str| {
+        let line = stderr.lines()
+            .find(|line| line.starts_with("HEAP DEBUG: allocs="))
+            .expect("heap counters");
+        let field = |name: &str| {
+            line.split_whitespace().find_map(|part| part.strip_prefix(name))
+                .expect("heap field").parse::<usize>().expect("heap count")
+        };
+        (field("live_blocks="), field("live_bytes="))
+    };
+    assert_eq!(
+        live_counts(&outputs[1].stderr), live_counts(&outputs[2].stderr),
+        "repeated JSON failures retain additional owners\n{}\n{}",
+        outputs[1].stderr, outputs[2].stderr,
+    );
+}
+
+/// Runtime eval recovers from enum serializer depth errors with all JSON flag combinations.
+#[test]
+fn test_dynamic_eval_json_enum_depth_recovery() {
+    assert_enum_json_depth_recovery();
+}
+
+/// Optimizer-disabled builds preserve the same PHP results and balanced heap ownership.
+#[test]
+fn test_dynamic_eval_json_enum_depth_recovery_without_ir_opt() {
+    without_ir_opt(assert_enum_json_depth_recovery);
+}
