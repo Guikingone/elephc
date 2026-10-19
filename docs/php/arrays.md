@@ -49,7 +49,8 @@ diagnostic. Both paths preserve copy-on-write aliases and caller references.
 Nested appends preserve object identity: `$items[0][] = $value` invokes
 `offsetSet(null, $value)` when the selected child implements `ArrayAccess`, while
 an array or null child keeps the attached array append path. `WeakMap` children
-reject append with a catchable `Error`. Generated nested updates can also create
+reject append with a catchable `Error`. Closure children also throw a catchable
+`Error` on array writes instead of silently discarding the value. Generated nested updates can create
 missing parents below a false or null ancestor, without permitting ordinary reads
 through a scalar value.
 

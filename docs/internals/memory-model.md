@@ -1098,6 +1098,9 @@ through `ArrayAccess::offsetSet(null, value)`. The method borrows the receiver a
 RHS roots; ordinary array/null children instead use the consuming boxed append helper.
 Both branches retire the caller's roots after mutation and expose them to exception
 unwinding when a user method throws.
+Callable payloads are Closure objects but have no class-table object header. The boxed
+setter releases a rejected value before entering the shared class-name Error helper,
+rather than reading a callable descriptor as an object or dropping the write.
 
 A fresh parent is preallocated with the indexed or associative representation required by
 its next key before the missing-key callback runs. Around conversion and reads, a typed, non-retaining

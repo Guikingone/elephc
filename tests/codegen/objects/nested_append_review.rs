@@ -110,6 +110,44 @@ fn test_nested_append_review_non_indexable_object_no_ir_opt() {
     without_ir_opt(test_nested_append_review_non_indexable_object);
 }
 
+/// Closures and first-class callables reject nested appends instead of discarding them.
+#[test]
+fn test_nested_append_review_closure_child() {
+    assert_nested_write(r#"<?php
+function append(mixed $object): void {
+    $items = [$object];
+    try { $items[0][] = str_repeat('v', 2); echo 'bad'; }
+    catch (Error $error) { echo $error->getMessage(), '|'; }
+}
+append(function() {}); append(strlen(...));
+"#, "Cannot use object of type Closure as array|Cannot use object of type Closure as array|");
+}
+
+/// Callable-object rejection retains the same error without EIR optimization.
+#[test]
+fn test_nested_append_review_closure_child_no_ir_opt() {
+    without_ir_opt(test_nested_append_review_closure_child);
+}
+
+/// Keyed nested writes share the same consuming Closure rejection as append fallback.
+#[test]
+fn test_nested_append_review_closure_keyed_write() {
+    assert_nested_write(r#"<?php
+function write(mixed $object): void {
+    $items = [$object];
+    try { $items[0][0] = str_repeat('v', 2); echo 'bad'; }
+    catch (Error $error) { echo $error->getMessage(); }
+}
+write(function() {});
+"#, "Cannot use object of type Closure as array");
+}
+
+/// The shared keyed-write error remains catchable without EIR optimization.
+#[test]
+fn test_nested_append_review_closure_keyed_write_no_ir_opt() {
+    without_ir_opt(test_nested_append_review_closure_keyed_write);
+}
+
 /// Mixed child cells retain object identity while ordinary arrays still detach on write.
 #[test]
 fn test_nested_append_review_mixed_children() {
