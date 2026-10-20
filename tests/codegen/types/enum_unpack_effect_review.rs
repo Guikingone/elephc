@@ -7,6 +7,7 @@
 //! Key details:
 //! - Array construction evaluates every value before last-wins argument binding.
 //! - Overwritten values can mutate caller storage or throw before method entry.
+//! - Enum cases are warmed before temporary allocations to keep the heap baseline stable.
 
 use crate::support::*;
 
@@ -29,6 +30,8 @@ enum UnpackLoose implements UnpackEffects {
     case A; public function f(mixed $a): int { echo 'L'; return $a; }
 }
 function mark(int $n, int &$seen): int { echo $n; $seen = $seen * 10 + $n; return $n; }
+function warm(UnpackEffects $target): void { echo get_class($target), ':'; }
+warm(UnpackTight::A); warm(UnpackLoose::A); echo '|';
 "#;
 
 /// Duplicate named keys preserve every value's output and by-reference side effect.
@@ -41,7 +44,7 @@ function invoke(UnpackEffects $target): void {{
 }}
 invoke(UnpackTight::A); invoke(UnpackLoose::A);
 "#));
-    assert_heap_baseline(&out, "12M2:12|12L2:12|");
+    assert_heap_baseline(&out, "UnpackTight:UnpackLoose:|12M2:12|12L2:12|");
 }
 
 /// Last-wins binding cannot erase earlier effects with EIR optimization disabled.
@@ -62,7 +65,7 @@ function invoke(UnpackEffects $target): void {{
 }}
 invoke(UnpackTight::A); invoke(UnpackLoose::A);
 "#));
-    assert_heap_baseline(&out, "1Fstop:1|1Fstop:1|");
+    assert_heap_baseline(&out, "UnpackTight:UnpackLoose:|1Fstop:1|1Fstop:1|");
 }
 
 /// Throwing overwritten values keep their source-order semantics without EIR optimization.
@@ -85,6 +88,8 @@ enum StringUnpackLoose implements StringUnpack {
 function sourceKey(): string { echo 'K'; return str_repeat('a', 1); }
 function sourceValue(): string { echo 'V'; return str_repeat('x', 2); }
 function sourceStop(): string { echo 'F'; throw new Exception('stop'); }
+function warm(StringUnpack $target): void { echo get_class($target), ':'; }
+warm(StringUnpackTight::A); warm(StringUnpackLoose::A); echo '|';
 function invoke(StringUnpack $target): void {
     echo $target->f(...[sourceKey() => sourceValue()]), '|';
     try { $target->f(...[sourceKey() => sourceStop()]); }
@@ -92,7 +97,7 @@ function invoke(StringUnpack $target): void {
 }
 invoke(StringUnpackTight::A); invoke(StringUnpackLoose::A);
 "#);
-    assert_heap_baseline(&out, "KVM2|KFstop|KVL2|KFstop|");
+    assert_heap_baseline(&out, "StringUnpackTight:StringUnpackLoose:|KVM2|KFstop|KVL2|KFstop|");
 }
 
 /// String construction cleanup also holds with EIR optimization disabled.

@@ -28,6 +28,8 @@ enum LooseType implements SelectedType {
 enum StrictType implements SelectedType {
     case A; public function f(int $a, int $b = 0): int { return $a + $b; }
 }
+function warmSelected(SelectedType $value): void { echo get_class($value), ':'; }
+warmSelected(LooseType::A); warmSelected(StrictType::A); echo '|';
 function badSelected(): string { echo 'a'; return str_repeat('n', 2); }
 function tailSelected(): int { echo 'b'; return 2; }
 function invokeSelected(SelectedType $value): void {
@@ -44,7 +46,7 @@ invokeSelected(LooseType::A); invokeSelected(StrictType::A);
 "#);
     assert!(out.success, "{}", out.stderr);
     let error = "StrictType::f(): Argument #1 ($a) must be of type int, string given";
-    assert_eq!(out.stdout, format!("ab11|ba11|ba11|ab11|ab{error}|ba{error}|ba{error}|ab{error}|"));
+    assert_eq!(out.stdout, format!("LooseType:StrictType:|ab11|ba11|ba11|ab11|ab{error}|ba{error}|ba{error}|ab{error}|"));
     assert_enum_heap_baseline(&out.stderr);
 }
 
@@ -92,6 +94,8 @@ enum ReferenceLoose implements ReferenceSelected {
 enum ReferenceTight implements ReferenceSelected {
     case A; public function &f(int $a): int { return $a; }
 }
+function warmReference(ReferenceSelected $value): void { echo get_class($value), ':'; }
+warmReference(ReferenceLoose::A); warmReference(ReferenceTight::A); echo '|';
 function selectedReferenceValue(): string { return str_repeat('n', 2); }
 function invokeReferenceSelected(ReferenceSelected $value): void {
     $anchor = 20; $result = &$anchor;
@@ -106,7 +110,7 @@ function invokeReferenceSelected(ReferenceSelected $value): void {
 invokeReferenceSelected(ReferenceLoose::A); invokeReferenceSelected(ReferenceTight::A);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "11:12|11:12|ReferenceTight::f(): Argument #1 ($a) must be of type int, string given:20|7:8|");
+    assert_eq!(out.stdout, "ReferenceLoose:ReferenceTight:|11:12|11:12|ReferenceTight::f(): Argument #1 ($a) must be of type int, string given:20|7:8|");
     assert_enum_heap_baseline(&out.stderr);
 }
 
@@ -127,6 +131,8 @@ enum WeakLoose implements WeakSelected {
 enum WeakTight implements WeakSelected {
     case A; public function f(int $a): int { return $a; }
 }
+function warmWeak(WeakSelected $value): void { echo get_class($value), ':'; }
+warmWeak(WeakLoose::A); warmWeak(WeakTight::A); echo '|';
 function weakSelectedNumber(): string { return str_repeat('7', 1); }
 function invokeWeakSelected(WeakSelected $value): void {
     echo $value->f(weakSelectedNumber()), '|';
@@ -134,7 +140,7 @@ function invokeWeakSelected(WeakSelected $value): void {
 invokeWeakSelected(WeakLoose::A); invokeWeakSelected(WeakTight::A);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "11|7|");
+    assert_eq!(out.stdout, "WeakLoose:WeakTight:|11|7|");
     assert_enum_heap_baseline(&out.stderr);
 }
 
@@ -155,6 +161,8 @@ enum RefParameterLoose implements RefParameterSelected {
 enum RefParameterTight implements RefParameterSelected {
     case A; public function f(int &$out, int $a): int { ++$out; return $a; }
 }
+function warmParameter(RefParameterSelected $value): void { echo get_class($value), ':'; }
+warmParameter(RefParameterLoose::A); warmParameter(RefParameterTight::A); echo '|';
 function refParameterValue(): string { echo 'a'; return str_repeat('n', 2); }
 function invokeRefParameterSelected(RefParameterSelected $value): void {
     $out = 2;
@@ -166,7 +174,7 @@ function invokeRefParameterSelected(RefParameterSelected $value): void {
 invokeRefParameterSelected(RefParameterLoose::A); invokeRefParameterSelected(RefParameterTight::A);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "a11:3|11:4|aRefParameterTight::f(): Argument #2 ($a) must be of type int, string given:2|7:3|");
+    assert_eq!(out.stdout, "RefParameterLoose:RefParameterTight:|a11:3|11:4|aRefParameterTight::f(): Argument #2 ($a) must be of type int, string given:2|7:3|");
     assert_enum_heap_baseline(&out.stderr);
 }
 

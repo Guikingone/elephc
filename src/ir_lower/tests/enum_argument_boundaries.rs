@@ -7,6 +7,7 @@
 //! Key details:
 //! - Runtime array parameters retain the implicit integer cast through optimization.
 //! - Each target independently emits both float and quoted-string diagnostic paths.
+//! - Mixed hash entries retain raw callable descriptors through rooted literal construction.
 
 /// Lowers and emits the enum argument boundary fixture for one target.
 fn verify(target: &str) {
@@ -138,9 +139,18 @@ function unpack_key_call(UnpackEffects $target): int {
     return $target->value(...[unpack_key() => unpack_effect(3)]);
 }
 echo unpack_key_call(UnpackEffectsValue::A);
+function raw_callback_hash(): array {
+    return ['callback' => function(): int { return 7; }, 'other' => 1];
+}
+$callbacks = raw_callback_hash(); echo ($callbacks['callback'])();
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     assert!(crate::ir::print_module(&module).contains("implicit_int_cast"), "{target}: diagnostic EIR cast");
+    let callback = module.functions.iter().find(|function| function.name == "raw_callback_hash").unwrap();
+    assert!(callback.instructions.iter().any(|instruction|
+        instruction.op == crate::ir::Op::HashSet && callback.value(instruction.operands[2])
+            .is_some_and(|value| value.php_type == crate::types::PhpType::Callable)),
+        "{target}: mixed hash callback entries preserve their raw descriptor contract");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("implicit_int_float"), "{target}: target-aware implicit int binding");
 }

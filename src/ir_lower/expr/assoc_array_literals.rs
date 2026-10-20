@@ -35,12 +35,6 @@ pub(super) fn lower_assoc_array_literal_with_guard(
         let key_value = lower_expr(ctx, key);
         let key = root_array_literal_item(ctx, key_value, key.span, &mut roots);
         let value_operand = lower_expr(ctx, value);
-        // Mixed hashes need a boxed callable for retaining stores, not the scalar callable ABI.
-        let value_operand = if ctx.builder.value_php_type(value_operand.value) == PhpType::Callable
-            && matches!(&hash_ty, PhpType::AssocArray { value, .. }
-                if value.codegen_repr() == PhpType::Mixed)
-        { ctx.box_value_as_mixed(value_operand, PhpType::Mixed, Some(value.span)) }
-        else { value_operand };
         let value = root_array_literal_item(ctx, value_operand, value.span, &mut roots);
         let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
