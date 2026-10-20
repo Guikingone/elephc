@@ -452,6 +452,7 @@ impl Scanner<'_> {
                     receiver: receiver.clone(), property: property.clone(),
                 }, stmt.span);
                 self.record_protocol_methods(&source, &["__elephc_reference"]);
+                self.scan_receiver(receiver);
                 self.scan_expr(index);
                 self.scan_expr(value);
             }

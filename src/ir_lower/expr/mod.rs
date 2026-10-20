@@ -628,6 +628,9 @@ fn lower_initialized_static_property_isset(
     property: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -752,6 +755,9 @@ fn lower_initialized_static_property_empty(
     construct: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
