@@ -1,8 +1,8 @@
 <?php
 
 // Packed particles integrated in a buffer<T> hot loop. With --ir-opt (the default)
-// the loop resolves the buffer handle once before it starts instead of at every
-// $p[$i] access.
+// the loop resolves the buffer handle once before it starts, and every $p[$i]
+// access in one iteration shares a single bounds-checked record address.
 
 packed class Particle
 {

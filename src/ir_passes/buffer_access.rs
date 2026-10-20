@@ -1,6 +1,7 @@
 //! Purpose:
 //! Hoists generation-safe `buffer<T>` handle resolution out of loops that cannot invalidate
-//! a buffer.
+//! a buffer, and shares one bounds-checked record address between the repeated `$b[$i]`
+//! packed accesses of an iteration.
 //!
 //! Called from:
 //! - `crate::ir_passes::driver::optimize_module`, once after the ordinary fixed point, so
@@ -24,11 +25,15 @@
 //!   back always passes the preheader, which resolves again.
 //! - The buffer operand must be loop-invariant: an SSA value defined outside the loop, or a
 //!   `load_local` of a slot nothing in the loop writes and no by-reference alias can reach.
+//! - Inside a rewritten loop, packed `buffer_get_resolved` instructions with the same
+//!   descriptor and index compute the same record address, so a dominated one is replaced by
+//!   its dominator. Scalar element reads are left alone: a `buffer_set_resolved` between two of
+//!   them can change the loaded value.
 //! - Skipped entirely for generators (a `yield` lets the caller run), functions with exception
 //!   handlers or dynamic `eval`, and modules that enable `pcntl_async_signals()`, whose backend
 //!   dispatches signal handlers after every instruction.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
     BlockId, Effects, Function, Immediate, InstId, Instruction, IrType, LocalSlotId, Module, Op,
@@ -37,9 +42,9 @@ use crate::ir::{
 use crate::types::PhpType;
 
 use super::cfg::has_exception_handlers;
-use super::dominance::compute_dominance;
+use super::dominance::{compute_dominance, DominanceInfo};
 use super::loops::{compute_loops, NaturalLoop};
-use super::rewrite::neutralize_to_nop;
+use super::rewrite::{neutralize_to_nop, replace_all_uses, resolve_chains};
 
 /// Rewrites buffer accesses in every function-like body and reports whether anything changed.
 pub(super) fn hoist_buffer_resolution(module: &mut Module) -> bool {
@@ -101,7 +106,7 @@ fn optimize_function(function: &mut Function) -> bool {
         if !loop_preserves_buffers(function, loop_ref) {
             continue;
         }
-        changed |= hoist_loop(function, loop_ref, preheader, &escaping);
+        changed |= hoist_loop(function, loop_ref, preheader, &dominance, &escaping);
     }
     changed
 }
@@ -120,6 +125,7 @@ fn hoist_loop(
     function: &mut Function,
     loop_ref: &NaturalLoop,
     preheader: BlockId,
+    dominance: &DominanceInfo,
     escaping: &HashSet<LocalSlotId>,
 ) -> bool {
     let written = slots_named_in_loop(function, loop_ref);
@@ -150,6 +156,7 @@ fn hoist_loop(
         return false;
     }
 
+    let mut rewritten = Vec::new();
     for (source, accesses) in groups {
         let handle = match source {
             HandleSource::Value(value) => value,
@@ -176,9 +183,11 @@ fn hoist_loop(
             inst.operands[0] = descriptor;
             inst.effects = inst.op.default_effects();
             inst.origin = Some(PassOrigin::BufferAccess);
+            rewritten.push(inst_id);
         }
     }
     neutralize_unused_loads(function, &replaced_loads);
+    share_record_addresses(function, &rewritten, dominance);
     true
 }
 
@@ -353,4 +362,133 @@ fn neutralize_unused_loads(function: &mut Function, loads: &[ValueId]) {
             neutralize_to_nop(&mut function.instructions[inst.as_raw() as usize]);
         }
     }
+}
+
+/// Replaces each packed record address that a dominating access with the same descriptor and
+/// index already computed.
+fn share_record_addresses(function: &mut Function, rewritten: &[InstId], dominance: &DominanceInfo) {
+    let mut positions: HashMap<InstId, (BlockId, usize)> = HashMap::new();
+    for block in &function.blocks {
+        for (index, &inst_id) in block.instructions.iter().enumerate() {
+            positions.insert(inst_id, (block.id, index));
+        }
+    }
+    let incoming = incoming_arguments(function);
+    let mut groups: HashMap<(ValueId, ValueId), Vec<InstId>> = HashMap::new();
+    for &inst_id in rewritten {
+        let inst = &function.instructions[inst_id.as_raw() as usize];
+        if inst.op != Op::BufferGetResolved
+            || !matches!(inst.result_php_type.codegen_repr(), PhpType::Packed(_))
+        {
+            continue;
+        }
+        let index = canonical_value(function, &incoming, inst.operands[1]);
+        groups.entry((inst.operands[0], index)).or_default().push(inst_id);
+    }
+    let dominates = |earlier: InstId, later: InstId| {
+        let (earlier_block, earlier_index) = positions[&earlier];
+        let (later_block, later_index) = positions[&later];
+        if earlier_block == later_block {
+            earlier_index < later_index
+        } else {
+            dominance.strictly_dominates(earlier_block, later_block)
+        }
+    };
+    let mut replacements = HashMap::new();
+    let mut redundant = Vec::new();
+    for accesses in groups.values() {
+        for &later in accesses {
+            let Some(&earlier) = accesses.iter().find(|&&earlier| earlier != later && dominates(earlier, later)) else {
+                continue;
+            };
+            let (Some(old), Some(new)) = (
+                function.instructions[later.as_raw() as usize].result,
+                function.instructions[earlier.as_raw() as usize].result,
+            ) else {
+                continue;
+            };
+            replacements.insert(old, new);
+            redundant.push(later);
+        }
+    }
+    if replacements.is_empty() {
+        return;
+    }
+    replace_all_uses(function, &resolve_chains(&replacements));
+    for inst_id in redundant {
+        neutralize_to_nop(&mut function.instructions[inst_id.as_raw() as usize]);
+    }
+}
+
+/// Collects, for every block parameter, the arguments each incoming edge passes to it.
+fn incoming_arguments(function: &Function) -> HashMap<(BlockId, usize), Vec<ValueId>> {
+    let mut incoming: HashMap<(BlockId, usize), Vec<ValueId>> = HashMap::new();
+    for block in &function.blocks {
+        let Some(terminator) = block.terminator.as_ref() else {
+            continue;
+        };
+        for (target, args) in edge_arguments(terminator) {
+            for (index, &arg) in args.iter().enumerate() {
+                incoming.entry((target, index)).or_default().push(arg);
+            }
+        }
+    }
+    incoming
+}
+
+/// Returns each explicit successor of a terminator with the arguments it passes.
+fn edge_arguments(terminator: &crate::ir::Terminator) -> Vec<(BlockId, &[ValueId])> {
+    use crate::ir::Terminator;
+    match terminator {
+        Terminator::Br { target, args } => vec![(*target, args.as_slice())],
+        Terminator::CondBr { then_target, then_args, else_target, else_args, .. } => {
+            vec![(*then_target, then_args.as_slice()), (*else_target, else_args.as_slice())]
+        }
+        Terminator::Switch { cases, default, default_args, .. } => {
+            let mut edges: Vec<_> = cases
+                .iter()
+                .map(|case| (case.target, case.args.as_slice()))
+                .collect();
+            edges.push((*default, default_args.as_slice()));
+            edges
+        }
+        Terminator::GeneratorSuspend { resume, resume_args, .. } => {
+            vec![(*resume, resume_args.as_slice())]
+        }
+        Terminator::Return { .. }
+        | Terminator::Throw { .. }
+        | Terminator::Fatal { .. }
+        | Terminator::Unreachable => Vec::new(),
+    }
+}
+
+/// Follows block parameters whose every incoming edge passes one and the same value.
+///
+/// Scalar promotion places a parameter at each join a promoted local is live into, even when
+/// no path changes it, so the loop index reaches the second half of an iteration as a fresh
+/// parameter equal to the header's. Seeing through such trivial parameters lets two accesses
+/// of `$b[$i]` on either side of an `if` share one record address.
+fn canonical_value(
+    function: &Function,
+    incoming: &HashMap<(BlockId, usize), Vec<ValueId>>,
+    value: ValueId,
+) -> ValueId {
+    let mut current = value;
+    for _ in 0..function.values.len() {
+        let Some(ValueDef::BlockParam { block, index }) = function.value(current).map(|value| value.def) else {
+            break;
+        };
+        let Some(args) = incoming.get(&(block, index as usize)) else {
+            break;
+        };
+        let mut distinct = args.iter().copied().filter(|&arg| arg != current);
+        let Some(first) = distinct.next() else {
+            break;
+        };
+        if distinct.any(|arg| arg != first) {
+            break;
+        }
+        current = first;
+    }
+    current
 }

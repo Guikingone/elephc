@@ -590,6 +590,13 @@ alias reaches. Generators, functions with exception handlers or dynamic `eval`,
 and modules that call `pcntl_async_signals()` (whose backend dispatches signal
 handlers after every instruction) are skipped.
 
+Inside a rewritten loop, packed `buffer_get_resolved` instructions with the same
+descriptor and index compute the same record address, so a dominated access
+reuses its dominator's result. Index operands are compared after seeing through
+block parameters whose every incoming edge passes the same value, which scalar
+promotion leaves at each join. Scalar element reads are not shared: a
+`buffer_set_resolved` between them can change the loaded value.
+
 Packed field reads and writes (`prop_get`/`prop_set` on a packed record) also get
 their exact effects during effect refinement (`reads_heap`; `writes_heap` and
 `may_fatal`), count as concat-inert, and consume their operands by value for the

@@ -441,7 +441,8 @@ See `examples/tail-recursion/main.php` for Euclid and a deep mutual countdown.
 ### Buffer loops
 
 With `--ir-opt` enabled, a loop over `buffer<T>` elements resolves the buffer
-handle once in front of the loop instead of at every `$b[$i]`:
+handle once in front of the loop instead of at every `$b[$i]`, and the packed
+field accesses of one iteration share a single bounds-checked record address:
 
 ```php
 function step(buffer<Particle> $p, int $count, float $dt): void {

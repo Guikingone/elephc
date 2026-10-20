@@ -183,6 +183,16 @@ fn test_buffer_loop_resolves_handle_once_in_the_preheader() {
     assert!(!ir.contains("= buffer_get "), "{ir}");
 }
 
+/// Every packed access of one iteration, on both sides of the bounce branch, shares a single
+/// bounds-checked record address: the loop index reaching the code after the branch through a
+/// fresh join parameter still names the same element.
+#[test]
+fn test_packed_accesses_of_one_iteration_share_one_record_address() {
+    let ir = function_ir(INTEGRATE_SOURCE, true, "step");
+    assert_eq!(ir.matches("= buffer_get_resolved ").count(), 1, "{ir}");
+    assert_eq!(run_variant(INTEGRATE_SOURCE, true), INTEGRATE_OUTPUT);
+}
+
 /// The hoisted resolution never faults: a stale handle still dies at the first access with the
 /// use-after-free diagnostic, and a loop that never runs its body reports nothing.
 #[test]
