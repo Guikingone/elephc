@@ -164,3 +164,25 @@ fn forget(owner: u64) {
     let previous = NATIVE.with(|values| values.borrow_mut().remove(&owner));
     drop(previous);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Detects allocation churn without adding an Rc alias that would disable unique-origin reuse.
+    #[test]
+    fn ini_native_unique_unresolved_refresh_reuses_metadata() {
+        assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+        let bytes = *b"a\0b";
+        let owner = bytes.as_ptr() as u64;
+        assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, 0), 0);
+        let address = || NATIVE.with(|values| Rc::as_ptr(values.borrow().get(&owner).unwrap()));
+        let original = address();
+        for length in [1, 3, 0, 2] {
+            assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, length), 0);
+            assert_eq!(address(), original, "unique unresolved refresh must not replace metadata");
+            assert_eq!(elephc_mbstring_native_string_lookup_v1(owner, length), 0);
+        }
+        assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    }
+}
