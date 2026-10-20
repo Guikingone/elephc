@@ -11,6 +11,8 @@
 //! - Every C integer width maps to the PHP type `int` and C `float` to the PHP type `float`;
 //!   `ExternAbiType` keeps the declared width so the call boundary can normalize registers
 //!   without widening the PHP type system.
+//! - Extern class fields use the natural C layout of the same widths (`ctype_field_layout`), so a
+//!   struct declared with the header's field types has the header's offsets and `sizeof`.
 
 use std::collections::HashMap;
 
@@ -81,25 +83,30 @@ pub fn ctype_to_php_type(ct: &CType) -> PhpType {
     }
 }
 
-/// Returns the stack frame size in bytes for a C-facing FFI type.
+/// Returns the natural C size and alignment, in bytes, of an extern class field type.
 ///
-/// All integer, float, bool, pointer, typed pointer, callable, and string (char*) types
-/// occupy 8 bytes on the stack. Void occupies 0 bytes. Used during codegen frame layout
-/// to determine how callee-saved registers and local variables are sized.
-pub fn ctype_stack_size(ct: &CType) -> usize {
+/// Every supported target (macOS and iOS arm64, Linux aarch64 and x86_64) is LP64 with
+/// natural alignment for these scalars, so one table serves them all: `int`, `i64`, `u64`,
+/// `float`/`f64`, pointers and `string` (`char*`) are 8 bytes, `i32`/`u32`/`f32` 4, `i16`/`u16` 2,
+/// and `i8`/`u8`/`bool` (C `_Bool`) one byte, each aligned to its own size. Returns `None` for
+/// `void` and `callable`, which cannot be stored in a struct field.
+pub fn ctype_field_layout(ct: &CType) -> Option<(usize, usize)> {
     match ct {
-        // Explicit widths are rejected on extern class fields for now, so a slot stays one word.
-        CType::Int
-        | CType::IntWidth(_)
-        | CType::Float
-        | CType::F32
-        | CType::Bool
-        | CType::Ptr
-        | CType::TypedPtr(_)
-        | CType::Callable => 8,
-        CType::Str => 8, // char*
-        CType::Void => 0,
+        CType::Int | CType::Float | CType::Ptr | CType::TypedPtr(_) | CType::Str => Some((8, 8)),
+        CType::IntWidth(width) => {
+            let bytes = usize::from(width.bits() / 8);
+            Some((bytes, bytes))
+        }
+        CType::F32 => Some((4, 4)),
+        CType::Bool => Some((1, 1)),
+        CType::Void | CType::Callable => None,
     }
+}
+
+/// Rounds `offset` up to the next multiple of `align` (a power of two, at least one).
+pub fn align_up(offset: usize, align: usize) -> usize {
+    debug_assert!(align.is_power_of_two(), "C alignments are powers of two");
+    (offset + align - 1) & !(align - 1)
 }
 
 /// Returns the ABI size for a PhpType, or None if the type has no fixed size.

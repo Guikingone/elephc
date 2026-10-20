@@ -96,6 +96,11 @@ pub fn compute(
         check_result,
     );
     state.apply_usage(executable_usage, true);
+    // An extern class is C struct layout metadata with no emitted code. Besides `ptr_cast<T>`
+    // (recorded by the usage scan) it is named through types the scan does not walk: `ptr<T>`
+    // in extern function signatures and in fields of other extern classes. Keeping every
+    // declared one costs nothing and keeps `$ptr->field` lowering able to find the layout.
+    state.reach.classes.extend(state.index.extern_classes.iter().cloned());
     for name in options.exported_functions {
         let name = php_symbol_key(name);
         state.reach.functions.insert(name.clone());

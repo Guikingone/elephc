@@ -24,7 +24,7 @@ use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{
     array_storage_conversion, join_array_storage_conversion, ClassInfo, EnumInfo,
-    ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
+    ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
     ReturnAliasSummaries, ReturnArgAlias, ThrowAccessInfo, TypeEnv,
 };
 
@@ -293,6 +293,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
         &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
     pub declared_trait_properties: &'m HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     pub packed_classes: &'m HashMap<String, PackedClassInfo>,
+    /// C struct layouts of the declared extern classes, read by `ptr<Class>` field accesses.
+    pub extern_classes: &'m HashMap<String, ExternClassInfo>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
@@ -461,6 +463,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         declared_trait_methods: &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
         declared_trait_properties: &'m HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
+        extern_classes: &'m HashMap<String, ExternClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
@@ -526,6 +529,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             declared_trait_methods,
             declared_trait_properties,
             packed_classes,
+            extern_classes,
             throw_access_sites,
             builtin_call_types,
             boxed_reference_promotion_sites,

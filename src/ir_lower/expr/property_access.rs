@@ -377,6 +377,9 @@ pub(super) fn lower_property_get_from_value(
     }
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
+    let reads_extern_cstr = op == Op::PropGet
+        && result_type == PhpType::Str
+        && extern_receiver_class(ctx, &ctx.builder.value_php_type(object.value)).is_some();
     let result = ctx.emit_value(
         op,
         vec![object.value],
@@ -385,6 +388,18 @@ pub(super) fn lower_property_get_from_value(
         op.default_effects(),
         Some(expr.span),
     );
+    if reads_extern_cstr {
+        // A C `char*` field reads as a borrowed view of C memory the program may free or
+        // rewrite at any time, so the value PHP keeps is an owned copy taken right here.
+        return ctx.emit_owned_value(
+            Op::StrPersist,
+            vec![result.value],
+            None,
+            PhpType::Str,
+            Op::StrPersist.default_effects(),
+            Some(expr.span),
+        );
+    }
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
 
@@ -449,6 +464,18 @@ fn property_result_type(
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
         if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             return PhpType::Mixed;
+        }
+        if let Some(class_name) = extern_receiver_class(ctx, &object_ty) {
+            // A C struct field reads as whatever its declared C type widens to: `int` for every
+            // integer width, `float` for both float widths.
+            let Some(field) = ctx
+                .extern_classes
+                .get(&class_name)
+                .and_then(|info| info.fields.iter().find(|field| field.name == property))
+            else {
+                return fallback_expr_type(expr);
+            };
+            return normalize_value_php_type(field.php_type.clone());
         }
         if let Some(class_name) = packed_receiver_class(ctx, &object_ty) {
             let normalized = class_name.trim_start_matches('\\');
@@ -544,6 +571,24 @@ pub(crate) fn packed_receiver_class(
         }
         _ => None,
     }
+}
+
+/// Returns the extern class a `ptr<T>` receiver addresses, or `None` for any other receiver.
+///
+/// The sibling of `packed_receiver_class` for C structs declared with `extern class`: the
+/// receiver is the struct's raw address, and each field is read and written at its natural C
+/// offset with its declared width.
+pub(crate) fn extern_receiver_class(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+) -> Option<String> {
+    let PhpType::Pointer(Some(class_name)) = object_ty.codegen_repr() else {
+        return None;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    ctx.extern_classes
+        .contains_key(normalized)
+        .then(|| normalized.to_string())
 }
 
 /// Returns whether a container read can carry PHP null in a statically non-null pointer type.
