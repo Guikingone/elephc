@@ -7,23 +7,36 @@
 //!
 //! Key details:
 //! - Pointer helpers must keep null checks and C-string conversions aligned with the pointer extension ABI.
-//! - `__rt_ptoa` appends at `_concat_buf + _concat_off` and publishes the written length, like
-//!   `__rt_itoa`, so its result can feed a concatenation without overwriting earlier pieces.
+//! - `__rt_ptoa` reserves its at most 18 bytes through `__rt_concat_reserve` and publishes the
+//!   written length through `__rt_concat_publish`, so its result can feed a concatenation
+//!   without overwriting earlier pieces and never writes past the 64 KiB `_concat_buf`.
+//! - When the scratch buffer is full the result lands in a heap block stamped with
+//!   `CONCAT_TEMP_HEAP_KIND`, the same transient kind `__rt_concat` uses: `i_to_str` results
+//!   are scratch strings that codegen never releases, so `__rt_str_persist` adopts the block
+//!   in place instead of duplicating it.
 
+use crate::codegen_support::runtime::strings::CONCAT_BUF_CAPACITY;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+
+/// Longest pointer spelling: `0x` plus sixteen hexadecimal digits.
+const PTOA_MAX_LEN: usize = 18;
 
 /// Emits the `__rt_ptoa` runtime helper that formats a pointer address as a lowercase hex string.
 ///
 /// Input: x0 = pointer value (64-bit address)
-/// Output: x1 = pointer to the string at the entry `_concat_buf + _concat_off`, x2 = string length
+/// Output: x1 = pointer to the string, x2 = string length
 ///
 /// Formats the pointer as "0x" followed by hexadecimal digits, skipping leading zeros.
 /// Null pointers are formatted as "0x0". Uses a loop to emit each nibble, converting
-/// values 0-9 to '0'-'9' and 10-15 to 'a'-'f'. The result (at most 18 bytes) is written at
-/// the current concat scratch cursor and `_concat_off` advances by its length, so `echo`,
-/// string casts, interpolation and concatenation operands all share one formatter without
-/// clobbering a partially built concatenation. Dispatches to the x86_64 Linux
-/// implementation when targeting that architecture.
+/// values 0-9 to '0'-'9' and 10-15 to 'a'-'f'. The result (at most 18 bytes) goes into
+/// storage from `__rt_concat_reserve`: the current concat scratch cursor while it fits, a
+/// transient heap block otherwise. `__rt_concat_publish` then advances `_concat_off` only for
+/// scratch results, so `echo`, string casts, interpolation and concatenation operands all
+/// share one formatter without clobbering a partially built concatenation or running past
+/// the scratch buffer. Clobbers every caller-saved register, because the reservation can
+/// reach `__rt_heap_alloc`. Dispatches to the x86_64 Linux implementation when targeting
+/// that architecture.
 pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ptoa_linux_x86_64(emitter);
@@ -35,15 +48,28 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     emitter.comment("--- runtime: ptoa (pointer to hex string) ---");
     emitter.label_global("__rt_ptoa");
 
-    // -- save return address --
-    emitter.instruction("str x30, [sp, #-16]!");                                // save link register
+    // -- set up a frame that keeps the pointer value across the reservation --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate a frame for the pointer value and the saved frame registers
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save the frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the ptoa frame pointer
+    emitter.instruction("str x0, [sp]");                                        // keep the pointer value across the reservation call
 
-    // -- set up output at the current concat_buf cursor --
-    abi::emit_symbol_address(emitter, "x7", "_concat_off");                     // x7 = address of the concat scratch offset
-    emitter.instruction("ldr x8, [x7]");                                        // x8 = current concat scratch offset
-    abi::emit_symbol_address(emitter, "x1", "_concat_buf");                     // load page of concat buffer
-    emitter.instruction("add x1, x1, x8");                                      // x1 = output start at the current concat cursor
-    emitter.instruction("mov x3, x1");                                          // x3 = write cursor
+    // -- reserve bounded storage instead of appending blindly at _concat_off --
+    emitter.instruction(&format!("mov x0, #{}", PTOA_MAX_LEN));                 // request room for the longest pointer spelling
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or heap storage for the digits
+
+    // -- stamp heap-backed results so __rt_str_persist can take them over in place --
+    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    emitter.instruction("sub x10, x0, x9");                                     // compute the candidate scratch offset of the reservation
+    emitter.instruction(&format!("mov x11, #{}", CONCAT_BUF_CAPACITY));         // load the concat scratch capacity in bytes
+    emitter.instruction("cmp x10, x11");                                        // is the reservation outside the shared scratch window (unsigned)?
+    emitter.instruction("b.lo __rt_ptoa_dest_ready");                           // scratch-backed reservations carry no heap header to stamp
+    emitter.instruction(&format!("mov x9, #{}", CONCAT_TEMP_HEAP_KIND));        // heap kind 7 = transient string temporary
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap reservation as a transient string
+    emitter.label("__rt_ptoa_dest_ready");
+    emitter.instruction("mov x1, x0");                                          // x1 = output start
+    emitter.instruction("mov x3, x0");                                          // x3 = write cursor
+    emitter.instruction("ldr x0, [sp]");                                        // reload the pointer value to format
 
     // -- write "0x" prefix --
     emitter.instruction("mov w4, #0x30");                                       // ASCII '0'
@@ -87,9 +113,9 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     // -- compute length and return --
     emitter.label("__rt_ptoa_done");
     emitter.instruction("sub x2, x3, x1");                                      // x2 = length (cursor - start)
-    emitter.instruction("add x8, x8, x2");                                      // advance the concat scratch offset past the written digits
-    emitter.instruction("str x8, [x7]");                                        // publish the new concat scratch offset
-    emitter.instruction("ldr x30, [sp], #16");                                  // restore link register
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch results
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the ptoa frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -104,18 +130,36 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
 /// down instead (the earlier form) was one nibble short whenever the top set bit was not
 /// the lowest bit of its nibble, so `0xf` printed `0x0` and typical addresses lost a digit.
 ///
-/// Output: rax = pointer to the string at the entry `_concat_buf + _concat_off`, rdx = string
-/// length; `_concat_off` advances by that length.
+/// Output: rax = pointer to the string, rdx = string length. The bytes go into storage from
+/// `__rt_concat_reserve` (heap fallback stamped `CONCAT_TEMP_HEAP_KIND`) and
+/// `__rt_concat_publish` advances `_concat_off` only for scratch results.
 fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ptoa (pointer to hex string) ---");
     emitter.label_global("__rt_ptoa");
 
-    emitter.instruction("mov r11, rax");                                        // preserve the incoming pointer payload because x86_64 call sites pass it in the integer result register
-    abi::emit_symbol_address(emitter, "rdi", "_concat_off");
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");
-    emitter.instruction("add rax, QWORD PTR [rdi]");                            // start the output at the current concat scratch cursor instead of the buffer base
-    emitter.instruction("mov rsi, rax");                                        // seed the write cursor from the output start so the helper can emit the pointer string in-place
+    // -- set up a frame that keeps the pointer value across the reservation --
+    emitter.instruction("push rbp");                                            // save the caller frame pointer and realign the stack
+    emitter.instruction("mov rbp, rsp");                                        // establish the ptoa frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the pointer value
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the incoming pointer value across the reservation
+
+    // -- reserve bounded storage instead of appending blindly at _concat_off --
+    emitter.instruction(&format!("mov eax, {}", PTOA_MAX_LEN));                 // request room for the longest pointer spelling
+    emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or heap storage for the digits
+
+    // -- stamp heap-backed results so __rt_str_persist can take them over in place --
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    emitter.instruction("mov r11, rax");                                        // copy the reservation before deriving its scratch offset
+    emitter.instruction("sub r11, r10");                                        // compute the candidate scratch offset of the reservation
+    emitter.instruction(&format!("cmp r11, {}", CONCAT_BUF_CAPACITY));          // is the reservation outside the shared scratch window?
+    emitter.instruction("jb __rt_ptoa_dest_ready_linux_x86_64");                // scratch reservations carry no heap header to stamp
+    abi::emit_load_int_immediate(emitter, "r10",
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND) as i64);
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap reservation as a transient string
+    emitter.label("__rt_ptoa_dest_ready_linux_x86_64");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the pointer value to format
+    emitter.instruction("mov rsi, rax");                                        // seed the write cursor from the output start
     emitter.instruction("mov BYTE PTR [rsi], 0x30");                            // write the leading '0' of the hexadecimal pointer prefix
     emitter.instruction("add rsi, 1");                                          // advance the write cursor after storing the leading '0'
     emitter.instruction("mov BYTE PTR [rsi], 0x78");                            // write the trailing 'x' of the hexadecimal pointer prefix
@@ -162,6 +206,55 @@ fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_ptoa_done_linux_x86_64");
     emitter.instruction("mov rdx, rsi");                                        // copy the final write cursor before converting it into the emitted string length
     emitter.instruction("sub rdx, rax");                                        // compute the emitted string length as write cursor minus output start
-    emitter.instruction("add QWORD PTR [rdi], rdx");                            // advance the concat scratch offset past the written digits
-    emitter.instruction("ret");                                                 // return the concat buffer pointer and emitted length in the x86_64 string result registers
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch results
+    emitter.instruction("mov rsp, rbp");                                        // release the pointer value slot
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the string pointer and length in rax and rdx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every target reserves the pointer spelling through `__rt_concat_reserve` before the first
+    /// byte store and publishes it through `__rt_concat_publish`, so a full concat scratch buffer
+    /// moves the result to the heap instead of writing past `_concat_buf`.
+    #[test]
+    fn ptoa_reserves_before_writing_and_publishes_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_ptoa(&mut emitter);
+            let asm = emitter.output();
+            let (reserve, publish, first_store) = if target.arch == Arch::X86_64 {
+                ("call __rt_concat_reserve\n", "call __rt_concat_publish\n", "mov BYTE PTR [rsi]")
+            } else {
+                ("bl __rt_concat_reserve\n", "bl __rt_concat_publish\n", "strb w4")
+            };
+            let reserve_at = asm.find(reserve).unwrap_or_else(|| panic!("{name}: no reservation"));
+            let store_at = asm.find(first_store).unwrap_or_else(|| panic!("{name}: no byte store"));
+            assert!(reserve_at < store_at, "{name}: ptoa stores before reserving");
+            assert!(asm.contains(publish), "{name}: ptoa does not publish its length");
+            assert!(!asm.contains("_concat_off"), "{name}: ptoa still moves the cursor itself");
+        }
+    }
+
+    /// A heap-backed reservation is stamped with the transient concat kind on both ABIs, so
+    /// `__rt_str_persist` adopts it instead of leaving a duplicated block behind.
+    #[test]
+    fn ptoa_marks_heap_fallback_results_transient() {
+        let mut arm = Emitter::new(Target::parse("linux-aarch64").unwrap());
+        emit_ptoa(&mut arm);
+        assert!(arm.output().contains(&format!("mov x9, #{}", CONCAT_TEMP_HEAP_KIND)));
+
+        let mut x86 = Emitter::new(Target::parse("linux-x86_64").unwrap());
+        emit_ptoa(&mut x86);
+        let x86_asm = x86.output();
+        let kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND);
+        assert!(
+            x86_asm.contains(&format!("0x{:x}", kind)) || x86_asm.contains(&kind.to_string()),
+            "x86_64 ptoa does not stamp the transient concat kind"
+        );
+    }
 }

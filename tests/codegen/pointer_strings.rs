@@ -187,3 +187,54 @@ echo "null=" . ptr_null(), "\n";
     assert_eq!(output.stdout, "ok\nnull=0x0\n");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Tests pointer conversions while the 64 KiB concat scratch buffer is already full.
+///
+/// `__rt_ptoa` used to write its up to 18 bytes at the scratch cursor without a capacity
+/// check, past the end of `_concat_buf` into whatever globals the linker placed after it.
+/// It now reserves through `__rt_concat_reserve`, so a full buffer moves the digits to a
+/// transient heap block; this covers that path for concatenation, interpolation, string casts
+/// stored into an array (adopted by `__rt_str_persist`), builtin arguments and `echo`.
+#[test]
+fn test_pointer_string_conversions_with_a_full_concat_scratch_buffer() {
+    let out = compile_and_run(
+        r#"<?php
+$n = ptr_null();
+$f = ptr_offset($n, 0x123456789abcdef0);
+$s = str_repeat("a", 65536) . $f . "|" . $n;
+echo strlen($s), " ", substr($s, 65534), "\n";
+$t = str_repeat("b", 65530) . "{$f}";
+echo strlen($t), " ", substr($t, -20), "\n";
+$parts = [str_repeat("c", 65536), (string)$f, strval($n)];
+echo strlen($parts[0]), " ", $parts[1], " ", $parts[2], "\n";
+echo str_contains(str_repeat("d", 65536), $f) ? "found" : "missing", "\n";
+echo str_repeat("e", 65536) === "" ? "" : "", $f, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "65558 aa0x123456789abcdef0|0x0\n\
+         65548 bb0x123456789abcdef0\n\
+         65536 0x123456789abcdef0 0x0\n\
+         missing\n\
+         0x123456789abcdef0\n"
+    );
+}
+
+/// Tests that a pointer string formatted into the heap fallback and adopted by an array slot
+/// is released exactly once under heap debugging.
+#[test]
+fn test_pointer_string_heap_fallback_is_adopted_without_leaks() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$f = ptr_offset(ptr_null(), 0x123456789abcdef0);
+$parts = [str_repeat("c", 65536), (string)$f];
+echo $parts[1], "\n";
+$parts = [];
+echo count($parts), "\n";
+"#,
+    );
+    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "0x123456789abcdef0\n0\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
