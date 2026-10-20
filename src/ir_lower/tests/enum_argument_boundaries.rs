@@ -53,6 +53,23 @@ function static_selected(StaticSelected $target, string $input): void {
     catch (TypeError $error) { echo $error->getMessage(), $out; }
 }
 static_selected(StaticLoose::A, 'bad'); static_selected(StaticTight::A, 'bad');
+class SelectedReferenceBase {}
+class SelectedReferenceNarrow extends SelectedReferenceBase {}
+interface SelectedReferenceContract { public function value(SelectedReferenceNarrow &$input): string; }
+enum SelectedReferenceTight implements SelectedReferenceContract {
+    case A;
+    public function value(SelectedReferenceNarrow &$input): string { return get_class($input); }
+}
+enum SelectedReferenceLoose implements SelectedReferenceContract {
+    case A;
+    public function value(SelectedReferenceBase &$input): string { return get_class($input); }
+}
+function selected_reference(SelectedReferenceContract $target, SelectedReferenceBase $input): void {
+    try { echo $target->value($input); }
+    catch (TypeError $error) { echo $error->getMessage(); }
+}
+selected_reference(SelectedReferenceTight::A, new SelectedReferenceBase());
+selected_reference(SelectedReferenceLoose::A, new SelectedReferenceBase());
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     assert!(crate::ir::print_module(&module).contains("implicit_int_cast"), "{target}: diagnostic EIR cast");

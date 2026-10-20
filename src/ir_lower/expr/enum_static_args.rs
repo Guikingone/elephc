@@ -15,7 +15,7 @@ use super::enum_method_args::call_intermediate;
 
 /// Keeps a by-reference place distinct from independently owned by-value snapshots.
 enum StagedArgument {
-    Reference(ValueId),
+    Reference { value: ValueId, referent: Option<String> },
     Value { original: String, checked: String },
 }
 
@@ -54,7 +54,11 @@ pub(super) fn lower_arguments(
             signature.ref_params.get(*index).copied().unwrap_or(false))
         {
             let source = sources.iter().find(|source| source.source_index() == source_index).unwrap();
-            staged.push(StagedArgument::Reference(lower_arg_with_signature(ctx, signature, index, source.expr())));
+            let reference = enum_ref_args::stage_argument(ctx, signature, index, source.expr(), span);
+            let (value, referent) = reference.map_or_else(|| {
+                (lower_arg_with_signature(ctx, signature, index, source.expr()), None)
+            }, |(value, alias)| (value, Some(alias)));
+            staged.push(StagedArgument::Reference { value, referent });
         } else {
             let value = parameter.and_then(|index| {
                 let source = sources.iter().find(|source| source.source_index() == source_index)?;
@@ -142,7 +146,10 @@ fn bind_argument(
     argument: &StagedArgument, position: Option<usize>, class: &str, method: &str, span: Span,
 ) -> ValueId {
     let StagedArgument::Value { original, checked } = argument else {
-        let StagedArgument::Reference(value) = argument else { unreachable!() };
+        let StagedArgument::Reference { value, referent } = argument else { unreachable!() };
+        if let Some(referent) = referent {
+            enum_ref_args::guard_argument(ctx, signature, index, referent, class, method, span);
+        }
         return *value;
     };
     let variable = Expr::new(ExprKind::Variable(checked.clone()), span);
