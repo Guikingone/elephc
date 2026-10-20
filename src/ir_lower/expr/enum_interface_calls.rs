@@ -73,6 +73,13 @@ pub(super) fn lower_enum_interface_call(
         let signature = ctx.classes.get(&class)
             .and_then(|info| info.methods.get(&php_symbol_key(method))).cloned();
         if let Some(signature) = signature.as_ref() {
+            if reference_assignment && signature.by_ref_return
+                && !signature.return_type.reference_payload_compatible(&result_type)
+            {
+                crate::ir_lower::diagnostics::refuse(expr.span,
+                    "Unsupported reference assignment: the selected enum reference payload \
+                     differs from the interface result representation");
+            }
             // PHP treats defaults before a later required parameter as required,
             // including named omissions. Keep declaration metadata unchanged.
             let regular = crate::types::call_args::regular_param_count(signature);
@@ -111,6 +118,9 @@ pub(super) fn lower_enum_interface_call(
             PhpType::Object(class), Op::Borrow.default_effects(), Some(expr.span));
         let uses_eir_binding = signature.as_ref()
             .is_some_and(|signature| !signature.ref_params.iter().any(|by_ref| *by_ref));
+        if reference_assignment {
+            ctx.reference_call_context.as_mut().unwrap().adopted = false;
+        }
         let call = if dynamic_unpack && !reference_assignment && !uses_eir_binding {
             // Runtime unpacks can carry either packed values or named/sparse hash keys. The
             // ordinary descriptor binder owns those rules and catchable missing-argument errors.
@@ -127,6 +137,7 @@ pub(super) fn lower_enum_interface_call(
                 ctx, concrete, method, args, op, expr,
             )
         };
+        complete_reference_branch(ctx, call, reference_assignment, &result_type, expr.span);
         if let Some(result) = &result {
             store_value_into_temp(ctx, result, result_type.clone(), call, expr.span);
         }
@@ -136,7 +147,12 @@ pub(super) fn lower_enum_interface_call(
     if has_class_fallback {
         let fallback = ctx.emit_value(Op::Borrow, vec![object.value], None,
             object_type, Op::Borrow.default_effects(), Some(expr.span));
+        if reference_assignment {
+            ctx.reference_call_context.as_mut().unwrap().adopted = false;
+        }
         let call = lower_method_call_with_receiver_direct(ctx, fallback, method, args, op, expr);
+        // A class interface adapter can erase an added reference return. Leave a
+        // non-adopting fallback false so the enclosing assignment refuses that shape.
         if let Some(result) = &result {
             store_value_into_temp(ctx, result, result_type, call, expr.span);
         }
@@ -161,6 +177,22 @@ pub(super) fn lower_enum_interface_call(
         }
         take_owned_temp(ctx, &result, expr.span)
     } else { lower_null(ctx, expr) })
+}
+
+/// Gives a selected by-value result its own cell instead of another branch's return lease.
+/// The enclosing reference assignment already published staging for unwind cleanup.
+fn complete_reference_branch(
+    ctx: &mut LoweringContext<'_, '_>, call: LoweredValue, reference_assignment: bool,
+    result_type: &PhpType, span: Span,
+) {
+    if !reference_assignment || ctx.reference_call_context.as_ref().unwrap().adopted { return; }
+    let staged = ctx.reference_call_context.as_ref().unwrap().staged.clone();
+    let temporary = ctx.declare_synthetic_php_local(result_type.clone());
+    store_value_into_temp(ctx, &temporary, result_type.clone(), call, span);
+    ctx.promote_local_ref_cell(&temporary, Some(span));
+    ctx.alias_local_ref_cell(&staged, &temporary, Some(span));
+    ctx.release_ref_cell_owner(&temporary, Some(span));
+    ctx.reference_call_context.as_mut().unwrap().adopted = true;
 }
 
 /// Evaluates rejected branch arguments once and throws through ordinary operand-owner cleanup.

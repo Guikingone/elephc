@@ -141,11 +141,14 @@ pub(crate) fn lower_ref_assign_call(
         ctx.promote_local_ref_cell(target, Some(span));
         return;
     }
-    // Publishing the alias retains the cell in the target's own owner, so the staging lease can
-    // retire. The record is detached first, exactly as `retire_owned_call_operand` does for a
-    // value root: `release_ref_cell_owner` clears the slot before releasing, so a throwing
-    // payload destructor cannot be retried by a later walk of the chain.
+    // Publish the new alias before the old payload's last release can throw. The extra old
+    // owner delays that destructor without changing the existing rebinding/owner primitives.
+    let previous_owner = super::reference_returns::root_previous_reference_binding(ctx, target, span);
     ctx.alias_local_ref_cell(target, &staged, Some(span));
+    if let Some(previous_owner) = previous_owner {
+        super::reference_returns::retire_previous_reference_binding(ctx, previous_owner, span);
+    }
+    // The target now owns the returned cell, including when old-payload retirement threw.
     unregister_owned_call_operand(ctx, owner, span);
     ctx.release_ref_cell_owner(&staged, Some(span));
 }

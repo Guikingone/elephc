@@ -1709,7 +1709,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns the reusable hidden owner slot for a promoted local, declaring it if needed.
-    fn declare_ref_cell_owner(&mut self, variable: &str, php_type: PhpType) -> LocalSlotId {
+    pub(crate) fn declare_ref_cell_owner(&mut self, variable: &str, php_type: PhpType) -> LocalSlotId {
         if let Some(slot) = self.ref_cell_owner_locals.get(variable).copied() {
             self.builder.widen_local_storage_type(slot, php_type);
             return slot;
