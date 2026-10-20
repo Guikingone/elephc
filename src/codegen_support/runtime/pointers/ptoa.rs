@@ -7,17 +7,22 @@
 //!
 //! Key details:
 //! - Pointer helpers must keep null checks and C-string conversions aligned with the pointer extension ABI.
+//! - `__rt_ptoa` appends at `_concat_buf + _concat_off` and publishes the written length, like
+//!   `__rt_itoa`, so its result can feed a concatenation without overwriting earlier pieces.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_ptoa` runtime helper that formats a pointer address as a lowercase hex string.
 ///
 /// Input: x0 = pointer value (64-bit address)
-/// Output: x1 = pointer to string in concat_buf, x2 = string length
+/// Output: x1 = pointer to the string at the entry `_concat_buf + _concat_off`, x2 = string length
 ///
 /// Formats the pointer as "0x" followed by hexadecimal digits, skipping leading zeros.
 /// Null pointers are formatted as "0x0". Uses a loop to emit each nibble, converting
-/// values 0-9 to '0'-'9' and 10-15 to 'a'-'f'. Dispatches to the x86_64 Linux
+/// values 0-9 to '0'-'9' and 10-15 to 'a'-'f'. The result (at most 18 bytes) is written at
+/// the current concat scratch cursor and `_concat_off` advances by its length, so `echo`,
+/// string casts, interpolation and concatenation operands all share one formatter without
+/// clobbering a partially built concatenation. Dispatches to the x86_64 Linux
 /// implementation when targeting that architecture.
 pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -33,8 +38,11 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     // -- save return address --
     emitter.instruction("str x30, [sp, #-16]!");                                // save link register
 
-    // -- set up output buffer in concat_buf --
+    // -- set up output at the current concat_buf cursor --
+    abi::emit_symbol_address(emitter, "x7", "_concat_off");                     // x7 = address of the concat scratch offset
+    emitter.instruction("ldr x8, [x7]");                                        // x8 = current concat scratch offset
     abi::emit_symbol_address(emitter, "x1", "_concat_buf");                     // load page of concat buffer
+    emitter.instruction("add x1, x1, x8");                                      // x1 = output start at the current concat cursor
     emitter.instruction("mov x3, x1");                                          // x3 = write cursor
 
     // -- write "0x" prefix --
@@ -79,6 +87,8 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     // -- compute length and return --
     emitter.label("__rt_ptoa_done");
     emitter.instruction("sub x2, x3, x1");                                      // x2 = length (cursor - start)
+    emitter.instruction("add x8, x8, x2");                                      // advance the concat scratch offset past the written digits
+    emitter.instruction("str x8, [x7]");                                        // publish the new concat scratch offset
     emitter.instruction("ldr x30, [sp], #16");                                  // restore link register
     emitter.instruction("ret");                                                 // return to caller
 }
@@ -89,17 +99,23 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
 /// Preserves the incoming pointer in r11 since the call site passes it in rax (the
 /// integer result register). Formats the pointer as "0x" followed by lowercase hex
 /// digits, with null pointers rendered as "0x0". Uses BSR to find the highest set
-/// bit, then shifts and masks to emit each nibble in a loop.
+/// bit, then shifts the value left by `60 - (msb & !3)` so the most significant nibble
+/// sits in bits 60..63 before the loop peels one nibble per digit. Rounding `60 - msb`
+/// down instead (the earlier form) was one nibble short whenever the top set bit was not
+/// the lowest bit of its nibble, so `0xf` printed `0x0` and typical addresses lost a digit.
 ///
-/// Output: rax = pointer to string in concat_buf, rdx = string length
+/// Output: rax = pointer to the string at the entry `_concat_buf + _concat_off`, rdx = string
+/// length; `_concat_off` advances by that length.
 fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ptoa (pointer to hex string) ---");
     emitter.label_global("__rt_ptoa");
 
     emitter.instruction("mov r11, rax");                                        // preserve the incoming pointer payload because x86_64 call sites pass it in the integer result register
+    abi::emit_symbol_address(emitter, "rdi", "_concat_off");
     abi::emit_symbol_address(emitter, "rax", "_concat_buf");
-    emitter.instruction("mov rsi, rax");                                        // seed the write cursor from the concat buffer base so the helper can emit the pointer string in-place
+    emitter.instruction("add rax, QWORD PTR [rdi]");                            // start the output at the current concat scratch cursor instead of the buffer base
+    emitter.instruction("mov rsi, rax");                                        // seed the write cursor from the output start so the helper can emit the pointer string in-place
     emitter.instruction("mov BYTE PTR [rsi], 0x30");                            // write the leading '0' of the hexadecimal pointer prefix
     emitter.instruction("add rsi, 1");                                          // advance the write cursor after storing the leading '0'
     emitter.instruction("mov BYTE PTR [rsi], 0x78");                            // write the trailing 'x' of the hexadecimal pointer prefix
@@ -115,9 +131,10 @@ fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, r8");                                          // copy the highest-set-bit index before converting it into a nibble count
     emitter.instruction("shr r9, 2");                                           // divide the highest-set-bit index by four to obtain the most significant nibble index
     emitter.instruction("add r9, 1");                                           // convert the nibble index into the total number of significant hexadecimal digits
-    emitter.instruction("mov r10, 60");                                         // seed the top-nibble shift distance used to peel hexadecimal digits from the pointer value
-    emitter.instruction("sub r10, r8");                                         // compute how many high-order bits precede the first significant bit
-    emitter.instruction("and r10, -4");                                         // round the leading-bit distance down to a nibble boundary for hexadecimal emission
+    emitter.instruction("mov r10, r8");                                         // copy the highest-set-bit index before aligning it to its nibble
+    emitter.instruction("and r10, -4");                                         // round the highest-set-bit index down to the first bit of its nibble
+    emitter.instruction("neg r10");                                             // negate the nibble start so the shift can be computed as 60 minus it
+    emitter.instruction("add r10, 60");                                         // shift = 60 - nibble start, which lifts the most significant nibble to bits 60..63
     emitter.instruction("mov rdx, r11");                                        // copy the incoming pointer value into a scratch register that can be shifted during digit emission
     emitter.instruction("mov cl, r10b");                                        // move the initial nibble-alignment shift into the x86 variable-shift register
     emitter.instruction("shl rdx, cl");                                         // align the first significant nibble at the top of the working pointer value
@@ -144,6 +161,7 @@ fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_ptoa_done_linux_x86_64");
     emitter.instruction("mov rdx, rsi");                                        // copy the final write cursor before converting it into the emitted string length
-    emitter.instruction("sub rdx, rax");                                        // compute the emitted string length as write cursor minus concat buffer start
+    emitter.instruction("sub rdx, rax");                                        // compute the emitted string length as write cursor minus output start
+    emitter.instruction("add QWORD PTR [rdi], rdx");                            // advance the concat scratch offset past the written digits
     emitter.instruction("ret");                                                 // return the concat buffer pointer and emitted length in the x86_64 string result registers
 }
