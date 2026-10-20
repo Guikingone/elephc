@@ -54,11 +54,12 @@ final-status-level = "slow"
 slow-timeout = { period = "60s", terminate-after = 1 }
 status-level = "slow"
 
-# One JUnit report per CI run, written under the run's target dir
-# (`<target>/nextest/ci/junit.xml`). The sharded jobs upload it so per-test wall
-# times are available for every run instead of only the >60s "SLOW" lines the
-# console status level prints; `cargo nextest archive` runs extract into
-# `$RUNNER_TEMP/nextest` for exactly this reason.
+# One JUnit report per CI run, written under nextest's store dir, which is
+# `target/nextest` relative to the workspace root (`<workspace>/target/nextest/ci/junit.xml`).
+# Archived runs with `--workspace-remap .` therefore write it into the checkout's
+# `target/`, not into the `--extract-to` directory. The sharded jobs upload it so
+# per-test wall times are available for every run instead of only the >60s "SLOW"
+# lines the console status level prints.
 [profile.ci.junit]
 path = "junit.xml"
 

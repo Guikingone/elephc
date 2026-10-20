@@ -596,12 +596,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-non-codegen-tests-macos-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -643,12 +645,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-non-codegen-tests-linux-x86_64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -690,12 +694,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-non-codegen-tests-linux-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -761,12 +767,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-cli-tests-macos-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -812,12 +820,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-cli-tests-linux-x86_64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -863,12 +873,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-cli-tests-linux-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -929,12 +941,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-web-tests-macos-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -975,12 +989,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-web-tests-linux-x86_64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1021,12 +1037,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-web-tests-linux-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1124,12 +1142,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-codegen-tests-macos-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1207,12 +1227,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-codegen-tests-linux-x86_64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1290,12 +1312,14 @@ jobs:
 
       - name: Upload JUnit report
         # `[profile.ci.junit]` in .config/nextest.toml writes one report per nextest
-        # run into the extracted archive's target dir; the aggregate job merges them.
+        # run into `target/nextest/ci/` of the checkout (nextest resolves its store dir
+        # against the remapped workspace root, not the extracted archive); the aggregate
+        # job merges them.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-codegen-tests-linux-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
 
@@ -2104,7 +2128,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
           EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
           EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
-          EVAL_SHARD_JUNIT_FILE: ${{ runner.temp }}/nextest/target/nextest/ci/junit-pass1.xml
+          EVAL_SHARD_JUNIT_FILE: target/nextest/ci/junit-pass1.xml
           # The shard runner installs no nextest of its own: pass 2 runs the
           # binary packaged with the archive (see build-archive-macos-aarch64).
           EVAL_SHARD_NEXTEST_BIN: ${{ runner.temp }}/cargo-nextest
@@ -2118,13 +2142,13 @@ jobs:
       - name: Upload JUnit reports
         # The shard runner writes `junit-pass1.xml` for its single-process pass (every selected
         # test, see EVAL_SHARD_JUNIT_FILE in scripts/ci/run_eval_codegen_shard.sh) and
-        # `[profile.ci.junit]` writes nextest's `junit.xml` for the reruns; the aggregate job
-        # merges both.
+        # `[profile.ci.junit]` writes nextest's `junit.xml` for the reruns, both under
+        # `target/nextest/ci/` of the checkout; the aggregate job merges both.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-eval-codegen-tests-macos-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/
+          path: target/nextest/ci/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -2167,7 +2191,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
           EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
           EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
-          EVAL_SHARD_JUNIT_FILE: ${{ runner.temp }}/nextest/target/nextest/ci/junit-pass1.xml
+          EVAL_SHARD_JUNIT_FILE: target/nextest/ci/junit-pass1.xml
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
@@ -2178,13 +2202,13 @@ jobs:
       - name: Upload JUnit reports
         # The shard runner writes `junit-pass1.xml` for its single-process pass (every selected
         # test, see EVAL_SHARD_JUNIT_FILE in scripts/ci/run_eval_codegen_shard.sh) and
-        # `[profile.ci.junit]` writes nextest's `junit.xml` for the reruns; the aggregate job
-        # merges both.
+        # `[profile.ci.junit]` writes nextest's `junit.xml` for the reruns, both under
+        # `target/nextest/ci/` of the checkout; the aggregate job merges both.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-eval-codegen-tests-linux-x86_64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/
+          path: target/nextest/ci/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -2227,7 +2251,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
           EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
           EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
-          EVAL_SHARD_JUNIT_FILE: ${{ runner.temp }}/nextest/target/nextest/ci/junit-pass1.xml
+          EVAL_SHARD_JUNIT_FILE: target/nextest/ci/junit-pass1.xml
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
@@ -2238,13 +2262,13 @@ jobs:
       - name: Upload JUnit reports
         # The shard runner writes `junit-pass1.xml` for its single-process pass (every selected
         # test, see EVAL_SHARD_JUNIT_FILE in scripts/ci/run_eval_codegen_shard.sh) and
-        # `[profile.ci.junit]` writes nextest's `junit.xml` for the reruns; the aggregate job
-        # merges both.
+        # `[profile.ci.junit]` writes nextest's `junit.xml` for the reruns, both under
+        # `target/nextest/ci/` of the checkout; the aggregate job merges both.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: junit-eval-codegen-tests-linux-aarch64-${{ matrix.shard }}
-          path: ${{ runner.temp }}/nextest/target/nextest/ci/
+          path: target/nextest/ci/
           if-no-files-found: ignore
           retention-days: 7
 
