@@ -497,6 +497,25 @@ echo delta(ptr_cast<Tag>(ptr_null()));
     assert!(err.contains("null pointer dereference"), "{}", err);
 }
 
+/// Verifies a packed class named only as the `ptr<T>` type of an extern class field keeps its
+/// layout after declaration pruning, so `$h->p->x` reads and writes through the packed record.
+#[test]
+fn test_ffi_extern_class_pointer_field_keeps_its_packed_target() {
+    let out = compile_and_run(
+        r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr;
+packed class Pair { public int $x; public int $y; }
+extern class Holder { public i32 $tag; public ptr<Pair> $p; }
+$h = ptr_cast<Holder>(calloc(1, ptr_sizeof("Holder")));
+$h->p = calloc(1, 16);
+$h->p->x = 41;
+$h->p->y = 1;
+echo $h->p->x + $h->p->y, "\n";
+"#,
+    );
+    assert_eq!(out, "42\n");
+}
+
 /// Verifies `isset()`, `empty()` and `??` with a literal dynamic name (`$r->{'y'}`) probe a C
 /// struct field exactly like their named forms: the same answers, an owned copy of a `char*`
 /// field, and the null-dereference fatal on a null receiver.
