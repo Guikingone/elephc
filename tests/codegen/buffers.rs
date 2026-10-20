@@ -641,3 +641,23 @@ echo ptr_is_null($slots[0]->node) ? "null" : "set";
     );
     assert_eq!(out, "null");
 }
+
+/// Regression test for a `ptr<T>` packed class field whose target is a builtin enum. The packed
+/// and extern prescan now runs before `inject_builtin_enums` registers `SortDirection`, so the
+/// builtin enum names must already resolve as pointer targets there; otherwise the packed
+/// declaration fails with "Unknown pointer target type: SortDirection". The extern class field,
+/// stored as a typed C pointer, is checked alongside to pin that it keeps compiling too.
+#[test]
+fn test_packed_and_extern_fields_point_to_builtin_enum() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Slot { public ptr<SortDirection> $dir; public int $id; }
+extern class Holder { public ptr<SortDirection> $dir; }
+buffer<Slot> $slots = buffer_new<Slot>(1);
+$slots[0]->id = 3;
+echo ptr_is_null($slots[0]->dir) ? "null" : "set", "|", $slots[0]->id, "|";
+echo ptr_sizeof("Slot"), "|", ptr_sizeof("Holder");
+"#,
+    );
+    assert_eq!(out, "null|3|16|8");
+}

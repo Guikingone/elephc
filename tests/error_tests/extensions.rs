@@ -66,6 +66,17 @@ fn test_error_packed_class_reusing_enum_name_is_duplicate() {
     );
 }
 
+/// Verifies a packed class reusing a builtin enum name keeps the builtin redeclaration
+/// diagnostic: the packed prescan sees builtin enum names as pointer targets only, not as
+/// pre-declared classes that would report a packed duplicate instead.
+#[test]
+fn test_error_packed_class_reusing_builtin_enum_name_reports_builtin_redeclaration() {
+    expect_error(
+        "<?php packed class SortDirection { public int $x; }",
+        "Cannot redeclare built-in type: SortDirection",
+    );
+}
+
 /// Verifies that a packed class with a nullable field (?int) is rejected.
 #[test]
 fn test_error_packed_class_rejects_nullable_field() {
