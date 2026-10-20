@@ -57,9 +57,13 @@ fn test_deferred_native_catalog_numeric_activations() {
     check_deferred(r#"<?php
 function run(int $n) {global $code; $sum=0;for($i=0;$i<$n;$i++){eval($code);}return $sum; }
 $code=str_repeat('$sum=$sum+3;', $argc);
-var_dump(run(1),run(100));
+var_dump(run(1),run(100),run(511),run(512),run(513),run(1000));
 "#, r#"int(3)
 int(300)
+int(1533)
+int(1536)
+int(1539)
+int(3000)
 "#, 0);
 }
 
@@ -97,11 +101,12 @@ $sum=new Victim();$code=str_repeat('$sum=3;', $argc);eval($code);var_dump($sum);
 "#, 0);
 }
 
-/// Numeric overflow remains float on every later eval invocation.
+/// Numeric overflow remains float across the transition to the complete catalog.
 #[test]
 fn test_deferred_native_catalog_numeric_overflow() {
     check_deferred(r#"<?php
-$sum=PHP_INT_MAX;$code=str_repeat('$sum=$sum+3;', $argc);eval($code);eval($code);var_dump($sum);
+$sum=PHP_INT_MAX;$code=str_repeat('$sum=$sum+3;', $argc);eval($code);eval($code);
+for($i=0;$i<512;$i++){eval($code);}var_dump($sum);
 "#, r#"float(9.223372036854776E+18)
 "#, 0);
 }

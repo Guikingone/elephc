@@ -33,9 +33,14 @@ fn publication_probe_assembly(target: Target) -> String {
 
 /// Instruments catalog publication without changing the real bridge call's ABI or lifetime.
 fn run_publication_probe(source: &str) -> String {
+    run_publication_probe_with_ir_opt(source, true)
+}
+
+/// Counts the same publication events with either optimizer mode.
+fn run_publication_probe_with_ir_opt(source: &str, ir_opt: bool) -> String {
     let dir = FixtureDir(make_cli_test_dir("elephc_deferred_catalog_probe"));
     let (user, runtime, requirements) =
-        compile_source_to_asm_with_options(source, &dir.0, 8 * 1024 * 1024, false, true);
+        compile_source_to_asm_with_options(source, &dir.0, 8 * 1024 * 1024, false, ir_opt);
     let target = target();
     let real = target.extern_symbol("__elephc_eval_context_publish_native_catalog");
     let mnemonic = if target.arch == Arch::AArch64 { "bl" } else { "call" };
@@ -47,6 +52,28 @@ fn run_publication_probe(source: &str) -> String {
     let output = assemble_and_run(&user, &runtime_obj, &dir.0,
         &requirements, &default_link_paths(), &[]);
     output
+}
+
+/// The catalog stays absent through512 numeric evals, then publishes once before the next flush.
+#[test]
+fn test_deferred_native_catalog_budget_publication_boundary() {
+    let source = r#"<?php
+extern function __elephc_test_catalog_publications(): int;
+function run(int $n) {
+    global $code;
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) { eval($code); }
+    return $sum;
+}
+$code = str_repeat('$sum=$sum+3;', $argc);
+echo run(511), ':', __elephc_test_catalog_publications(), '|';
+echo run(512), ':', __elephc_test_catalog_publications(), '|';
+echo run(513), ':', __elephc_test_catalog_publications(), '|';
+echo run(1), ':', __elephc_test_catalog_publications();
+"#;
+    for ir_opt in [false, true] {
+        assert_eq!(run_publication_probe_with_ir_opt(source, ir_opt), "1533:0|1536:0|1539:1|3:1");
+    }
 }
 
 /// The same counter definitions and addressing expressions assemble on all five targets.

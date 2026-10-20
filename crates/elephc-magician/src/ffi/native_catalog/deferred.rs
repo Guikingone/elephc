@@ -45,6 +45,7 @@ pub unsafe extern "C" fn __elephc_eval_context_can_flush_without_native_catalog(
         let Some(context) = (unsafe { ctx.as_ref() }) else { return 0; };
         if context.abi_version() != ABI_VERSION { return 0; }
         if context.native_catalog_is_ready() { return 1; }
+        if !context.native_catalog_deferral_budget_remaining() { return 0; }
         if context.eval_scope_sync_requires_full() { return 0; }
         let (Some(scope), Some(globals)) = (unsafe { scope.as_ref() }, unsafe { global_scope.as_ref() })
             else { return 0; };
@@ -91,6 +92,7 @@ unsafe fn can_defer_inner(
     let Some(context) = (unsafe { ctx.as_ref() }) else { return 0; };
     if context.abi_version() != ABI_VERSION { return 0; }
     if context.native_catalog_is_ready() { return 1; }
+    if !context.native_catalog_deferral_budget_remaining() { return 0; }
     let Some(scope) = (unsafe { scope.as_ref() }) else { return 0; };
     let Ok(len) = usize::try_from(code_len) else { return 0; };
     if context.eval_scope_sync_requires_full() || (len != 0 && code_ptr.is_null())

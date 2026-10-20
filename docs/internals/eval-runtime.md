@@ -153,8 +153,9 @@ When interpreter fallback is required, generated code performs these steps:
    and, when needed, `EvalGlobalScope` handles.
 4. Compute the fragment's conservative caller-scope access mask. Ask
    `__elephc_eval_context_can_flush_without_native_catalog` whether replacing
-   existing local and global cells is safe. If it is not, register and publish
-   the complete native catalog before flushing any scope owner.
+   existing local and global cells is safe and whether the activation still
+   has a numeric-deferral budget. Otherwise, register and publish the complete
+   native catalog before flushing any scope owner.
 5. Flush selected locals and globals or the complete eligible scope into boxed
    cells, mark global aliases and attach the global scope to the context.
 6. Ask `__elephc_eval_context_can_defer_native_catalog` whether the parsed
@@ -169,11 +170,15 @@ When interpreter fallback is required, generated code performs these steps:
 8. Reload dirty, created or unset scope entries and propagate return/fatal/
    throwable state through the normal generated runtime paths.
 
-A bounded proof permits straight-line numeric scalar fragments to execute
-while the native catalog remains unpublished. Class imports are postponed
-only while that catalog is unready; a later metadata-dependent fragment
-upgrades the same activation context. The legacy `__elephc_eval_execute` entry
-retains eager class imports for existing bridge consumers.
+A bounded proof permits the first 512 straight-line numeric scalar evals in
+one activation to execute while the native catalog remains unpublished. The
+next eval uses the existing full-catalog path before flushing scope owners,
+limiting repeated proof work in long loops. The saturating execution counter
+belongs to the activation and is not shared with the immutable catalog.
+Class imports are postponed only while the catalog is unready; an earlier
+metadata-dependent fragment upgrades the same activation immediately. The
+legacy `__elephc_eval_execute` entry retains eager class imports for existing
+bridge consumers.
 
 ### Selective dynamic scope synchronization
 

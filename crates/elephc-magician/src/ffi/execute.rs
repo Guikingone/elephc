@@ -196,7 +196,9 @@ unsafe fn execute_parsed_eval(
         && !context.eval_scope_sync_requires_full()
         && program.as_ref().is_ok_and(|program| super::native_catalog::metadata_free_fragment(
             program, scope, globals, |cell| values.type_tag(cell).ok()));
-    if !numeric_without_catalog {
+    if numeric_without_catalog {
+        context.record_native_catalog_deferral();
+    } else {
         context.sync_global_eval_classes();
     }
     let outcome = program.and_then(|program| {
