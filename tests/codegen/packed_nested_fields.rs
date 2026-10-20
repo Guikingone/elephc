@@ -9,7 +9,7 @@
 //! - Covers reads, writes and compound assignments through buffer elements and `ptr<T>` typed
 //!   pointers, three levels of nesting, layout offsets and stride, whole-record copies, inner
 //!   classes declared after the outer one, pruning of classes named only by fields, and the
-//!   null-pointer guard on typed pointer receivers.
+//!   null-pointer guard on typed pointer receivers, including literal dynamic names.
 
 use crate::support::*;
 
@@ -279,6 +279,20 @@ packed class Holder { public ptr<Vec2> $p; }
 function first_x(buffer<Holder> $h): float { return $h[0]->p->x; }
 $h = buffer_new<Holder>(1);
 echo first_x($h);
+"#,
+    );
+    assert!(err.contains("null pointer dereference"), "{}", err);
+}
+
+/// Verifies a field read through a null `ptr<T>` spelled with a literal dynamic name
+/// (`$p->{'x'}`) aborts with the same fatal as `$p->x` instead of faulting.
+#[test]
+fn test_typed_pointer_dynamic_name_read_on_null_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+function read_x(ptr<Vec2> $p): float { return $p->{'x'}; }
+echo read_x(ptr_cast<Vec2>(ptr_null()));
 "#,
     );
     assert!(err.contains("null pointer dereference"), "{}", err);
