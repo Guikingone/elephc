@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// A short enum implementation cannot hide a type error from another satisfiable signature.
+#[test]
+fn test_enum_selected_type_review_shortage_does_not_mask_type_error() {
+    for arguments in ["badSelectedType()", "a: badSelectedType()"] {
+        expect_error(&format!(r#"<?php
+interface SelectedType {{ public function f(int $a, int $b): int; }}
+enum FlexibleSelectedType implements SelectedType {{
+    case A; public function f(int $a = 0, int $b = 0): int {{ return $a + $b; }}
+}}
+enum ShortSelectedType implements SelectedType {{
+    case A; public function f(int $a, int $b): int {{ return $a + $b; }}
+}}
+function badSelectedType(): string {{ return 'no'; }}
+function invokeSelectedType(SelectedType $value): int {{ return $value->f({arguments}); }}
+echo invokeSelectedType(FlexibleSelectedType::A);
+"#), "expects int, got string");
+    }
+}
+
 /// Public builtin factory inputs widen compatible source contracts, not arbitrary declarations.
 #[test]
 fn test_error_enum_grok_current_factory_contract_rejections() {

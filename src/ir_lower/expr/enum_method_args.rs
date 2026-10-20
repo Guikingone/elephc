@@ -115,8 +115,13 @@ pub(super) fn lower_arguments(
 }
 
 /// Lets ordinary call cleanup retain a mutable materialization slot through the callee.
-fn call_intermediate(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> String {
+pub(super) fn call_intermediate(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> String {
     let ty = ctx.builder.value_php_type(value.value);
+    if !Ownership::php_type_needs_lifetime_tracking(&ty) {
+        let slot = ctx.declare_hidden_temp(ty.clone());
+        store_value_into_temp(ctx, &slot, ty, value, span);
+        return slot;
+    }
     let slot = own_value(ctx, value, ty, span);
     let snapshot = ctx.load_local(&slot, Some(span));
     ctx.builder.set_value_ownership(snapshot.value, Ownership::Borrowed);

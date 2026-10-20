@@ -324,6 +324,7 @@ impl Checker {
                 let mut accepted = false;
                 let mut missing = false;
                 let mut runtime_shortage = false;
+                let mut satisfiable_error = None;
                 for (name, implementation) in implementations {
                     let Some(implementation) = implementation else {
                         // Schema validation already recorded the missing contract. Continue
@@ -334,22 +335,30 @@ impl Checker {
                     // Final enum dispatch diagnoses omissions in the selected branch,
                     // including named slots and defaults before a later required parameter.
                     let binding = crate::types::call_args::required_argument_binding_signature(&implementation);
-                    runtime_shortage |= match crate::types::call_args::plan_call_args(
+                    let (shortage, satisfiable) = match crate::types::call_args::plan_call_args(
                         &binding, args, expr.span, false, true,
                     ) {
-                        Ok(plan) => plan.statically_missing_positionals(&implementation).is_some(),
-                        Err(crate::types::call_args::CallArgPlanError::MissingRequired { .. }) => true,
-                        Err(_) => false,
+                        Ok(plan) => {
+                            let shortage = plan.statically_missing_positionals(&implementation).is_some();
+                            (shortage, !shortage)
+                        }
+                        Err(crate::types::call_args::CallArgPlanError::MissingRequired { .. }) => (true, false),
+                        Err(_) => (false, false),
                     };
-                    if self.check_user_declared_call(
+                    runtime_shortage |= shortage;
+                    match self.check_user_declared_call(
                         &implementation, args, expr.span, env,
                         &format!("Method {name}::{method}"), &name,
-                    ).is_ok() {
-                        accepted = true;
-                        break;
+                    ) {
+                        Ok(_) => { accepted = true; break; }
+                        Err(error) if satisfiable && satisfiable_error.is_none() => {
+                            satisfiable_error = Some(error);
+                        }
+                        Err(_) => {}
                     }
                 }
                 if !accepted && !missing {
+                    if let Some(error) = satisfiable_error { return Err(error); }
                     if !runtime_shortage { return Err(shared_error); }
                     // Deferring binding must not skip validation of the caller's source
                     // expressions when a missing slot made every signature check stop early.

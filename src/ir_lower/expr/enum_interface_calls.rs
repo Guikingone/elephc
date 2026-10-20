@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - The receiver is evaluated once; only the selected branch evaluates source arguments.
-//! - Ordinary call planning owns defaults, named/spread arguments and reference returns.
+//! - Selected calls validate concrete parameter types before ordinary reference-return adoption.
 //! - Interface declarations remain unchanged for reflection and non-enum fallback dispatch.
 //! - Rejected binding throws only in its selected branch after source argument evaluation.
 //! - Result-owner slots are zeroed before publication even when every branch rejects binding.
@@ -123,7 +123,9 @@ pub(super) fn lower_enum_interface_call(
             );
             emit_callable_descriptor_invoke(ctx, callable, arguments, expr.span)
         } else {
-            lower_method_call_with_receiver_direct(ctx, concrete, method, args, op, expr)
+            super::nullable_method_calls::lower_selected_enum_method_call(
+                ctx, concrete, method, args, op, expr,
+            )
         };
         if let Some(result) = &result {
             store_value_into_temp(ctx, result, result_type.clone(), call, expr.span);

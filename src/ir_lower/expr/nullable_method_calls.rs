@@ -119,6 +119,22 @@ pub(super) fn lower_method_call_with_receiver_direct(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
     args: &[Expr], op: Op, expr: &Expr,
 ) -> LoweredValue {
+    lower_method_call_with_binding(ctx, object, method, args, op, expr, false)
+}
+
+/// Checks the selected enum signature without changing direct reference-return adoption.
+pub(super) fn lower_selected_enum_method_call(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
+    args: &[Expr], op: Op, expr: &Expr,
+) -> LoweredValue {
+    lower_method_call_with_binding(ctx, object, method, args, op, expr, true)
+}
+
+/// Keeps selected parameter validation inside the published argument and result-owner scope.
+fn lower_method_call_with_binding(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
+    args: &[Expr], op: Op, expr: &Expr, selected_enum: bool,
+) -> LoweredValue {
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }
@@ -167,7 +183,10 @@ pub(super) fn lower_method_call_with_receiver_direct(
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
         .and_then(|(class, _)| ctx.enums.contains_key(class).then(|| class.to_string()))
         .and_then(|class| sig.as_ref().and_then(|signature|
-            enum_method_args::lower_arguments(ctx, signature, args, &class, dispatch_method, expr.span)));
+            enum_method_args::lower_arguments(ctx, signature, args, &class, dispatch_method, expr.span)
+                .or_else(|| selected_enum.then(|| enum_static_args::lower_arguments(
+                    ctx, signature, args, &class, dispatch_method, expr.span,
+                )).flatten())));
     let arg_values = enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args));
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);

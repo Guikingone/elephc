@@ -40,6 +40,19 @@ function named_hole_call(NamedHole $target): void {
     try { $target->value(good_float(), c: 2); } catch (ArgumentCountError $error) { echo 'hole'; }
 }
 named_hole_call(NamedHoleValue::A);
+interface StaticSelected { public function value(int &$out, int $input): int; }
+enum StaticLoose implements StaticSelected {
+    case A; public function value(int &$out, mixed $input): int { ++$out; return 11; }
+}
+enum StaticTight implements StaticSelected {
+    case A; public function value(int &$out, int $input): int { ++$out; return $input; }
+}
+function static_selected(StaticSelected $target, string $input): void {
+    $out = 1;
+    try { echo $target->value(input: $input, out: $out); }
+    catch (TypeError $error) { echo $error->getMessage(), $out; }
+}
+static_selected(StaticLoose::A, 'bad'); static_selected(StaticTight::A, 'bad');
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     assert!(crate::ir::print_module(&module).contains("implicit_int_cast"), "{target}: diagnostic EIR cast");
