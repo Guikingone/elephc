@@ -47,6 +47,7 @@ pub(super) use callable_argument_normalizer::emit_callable_argument_normalizer;
 pub(super) use callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER;
 mod comparisons;
 mod conversions;
+mod implicit_int_cast;
 mod enums;
 pub(super) mod exceptions;
 mod mixed_narrowing;

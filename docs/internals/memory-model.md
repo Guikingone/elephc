@@ -629,7 +629,10 @@ detach an arbitrary named record. On the normal path the slot is CLEARED rather
 than released, which transfers the single reference back to the expression's
 consumer; on the unwind path the record releases it exactly once, before the catch
 body runs. The slot is declared with the exact result type the call is emitted
-with. Two cases are deliberately excluded: a by-reference-returning callee, whose
+with. Only heap-bearing results publish heap-owner records. A rejected call can leave
+a scalar result slot uninitialized, and heap cleanup must never interpret its bits
+as a pointer. For heap-bearing results, two further cases are deliberately excluded:
+a by-reference-returning callee, whose
 result is the transferred cell the reference staging already owns, and a callee
 whose summary says its result may be one of its arguments, because that argument's
 release is guarded by a runtime alias comparison and rooting both would release one
@@ -1257,6 +1260,14 @@ does not bypass normal copy-on-write or final-owner destruction.
 ### Unboxing a Mixed hands back a reference
 
 `Op::MixedUnbox` extracts concrete storage from a checked Mixed source. Its callers include typed local/property assignment (`coerce_typed_assign_value`), call-argument and closure coercion, static method-call receivers, typed foreach slots, object-return coercion, and merge temps that retain a `??`-kept `?C` cell as an object or callable (#1628). Its lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so a refcounted payload carries its own reference rather than borrowing the box's.
+
+Call parameters declared `iterable` receive a raw array, hash or Traversable pointer, not the surrounding Mixed cell. After runtime argument validation, their layout-neutral unbox acquires the payload before the source lease is released. Enum interface calls also keep static-unpack arrays and projected values rooted while checking types before a later arity shortage. A typed variadic collector promoted to Mixed storage must pass through an EIR unpack/rebox adapter; forwarding its raw words would confuse typed element storage with boxed entries and lose named keys or actual counts.
+
+An enum interface call zeroes a heap-result slot before publishing its cleanup
+record. Every candidate may reject argument binding before storing a result, so
+the guard cannot rely on a later successful store to make frame initialization
+include that slot. `ZeroLocalSlot` initializes both string words, or the single
+array/object pointer, and participates in the backend's local-store analysis.
 
 An object return can consume an independent Mixed assignment-result cell, not just borrow a frame local. Return coercion first acquires the object payload and then releases that owned cell. Borrowed parameter/local cells retain their existing frame cleanup instead; releasing them as independent return temporaries would retire the same owner twice.
 

@@ -1354,7 +1354,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// The single spelling site for both place temporaries, so the marker cannot be applied to
     /// one and forgotten on the other.
-    fn next_synthetic_place_local_name(&mut self) -> String {
+    pub(crate) fn next_synthetic_place_local_name(&mut self) -> String {
         let name = crate::names::synthetic_place_local_name(self.hidden_temp_counter);
         self.hidden_temp_counter += 1;
         name
@@ -1709,7 +1709,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns the reusable hidden owner slot for a promoted local, declaring it if needed.
-    fn declare_ref_cell_owner(&mut self, variable: &str, php_type: PhpType) -> LocalSlotId {
+    pub(crate) fn declare_ref_cell_owner(&mut self, variable: &str, php_type: PhpType) -> LocalSlotId {
         if let Some(slot) = self.ref_cell_owner_locals.get(variable).copied() {
             self.builder.widen_local_storage_type(slot, php_type);
             return slot;

@@ -31,6 +31,8 @@ pub(crate) mod fibers;
 mod ffi;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
+/// PHP type spelling shared by parameter and property diagnostics.
+pub(crate) mod diagnostic_names;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
