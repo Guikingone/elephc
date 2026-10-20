@@ -7,8 +7,9 @@
 //!
 //! Key details:
 //! - Covers reads, writes and compound assignments through buffer elements and `ptr<T>` typed
-//!   pointers, three levels of nesting, layout offsets and stride, whole-record copies, and the
-//!   null-pointer guard on typed pointer receivers.
+//!   pointers, three levels of nesting, layout offsets and stride, whole-record copies, inner
+//!   classes declared after the outer one, and the null-pointer guard on typed pointer
+//!   receivers.
 
 use crate::support::*;
 
@@ -244,4 +245,24 @@ $b[0]->pos = ptr_cast<Vec2>(ptr_null());
 "#,
     );
     assert!(err.contains("null pointer dereference"), "{}", err);
+}
+
+/// Verifies a packed class may embed packed classes declared after it, at any depth: each outer
+/// layout is sized once the record it embeds exists.
+#[test]
+fn test_nested_packed_class_may_be_declared_after_its_outer_class() {
+    let out = compile_and_run(
+        r#"<?php
+packed class World { public Body $player; public int $tick; }
+packed class Body { public Vec2 $pos; public int $id; }
+packed class Vec2 { public float $x; public float $y; }
+$w = buffer_new<World>(2);
+$w[1]->player->pos->y = 2.5;
+$w[1]->player->id = 7;
+$w[1]->tick = 3;
+echo ptr_sizeof("World"), " ", ptr_sizeof("Body"), " ", $w[1]->player->pos->y, " ";
+echo $w[1]->player->id, " ", $w[1]->tick, " ", $w[0]->player->pos->y, "\n";
+"#,
+    );
+    assert_eq!(out, "32 24 2.5 7 3 0\n");
 }

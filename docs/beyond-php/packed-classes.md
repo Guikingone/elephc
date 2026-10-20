@@ -69,6 +69,10 @@ echo $bodies[0]->pos->x;   // 1.25
 echo ptr_sizeof("Body");   // 40
 ```
 
+The embedded class may be declared before or after the class that embeds it. A packed class
+cannot embed itself, directly or through other packed classes, because the record would have
+no finite size.
+
 Reading a nested record (`$bodies[0]->pos`) yields the record's address, like reading a
 buffer element: a local holding it writes through to the buffer. Assigning a whole record
 to a nested field copies its bytes, and the source must be a record of the same packed

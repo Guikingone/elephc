@@ -142,6 +142,24 @@ fn test_error_nested_packed_field_rejects_other_record_class() {
     );
 }
 
+/// Verifies a packed class that embeds itself has no finite layout and is reported.
+#[test]
+fn test_error_packed_class_embedding_itself_is_rejected() {
+    expect_error(
+        "<?php packed class Node { public int $value; public Node $next; }",
+        "Packed class Node embeds itself through its packed class fields",
+    );
+}
+
+/// Verifies packed classes that embed each other in a cycle are reported.
+#[test]
+fn test_error_packed_classes_embedding_each_other_are_rejected() {
+    expect_error(
+        "<?php packed class A { public B $b; } packed class B { public A $a; }",
+        "Packed class A embeds itself through its packed class fields",
+    );
+}
+
 /// Verifies reading an undefined field of a nested record names the inner packed class.
 #[test]
 fn test_error_nested_packed_field_read_of_undefined_inner_field() {
