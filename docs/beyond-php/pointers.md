@@ -101,15 +101,34 @@ free($buf);
 
 `ptr_write_string($p, $str)` copies the raw bytes of `$str` to `$p` without a trailing null terminator and returns the number of bytes written.
 
-## Echo and comparison
+## Echo, string conversion and comparison
 
 ```php
 <?php
 echo $p;                      // prints hex: 0x16f502348
 echo ptr_null();              // prints: 0x0
+echo "p = " . $p;             // "p = 0x16f502348"
+echo "p = $p";                // same text through interpolation
+$s = (string)$p;              // "0x16f502348", also strval($p) and sprintf("%s", $p)
 echo $p === $q ? "same" : "different";
 echo gettype($p);             // "pointer"
 ```
+
+A pointer converts to a string as `0x` followed by its address in lowercase
+hexadecimal without leading zeros (`0x0` for a null pointer), on every target.
+`echo`, `print`, concatenation, `.=`, interpolation in double-quoted strings and
+heredocs, `(string)` casts, `strval()` and `sprintf("%s")` all produce that same
+text, for `ptr` and `ptr<T>` values alike, including pointers returned by
+`extern` functions. To hand the text to another string builtin, pass
+`(string)$p`.
+
+A pointer is not a string, so it is still rejected where a `string` is required
+by declaration: a `string` parameter or return type, `strlen()`, and loose
+comparison with `==` (use `===`). The conversion applies to values the compiler
+knows to be pointers: a pointer stored in a `mixed` or union-typed value, for
+example `$v = $flag ? $p : "none"`, is held as its integer address there and
+prints in decimal. Code running inside `eval()` also sees pointers as plain
+integers, so `echo ptr_null()` there prints `0`.
 
 ## Function reference
 
