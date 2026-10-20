@@ -40,6 +40,7 @@ mod eval_ownership;
 mod eval_default_helpers;
 mod exhaustive;
 mod ownership;
+mod strip_tags_review;
 mod weak_map_places;
 mod backtrace_labels;
 mod preg_match_all_review;

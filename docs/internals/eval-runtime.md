@@ -275,6 +275,11 @@ when the old and new cell pointers coincide. Class-default collection builders
 also acquire a lease for defaults borrowed from persistent class constants or
 enum cases before inserting and releasing their temporary operands.
 
+By-value `foreach` likewise owns its evaluated receiver until iteration finishes.
+The receiver lease survives body callbacks and replacement of its source local,
+then retires on normal completion, `break`, `return`, or failure. Literal temporary
+arrays do not depend on a scope binding to keep their owner balanced.
+
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
 boxed-cell operations it dispatches a typed `RuntimeBuiltinId` through

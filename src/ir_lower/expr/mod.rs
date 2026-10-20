@@ -63,6 +63,7 @@ mod callable_tracking;
 mod callable_resolution;
 mod unset;
 mod array_builtin_args;
+mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
 mod positional_spreads;
@@ -147,6 +148,7 @@ pub(in crate::ir_lower) fn instance_object_class_for_ir(
 }
 use unset::*;
 use array_builtin_args::*;
+use weak_string_unions::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
 use positional_spreads::*;

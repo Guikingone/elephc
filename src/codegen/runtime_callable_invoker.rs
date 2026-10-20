@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - The invoker accepts a descriptor, a normalized boxed Mixed argument container and the
-//!   invocation-site lexical class id. It forwards the scope as a trailing hidden ABI argument.
+//!   invocation-site profile. Weak scope ids retain their legacy values; strict scope is -id-3.
+//!   It forwards that frame-owned word as a trailing hidden ABI argument.
 //! - Capture values are loaded from the callable descriptor, not caller frame state.
 //! - Argument materialization supports indexed arrays, associative arrays, defaults, variadics,
 //!   by-reference marker cells, and target-aware ABI calls without depending on `Context`.
@@ -70,7 +71,7 @@ const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
 /// Spill slot for the boxed argument container across the eval exception-boundary `setjmp`.
 const INVOKER_ARG_ARRAY_OFFSET: usize = 24;
-/// Invocation-site lexical class id, with `-1` representing global scope.
+/// Invocation profile: weak class id/global -1, or strict -class_id-3/global -2.
 const INVOKER_SCOPE_OFFSET: usize = 32;
 /// First frame slot of the callee-saved register save area (issue #487).
 /// Placed after descriptor/concat/arg-array so the eval boundary path can reuse those slots.
@@ -2880,7 +2881,7 @@ fn call_target_with_pushed_args(
 ) {
     // Every descriptor entry receives one trailing native argument after its complete PHP ABI
     // shape. Ordinary PHP functions ignore the extra register or stack word. The synthetic
-    // `clone()` wrapper alone declares the hidden parameter and consumes it for hook visibility.
+    // `clone()` decodes the scope; source-sensitive builtin wrappers also read its strictness.
     abi::load_at_offset(
         emitter,
         abi::int_result_reg(emitter),

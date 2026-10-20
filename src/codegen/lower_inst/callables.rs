@@ -2752,7 +2752,7 @@ fn emit_owned_descriptor_args_boundary(ctx: &mut FunctionContext<'_>, owns_descr
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 2),
-        ctx.lexical_class_id(),
+        ctx.callable_invocation_profile(),
     );
     abi::emit_call_label(ctx.emitter, entry);
 }

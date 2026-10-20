@@ -4763,6 +4763,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                     crate::ir::RuntimeFnId::FunctionExists
                         | crate::ir::RuntimeFnId::IsCallable
                         | crate::ir::RuntimeFnId::ObStart
+                        | crate::ir::RuntimeFnId::StripTags
                 ) || target.string_callback_operand_index().is_some()
                     || target.uses_mbstring_runtime() =>
             {
