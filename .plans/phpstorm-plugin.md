@@ -16,9 +16,9 @@ stubs were illustrative and have been removed because they are not a verified
 SDK implementation or an authoritative compiler contract.
 
 Elephc supports macOS ARM64, iOS device ARM64, iOS Simulator ARM64, Linux ARM64
-and Linux x86_64. Project files may use `.php` or `.lfc`; `.lfc` enables the
-extension-friendly source profile, while explicit strict-PHP policy takes
-precedence. IDE diagnostics and run targets must reflect those choices.
+and Linux x86_64. Project files may use `.php` or `.lfc`; `.lfc` stays
+extension-enabled even with `--strict-php`, which restricts only PHP-mode files.
+IDE diagnostics and run targets must reflect those choices.
 
 ## Proposed integration
 
