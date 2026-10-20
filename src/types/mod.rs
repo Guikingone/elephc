@@ -23,6 +23,8 @@ mod array_storage;
 mod array_cast;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
+/// Shared detection of lazy lexical errors in normalized default expression trees.
+pub(crate) mod deferred_defaults;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// C FFI type mapping utilities.
@@ -66,7 +68,9 @@ pub(crate) use array_keys::{
 };
 pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayCast};
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
-pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
+pub use ffi::{
+    ctype_stack_size, ctype_to_abi_type, ctype_to_php_type, packed_type_size, ExternAbiType,
+};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,

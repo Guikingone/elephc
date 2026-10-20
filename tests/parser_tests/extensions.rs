@@ -190,6 +190,36 @@ fn test_parse_extern_global() {
     }
 }
 
+/// Parses every explicit C integer width in extern parameters and returns, with `i64` folding
+/// to the plain 64-bit `int`.
+#[test]
+fn test_parse_extern_int_widths() {
+    use elephc::parser::ast::{CIntWidth, CType};
+    let stmts = parse_source(
+        "<?php extern function widths(i8 $a, u8 $b, i16 $c, u16 $d, i32 $e, u32 $f, i64 $g, u64 $h): u32;",
+    );
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { params, return_type, .. } => {
+            let widths: Vec<&CType> = params.iter().map(|param| &param.c_type).collect();
+            assert_eq!(
+                widths,
+                vec![
+                    &CType::IntWidth(CIntWidth::I8),
+                    &CType::IntWidth(CIntWidth::U8),
+                    &CType::IntWidth(CIntWidth::I16),
+                    &CType::IntWidth(CIntWidth::U16),
+                    &CType::IntWidth(CIntWidth::I32),
+                    &CType::IntWidth(CIntWidth::U32),
+                    &CType::Int,
+                    &CType::IntWidth(CIntWidth::U64),
+                ]
+            );
+            assert_eq!(return_type, &CType::IntWidth(CIntWidth::U32));
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
 /// Parses `extern "m" function sin(float $x): float;` as an `ExternFunctionDecl` with library `"m"`.
 /// Verifies name, library, param types, and return type are all captured correctly.
 #[test]

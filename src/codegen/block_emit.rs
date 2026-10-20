@@ -1067,6 +1067,10 @@ pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -
         let Some(class_info) = ctx.module.class_infos.get(&class_name) else {
             continue;
         };
+        if class_info.deferred_property_default_error.is_some() {
+            // Initialization raises through EIR before any of this class's storage is observed.
+            continue;
+        }
         for (index, (property, php_type)) in class_info.static_properties.iter().enumerate() {
             let declaring_class = class_info
                 .static_property_declaring_classes
@@ -1133,6 +1137,11 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
+    let resolved = super::const_default_values::resolve_const_default(
+        &crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic()),
+        &super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name),
+    ).and_then(super::const_default_values::resolved_literal_default);
+    let expr = resolved.as_ref().unwrap_or(expr);
     let value = literal_default_value(
         &format!("static property {}::${}", class_name, property),
         php_type,

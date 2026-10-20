@@ -349,6 +349,17 @@ replacement fields, then releases displaced owners. The same constructor can
 therefore reinitialize a compact native Throwable or an ordinary eval/subclass
 object without mixing raw previous pointers and nullable Mixed cells.
 
+Mixed add, subtract and multiply may borrow an integer RHS cell from a 32-byte,
+16-byte-aligned stack span for the duration of that single runtime call. The cell
+has the usual 24-byte tag/payload layout, with integer tag zero, but no managed
+heap header. Only these read-only intrinsics may receive it: they must not retain,
+release, store or return its pointer. Their result remains a fresh owned heap
+cell, including after integer overflow promotes to float. Codegen uses this path
+only for an exact integer constant beside a boxed Mixed left operand; bool, null,
+float and dynamic operands keep ordinary materialization. Boxed increment and
+decrement use the same loan for their integer delta. No caller-visible value,
+reference binding or loop type proof changes.
+
 Deep release of objects, indexed arrays, hashes, Mixed cells, and callable
 captures contains destructor exceptions in a native cleanup boundary. Each
 cleanup frame keeps a pending exception chain, completes the remaining child
@@ -559,6 +570,16 @@ the current pointer after every push, and it applies only to source elements who
 evaluation cannot be observed, because it interleaves element evaluation with
 callback invocation while PHP evaluates the whole source array first.
 
+Descriptor invocation also carries the physical caller's scalar-binding mode,
+independently of where a callable was created. Its hidden frame-owned profile
+preserves legacy weak class ids and global `-1`; strict profiles encode
+`-class_id - 3`, including global `-2`. The native boundary and invoker forward
+that same word across throws and nested calls. Source-sensitive builtin wrappers
+select strict or weak EIR paths from it, while the `clone()` wrapper decodes the
+original scope before checking hook visibility. No mutable global carries this
+state. Weak Stringable union preparation copies and roots the source cell before
+invoking `__toString()`, then retires both source and converted-string leases.
+
 Argument containers are published the same way whether they are built from a
 signature or not. A `call_user_func()` / `call_user_func_array()` container is
 rooted for its whole construction and reloaded from that slot after every
@@ -655,7 +676,7 @@ The runtime routine `__rt_heap_free`:
 1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
 2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
 3. Otherwise, payloads up to 64 bytes are cached into one of four segregated small-bin heads (`<=8`, `<=16`, `<=32`, `<=64`) so later tiny allocations can reuse them without scanning the larger free list
-4. Larger non-tail blocks are inserted into the general free list in address order, merged with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
+4. Larger non-tail blocks are inserted into the general free list in address order and merged with adjacent free neighbors. Only a merged block ending at the bump frontier starts a tail search; other insertions skip that scan. Direct bump-tail frees still search for and repeatedly reclaim newly exposed free tail blocks. Cache draining uses the same merged-end check, so a cached block that now touches the tail is reclaimed without adding a free event.
 5. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the next pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
@@ -1319,3 +1340,11 @@ skips the string-registry lookup; the child's release still retires its own
 identity before allocator reuse. Eval array-reference observers retire before
 this skip, including when a Mixed cell no longer contains its former array
 value. Other allocation kinds retain their existing identity retirement path.
+
+### Packed integer prefixes in JSON arrays
+
+The structural JSON decoder constructs each fresh indexed array with signed-i64 slots. A bounded, allocation-free token probe accepts only strict JSON integers within PHP's integer range, followed by JSON whitespace and a comma or closing bracket. It appends the raw value with `__rt_array_push_int`, preserving the ordinary separator, depth and error cleanup paths. It records the same token-start diagnostic candidate as recursive decoding.
+
+At the first other token, `__rt_array_to_mixed` converts the existing integer prefix once before recursive decoding continues. This covers floats, oversized integers (including `JSON_BIGINT_AS_STRING`), strings, booleans, null and containers. Later elements keep the generic path; the decoder never rereads the whole array to choose its storage. Fully integer arrays remain packed under their Mixed container box. Existing runtime-header-aware consumers handle reads, COW, references, mutation and encoding. Construction owners remain unique and unpublished until the existing owned-container boxing transfer. Partial errors release either representation through ordinary array cleanup.
+
+Packed integer leaves remain outside the cycle collector's swept-node set. When an unreachable graph owner releases one, the uniform decref dispatcher therefore performs an ordinary array decrement even during the final sweep. A surviving native alias keeps the buffer alive; the final owner releases it. Graph-backed array storage keeps its existing reachability and sweep suppression.

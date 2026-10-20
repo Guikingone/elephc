@@ -16,7 +16,7 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 
-use super::{FunctionSig, PhpType};
+use super::{ExternAbiType, FunctionSig, PhpType};
 
 mod abstract_setters;
 
@@ -355,6 +355,8 @@ pub struct ClassInfo {
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,
+    /// A trait's unbound parent default fails only when this class initializes its properties.
+    pub deferred_property_default_error: Option<String>,
     pub property_visibilities: HashMap<String, Visibility>,
     /// PHP 8.4 asymmetric write (`set`) visibility, only for properties whose write visibility
     /// differs from their read visibility (e.g. `public private(set)`). Properties absent here
@@ -840,7 +842,11 @@ pub struct EnumInfo {
 pub struct ExternFunctionSig {
     pub name: String,
     pub params: Vec<(String, PhpType)>,
+    /// C ABI shape of each parameter, parallel to `params`.
+    pub abi_params: Vec<ExternAbiType>,
     pub return_type: PhpType,
+    /// C ABI shape of the return slot; decides how the return register is normalized.
+    pub abi_return: ExternAbiType,
     pub library: Option<String>,
 }
 
