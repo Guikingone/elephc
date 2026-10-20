@@ -455,11 +455,14 @@ function step(buffer<Particle> $p, int $count, float $dt): void {
 Diagnostics are unchanged. A stale handle still dies with `use of buffer after
 buffer_free()` at the first access, an out-of-range index still dies with
 `buffer index out of bounds`, and a loop that never runs its body reports
-nothing. The loop must not be able to free, allocate or rebind a buffer: a call,
-a `buffer_free()`, an assignment to the buffer variable, output, a warning, or a
-throw inside it keeps the ordinary per-access resolution, because user code could
-free the buffer through another handle. Generators, functions with `try`, dynamic
-`eval`, and programs that call `pcntl_async_signals()` are left alone.
+nothing. The loop must not be able to free, allocate or rebind a buffer: a
+`buffer_free()`, an assignment to the buffer variable, output, a warning, a
+throw, or a call to anything that may do one of those inside it keeps the
+ordinary per-access resolution, because user code could free the buffer through
+another handle. A call to a user function or method whose whole effect summary
+only reads state (or ends in a fatal error) does not block the rewrite.
+Generators, functions with `try`, dynamic `eval`, and programs that call
+`pcntl_async_signals()` are left alone.
 
 Packed field reads and writes are also known to be plain loads and stores, so
 the loop index and locals stored into packed fields stay in registers and no

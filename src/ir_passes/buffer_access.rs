@@ -18,10 +18,11 @@
 //!   loop that never runs its body never reports anything, exactly as before.
 //! - A loop qualifies only when every instruction in its natural body is on a default-deny
 //!   allowlist: buffer element and packed field accesses, local loads, stores of scalar
-//!   locals, concat resets, and instructions whose effects only read state or fatal. Calls,
-//!   releases, allocations, warnings (user error handlers), output (output-buffer callbacks)
-//!   and throws all disqualify it, because each can run user code that frees a buffer through
-//!   an alias. Blocks that leave the loop for good are outside the natural body, and coming
+//!   locals, concat resets, and instructions whose effects only read state or fatal. That
+//!   includes a user function or method call whose refined effect summary is read-only. Any
+//!   other call, and releases, allocations, warnings (user error handlers), output
+//!   (output-buffer callbacks) and throws disqualify it, because each can run user code that
+//!   frees a buffer through an alias. Blocks that leave the loop for good are outside the natural body, and coming
 //!   back always passes the preheader, which resolves again.
 //! - The buffer operand must be loop-invariant: an SSA value defined outside the loop, or a
 //!   `load_local` of a slot nothing in the loop writes and no by-reference alias can reach.
@@ -203,9 +204,11 @@ fn loop_preserves_buffers(function: &Function, loop_ref: &NaturalLoop) -> bool {
 
 /// Default-deny classification of one loop instruction.
 ///
-/// Anything able to run user code (a call, a destructor, an error handler, an output
-/// callback, an unwinding throw), allocate, or write local or heap state other than a scalar
-/// local, a buffer element or a packed field disqualifies the loop.
+/// Anything able to run user code (a destructor, an error handler, an output callback, an
+/// unwinding throw), allocate, or write local or heap state other than a scalar local, a
+/// buffer element or a packed field disqualifies the loop. A call passes only through the
+/// effects check: effect refinement gives a direct user call its callee's summary, so a callee
+/// proven to only read state or fatal cannot free a buffer either.
 fn instruction_preserves_buffers(function: &Function, inst: &Instruction) -> bool {
     match inst.op {
         Op::Nop

@@ -581,10 +581,12 @@ handle still raises the use-after-free fatal at the access, and a loop that neve
 runs its body never reports anything. A loop qualifies only when every
 instruction in its body is on a default-deny allowlist: buffer element accesses,
 packed field reads and writes, local loads, stores to scalar locals, concat
-resets, and instructions whose effects only read state or fatal. Calls, releases,
-allocations, warnings, output and throws disqualify it, because each can run user
-code (a callee, a destructor, an error handler, an output callback) that frees a
-buffer through an alias. The handle must be an SSA value defined outside the loop
+resets, and instructions whose effects only read state or fatal. That last group
+includes direct user function and method calls once effect refinement has proven
+the callee's whole summary read-only; every other call, and releases, allocations,
+warnings, output and throws, disqualify the loop, because each can run user code
+(a callee, a destructor, an error handler, an output callback) that frees a buffer
+through an alias. The handle must be an SSA value defined outside the loop
 or a `load_local` of a slot that nothing in the loop writes and no by-reference
 alias reaches. Generators, functions with exception handlers or dynamic `eval`,
 and modules that call `pcntl_async_signals()` (whose backend dispatches signal
