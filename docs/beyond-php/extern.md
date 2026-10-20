@@ -282,7 +282,10 @@ instead of reaching C memory. Statically wrong types (a string into an `f32`
 field, an int into a `bool` field) are compile errors.
 
 **Pointer fields** chain: a `ptr<Node>` field reads as a typed pointer, so
-`$node->next->value` follows it. **`string` fields** are `char*`: a read copies
+`$node->next->value` follows it. Inside a namespace, the class a `ptr<T>`
+names in an extern class field, extern function signature or extern global
+resolves like any other class name (`ptr<Node>` in `namespace App` is
+`App\Node`, and `use` aliases apply). **`string` fields** are `char*`: a read copies
 the bytes up to the terminator into a PHP string (`NULL` reads as `""`), and a
 write stores a fresh null-terminated copy that the struct keeps for the rest
 of the program, like an `extern global string` store; C must not `free()` it.

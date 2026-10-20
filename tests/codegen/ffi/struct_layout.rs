@@ -383,3 +383,88 @@ echo ptr_sizeof("Big"), " ", $big->tail, " ", ptr_read8(ptr_offset($big, 4160)),
     ));
     assert_eq!(out, "4168 1 1 9 77\n");
 }
+
+/// Verifies `ptr<T>` in a namespaced extern class field names the namespace's class, so a chained
+/// `$n->next->value` read compiles and reads that struct.
+#[test]
+fn test_ffi_extern_class_ptr_targets_resolve_in_a_namespace() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr;
+require "node.php";
+$head = ptr_cast<App\Node>(calloc(1, ptr_sizeof("App\\Node")));
+$tail = ptr_cast<App\Node>(calloc(1, ptr_sizeof("App\\Node")));
+App\link($head, $tail);
+echo App\second($head), " ", ptr_sizeof("App\\Node"), "\n";
+"#,
+            ),
+            (
+                "node.php",
+                r#"<?php
+namespace App;
+extern class Node {
+    public i32 $value;
+    public ptr<Node> $next;
+}
+function link(ptr<Node> $head, ptr<Node> $tail): void {
+    $tail->value = 41;
+    $tail->value += 1;
+    $head->next = $tail;
+}
+function second(ptr<Node> $n): int {
+    return $n->next->value;
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "42 16\n");
+}
+
+/// Verifies a namespaced extern class wins over a global one with the same short name: the
+/// `ptr<Node>` field inside `namespace App` must use `App\Node`'s offsets, not the global
+/// struct's, which `ptr_read32` at both candidate offsets tells apart.
+#[test]
+fn test_ffi_extern_class_ptr_targets_do_not_bind_a_same_named_global_class() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr;
+extern class Node {
+    public i64 $pad;
+    public ptr<Node> $next;
+    public i32 $value;
+}
+require "node.php";
+$head = ptr_cast<App\Node>(calloc(1, 32));
+$tail = ptr_cast<App\Node>(calloc(1, 32));
+$tail->value = 7;
+$head->next = $tail;
+echo App\second($head), " ", ptr_read32($tail), " ", ptr_read32(ptr_offset($tail, 16)), " ";
+echo ptr_sizeof("Node"), " ", ptr_sizeof("App\\Node"), "\n";
+"#,
+            ),
+            (
+                "node.php",
+                r#"<?php
+namespace App;
+extern class Node {
+    public i32 $value;
+    public ptr<Node> $next;
+}
+function second(ptr<Node> $n): int {
+    return $n->next->value;
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "7 7 0 24 16\n");
+}

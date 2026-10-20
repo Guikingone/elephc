@@ -9,16 +9,16 @@
 //! - Declaration names become canonical before type checking and codegen symbol collection.
 //! - Generic parameter names remain bare in their declaration and method scopes.
 //! - Generic bounds and defaults still use ordinary namespace/import resolution.
-//! - Extern function signatures and extern globals resolve the class each C `ptr<T>` type names
-//!   (`resolve_ctype`); extern global names stay C symbols.
+//! - Extern declarations resolve the class each C `ptr<T>` type names (`resolve_ctype`), so a
+//!   namespaced C struct is found by its field accesses; extern global names stay C symbols.
 
 mod type_params;
 
 use crate::errors::CompileError;
 use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{
-    Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, ExternParam, GenericDecl,
-    Stmt, StmtKind, TraitAdaptation, TraitUse, TypeParam,
+    Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, ExternField, ExternParam,
+    GenericDecl, Stmt, StmtKind, TraitAdaptation, TraitUse, TypeParam,
 };
 
 use super::expressions::resolve_expr;
@@ -384,7 +384,13 @@ pub(super) fn resolve_decl_stmt(
         StmtKind::ExternClassDecl { name, fields } => Ok(Some(Stmt::with_attributes(
             StmtKind::ExternClassDecl {
                 name: canonical_name_for_decl(namespace, name),
-                fields: fields.clone(),
+                fields: fields
+                    .iter()
+                    .map(|field| ExternField {
+                        name: field.name.clone(),
+                        c_type: resolve_ctype(&field.c_type, namespace, imports, symbols),
+                    })
+                    .collect(),
             },
             stmt.span,
             stmt_attributes,
