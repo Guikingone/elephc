@@ -31,12 +31,14 @@ Physical source (.php or .lfc)
   -> opcache-prelude     inject OPcache declarations and a placeholder script manifest when used
   -> image-prelude      inject the image (GD/Exif/Imagick) prelude when used
   -> hash-prelude       inject the incremental HashContext/hash_* prelude when used
+  -> testing-prelude    inject the Elephc\Testing runtime when used (forced by elephc test)
   -> curl-prelude       inject the curl prelude when used
   -> xml-prelude        inject the XML/XMLWriter prelude when used
   -> web-prelude        inject the web runtime prelude with --web
   -> version-prelude    inject requested PHP version/SAPI surface functions
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
+  -> (test-discovery)   find test classes and append the runner driver (elephc test)
   -> object-cast-prelude inject stdClass declarations when object casts need them
   -> func-args          desugar func_num_args/get_args/get_arg to a hidden variadic
   -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest

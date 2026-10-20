@@ -1891,6 +1891,50 @@ jobs:
             exit 1
           fi
 
+  differential-tests:
+    name: Differential test run (PHPUnit vs elephc test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache Rust build state
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-differential-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-differential-
+
+      - name: Build the compiler
+        run: cargo build
+
+      - name: Set up reference PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer
+
+      - name: Install PHPUnit for the example suite
+        # The example project is the differential fixture: its `*Test.php` files are
+        # plain PHP written against PHPUnit's namespace, so the reference run and the
+        # compiled run see the same source. vendor/ is created here and never committed.
+        run: composer require --dev --no-interaction --quiet phpunit/phpunit
+        working-directory: examples/testing
+
+      - name: Compare PHPUnit and elephc test outcomes
+        # Every test PHPUnit reports must exist in the compiled run with the same
+        # outcome; tests only elephc runs (the .lfc files) are informational.
+        run: python3 scripts/test-differential.py examples/testing --elephc target/debug/elephc
+
   curl-feature-contract:
     name: Curl feature contract coverage
     runs-on: ubuntu-latest
@@ -2235,6 +2279,7 @@ jobs:
       - eval-codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
+      - differential-tests
       - managed-native-smoke
       - curl-feature-contract
       - security-audit
@@ -2270,6 +2315,7 @@ jobs:
           test "${{ needs.eval-codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
+          test "${{ needs.differential-tests.result }}" = "success"
           test "${{ needs.managed-native-smoke.result }}" = "success"
           test "${{ needs.curl-feature-contract.result }}" = "success"
           test "${{ needs.security-audit.result }}" = "success"
