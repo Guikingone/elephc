@@ -7,9 +7,10 @@
 //!
 //! Key details:
 //! - Covers reads, writes and compound assignments through buffer elements and `ptr<T>` typed
-//!   pointers, three levels of nesting, layout offsets and stride, whole-record copies, inner
-//!   classes declared after the outer one, pruning of classes named only by fields, and the
-//!   null-pointer guard on typed pointer receivers, including literal dynamic names.
+//!   pointers, three levels of nesting, layout offsets and stride (including offsets beyond the
+//!   AArch64 `add` immediate range), whole-record copies, inner classes declared after the outer
+//!   one, pruning of classes named only by fields, and the null-pointer guard on typed pointer
+//!   receivers, including literal dynamic names.
 
 use crate::support::*;
 
@@ -265,6 +266,26 @@ echo $w[1]->player->id, " ", $w[1]->tick, " ", $w[0]->player->pos->y, "\n";
 "#,
     );
     assert_eq!(out, "32 24 2.5 7 3 0\n");
+}
+
+/// Verifies a nested record placed beyond the AArch64 `add` immediate range (byte offset 4104)
+/// is addressed correctly for reads, writes and compound assignments.
+#[test]
+fn test_nested_packed_field_beyond_the_add_immediate_range() {
+    let fields: String = (0..513).map(|i| format!("public int $f{}; ", i)).collect();
+    let source = format!(
+        r#"<?php
+packed class Vec2 {{ public float $x; public float $y; }}
+packed class Big {{ {fields}public Vec2 $tail; }}
+$b = buffer_new<Big>(1);
+$b[0]->tail->x = 1.5;
+$b[0]->tail->y += 2.0;
+$b[0]->f512 = 7;
+echo $b[0]->tail->x, " ", $b[0]->tail->y, " ", $b[0]->f512, " ", ptr_sizeof("Big"), "\n";
+"#
+    );
+    let out = compile_and_run(&source);
+    assert_eq!(out, "1.5 2 7 4120\n");
 }
 
 /// Verifies a packed class named only as the target of a `ptr<T>` field of a reachable packed
