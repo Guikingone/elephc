@@ -349,6 +349,17 @@ replacement fields, then releases displaced owners. The same constructor can
 therefore reinitialize a compact native Throwable or an ordinary eval/subclass
 object without mixing raw previous pointers and nullable Mixed cells.
 
+Mixed add, subtract and multiply may borrow an integer RHS cell from a 32-byte,
+16-byte-aligned stack span for the duration of that single runtime call. The cell
+has the usual 24-byte tag/payload layout, with integer tag zero, but no managed
+heap header. Only these read-only intrinsics may receive it: they must not retain,
+release, store or return its pointer. Their result remains a fresh owned heap
+cell, including after integer overflow promotes to float. Codegen uses this path
+only for an exact integer constant beside a boxed Mixed left operand; bool, null,
+float and dynamic operands keep ordinary materialization. Boxed increment and
+decrement use the same loan for their integer delta. No caller-visible value,
+reference binding or loop type proof changes.
+
 Deep release of objects, indexed arrays, hashes, Mixed cells, and callable
 captures contains destructor exceptions in a native cleanup boundary. Each
 cleanup frame keeps a pending exception chain, completes the remaining child
