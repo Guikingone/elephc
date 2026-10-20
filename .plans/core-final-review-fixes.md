@@ -15,7 +15,7 @@ claims that the PR remains unmerged or still awaits its original CI are stale.
 This is a remaining-work backlog, not a new claim that all callable reference
 forms have PHP parity.
 
-Full investigation history remains in Git at `819d3d3908`, including both
+Full investigation history remains in Git at `8526fd1b5c`, including both
 original filenames. Current contracts live in
 [the memory model](../docs/internals/memory-model.md),
 [functions](../docs/php/functions.md), and

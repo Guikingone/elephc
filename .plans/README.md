@@ -40,14 +40,14 @@ are preserved in a permanent regression or resolved with current evidence.
 
 The cleanup removed 46 completed/superseded planning records and merged the
 second Core log into its surviving backlog. The complete original collection is
-recoverable from Git commit `819d3d3908`, for example:
+recoverable from Git commit `8526fd1b5c`, for example:
 
 ```bash
-git show 819d3d3908:.plans/<original-filename>.md
+git show 8526fd1b5c:.plans/<original-filename>.md
 ```
 
 The completed 0.27.4 release-preparation records were retired after approval;
-their final contents remain available at Git commit `7e6ca24785`.
+their final contents remain available at Git commit `b5a5e6df4f`.
 
 Use permanent `docs/` pages for shipped contracts and update live references
 when retiring a plan. Preserve immutable historical learning records. New or

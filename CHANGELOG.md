@@ -7,6 +7,8 @@ Releases are listed newest first.
 
 ## [0.27.4] - 2026-10-20
 
+- Changed extern C integer handling (**breaking**): `int`/`i64` now preserve 64-bit values, and explicit signed/unsigned 8-, 16-, 32-, and 64-bit widths control argument and return conversion; declarations for C `int` and `unsigned` must use `i32` and `u32`.
+- Added PHP `strip_tags()` in compiled and `eval()` code, with string or array allow-lists and PHP-compatible handling of comments and PHP tags.
 - Added immutable `BcMath\Number` objects with decimal methods, arithmetic and comparison operators, serialization, and matching native-object behavior in `eval()`.
 - Added missing PHP 8.5 Core classes and constants, including `WeakReference`, `WeakMap`, `Serializable`, `ErrorException`, enum interfaces, and runtime `PHP_BINARY`, in compiled and `eval()` code.
 - Added a pay-for-use DOM HTML fragment walker for Termwind-style rendering, including `DOMDocument::loadHTML()`, node traversal, attributes, and `saveXML()`; this remains an HTML-only subset.
@@ -22,6 +24,12 @@ Releases are listed newest first.
 - Improved Linux x86_64 cycle collection with cached incoming-edge counts and an exact fallback when those counts saturate.
 - Reduced mbstring bridge and executable size by sharing one immutable encoding catalog instead of duplicating codec tables.
 - Improved JSON parsing by deferring source-location scans until an error and avoiding legacy string decoding for non-string tokens.
+- Reduced startup costs for eligible short numeric dynamic `eval()` fragments by deferring native catalog initialization, with guarded fallback and a bounded deferral budget.
+- Reduced allocations for boxed add/subtract/multiply and increment/decrement by borrowing constant integer operands while keeping results independently owned.
+- Reduced heap-release and `gc_mem_caches()` overhead by skipping free-list tail scans when a freed block cannot reach the heap frontier.
+- Improved `json_decode()` memory use for integer arrays by keeping initial signed 64-bit values packed and widening to mixed storage only when needed.
+- Reduced native string-append metadata allocations by reusing unique unresolved mbstring origins, while preserving replacement behavior for shared, resolved, and literal origins.
+- Fixed property and parameter defaults to bind `self::` and `parent::` in their declaring or trait-consuming scope, defer catchable default errors until use, and preserve those defaults in Reflection and `eval()`; invalid late-static property defaults are rejected.
 - Fixed literal `false` and `null` parameter contracts across inherited methods and runtime callables so invalid arguments raise `TypeError` before coercion or receiver mutation.
 - Fixed `(array)` casts of scalar, string, null, packed-array, mixed, and union values, including returns declared as `array`.
 - Fixed by-reference `foreach` so elements appended after yielding the current tail are visited, including after hash growth.
