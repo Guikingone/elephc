@@ -101,6 +101,37 @@ pub(super) fn lower_write_key_and_value(
     (pending[0], value_value, index_pins)
 }
 
+/// Lowers the key and the value of an element write in PHP's order, pinning each heap operand in
+/// an unwind-visible slot as soon as it is lowered.
+///
+/// Used when the receiver is fetched AFTER the operands (`element_write_order`). The later
+/// operand may reassign the receiver and free the array an earlier operand borrows from, and it
+/// may throw while an earlier operand holds an owned temporary; the slot covers both. The caller
+/// retires the returned slots, in reverse, after the write.
+pub(super) fn lower_pinned_write_key_and_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) -> (LoweredValue, LoweredValue, Vec<crate::ir::LocalSlotId>) {
+    let mut slots = Vec::new();
+    let mut lower_pinned = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
+        let lowered = lower_expr(ctx, expr);
+        let (pinned, slot) = crate::ir_lower::expr::root_call_operand(ctx, lowered, span);
+        slots.extend(slot);
+        pinned
+    };
+    // Same order as `lower_write_key_and_value`: a bare variable key is read at store time.
+    let (index_value, value_value) = if matches!(index.kind, ExprKind::Variable(_)) {
+        let value_value = lower_pinned(ctx, value);
+        (lower_pinned(ctx, index), value_value)
+    } else {
+        let index_value = lower_pinned(ctx, index);
+        (index_value, lower_pinned(ctx, value))
+    };
+    (index_value, value_value, slots)
+}
+
 /// Lowers an indexed array assignment.
 pub(super) fn lower_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -200,14 +231,82 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     span: Span,
     key_already_diagnosed: bool,
 ) {
+    // PHP fetches the receiver for writing only after the key and the value: when either one
+    // may write it (`$m["k"] = ($m = [...]) ? ...`), the receiver is fetched late so the write
+    // lands in the array the variable holds then, not in the one the reassignment released.
+    // Everywhere else the early fetch stays; see `element_write_order` for why.
+    if super::element_write_order::element_write_operands_may_write_receiver(
+        ctx,
+        array,
+        &[index, value],
+    ) {
+        let (index_value, value_value, slots) =
+            lower_pinned_write_key_and_value(ctx, index, value, span);
+        let array_value = load_array_local_for_write(ctx, array, span);
+        if array_value_is_boxed(array_value) {
+            lower_boxed_array_set_values(
+                ctx, array_value, index_value, value_value, span, key_already_diagnosed,
+            );
+        } else {
+            finish_array_local_set(
+                ctx, array, array_value, index, value, index_value, value_value, Vec::new(), span,
+                key_already_diagnosed,
+            );
+        }
+        // The write lowers may end the block with a throw (a coerced key, a boxed writer
+        // guard); the published slots stay for the unwinder, and emitting the retires after a
+        // terminator is an EIR panic.
+        if !ctx.builder.insertion_block_is_terminated() {
+            for slot in slots.into_iter().rev() {
+                crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+            }
+        }
+        return;
+    }
     let array_value = load_array_local_for_write(ctx, array, span);
     let op = array_set_op(array_value.ir_type);
     if op == Op::RuntimeCall {
         lower_boxed_array_set(ctx, array_value, index, value, span, key_already_diagnosed);
         return;
     }
-    let (mut index_value, mut value_value, mut index_pins) =
-        lower_write_key_and_value(ctx, index, value);
+    let (index_value, value_value, index_pins) = lower_write_key_and_value(ctx, index, value);
+    finish_array_local_set(
+        ctx, array, array_value, index, value, index_value, value_value, index_pins, span,
+        key_already_diagnosed,
+    );
+}
+
+/// Returns true when a fetched receiver is a boxed `Mixed`/union cell, written through the
+/// runtime's boxed setter rather than a typed array op.
+fn array_value_is_boxed(array_value: LoweredValue) -> bool {
+    array_set_op(array_value.ir_type) == Op::RuntimeCall
+        && matches!(
+            array_value.ir_type,
+            IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
+        )
+}
+
+/// Lowers a typed element write into an already-fetched receiver, from already-lowered operands.
+///
+/// The body is the early-fetch lowering's tail, split out so the late-fetch path (an operand may
+/// write the receiver) runs exactly the same emit/restore choreography after a different fetch
+/// order.
+#[allow(clippy::too_many_arguments)]
+fn finish_array_local_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    index: &Expr,
+    value: &Expr,
+    mut index_value: LoweredValue,
+    mut value_value: LoweredValue,
+    mut index_pins: Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    let op = array_set_op(array_value.ir_type);
+    // Container element storage may require a different RHS representation (pointer and buffer
+    // arrays); the fetch has already settled the receiver's PHP type.
     let container_ty = ctx.builder.value_php_type(array_value.value);
     value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
     // Concrete string keys normally select associative storage. Ref-bound Mixed-slot
