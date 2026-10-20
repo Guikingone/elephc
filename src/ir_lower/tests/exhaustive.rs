@@ -96,7 +96,9 @@ fn dummy_check_result() -> CheckResult {
         ExternFunctionSig {
             name: "ef".to_string(),
             params: vec![("x".to_string(), PhpType::Int)],
+            abi_params: vec![crate::types::ExternAbiType::INT64],
             return_type: PhpType::Int,
+            abi_return: crate::types::ExternAbiType::INT64,
             library: Some("c".to_string()),
         },
     );

@@ -16,7 +16,7 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 
-use super::{FunctionSig, PhpType};
+use super::{ExternAbiType, FunctionSig, PhpType};
 
 mod abstract_setters;
 
@@ -840,7 +840,11 @@ pub struct EnumInfo {
 pub struct ExternFunctionSig {
     pub name: String,
     pub params: Vec<(String, PhpType)>,
+    /// C ABI shape of each parameter, parallel to `params`.
+    pub abi_params: Vec<ExternAbiType>,
     pub return_type: PhpType,
+    /// C ABI shape of the return slot; decides how the return register is normalized.
+    pub abi_return: ExternAbiType,
     pub library: Option<String>,
 }
 

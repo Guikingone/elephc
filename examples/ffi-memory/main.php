@@ -3,10 +3,10 @@
 // This example uses libc allocation plus byte, 16-bit word, and raw string helpers.
 
 extern "System" {
-    function malloc(int $size): ptr;
+    function malloc(u64 $size): ptr;
     function free(ptr $p): void;
-    function memset(ptr $dest, int $byte, int $count): ptr;
-    function memcpy(ptr $dest, ptr $src, int $count): ptr;
+    function memset(ptr $dest, i32 $byte, u64 $count): ptr;
+    function memcpy(ptr $dest, ptr $src, u64 $count): ptr;
 }
 
 $src = malloc(64);

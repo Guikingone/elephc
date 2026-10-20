@@ -450,9 +450,9 @@ elephc can call native C functions directly through `extern` declarations.
 
 ```php
 <?php
-extern function atoi(string $s): int;
-extern function signal(int $sig, callable $handler): ptr;
-extern function raise(int $sig): int;
+extern function atoi(string $s): i32;
+extern function signal(i32 $sig, callable $handler): ptr;
+extern function raise(i32 $sig): i32;
 extern global ptr $environ;
 
 function on_signal($sig) {
