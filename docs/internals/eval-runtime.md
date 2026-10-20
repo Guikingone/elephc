@@ -145,19 +145,35 @@ front-end safety rules.
 When interpreter fallback is required, generated code performs these steps:
 
 1. Coerce the code argument to a PHP string.
-2. Lazily allocate the `EvalContext`, activation `EvalScope`, and, when needed,
-   `EvalGlobalScope`.
-3. Attach the module's immutable native catalog on a cache hit. On a miss,
-   register bridge-compatible AOT functions, methods, constructors, class
-   metadata, parameter names, defaults, and visibility information, then publish
-   the complete catalog before executing PHP.
-4. Compute the fragment's conservative caller-scope access mask, then flush
-   selected locals and globals or the complete eligible scope into boxed cells.
-5. Set call-site file, directory, namespace, class, trait, function, and method
-   metadata used by magic constants.
-6. Call `__elephc_eval_execute` through the target-aware ABI.
-7. Reload dirty, created, or unset scope entries and propagate return/fatal/
+2. Lazily allocate the activation's `EvalContext` handle and attach the module's
+   immutable native catalog on a cache hit. A cache miss leaves the catalog
+   unpublished until a later guard requires it.
+3. Set the strict-PHP/version profile and call-site file, directory, namespace,
+   class, trait, function and method metadata. Ensure the activation `EvalScope`
+   and, when needed, `EvalGlobalScope` handles.
+4. Compute the fragment's conservative caller-scope access mask. Ask
+   `__elephc_eval_context_can_flush_without_native_catalog` whether replacing
+   existing local and global cells is safe. If it is not, register and publish
+   the complete native catalog before flushing any scope owner.
+5. Flush selected locals and globals or the complete eligible scope into boxed
+   cells, mark global aliases and attach the global scope to the context.
+6. Ask `__elephc_eval_context_can_defer_native_catalog` whether the parsed
+   fragment and current scopes can execute safely without native metadata. If
+   not, register and publish the complete catalog before executing PHP. Both
+   guards share one registration block and an already published catalog is
+   reused. Registration includes AOT functions, methods, constructors, class
+   metadata, constants, parameter names, defaults and visibility information.
+7. Push the caller class scope when required and call
+   `__elephc_eval_execute_with_deferred_catalog` through the target-aware ABI,
+   then restore that class scope.
+8. Reload dirty, created or unset scope entries and propagate return/fatal/
    throwable state through the normal generated runtime paths.
+
+A bounded proof permits straight-line numeric scalar fragments to execute
+while the native catalog remains unpublished. Class imports are postponed
+only while that catalog is unready; a later metadata-dependent fragment
+upgrades the same activation context. The legacy `__elephc_eval_execute` entry
+retains eager class imports for existing bridge consumers.
 
 ### Selective dynamic scope synchronization
 
