@@ -66,5 +66,5 @@ fixtures; a symbol or unit test alone is insufficient.
 
 No historical failure is relabeled as a current reproduction or a successful
 replay. Earlier logs, commands and transient paths remain recoverable from
-`b9a805233c`; reproducible source cases remain in this repository. No tests,
+`54c5c3332e`; reproducible source cases remain in this repository. No tests,
 PHP probes, native package installation or benchmarks ran during consolidation.

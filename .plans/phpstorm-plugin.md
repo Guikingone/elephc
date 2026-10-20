@@ -59,4 +59,4 @@ suppression alone.
 Verify ordinary PHP behavior alongside extension syntax and navigation. Exercise
 compiler settings, diagnostics, paths containing spaces and supported output
 forms, including iOS library outputs. The historical proposal remains available
-at `b9a805233c`; no IDE or compiler execution was performed during this cleanup.
+at `54c5c3332e`; no IDE or compiler execution was performed during this cleanup.

@@ -33,6 +33,7 @@ Releases are listed newest first.
 - Improved `json_decode()` memory use for integer arrays by keeping initial signed 64-bit values packed and widening to mixed storage only when needed.
 - Reduced native string-append metadata allocations by reusing unique unresolved mbstring origins, while preserving replacement behavior for shared, resolved, and literal origins.
 - Reduced compilation work and generated code for literal `eval()` fragments by retaining only the declarations and builtin surfaces they can reach, with conservative fallback for runtime source and dynamic lookups.
+- Security: updated `webpki-roots` to `1.0.10` and `rustls-webpki` to `0.103.16` to reject distrusted emSign certificate paths, addressing RUSTSEC-2026-0381 and RUSTSEC-2026-0382.
 - Fixed property and parameter defaults to bind `self::` and `parent::` in their declaring or trait-consuming scope, defer catchable default errors until use, and preserve those defaults in Reflection and `eval()`; invalid late-static property defaults are rejected.
 - Fixed literal `false` and `null` parameter contracts across inherited methods and runtime callables so invalid arguments raise `TypeError` before coercion or receiver mutation.
 - Fixed `(array)` casts of scalar, string, null, packed-array, mixed, and union values, including returns declared as `array`.

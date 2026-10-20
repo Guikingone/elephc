@@ -33,4 +33,4 @@ requested, then remove only sources whose evidence is preserved.
 Keep generated assembly, binaries and logs outside this directory. Permanent
 native regressions belong under `tests/codegen/`; interpreter/lexer regressions
 belong in the corresponding Magician suite. The original historical context
-is available from Git commit `b9a805233c`.
+is available from Git commit `54c5c3332e`.

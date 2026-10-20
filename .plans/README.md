@@ -1,6 +1,6 @@
 # Repository plans and working specifications
 
-Reviewed on 2026-10-20 against code candidate `a8f730c5f3`. This index
+Reviewed on 2026-10-20 against code candidate `3c39673c06`. This index
 distinguishes remaining work and retained specifications. Implementation status
 comes from source and recorded integration evidence; this cleanup ran no tests
 or behavioral probes.
@@ -17,6 +17,7 @@ or behavioral probes.
 | [PHP extension bridge](bidirectional-php-extension-bridge.md) | Producer stack integration on open PRs and the separate consumer-hosting design. The producer is not in this release code candidate. |
 | [Native test runner](elephc-test.md) | Shipped runner and assertion contract, with the remaining runtime acceptance checklist and deferred assertion specialization. |
 | [PDO parity](pdo-full-maintained-php-parity.md) | Broader registry migration, unintended common divergences and proprietary-client/cross-target live qualification. |
+| [TLS advisory rollout](webpki-advisories-20261020.md) | Dependency update merged in #1954; affected-branch refresh remains tracked in the plan. |
 | [PhpStorm plugin](phpstorm-plugin.md) | Unimplemented IDE proposal; SDK choice, language integration and qualification remain open. |
 
 Detailed execution plans, current task ownership and investigation evidence also
@@ -41,14 +42,14 @@ are preserved in a permanent regression or resolved with current evidence.
 
 The cleanup removed 46 completed/superseded planning records and merged the
 second Core log into its surviving backlog. The complete original collection is
-recoverable from Git commit `b9a805233c`, for example:
+recoverable from Git commit `54c5c3332e`, for example:
 
 ```bash
-git show b9a805233c:.plans/<original-filename>.md
+git show 54c5c3332e:.plans/<original-filename>.md
 ```
 
 The completed 0.27.4 release-preparation records were retired after approval;
-their final contents remain available at Git commit `02e0b751df`.
+their final contents remain available at Git commit `3f0b24ad70`.
 
 Use permanent `docs/` pages for shipped contracts and update live references
 when retiring a plan. Preserve immutable historical learning records. New or
