@@ -568,6 +568,11 @@ During type checking, extern declarations are registered in dedicated maps that 
 - `extern_classes`: flat C struct layout metadata
 - `extern_globals`: native global symbols loaded through the linker
 
+The checker registers extern and packed classes before the interface and class schema passes,
+because class members name them too (`public buffer<Vec2> $data`, `public ptr<Point> $p`, or a
+generic argument such as `Store<Vec2>`). Duplicate detection against ordinary classes therefore
+reads the pre-declared class names rather than the finished class table.
+
 Extern calls differ from ordinary elephc function calls in four important ways:
 
 1. Codegen dispatches extern functions before built-ins, so an `extern function strlen(...)` declaration really calls C `strlen`, not the elephc builtin.

@@ -299,6 +299,12 @@ pub(super) fn check_types_impl(
             checker.declared_classes.insert(name.clone());
         }
     }
+    // Packed and extern classes are types that class members name too: `public buffer<Vec2> $data`,
+    // `public ptr<Point> $p`, a method parameter, or a generic argument (`Store<Vec2>` substitutes
+    // `buffer<T>` into a member). Their layouts must therefore exist before the interface and
+    // class schema passes below resolve member signatures. Duplicate detection against ordinary
+    // classes reads `declared_classes`, which is already complete here.
+    checker.prescan_extern_decls(program, &mut errors);
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
@@ -441,8 +447,6 @@ pub(super) fn check_types_impl(
     patch_builtin_generator_signatures(&mut checker);
     patch_builtin_spl_storage_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
-
-    checker.prescan_extern_decls(program, &mut errors);
 
     // Every class, interface and enum is registered, and no body has been checked: a violated
     // bound is reported now, alone, instead of as whatever the instantiated body trips over.

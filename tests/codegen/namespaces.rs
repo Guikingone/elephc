@@ -396,6 +396,52 @@ class User {
     assert_eq!(out, "ok");
 }
 
+/// Regression test for a packed class declared in another namespace and file, then named by
+/// class member signatures through `use`: the shape PSR-4 autoloading produces. The member
+/// types used to fail with "Unknown type" as if the packed class file were never loaded.
+#[test]
+fn test_namespace_include_resolves_packed_class_in_member_signatures() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+namespace Demo\App;
+require "geometry.php";
+
+use Demo\Geometry\Vec2;
+
+final class Path {
+    public buffer<Vec2> $points;
+
+    public function __construct() {
+        $this->points = buffer_new<Vec2>(2);
+        $this->points[1]->x = 4.5;
+    }
+
+    public function x(buffer<Vec2> $points, int $index): float {
+        return $points[$index]->x;
+    }
+}
+
+$path = new Path();
+echo $path->x($path->points, 1), "|", buffer_len($path->points);
+"#,
+            ),
+            (
+                "geometry.php",
+                r#"<?php
+namespace Demo\Geometry;
+
+packed class Vec2 { public float $x; public float $y; }
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "4.5|2");
+}
+
 /// Verifies that `use const` aliasing and fully-qualified constant paths both resolve
 /// correctly in the same namespace (`Demo\Values\ANSWER` aliased as `ANSWER` and accessed
 /// via `\Demo\Values\ANSWER`). Checks both resolution paths produce the same value.

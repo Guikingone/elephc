@@ -37,7 +37,15 @@ impl Checker {
             "bool" | "boolean" => Some("bool".to_string()),
             "string" => Some("string".to_string()),
             "ptr" | "pointer" => Some("ptr".to_string()),
-            class_name if self.classes.contains_key(class_name) => Some(class_name.to_string()),
+            // `declared_classes` covers classes whose schema is not built yet: member signatures
+            // and packed class fields resolve `ptr<T>` while the class schema pass is still
+            // registering the classes they name.
+            class_name
+                if self.classes.contains_key(class_name)
+                    || self.declared_classes.contains(class_name) =>
+            {
+                Some(class_name.to_string())
+            }
             class_name if self.packed_classes.contains_key(class_name) => {
                 Some(class_name.to_string())
             }

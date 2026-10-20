@@ -36,6 +36,36 @@ fn test_error_buffer_new_rejects_union_element_type() {
     );
 }
 
+/// Verifies a packed class reusing an ordinary class name (case-insensitively) is still a
+/// duplicate now that packed classes are registered before the class schema pass.
+#[test]
+fn test_error_packed_class_reusing_class_name_is_duplicate() {
+    expect_error(
+        "<?php class Vec2 {} packed class vec2 { public float $x; }",
+        "Duplicate packed class declaration: vec2",
+    );
+}
+
+/// Verifies an extern class reusing an ordinary class name (case-insensitively) is still a
+/// duplicate now that extern classes are registered before the class schema pass.
+#[test]
+fn test_error_extern_class_reusing_class_name_is_duplicate() {
+    expect_error(
+        "<?php class Point {} extern class point { public int $x; }",
+        "Duplicate class declaration: point",
+    );
+}
+
+/// Verifies a packed class reusing an enum name is still a duplicate: enums are only
+/// pre-declared when the packed prescan runs.
+#[test]
+fn test_error_packed_class_reusing_enum_name_is_duplicate() {
+    expect_error(
+        "<?php enum Mode { case A; } packed class Mode { public int $x; }",
+        "Duplicate packed class declaration: Mode",
+    );
+}
+
 /// Verifies that a packed class with a nullable field (?int) is rejected.
 #[test]
 fn test_error_packed_class_rejects_nullable_field() {
