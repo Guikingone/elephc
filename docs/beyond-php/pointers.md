@@ -67,7 +67,15 @@ ptr_write16($p, 0x1234);     // write 2 bytes, little-endian
 echo ptr_read16($p);          // read 2 bytes, zero-extended
 ptr_write32($p, 12345);      // write 4 bytes
 echo ptr_read32($p);          // read 4 bytes
+ptr_write_f32($p, 1.5);      // write an IEEE 754 single (4 bytes)
+echo ptr_read_f32($p);        // read it back as a PHP float
+ptr_write_f64($p, 0.1);      // write an IEEE 754 double (8 bytes)
+echo ptr_read_f64($p);        // 0.1
 ```
+
+`ptr_write_f32()` rounds the PHP float to single precision, so
+`ptr_read_f32()` returns `0.10000000149011612` for a stored `0.1`; the 64-bit
+pair keeps the value exactly. Both accept an `int` value and convert it.
 
 ## Null safety
 
@@ -121,12 +129,16 @@ echo gettype($p);             // "pointer"
 | `ptr_write16($p, $v)` | `ptr_write16($p, $v): void` | Write the low 16 bits as 2 little-endian bytes |
 | `ptr_read32($p)` | `ptr_read32($p): int` | Read 4 bytes |
 | `ptr_write32($p, $v)` | `ptr_write32($p, $v): void` | Write 4 bytes |
+| `ptr_read_f32($p)` | `ptr_read_f32($p): float` | Read a 4-byte IEEE 754 single, widened to a PHP float |
+| `ptr_write_f32($p, $v)` | `ptr_write_f32($p, $v): void` | Round a float (or int) to a single and write 4 bytes |
+| `ptr_read_f64($p)` | `ptr_read_f64($p): float` | Read an 8-byte IEEE 754 double |
+| `ptr_write_f64($p, $v)` | `ptr_write_f64($p, $v): void` | Write a float (or int) as an 8-byte double |
 | `ptr_read_string($p, $len)` | `ptr_read_string($p, $len): string` | Copy exactly `$len` bytes into a new PHP string |
 | `ptr_write_string($p, $str)` | `ptr_write_string($p, $str): int` | Copy string bytes into raw memory and return bytes written |
 
 Notes:
 
 - `ptr()` only accepts variables. `ptr(1 + 2)` is a compile-time error.
-- `ptr_set()` writes a single 8-byte word (int, bool, null, or pointer).
+- `ptr_set()` writes a single 8-byte word (int, bool, null, or pointer); floats go through `ptr_write_f64()` or `ptr_write_f32()`.
 - `ptr_cast<T>()` accepts builtin types, classes, packed classes, and extern classes.
 - Use `===` and `!==` for comparison. `==`/`!=` is rejected.

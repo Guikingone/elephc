@@ -17,6 +17,8 @@
 //!   its low byte, because both ABIs leave the upper return-register bits unspecified.
 //! - Integer arguments narrower than 32 bits are truncated and extended to 32 bits by the
 //!   caller, as Apple's arm64 ABI requires and clang assumes everywhere.
+//! - A C `float` (`f32`) is rounded from the PHP double before the call and widened back to a
+//!   double after it; the callee only ever sees the low half of the floating-point register.
 
 use crate::codegen::abi;
 use crate::codegen::callable_descriptor;
@@ -210,8 +212,14 @@ fn materialize_extern_arg(
             )))
         }
     }
-    if let ExternAbiType::Int { bits, signed } = param.abi {
-        abi::emit_normalize_narrow_int_arg(ctx.emitter, bits, signed);
+    match param.abi {
+        ExternAbiType::Int { bits, signed } => {
+            abi::emit_normalize_narrow_int_arg(ctx.emitter, bits, signed);
+        }
+        ExternAbiType::Float32 => {
+            abi::emit_float_result_double_to_single(ctx.emitter);
+        }
+        _ => {}
     }
     Ok(target_ty)
 }
@@ -542,8 +550,8 @@ fn extern_codegen_types_match(expected: &PhpType, actual: &PhpType) -> bool {
 
 /// Normalizes extern return registers before storing the EIR result.
 ///
-/// Integer returns widen from the declared C width; a C `bool` keeps only its low byte, since
-/// both ABIs define nothing above it.
+/// Integer returns widen from the declared C width, a C `float` widens to the PHP double, and a
+/// C `bool` keeps only its low byte, since both ABIs define nothing above it.
 fn normalize_extern_return(
     ctx: &mut FunctionContext<'_>,
     return_ty: &PhpType,
@@ -565,7 +573,13 @@ fn normalize_extern_return(
             abi::emit_extend_int_result(ctx.emitter, 8, false);
             Ok(())
         }
-        PhpType::Float | PhpType::Pointer(_) => Ok(()),
+        PhpType::Float => {
+            if return_abi == ExternAbiType::Float32 {
+                abi::emit_float_result_single_to_double(ctx.emitter);
+            }
+            Ok(())
+        }
+        PhpType::Pointer(_) => Ok(()),
         PhpType::Str => {
             abi::emit_call_label(ctx.emitter, "__rt_cstr_to_str");
             Ok(())

@@ -34,7 +34,8 @@ extern "SDL2" {
 | `i32` / `u32` | `int32_t` / `uint32_t` (C `int` / `unsigned`) | integer argument register |
 | `i16` / `u16` | `int16_t` / `uint16_t` (`short`) | integer argument register |
 | `i8` / `u8` | `int8_t` / `uint8_t` (`signed char` / `unsigned char`) | integer argument register |
-| `float` | `double` | floating-point argument register |
+| `float` (alias `f64`) | `double` | floating-point argument register |
+| `f32` | `float` | floating-point argument register |
 | `bool` | `bool` (`_Bool`, one byte) | integer argument register |
 | `string` | `char*` (auto null-terminated) | integer argument register |
 | `ptr` | `void*` | integer argument register |
@@ -70,6 +71,8 @@ Declare the width the C header uses:
 | `signed char`, `int8_t` | `i8` |
 | `unsigned char`, `uint8_t`, `Uint8` | `u8` |
 | `bool`, `_Bool` | `bool` |
+| `float` | `f32` |
+| `double` | `float` (or `f64`) |
 
 Plain `char` is signed on linux-x86_64 and on the Apple targets but unsigned on
 linux-aarch64, so declare it `i8` or `u8` from the header's intent, not from
@@ -94,6 +97,26 @@ the call works whenever the callee happens to leave the upper bits clean and
 reads garbage otherwise. Explicit widths are accepted on `extern function`
 parameters and returns only; `extern class` fields, `extern global`
 declarations and callback signatures still use `int`.
+
+## Float widths
+
+`float` is a C `double`. Declare a C `float` parameter or return as `f32`: the
+PHP value is still a 64-bit `float`, and elephc rounds it to single precision
+before the call (IEEE round-to-nearest, values outside the single range become
+infinity) and widens a returned single back to a double. The C side only ever
+reads the low 32 bits of its floating-point register, so a C `float` function
+declared as `float` passes and reads garbage.
+
+```php
+<?php
+extern function sqrtf(f32 $x): f32;
+var_dump(sqrtf(2.0));   // float(1.4142135381698608): the single-precision root, widened
+```
+
+Like the integer widths, `f32` is accepted on `extern function` parameters and
+returns only. To fill C structs that hold `float` fields (`SDL_FRect`,
+`SDL_Vertex`), write them through a pointer with `ptr_write_f32()`; see
+[Pointers](pointers.md).
 
 `callable` in an `extern function` signature is a special FFI-only path. The
 call site can provide either a string-literal elephc function name (resolved

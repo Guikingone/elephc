@@ -17,7 +17,8 @@ use super::{expect_semicolon, expect_token, recover_to_statement_boundary};
 
 /// Parses a C type token and returns the corresponding CType variant.
 /// Handles primitive types (int, float, string, bool, void, callable), explicit C integer
-/// widths (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`), and pointer types
+/// widths (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`), the C `float` width (`f32`,
+/// with `f64` an alias of `float`), and pointer types
 /// including ptr and ptr<TypeName>. Advances `pos` on success.
 fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, CompileError> {
     let span = if *pos < tokens.len() {
@@ -38,7 +39,8 @@ fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, Compi
                 "i32" => Ok(CType::IntWidth(CIntWidth::I32)),
                 "u32" => Ok(CType::IntWidth(CIntWidth::U32)),
                 "u64" => Ok(CType::IntWidth(CIntWidth::U64)),
-                "float" | "double" => Ok(CType::Float),
+                "float" | "double" | "f64" => Ok(CType::Float),
+                "f32" => Ok(CType::F32),
                 "string" => Ok(CType::Str),
                 "bool" | "boolean" => Ok(CType::Bool),
                 "void" => Ok(CType::Void),

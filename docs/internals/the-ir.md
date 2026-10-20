@@ -261,6 +261,7 @@ declared C width so the backend can normalize registers at the call boundary.
 | `Int`, `Bool`, `Ptr`, `TypedPtr(_)`, `Callable` | `I64` |
 | `IntWidth(_)` (`i8`..`u32`, `u64`) | `I64`; the width lives in `ExternAbiType` and only drives sign/zero extension of returns and caller-side extension of narrow arguments. |
 | `Float` | `F64` |
+| `F32` | `F64`; `ExternAbiType::Float32` rounds the argument to a single before the call and widens the return after it. |
 | `Str` | `I64` native C string pointer; PHP strings are converted at the boundary. |
 | `Void` | `Void` |
 
@@ -2036,7 +2037,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ClassProperty` / `PropertyHooks` | Class metadata, property layout, readonly/final/static flags, hooks, defaults, and attributes. |
 | `ClassConst` | Class/interface/trait constant metadata and value expression. |
 | `ClassMethod` | Separate `Function` plus method metadata and vtable/static dispatch metadata. |
-| `CType::Int`, `IntWidth`, `Float`, `Str`, `Bool`, `Void`, `Ptr`, `TypedPtr`, `Callable` | Extern ABI metadata. `ExternAbiType` drives `ExternCall` argument and return normalization only; extern globals and callback trampolines still see the PHP type. |
+| `CType::Int`, `IntWidth`, `Float`, `F32`, `Str`, `Bool`, `Void`, `Ptr`, `TypedPtr`, `Callable` | Extern ABI metadata. `ExternAbiType` drives `ExternCall` argument and return normalization only; extern globals and callback trampolines still see the PHP type. |
 | `ExternParam` | Extern function parameter metadata. |
 | `ExternField` | Extern class/struct field offset/type metadata. |
 | `PackedField` | Packed class field offset/type metadata. |
