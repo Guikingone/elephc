@@ -5,7 +5,7 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
-## [0.27.4] - 2026-10-20
+## [0.27.4] - 2026-10-21
 
 - Changed extern C integer handling (**breaking**): `int`/`i64` now preserve 64-bit values, and explicit signed/unsigned 8-, 16-, 32-, and 64-bit widths control argument and return conversion; declarations for C `int` and `unsigned` must use `i32` and `u32`.
 - Added `f32` extern function parameters and returns for C `float`, with single-precision rounding and widening at the ABI boundary; `f64` aliases the existing `float` declaration for C `double`.
