@@ -357,10 +357,13 @@ fn test_every_target_runtime_carries_the_non_faulting_resolver() {
             .unwrap_or_else(|| panic!("{name} runtime lacks __rt_buffer_try_resolve"));
         let rest = &runtime[start..];
         let body = &rest[..rest.find("\n\n").unwrap_or(rest.len())];
-        assert!(!body.contains("__rt_buffer_use_after_free"), "{name}: {body}");
+        assert!(
+            !body.contains("__rt_buffer_use_after_free"),
+            "{name}: __rt_buffer_try_resolve reaches the use-after-free fatal"
+        );
         assert!(
             body.contains("mov x0, #0") || body.contains("xor eax, eax"),
-            "{name}: {body}"
+            "{name}: __rt_buffer_try_resolve has no zero result path"
         );
     }
 }
