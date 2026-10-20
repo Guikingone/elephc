@@ -10,7 +10,7 @@
 //! - The host forgets allocations before freeing/reusing them and clears metadata before arena reset.
 //! - Copying a full tracked string preserves identity; copying a different-length view does not.
 
-use std::{cell::OnceCell, collections::HashMap, rc::Rc};
+use std::{cell::OnceCell, collections::{HashMap, hash_map::Entry}, rc::Rc};
 use super::*;
 
 struct NativeString { identity: OnceCell<Identity>, length: u64, interned: bool }
@@ -123,9 +123,28 @@ fn bind(owner: u64, length: u64, identity: u64) -> i32 {
 }
 
 /// Records one fresh or interned origin without reading bytes or retaining another native allocation.
+/// A unique unresolved fresh origin has no observable identity or alias, so only its length changes.
 fn create(owner: u64, length: u64, interned: bool) -> i32 {
     if owner == 0 || length > isize::MAX as u64 { return 1; }
-    replace(owner, Rc::new(NativeString { identity: OnceCell::new(), length, interned }));
+    let previous = NATIVE.with(|values| match values.borrow_mut().entry(owner) {
+        Entry::Occupied(mut slot) => {
+            if !interned {
+                if let Some(entry) = Rc::get_mut(slot.get_mut()) {
+                    if !entry.interned && entry.identity.get().is_none() {
+                        entry.length = length;
+                        return None;
+                    }
+                }
+            }
+            Some(slot.insert(Rc::new(NativeString { identity: OnceCell::new(), length, interned })))
+        },
+        Entry::Vacant(slot) => {
+            slot.insert(Rc::new(NativeString { identity: OnceCell::new(), length, interned }));
+            None
+        },
+    });
+    // Retiring a resolved origin can release an identity lease; keep that outside the map borrow.
+    drop(previous);
     0
 }
 
