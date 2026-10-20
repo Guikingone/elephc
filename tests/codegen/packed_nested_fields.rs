@@ -305,6 +305,41 @@ echo first_x($h);
     assert!(err.contains("null pointer dereference"), "{}", err);
 }
 
+/// Verifies a packed class named only as the `ptr<T>` return type of a reachable extern function
+/// keeps its layout after declaration pruning, so field access through the returned pointer
+/// compiles and runs.
+#[test]
+fn test_packed_class_named_only_by_an_extern_signature_is_kept() {
+    let out = compile_and_run(
+        r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr<Pair>;
+extern function free(ptr $p): void;
+packed class Pair { public int $left; public int $right; }
+$pair = calloc(1, 16);
+$pair->right = 42;
+$pair->left = $pair->right - 1;
+echo $pair->left, ":", $pair->right, "\n";
+free($pair);
+"#,
+    );
+    assert_eq!(out, "41:42\n");
+}
+
+/// Verifies a packed class named only as the `ptr<T>` type of an extern global keeps its layout
+/// after declaration pruning: the field read through the global sees the same first word as
+/// `ptr_get` on it.
+#[test]
+fn test_packed_class_named_only_by_an_extern_global_is_kept() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Slot { public int $first; }
+extern global ptr<Slot> $environ;
+echo $environ->first == ptr_get($environ) ? "same" : "diff", "\n";
+"#,
+    );
+    assert_eq!(out, "same\n");
+}
+
 /// Verifies a field read through a null `ptr<T>` spelled with a literal dynamic name
 /// (`$p->{'x'}`) aborts with the same fatal as `$p->x` instead of faulting.
 #[test]
