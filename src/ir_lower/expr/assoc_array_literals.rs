@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - Construction and owned operands remain rooted across later expressions and hash writes.
 
 use super::*;
 
@@ -27,18 +28,28 @@ pub(super) fn lower_assoc_array_literal_with_guard(
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
-    let owner = crate::ir_lower::function::contains_deferred_error(expr)
-        .then(|| publish_constructed_container(ctx, hash, expr.span));
+    let owner = publish_constructed_container(ctx, hash, expr.span);
     if guarded { guard_descriptor_container(ctx, hash, expr.span); }
     for (key, value) in pairs {
-        let key = lower_expr(ctx, key);
-        let value = lower_expr(ctx, value);
-        let hash = owner.map(|slot| load_published_container(ctx, slot, hash_ty.clone(), expr.span))
-            .unwrap_or(hash);
+        let mut roots = Vec::new();
+        let key_value = lower_expr(ctx, key);
+        let key = root_array_literal_item(ctx, key_value, key.span, &mut roots);
+        let value_operand = lower_expr(ctx, value);
+        // Mixed hashes need a boxed callable for retaining stores, not the scalar callable ABI.
+        let value_operand = if ctx.builder.value_php_type(value_operand.value) == PhpType::Callable
+            && matches!(&hash_ty, PhpType::AssocArray { value, .. }
+                if value.codegen_repr() == PhpType::Mixed)
+        { ctx.box_value_as_mixed(value_operand, PhpType::Mixed, Some(value.span)) }
+        else { value_operand };
+        let value = root_array_literal_item(ctx, value_operand, value.span, &mut roots);
+        let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
         if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
+        for slot in roots.into_iter().rev() {
+            retire_owned_call_operand(ctx, slot, expr.span);
+        }
     }
-    owner.map(|slot| take_published_container(ctx, slot, hash_ty, expr.span)).unwrap_or(hash)
+    take_published_container(ctx, owner, hash_ty, expr.span)
 }
 
 /// Returns the associative-array type for a literal that contains at least one associative

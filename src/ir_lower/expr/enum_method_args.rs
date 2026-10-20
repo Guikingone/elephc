@@ -25,14 +25,14 @@ pub(super) fn lower_arguments(
         || !args.iter().any(is_spread_arg)
         || crate::types::call_args::expand_planned_positional_spreads(args).is_some()
     { return None; }
-    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+    crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
         signature, args, span, crate::types::call_args::regular_param_count(signature),
         false, signature.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(signature),
         &assoc_spread_sources(ctx, args),
     ).expect("selected enum runtime binding consumes the validated shared plan");
-    let container = lower_named_descriptor_invoker_arg_container(
-        ctx, &plan.source_args, Some(signature), span,
-    );
+    // The plan validates last-wins binding, but its projection can omit overwritten
+    // array values. Construct the original arrays so every source effect still runs.
+    let container = lower_named_descriptor_invoker_arg_container(ctx, args, Some(signature), span);
     let container = unbox_array_param_storage(ctx, container, PhpType::AssocArray {
         key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed),
     }, Some(span));

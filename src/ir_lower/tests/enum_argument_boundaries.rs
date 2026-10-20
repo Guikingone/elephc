@@ -124,6 +124,20 @@ function selected_lifetime_call(SelectedLifetimeContract $target): void {
     echo $target->value(...selected_lifetime_args());
 }
 selected_lifetime_call(SelectedLifetimeTight::A);
+interface UnpackEffects { public function value(int $a): int; }
+enum UnpackEffectsValue implements UnpackEffects {
+    case A; public function value(int $a): int { return $a; }
+}
+function unpack_effect(int $value): int { echo $value; return $value; }
+function unpack_key(): string { return str_repeat('a', 1); }
+function unpack_effect_call(UnpackEffects $target): int {
+    return $target->value(...['a' => unpack_effect(1), 'a' => unpack_effect(2)]);
+}
+echo unpack_effect_call(UnpackEffectsValue::A);
+function unpack_key_call(UnpackEffects $target): int {
+    return $target->value(...[unpack_key() => unpack_effect(3)]);
+}
+echo unpack_key_call(UnpackEffectsValue::A);
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     assert!(crate::ir::print_module(&module).contains("implicit_int_cast"), "{target}: diagnostic EIR cast");

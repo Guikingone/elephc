@@ -69,7 +69,7 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
 }
 
 /// Roots owned literal items across later evaluation and lends their stable slot value to insertion.
-fn root_array_literal_item(
+pub(super) fn root_array_literal_item(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
