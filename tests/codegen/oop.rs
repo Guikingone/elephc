@@ -82,3 +82,6 @@ mod reflection_attribute_filter;
 mod readonly_setter_review;
 #[path = "oop/readonly_store_box_review.rs"]
 mod readonly_store_box_review;
+
+#[path = "oop/enum_trait_constant_review.rs"]
+mod enum_trait_constant_review;
