@@ -131,6 +131,7 @@ pub(super) fn emit_strip_tags_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [x29, #-48]");                                 // reload the output write cursor for this scan step
     emitter.instruction("sub x2, x2, x1");                                      // derive retained output length from the final write cursor
     emitter.instruction("bl __rt_concat_publish");                              // publish only the retained output bytes
+    emitter.instruction("bl __rt_str_persist");                                 // return independent storage while adopting a sole heap reservation in place
     emitter.instruction("ldp x19, x20, [x29, #-200]");                          // restore the caller's preserved subject registers
     emitter.instruction("ldp x21, x22, [x29, #-184]");                          // restore the caller's preserved cursor registers
     emitter.instruction("ldr x23, [x29, #-168]");                               // restore the remaining callee-saved scanner register

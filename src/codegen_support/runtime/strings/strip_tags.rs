@@ -12,7 +12,8 @@
 //!   allow length means "strip every tag". Output is a fresh string in the
 //!   target string-result registers, reserved through `__rt_concat_reserve`.
 //! - HTML comments and PHP tags are always stripped and cannot be allow-listed.
-//! - Oversized output reservations stay transient until string persistence adopts them.
+//! - Oversized output reservations stay transient until the helper adopts them into
+//!   independently owned string storage before returning.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -32,7 +33,7 @@ pub fn emit_strip_tags(emitter: &mut Emitter) {
     aarch64::emit_strip_tags_aarch64(emitter);
 }
 
-/// Marks only heap-backed reservations as temporary so persistence can adopt them.
+/// Marks only heap-backed reservations as temporary so final persistence can adopt them.
 pub(super) fn emit_mark_reserved_result_temporary(emitter: &mut Emitter) {
     let ready = "__rt_strip_tags_reservation_ready";
     // -- retain scratch semantics, but transfer oversized reservations to their consumer --
@@ -65,21 +66,34 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
-    /// Every target marks heap fallbacks after reservation but before saving the output pair.
+    /// Every target adopts the reservation into independently owned storage before returning.
     #[test]
-    fn strip_tags_heap_output_is_adoptable_on_all_targets() {
+    fn strip_tags_output_is_independent_on_all_targets() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             emit_strip_tags(&mut emitter);
             let assembly = emitter.output();
-            let (reserve, mark, save) = if target.arch == Arch::AArch64 {
-                ("bl __rt_concat_reserve", "str x9, [x0, #-8]", "str x0, [x29, #-40]")
+            let (reserve, mark, save, publish, persist) = if target.arch == Arch::AArch64 {
+                (
+                    "bl __rt_concat_reserve",
+                    "str x9, [x0, #-8]",
+                    "str x0, [x29, #-40]",
+                    "bl __rt_concat_publish",
+                    "bl __rt_str_persist",
+                )
             } else {
-                ("call __rt_concat_reserve", "mov QWORD PTR [rax - 8], r10", "mov QWORD PTR [rbp - 40], rax")
+                (
+                    "call __rt_concat_reserve",
+                    "mov QWORD PTR [rax - 8], r10",
+                    "mov QWORD PTR [rbp - 40], rax",
+                    "call __rt_concat_publish",
+                    "call __rt_str_persist",
+                )
             };
             assert!(assembly.find(reserve).unwrap() < assembly.find(mark).unwrap(), "{name}");
             assert!(assembly.find(mark).unwrap() < assembly.find(save).unwrap(), "{name}");
+            assert!(assembly.find(publish).unwrap() < assembly.find(persist).unwrap(), "{name}");
             assert!(assembly.contains("__rt_strip_tags_reservation_ready"), "{name}: guard scratch pointers");
         }
     }

@@ -141,6 +141,7 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the output write cursor for this scan step
     emitter.instruction("sub rdx, rax");                                        // derive retained output length from the final write cursor
     emitter.instruction("call __rt_concat_publish");                            // publish only the retained output bytes
+    emitter.instruction("call __rt_str_persist");                               // return independent storage while adopting a sole heap reservation in place
     emitter.instruction("mov rbx, QWORD PTR [rbp - 152]");                      // reload the saved caller rbx for this scan step
     emitter.instruction("mov r12, QWORD PTR [rbp - 160]");                      // reload the saved caller r12 for this scan step
     emitter.instruction("mov r13, QWORD PTR [rbp - 168]");                      // reload the saved caller r13 for this scan step

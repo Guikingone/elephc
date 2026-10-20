@@ -2598,6 +2598,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strripos
                 | RuntimeFnId::Strrpos
+                // `strip_tags()` publishes its concat reservation and then persists it before
+                // returning. Scratch results are copied, while a sole oversized reservation is
+                // adopted in place; either path hands the caller one fresh owned string.
+                | RuntimeFnId::StripTags
                 // `strtr()` writes into a reservation taken from `__rt_concat_reserve` and then
                 // copies the finished bytes into owned heap storage through `__rt_str_persist`,
                 // releasing the reservation afterwards, so the result is caller-owned and can
@@ -2656,7 +2660,6 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrIreplace
                 // Repetition uses separate concat storage and cannot alias its subject.
                 | RuntimeFnId::StrRepeat
-                | RuntimeFnId::StripTags
                 // Wire bytes occupy concat storage, never an operand's allocation. This also
                 // keeps temporary inputs pinned while serialization hooks can unwind.
                 | RuntimeFnId::Serialize
@@ -3364,6 +3367,7 @@ mod tests {
             RuntimeFnId::Strtotime,
             RuntimeFnId::Hrtime,
             RuntimeFnId::GraphemeStrrev,
+            RuntimeFnId::StripTags,
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }

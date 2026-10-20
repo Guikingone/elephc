@@ -7,6 +7,7 @@
 //! Key details:
 //! - Native normalized arrays survive throwing element conversions without leaking.
 //! - Large native allow-list intermediates are retired after their final use.
+//! - Saved large results keep independent storage after runtime-result cleanup.
 //! - Eval destructor failures retire displaced return and throw payloads.
 
 use crate::support::*;
@@ -113,6 +114,27 @@ for ($i = 0; $i < 4; $i++) {
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "IIIIIIII");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Saving a heap-backed result keeps its bytes after the runtime result owner is released.
+#[test]
+fn strip_tags_native_saved_large_result_is_independent() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$width = 70000 + $argc;
+$saved = strip_tags(str_repeat('x', $width));
+$overwrite = str_repeat('z', $width);
+echo substr($saved, 0, 1), '|', substr($saved, -1), '|', strlen($saved), '|';
+unset($overwrite, $saved);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "x|x|70001|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Saved heap-backed results remain independent with EIR optimization disabled too.
+#[test]
+fn strip_tags_native_saved_large_result_is_independent_no_ir_opt() {
+    without_ir_opt(strip_tags_native_saved_large_result_is_independent);
 }
 
 /// A foreach receiver destructor retires any return or throw it displaces.
