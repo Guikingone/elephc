@@ -46,7 +46,9 @@ $q = ptr_offset($p, 8);   // advance by 8 bytes
 $typed = ptr_cast<MyClass>($p);   // change type tag, same address
 ```
 
-`ptr_cast<T>()` is compile-time only.
+`ptr_cast<T>()` is compile-time only. When `T` is a packed class, fields are read and
+written through the typed pointer (`$typed->field`, including nested records); see
+[Packed Classes](packed-classes.md#typed-pointers).
 
 ## Querying sizes
 
