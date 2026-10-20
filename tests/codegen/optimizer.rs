@@ -88,3 +88,6 @@ mod machine_peepholes;
 
 #[path = "optimizer/tail_call.rs"]
 mod tail_call;
+
+#[path = "optimizer/stack_numeric.rs"]
+mod stack_numeric;
