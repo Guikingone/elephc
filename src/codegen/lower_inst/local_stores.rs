@@ -102,6 +102,8 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
 /// hash on the next release.
 /// Concrete `ArrayFetchForWrite` calls have the same consuming contract when promoting or
 /// separating a nested parent. Boxed-receiver calls return a child, not a replacement container.
+/// An ensure may consume an `ArrayToHash` result rather than the original load directly, so the
+/// consuming chain is followed until the reference-cell load is found.
 fn value_is_consuming_mutation_of_ref_cell(
     ctx: &FunctionContext<'_>,
     value: ValueId,
@@ -111,23 +113,33 @@ fn value_is_consuming_mutation_of_ref_cell(
         return Ok(false);
     };
     let consuming_fetch = conversion.op == Op::RuntimeCall
-        && conversion.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite))
-        && matches!(conversion.result_php_type.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. });
+        && matches!(conversion.immediate, Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::ArrayFetchForWrite
+            | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)))
+        && matches!(
+            conversion.result_php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        );
     if conversion.op != Op::ArrayToHash && !consuming_fetch {
         return Ok(false);
     }
     let Some(source) = conversion.operands.first().copied() else {
         return Ok(false);
     };
-    if consuming_fetch && !matches!(ctx.value_php_type(source)?.codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. })
+    if consuming_fetch
+        && !matches!(
+            ctx.value_php_type(source)?.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
     {
         return Ok(false);
     }
-    Ok(instruction_for_value(ctx, source)?.is_some_and(|load| {
+    if instruction_for_value(ctx, source)?.is_some_and(|load| {
         load.op == Op::LoadRefCell && load.immediate == Some(Immediate::LocalSlot(slot))
-    }))
+    }) {
+        return Ok(true);
+    }
+    value_is_consuming_mutation_of_ref_cell(ctx, source, slot)
 }
 
 /// Retires what a still-raw slot holds before a ref-cell store overwrites it.

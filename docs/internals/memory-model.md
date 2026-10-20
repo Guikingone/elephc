@@ -1133,6 +1133,15 @@ reference sets. When a child lease replaces an older compiler parent, EIR pops t
 record, publishes the child, then releases the old parent slot. This keeps unwinding safe
 without making dead compiler ancestors look like live PHP owners.
 
+A selected object child retains that same rooted cell while EIR dispatches an append
+through `ArrayAccess::offsetSet(null, value)`. The method borrows the receiver and
+RHS roots; ordinary array/null children instead use the consuming boxed append helper.
+Both branches retire the caller's roots after mutation and expose them to exception
+unwinding when a user method throws.
+Callable payloads are Closure objects but have no class-table object header. The boxed
+setter releases a rejected value before entering the shared class-name Error helper,
+rather than reading a callable descriptor as an object or dropping the write.
+
 A fresh parent is preallocated with the indexed or associative representation required by
 its next key before the missing-key callback runs. Around conversion and reads, a typed, non-retaining
 EIR query counts both cell and payload owners. Their sum must be exactly three:
@@ -1151,6 +1160,18 @@ case uses dedicated array conversion and hash insertion entries that preserve th
 selected payload instead of crossing another COW boundary. Both normal and cancellation
 branches retire active leases in LIFO order. ARM64 and x86_64 use the same ownership
 rules; non-array offsets keep their ordinary dispatch.
+
+Nested write lowering captures computed keys and property receivers in source order, roots
+them across RHS evaluation, and traverses writable parents afterwards. Each child is published
+before an older receiver or key owner is retired. Short internal handlers preserve a pending
+false-conversion exception through key-sensitive opcode completion, then transfer that
+exception or chain it under a new key error without leaving an owner in both the frame and the
+in-flight exception cell.
+
+Local and static false-parent updates query the selected Mixed cell's reference count after notification
+without acquiring another reference. A count of one means only the pending write pin remains;
+the leaf read is skipped and an owned null is selected instead. The ARM64 and x86_64 emitters
+read the same uniform heap header, including on the iOS targets.
 
 ## Memory limits and trade-offs
 
