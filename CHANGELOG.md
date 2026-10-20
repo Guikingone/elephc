@@ -8,6 +8,8 @@ Releases are listed newest first.
 ## [0.27.4] - 2026-10-20
 
 - Changed extern C integer handling (**breaking**): `int`/`i64` now preserve 64-bit values, and explicit signed/unsigned 8-, 16-, 32-, and 64-bit widths control argument and return conversion; declarations for C `int` and `unsigned` must use `i32` and `u32`.
+- Added `f32` extern function parameters and returns for C `float`, with single-precision rounding and widening at the ABI boundary; `f64` aliases the existing `float` declaration for C `double`.
+- Added `ptr_read_f32()`, `ptr_write_f32()`, `ptr_read_f64()`, and `ptr_write_f64()` for floating-point memory access in compiled and `eval()` code.
 - Added PHP `strip_tags()` in compiled and `eval()` code, with string or array allow-lists and PHP-compatible handling of comments and PHP tags.
 - Added immutable `BcMath\Number` objects with decimal methods, arithmetic and comparison operators, serialization, and matching native-object behavior in `eval()`.
 - Added missing PHP 8.5 Core classes and constants, including `WeakReference`, `WeakMap`, `Serializable`, `ErrorException`, enum interfaces, and runtime `PHP_BINARY`, in compiled and `eval()` code.
