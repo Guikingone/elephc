@@ -279,6 +279,7 @@ fn validate_instruction_result(
 /// `load_local` additionally admits exactly `PURE`, which is attached only after
 /// the immutable-local pass proves that the named scalar slot cannot change.
 /// Physical property initialization additionally allocates owned reference cells.
+/// A named `prop_set` additionally admits exactly the packed field store effects.
 fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
@@ -300,8 +301,12 @@ fn validate_instruction_effects(
         inst.op.default_effects()
     };
     let immutable_local_refinement = inst.op == Op::LoadLocal && inst.effects.is_pure();
+    let packed_field_store_refinement = inst.op == Op::PropSet
+        && matches!(inst.immediate, Some(Immediate::Data(_)))
+        && inst.effects == Op::PropSet.packed_field_access_effects();
     if !inst.op.allows_effect_refinement()
         && !immutable_local_refinement
+        && !packed_field_store_refinement
         && inst.effects != expected
     {
         return Err(ValidationError::EffectMismatch {
@@ -361,6 +366,35 @@ mod instruction_effect_tests {
                 instruction.effects = expected | Effects::OUTPUT;
                 assert!(validate_instruction_effects(id, &instruction).is_err());
             }
+        }
+    }
+
+    /// A named `prop_set` admits exactly one refinement, the packed field store effects, and
+    /// keeps rejecting every other deviation from its canonical contract.
+    #[test]
+    fn named_prop_set_admits_only_the_packed_field_store_refinement() {
+        let packed = Op::PropSet.packed_field_access_effects();
+        let mut instruction = Instruction::new(
+            Op::PropSet,
+            Vec::new(),
+            Some(Immediate::Data(crate::ir::DataId::from_raw(0))),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            packed,
+            None,
+        );
+        let id = InstId::from_raw(0);
+        assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+        instruction.effects = Op::PropSet.default_effects();
+        assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+        for effects in [packed | Effects::OUTPUT, Effects::WRITES_HEAP] {
+            instruction.effects = effects;
+            assert!(matches!(
+                validate_instruction_effects(id, &instruction),
+                Err(ValidationError::EffectMismatch { .. })
+            ));
         }
     }
 

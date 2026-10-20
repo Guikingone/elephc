@@ -10,7 +10,7 @@
 //!   are zero-based indices into those tables.
 
 use crate::ir::block::{BasicBlock, BlockId};
-use crate::ir::instr::{InstId, Instruction};
+use crate::ir::instr::{Immediate, InstId, Instruction, Op};
 use crate::ir::types::IrType;
 use crate::ir::value::{Value, ValueId};
 use crate::types::{AttrArgEntry, FunctionSig, PhpType};
@@ -169,6 +169,24 @@ impl Function {
     /// value's type (e.g. constant folding a checked op into a scalar constant).
     pub fn value_mut(&mut self, id: ValueId) -> Option<&mut Value> {
         self.values.get_mut(id.as_raw() as usize)
+    }
+
+    /// Returns whether `inst` is a named property read or write on a `packed class` record.
+    ///
+    /// A packed receiver is the checked address of one flat record (a `buffer<T>` element or
+    /// a nested packed field). The field resolves to a compile-time offset with no class id,
+    /// hook, magic accessor, typed-slot guard, dynamic property, or refcounted payload behind
+    /// it, so the access is exactly one load or one store of a scalar.
+    pub fn is_packed_field_access(&self, inst: &Instruction) -> bool {
+        matches!(inst.op, Op::PropGet | Op::PropSet)
+            && matches!(inst.immediate, Some(Immediate::Data(_)))
+            && inst
+                .operands
+                .first()
+                .and_then(|receiver| self.value(*receiver))
+                .is_some_and(|receiver| {
+                    matches!(receiver.php_type.codegen_repr(), PhpType::Packed(_))
+                })
     }
 
     /// Assigns the module-local function identifier.

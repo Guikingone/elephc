@@ -1469,6 +1469,21 @@ impl Op {
         }
     }
 
+    /// Returns the exact effects of a `prop_get` or `prop_set` on a `packed class` record.
+    ///
+    /// The read is a single load from the record. The write is a single store of a scalar the
+    /// lowering already narrowed; `MAY_FATAL` stays for the payload guard a `false`-typed field
+    /// keeps. Neither can warn, throw, run user code, or touch the concat scratch. Effect
+    /// refinement attaches these to packed receivers, and the validator accepts exactly this
+    /// value as the one refinement of an otherwise default-only `prop_set`.
+    pub fn packed_field_access_effects(self) -> Effects {
+        if self == Op::PropSet {
+            Effects::WRITES_HEAP | Effects::MAY_FATAL
+        } else {
+            Effects::READS_HEAP
+        }
+    }
+
     /// Returns true when the builder may replace the conservative default effects.
     ///
     /// The arithmetic opcodes below default to `MAY_THROW` because PHP raises a catchable

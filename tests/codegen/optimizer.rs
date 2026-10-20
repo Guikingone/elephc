@@ -80,6 +80,7 @@ mod integer_range;
 mod memory_model_propagation;
 #[path = "optimizer/mem2reg.rs"]
 mod mem2reg;
+mod buffer_access;
 #[path = "optimizer/warning_globals.rs"]
 mod warning_globals;
 
