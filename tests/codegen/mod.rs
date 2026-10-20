@@ -10,6 +10,7 @@
 mod exceptions;
 mod fibers;
 mod buffers;
+mod packed_nested_fields;
 mod generics;
 mod generics_review;
 mod generics_constructors;

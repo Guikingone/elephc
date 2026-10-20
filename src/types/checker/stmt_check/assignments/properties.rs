@@ -53,7 +53,7 @@ pub(super) fn check_property_assign(
     if matches!(obj_ty.codegen_repr(), PhpType::Mixed) {
         scope_dynamic_storage::record_scope_dynamic_mixed_receiver_mutation(checker, property);
     }
-    if let PhpType::Pointer(Some(class_name)) = &obj_ty {
+    if let PhpType::Pointer(Some(class_name)) | PhpType::Packed(class_name) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
     }
     Ok(())
@@ -750,6 +750,24 @@ fn check_pointer_property_write(
                 &format!(
                     "Type error: cannot assign {:?} to extern field {}::{} of type {:?}",
                     val_ty, class_name, property, field_ty
+                ),
+            ));
+        }
+    } else if let Some(PhpType::Packed(inner)) = checker.packed_field_type(class_name, property) {
+        // A nested record field is assigned as a whole by copying the source record's bytes,
+        // so the value must be the address of a record of the SAME packed class: a buffer
+        // element, another nested field, or a `ptr<Inner>`.
+        let same_record = matches!(
+            val_ty,
+            PhpType::Pointer(Some(source)) | PhpType::Packed(source)
+                if source.trim_start_matches('\\').eq_ignore_ascii_case(inner.trim_start_matches('\\'))
+        );
+        if !same_record {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Type error: cannot assign {} to packed field {}::{} of type {}; a nested packed field takes a {} record",
+                    val_ty, class_name, property, inner, inner
                 ),
             ));
         }

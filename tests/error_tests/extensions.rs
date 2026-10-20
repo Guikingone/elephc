@@ -124,6 +124,51 @@ fn test_error_buffer_packed_element_requires_field_assignment() {
     );
 }
 
+/// Verifies a nested packed field rejects a scalar where a whole record is expected.
+#[test]
+fn test_error_nested_packed_field_rejects_scalar_record_assignment() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $b[0]->pos = 5;",
+        "cannot assign int to packed field Body::pos of type Vec2; a nested packed field takes a Vec2 record",
+    );
+}
+
+/// Verifies a nested packed field rejects a record of a different packed class.
+#[test]
+fn test_error_nested_packed_field_rejects_other_record_class() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Other { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $o = buffer_new<Other>(1); $b[0]->pos = $o[0];",
+        "cannot assign ptr<Other> to packed field Body::pos of type Vec2",
+    );
+}
+
+/// Verifies reading an undefined field of a nested record names the inner packed class.
+#[test]
+fn test_error_nested_packed_field_read_of_undefined_inner_field() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); echo $b[0]->pos->z;",
+        "Undefined packed field: Vec2::z",
+    );
+}
+
+/// Verifies writing an undefined field of a nested record names the inner packed class.
+#[test]
+fn test_error_nested_packed_field_write_of_undefined_inner_field() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $b[0]->pos->z = 1.0;",
+        "Undefined packed field: Vec2::z",
+    );
+}
+
+/// Verifies a nested record's scalar field keeps the packed field type check.
+#[test]
+fn test_error_nested_packed_inner_field_type_mismatch() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $b[0]->pos->x = \"far\";",
+        "cannot assign string to packed field Vec2::x of type float",
+    );
+}
+
 /// Verifies that buffer_len rejects a non-buffer argument (int).
 #[test]
 fn test_error_buffer_len_requires_buffer_argument() {

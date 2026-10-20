@@ -120,7 +120,43 @@ pub fn compute(
     }
     state.apply_global_hazards();
     state.fixed_point();
-    state.reach
+    let mut reach = state.reach;
+    retain_embedded_packed_classes(&mut reach, check_result);
+    reach
+}
+
+/// Keeps every packed class embedded as a field of a reachable packed class.
+///
+/// A nested packed field (`packed class Body { public Vec2 $pos; }`) names its record type only
+/// in the outer declaration, which carries no code and no graph edges, so `Vec2` would be pruned
+/// while `Body` survives and `$b[0]->pos->x` would lower against a missing layout. Packed classes
+/// hold only POD fields, so closing over their field types after the fixed point is complete.
+fn retain_embedded_packed_classes(reach: &mut Reachability, check_result: &CheckResult) {
+    let packed: HashMap<String, &crate::types::PackedClassInfo> = check_result
+        .packed_classes
+        .iter()
+        .map(|(name, info)| (php_symbol_key(name), info))
+        .collect();
+    let mut pending: Vec<String> = reach
+        .classes
+        .iter()
+        .filter(|key| packed.contains_key(*key))
+        .cloned()
+        .collect();
+    while let Some(key) = pending.pop() {
+        let Some(info) = packed.get(&key) else {
+            continue;
+        };
+        for field in &info.fields {
+            let crate::types::PhpType::Packed(inner) = &field.php_type else {
+                continue;
+            };
+            let inner_key = php_symbol_key(inner);
+            if packed.contains_key(&inner_key) && reach.classes.insert(inner_key.clone()) {
+                pending.push(inner_key);
+            }
+        }
+    }
 }
 
 struct GraphState {
