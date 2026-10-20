@@ -14,6 +14,7 @@
 
 mod allocation;
 mod boxed_narrowing;
+mod bounded_mixed_counter;
 mod branch_simplify;
 mod by_ref_alias;
 mod checked_int_sink;
