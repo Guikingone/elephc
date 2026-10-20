@@ -70,6 +70,34 @@ function selected_reference(SelectedReferenceContract $target, SelectedReference
 }
 selected_reference(SelectedReferenceTight::A, new SelectedReferenceBase());
 selected_reference(SelectedReferenceLoose::A, new SelectedReferenceBase());
+interface SelectedReferenceTail { public function value(int &...$items): string; }
+enum SelectedReferenceTailTight implements SelectedReferenceTail {
+    case A; public function value(int &...$items): string { return gettype($items[0]); }
+}
+enum SelectedReferenceTailLoose implements SelectedReferenceTail {
+    case A; public function value(mixed &...$items): string { return gettype($items[0]); }
+}
+function selected_reference_tail(SelectedReferenceTail $target, mixed $input): void {
+    try { echo $target->value($input), gettype($input); }
+    catch (TypeError $error) { echo $error->getMessage(); }
+}
+selected_reference_tail(SelectedReferenceTailTight::A, '7');
+selected_reference_tail(SelectedReferenceTailTight::A, 'bad');
+selected_reference_tail(SelectedReferenceTailLoose::A, 'bad');
+interface SelectedReferenceUnion { public function value(int|string &$input): string; }
+enum SelectedReferenceUnionTight implements SelectedReferenceUnion {
+    case A; public function value(int|string &$input): string { return gettype($input); }
+}
+enum SelectedReferenceUnionLoose implements SelectedReferenceUnion {
+    case A; public function value(mixed &$input): string { return gettype($input); }
+}
+function selected_reference_union(SelectedReferenceUnion $target, mixed $input): void {
+    try { echo $target->value($input), gettype($input); }
+    catch (TypeError $error) { echo $error->getMessage(); }
+}
+selected_reference_union(SelectedReferenceUnionTight::A, []);
+selected_reference_union(SelectedReferenceUnionTight::A, true);
+selected_reference_union(SelectedReferenceUnionLoose::A, []);
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     assert!(crate::ir::print_module(&module).contains("implicit_int_cast"), "{target}: diagnostic EIR cast");

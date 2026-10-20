@@ -1354,7 +1354,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// The single spelling site for both place temporaries, so the marker cannot be applied to
     /// one and forgotten on the other.
-    fn next_synthetic_place_local_name(&mut self) -> String {
+    pub(crate) fn next_synthetic_place_local_name(&mut self) -> String {
         let name = crate::names::synthetic_place_local_name(self.hidden_temp_counter);
         self.hidden_temp_counter += 1;
         name

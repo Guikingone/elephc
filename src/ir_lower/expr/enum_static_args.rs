@@ -24,8 +24,6 @@ pub(super) fn lower_arguments(
     ctx: &mut LoweringContext<'_, '_>, signature: &FunctionSig, args: &[Expr],
     class: &str, method: &str, span: Span,
 ) -> Option<Vec<ValueId>> {
-    // Keep reference collectors on the existing place-aware variadic materializer.
-    if variadic_param_is_by_ref(signature) { return None; }
     let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
     let flat = crate::types::call_args::expand_planned_positional_spreads(&expanded)
         .unwrap_or(expanded);
@@ -50,11 +48,14 @@ pub(super) fn lower_arguments(
     for (source_index, arg) in plan.source_args.iter().enumerate() {
         let parameter = sources.iter().find(|source| source.source_index() == source_index)
             .and_then(PlannedSourceValue::param_idx);
-        if let Some(index) = parameter.filter(|index|
+        let variadic_reference = parameter.is_none() && variadic_param_is_by_ref(signature);
+        let reference_index = parameter.filter(|index|
             signature.ref_params.get(*index).copied().unwrap_or(false))
-        {
+            .or_else(|| variadic_reference.then(|| signature.params.len() - 1));
+        if let Some(index) = reference_index {
             let source = sources.iter().find(|source| source.source_index() == source_index).unwrap();
-            let reference = enum_ref_args::stage_argument(ctx, signature, index, source.expr(), span);
+            let reference = enum_ref_args::stage_argument(ctx, signature, index, source.expr(),
+                variadic_reference, span);
             let (value, referent) = reference.map_or_else(|| {
                 (lower_arg_with_signature(ctx, signature, index, source.expr()), None)
             }, |(value, alias)| (value, Some(alias)));
@@ -118,10 +119,12 @@ pub(super) fn lower_arguments(
             let value = bind_argument(ctx, &element_signature, index,
                 &staged[source.source_index()], Some(argument_position), class, method, span);
             bound[source.source_index()] = value;
-            // Packing must refer only to already checked values, never original caller expressions.
-            let slot = call_intermediate(ctx, lowered_value_from_id(ctx, value), span);
-            let value = Expr::new(ExprKind::Variable(slot), span);
-            if let PlannedSourceValue::Variadic { expr, .. } = source { *expr = value; }
+            if !variadic_param_is_by_ref(signature) {
+                // Packing must use checked values, never reevaluate caller expressions.
+                let slot = call_intermediate(ctx, lowered_value_from_id(ctx, value), span);
+                let value = Expr::new(ExprKind::Variable(slot), span);
+                if let PlannedSourceValue::Variadic { expr, .. } = source { *expr = value; }
+            }
         }
         let tail = lower_named_variadic_tail_array(ctx, signature, &tail_sources, &bound);
         values.push(root_evaluated_call_argument(ctx, tail, span).value);
@@ -148,7 +151,7 @@ fn bind_argument(
     let StagedArgument::Value { original, checked } = argument else {
         let StagedArgument::Reference { value, referent } = argument else { unreachable!() };
         if let Some(referent) = referent {
-            enum_ref_args::guard_argument(ctx, signature, index, referent, class, method, span);
+            enum_ref_args::guard_argument(ctx, signature, index, referent, position, class, method, span);
         }
         return *value;
     };
