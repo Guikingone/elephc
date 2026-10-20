@@ -216,7 +216,13 @@ struct EvalNativeAbstractPropertyRegistration {
 struct EvalNativePropertyDefaultRegistration {
     class_name: String,
     property_name: String,
-    default: EvalNativeCallableDefault,
+    default: EvalNativePropertyDefault,
+}
+
+/// Property default metadata separates stored values from deferred materialization failures.
+enum EvalNativePropertyDefault {
+    Value(EvalNativeCallableDefault),
+    DeferredError(String),
 }
 
 /// A module-local member attribute that can be registered with the eval context.
@@ -252,6 +258,8 @@ mod member_collection;
 mod signature_metadata;
 mod default_expressions;
 mod default_constants;
+mod default_errors;
+mod default_source;
 mod user_constants;
 mod function_registration;
 mod method_registration;
@@ -300,6 +308,7 @@ use signature_metadata::*;
 use default_expressions::*;
 #[allow(unused_imports)]
 use default_constants::*;
+use default_errors::*;
 #[allow(unused_imports)]
 use user_constants::*;
 #[allow(unused_imports)]

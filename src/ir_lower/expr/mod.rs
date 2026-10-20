@@ -63,6 +63,7 @@ mod callable_tracking;
 mod callable_resolution;
 mod unset;
 mod array_builtin_args;
+mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
 mod positional_spreads;
@@ -150,6 +151,7 @@ pub(in crate::ir_lower) fn instance_object_class_for_ir(
 }
 use unset::*;
 use array_builtin_args::*;
+use weak_string_unions::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
 use positional_spreads::*;
@@ -629,6 +631,9 @@ fn lower_initialized_static_property_isset(
     property: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -753,6 +758,9 @@ fn lower_initialized_static_property_empty(
     construct: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder

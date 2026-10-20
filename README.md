@@ -450,9 +450,9 @@ elephc can call native C functions directly through `extern` declarations.
 
 ```php
 <?php
-extern function atoi(string $s): int;
-extern function signal(int $sig, callable $handler): ptr;
-extern function raise(int $sig): int;
+extern function atoi(string $s): i32;
+extern function signal(i32 $sig, callable $handler): ptr;
+extern function raise(i32 $sig): i32;
 extern global ptr $environ;
 
 function on_signal($sig) {
@@ -561,9 +561,9 @@ The full list of supported constructs, operators, and control structures is in t
 
 </details>
 
-### Built-in functions (1068)
+### Built-in functions (1069)
 
-The generated builtin documentation currently exposes 1068 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1069 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 

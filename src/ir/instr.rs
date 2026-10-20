@@ -1080,6 +1080,7 @@ pub enum Op {
     ExprCall,
     FirstClassCallableNew,
     CallableArrayNew,
+    /// Invokes a descriptor with callback, argument container, and optional source-strict Bool.
     CallableDescriptorInvoke,
     PipeCall,
     PtrCast,

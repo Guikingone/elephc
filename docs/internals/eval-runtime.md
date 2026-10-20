@@ -275,6 +275,11 @@ when the old and new cell pointers coincide. Class-default collection builders
 also acquire a lease for defaults borrowed from persistent class constants or
 enum cases before inserting and releasing their temporary operands.
 
+By-value `foreach` likewise owns its evaluated receiver until iteration finishes.
+The receiver lease survives body callbacks and replacement of its source local,
+then retires on normal completion, `break`, `return`, or failure. Literal temporary
+arrays do not depend on a scope binding to keep their owner balanced.
+
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
 boxed-cell operations it dispatches a typed `RuntimeBuiltinId` through
@@ -372,13 +377,22 @@ value representation or target-specific ABI is introduced. PHPDoc token provenan
 mode acceptance; `EvalProgram` records native syntax for rejection before execution. The current
 file-cache layout includes retained templates, tokens, imports, structural types, typed locals,
 and the conservative caller-scope access mask, alongside preserved source spelling for direct
-and first-class function calls and retained readonly setter contracts.
+and first-class function calls, native deferred-default error expressions, and retained readonly
+setter contracts.
 `FORMAT_VERSION` in `crates/elephc-magician/src/script_cache/file_store.rs` identifies the complete
 serialized layout; incompatible entries are rejected before decoding. Format changes invalidate
 older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents and
 member annotations discarded after uppercase or mixed-case native class-like keywords.
 Earlier format changes also invalidated stored parse errors for valid comparisons after class references.
 The format guard covers the combined serialized IR and its corresponding type sources.
+
+Native callable defaults retain array-unpack operands through a private array-element marker.
+Registration validates and normalizes that marker before execution; it is not public PHP syntax.
+The interpreter evaluates each unpack operand once, appends numeric entries, overwrites string
+keys, and releases partial results if evaluation fails. Generated code checks registration results
+before installing a default factory. Native class-initialization errors have a separate catalog
+entry from reflected property defaults: static access checks visibility first, then initialization,
+without invalidating an independently readable `ReflectionProperty` default.
 
 ## Parsing and cache
 

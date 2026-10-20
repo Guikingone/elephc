@@ -631,6 +631,7 @@ pub(super) fn register_eval_native_method_signatures(ctx: &mut FunctionContext<'
     for registration in eval_native_property_default_registrations(ctx) {
         register_eval_native_property_default(ctx, context_offset, &registration);
     }
+    super::property_attribute_registration::register_eval_native_class_default_errors(ctx, context_offset);
     for registration in eval_native_member_attribute_registrations(ctx) {
         register_eval_native_member_attribute(ctx, context_offset, &registration);
     }

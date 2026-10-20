@@ -10,13 +10,14 @@
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{CType, ExternField, ExternParam, Stmt, StmtKind};
+use crate::parser::ast::{CIntWidth, CType, ExternField, ExternParam, Stmt, StmtKind};
 use crate::span::Span;
 
 use super::{expect_semicolon, expect_token, recover_to_statement_boundary};
 
 /// Parses a C type token and returns the corresponding CType variant.
-/// Handles primitive types (int, float, string, bool, void, callable) and pointer types
+/// Handles primitive types (int, float, string, bool, void, callable), explicit C integer
+/// widths (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`), and pointer types
 /// including ptr and ptr<TypeName>. Advances `pos` on success.
 fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, CompileError> {
     let span = if *pos < tokens.len() {
@@ -29,7 +30,14 @@ fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, Compi
             let name = name.clone();
             *pos += 1;
             match name.as_str() {
-                "int" | "integer" => Ok(CType::Int),
+                "int" | "integer" | "i64" => Ok(CType::Int),
+                "i8" => Ok(CType::IntWidth(CIntWidth::I8)),
+                "u8" => Ok(CType::IntWidth(CIntWidth::U8)),
+                "i16" => Ok(CType::IntWidth(CIntWidth::I16)),
+                "u16" => Ok(CType::IntWidth(CIntWidth::U16)),
+                "i32" => Ok(CType::IntWidth(CIntWidth::I32)),
+                "u32" => Ok(CType::IntWidth(CIntWidth::U32)),
+                "u64" => Ok(CType::IntWidth(CIntWidth::U64)),
                 "float" | "double" => Ok(CType::Float),
                 "string" => Ok(CType::Str),
                 "bool" | "boolean" => Ok(CType::Bool),

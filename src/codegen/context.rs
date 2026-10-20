@@ -107,6 +107,22 @@ impl<'a> FunctionContext<'a> {
             .map_or(-1, |class| class.class_id as i64)
     }
 
+    /// Packs source strictness into the existing framed invocation-scope word.
+    /// Weak calls keep legacy class ids and global -1; strict calls use -scope-3.
+    pub(super) fn callable_invocation_profile(&self) -> i64 {
+        let strict = self.current_inst.and_then(|id| self.function.instruction(id))
+            .filter(|inst| inst.op == Op::CallableDescriptorInvoke)
+            .and_then(|inst| inst.operands.get(2))
+            .and_then(|value| self.function.value(*value))
+            .and_then(|value| match value.def {
+                ValueDef::Instruction { inst, .. } => self.function.instruction(inst),
+                _ => None,
+            })
+            .is_some_and(|inst| inst.immediate == Some(Immediate::Bool(true)));
+        let scope = self.lexical_class_id();
+        if strict { -scope - 3 } else { scope }
+    }
+
     /// Creates a lowering context with finalized frame and value-placement metadata.
     pub(super) fn new(
         module: &'a Module,

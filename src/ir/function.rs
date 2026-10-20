@@ -62,10 +62,14 @@ pub struct Function {
     pub entry: BlockId,
     pub source_signature: Option<String>,
     pub signature: Option<FunctionSig>,
+    /// Source spelling of free-function defaults, separate from normalized executable defaults.
+    pub source_defaults: Vec<Option<crate::parser::ast::Expr>>,
     pub attribute_names: Vec<String>,
     pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
     /// PHP lexical class scope inherited by methods and closures declared inside them.
     pub lexical_class: Option<String>,
+    /// Normalized expression evaluated by this native callable-default helper, if any.
+    pub callable_default: Option<crate::parser::ast::Expr>,
     pub flags: FunctionFlags,
     /// Slots the epilogue must never release: values this frame borrows or already moved.
     ///
@@ -116,6 +120,8 @@ impl Function {
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             lexical_class: None,
+            callable_default: None,
+            source_defaults: Vec::new(),
             flags: FunctionFlags::default(),
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
         }

@@ -724,6 +724,7 @@ pub enum RuntimeFnId {
     Strcmp,
     Strncasecmp,
     Strncmp,
+    StripTags,
     Stripos,
     Strpos,
     Strripos,
@@ -1232,7 +1233,7 @@ impl RuntimeFnId {
             // arbitrary PHP. Discarded calls must retain these observable effects.
             // I/O inside those callbacks is monitored at its own runtime boundary;
             // the join itself does not perform a network or blocking operation.
-            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip => crate::ir::Effects::from_bits_retain(
+            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip | RuntimeFnId::StripTags => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
@@ -2597,6 +2598,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strripos
                 | RuntimeFnId::Strrpos
+                // `strip_tags()` publishes its concat reservation and then persists it before
+                // returning. Scratch results are copied, while a sole oversized reservation is
+                // adopted in place; either path hands the caller one fresh owned string.
+                | RuntimeFnId::StripTags
                 // `strtr()` writes into a reservation taken from `__rt_concat_reserve` and then
                 // copies the finished bytes into owned heap storage through `__rt_str_persist`,
                 // releasing the reservation afterwards, so the result is caller-owned and can
@@ -3231,6 +3236,7 @@ impl RuntimeFnId {
             RuntimeFnId::Strcmp => "strcmp",
             RuntimeFnId::Strncasecmp => "strncasecmp",
             RuntimeFnId::Strncmp => "strncmp",
+            RuntimeFnId::StripTags => "strip_tags",
             RuntimeFnId::Stripos => "stripos",
             RuntimeFnId::Strpos => "strpos",
             RuntimeFnId::Strripos => "strripos",
@@ -3361,6 +3367,7 @@ mod tests {
             RuntimeFnId::Strtotime,
             RuntimeFnId::Hrtime,
             RuntimeFnId::GraphemeStrrev,
+            RuntimeFnId::StripTags,
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }
