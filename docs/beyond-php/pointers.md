@@ -117,17 +117,19 @@ echo gettype($p);             // "pointer"
 A pointer converts to a string as `0x` followed by its address in lowercase
 hexadecimal without leading zeros (`0x0` for a null pointer), on every target.
 `echo`, `print`, concatenation, `.=`, interpolation in double-quoted strings and
-heredocs, `(string)` casts, `strval()` and `sprintf("%s")` all produce that same
-text, for `ptr` and `ptr<T>` values alike, including pointers returned by
-`extern` functions. To hand the text to another string builtin, pass
-`(string)$p`.
+heredocs, `(string)` casts, `strval()` and `%s` in `sprintf()`/`printf()` (with a
+literal or a runtime format string) all produce that same text, for `ptr` and
+`ptr<T>` values alike, including pointers returned by `extern` functions. To
+hand the text to another string builtin, pass `(string)$p`.
 
 A pointer is not a string, so it is still rejected where a `string` is required
 by declaration: a `string` parameter or return type, `strlen()`, and loose
 comparison with `==` (use `===`). The conversion applies to values the compiler
 knows to be pointers: a pointer stored in a `mixed` or union-typed value, for
 example `$v = $flag ? $p : "none"`, is held as its integer address there and
-prints in decimal. Code running inside `eval()` also sees pointers as plain
+prints in decimal. `settype($p, "string")` needs that same mixed storage, so it
+does not compile yet for a pointer variable; assign `(string)$p` to another
+variable instead. Code running inside `eval()` also sees pointers as plain
 integers, so `echo ptr_null()` there prints `0`.
 
 ## Function reference

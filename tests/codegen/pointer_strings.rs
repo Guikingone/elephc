@@ -1,7 +1,7 @@
 //! Purpose:
 //! Regression tests for converting raw pointers to PHP strings: concatenation, interpolation,
-//! string casts, `strval()`, `sprintf("%s")` and string builtins must print the same
-//! lowercase "0x..." text as `echo $ptr`.
+//! string casts, `strval()`, printf-family `%s` (literal or runtime format) and string builtins
+//! must print the same lowercase "0x..." text as `echo $ptr`.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -119,6 +119,34 @@ free($typed);
         out,
         "hex\nconcat ok\ninterp ok\ncast ok\nstrval ok\nsprintf ok\ntyped ok\nextern ok\nbuiltin ok\n"
     );
+}
+
+/// Tests that printf-family calls with a runtime format string print pointers like `echo`.
+///
+/// Only a literal format let the backend pick the `%s` string conversion; a format held in a
+/// local or a parameter packed the raw pointer type and failed with "sprintf format argument
+/// PHP type Pointer". The two pointers in one call also check that each "0x..." operand keeps
+/// its own concat scratch bytes.
+#[test]
+fn test_pointer_printf_family_with_runtime_format_matches_echo() {
+    let out = compile_and_run(
+        r#"<?php
+function fmt_ptr(string $format, ptr $p): string {
+    return sprintf($format, $p);
+}
+$fmt = "%s";
+$pair = "%s|%s";
+$n = ptr_null();
+$f = ptr_offset($n, 255);
+echo sprintf($fmt, $n), "\n";
+echo sprintf($pair, $f, $n), "\n";
+echo fmt_ptr("<%s>", $f), "\n";
+$count = printf($fmt, $f);
+echo "\n", $count, "\n";
+echo sprintf("%s-%s", $f, $n), "\n";
+"#,
+    );
+    assert_eq!(out, "0x0\n0xff|0x0\n<0xff>\n0xff\n4\n0xff-0x0\n");
 }
 
 /// Tests that a pointer formatted in the middle of a concatenation keeps the earlier pieces.
