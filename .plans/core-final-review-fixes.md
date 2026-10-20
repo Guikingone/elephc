@@ -2,6 +2,7 @@
 
 - [x] Ship PR #893's managed reference cells, call-operand roots, returned leases, and exception-safe cleanup.
 - [x] Consolidate the historical Core review and property-reference cleanup logs.
+- [x] Ship PR #1674's compatible native enum interface reference returns and exception-safe reference rebinding.
 - [ ] Define the missing ownership-transfer contract for unresolved by-reference callable results before extending reference assignment.
 - [ ] Requalify the remaining descriptor/interface reference-return reports against current source and their Code Journal tasks.
 - [ ] Add focused normal/exceptional and supported-target regressions for each accepted follow-up.
@@ -15,7 +16,7 @@ claims that the PR remains unmerged or still awaits its original CI are stale.
 This is a remaining-work backlog, not a new claim that all callable reference
 forms have PHP parity.
 
-Full investigation history remains in Git at `6e7bb842bb`, including both
+Full investigation history remains in Git at `b9a805233c`, including both
 original filenames. Current contracts live in
 [the memory model](../docs/internals/memory-model.md),
 [functions](../docs/php/functions.md), and
@@ -38,6 +39,13 @@ must be rooted before a later argument, conversion or destructor can throw.
 Cleanup clears published slots before release, preserves an earlier pending
 exception, and retires records in LIFO order. Fallthrough `finally` rebinding
 must not change the pointer already selected for return.
+
+Native enum interface dispatch now transfers the selected method's actual reference
+when its payload layout matches the interface result. A selected by-value method
+creates an independent result cell instead. Incompatible reference layouts and
+runtime-selected descriptor calls keep their explicit unsupported diagnostics.
+These shipped paths do not close the historical interface reports below without
+checking their exact reproducers.
 
 ## Remaining boundaries
 

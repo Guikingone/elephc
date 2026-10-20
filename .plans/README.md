@@ -1,6 +1,6 @@
 # Repository plans and working specifications
 
-Reviewed on 2026-10-20 against code candidate `40c2d2ab3c`. This index
+Reviewed on 2026-10-20 against code candidate `a8f730c5f3`. This index
 distinguishes remaining work and retained specifications. Implementation status
 comes from source and recorded integration evidence; this cleanup ran no tests
 or behavioral probes.
@@ -41,14 +41,14 @@ are preserved in a permanent regression or resolved with current evidence.
 
 The cleanup removed 46 completed/superseded planning records and merged the
 second Core log into its surviving backlog. The complete original collection is
-recoverable from Git commit `6e7bb842bb`, for example:
+recoverable from Git commit `b9a805233c`, for example:
 
 ```bash
-git show 6e7bb842bb:.plans/<original-filename>.md
+git show b9a805233c:.plans/<original-filename>.md
 ```
 
 The completed 0.27.4 release-preparation records were retired after approval;
-their final contents remain available at Git commit `6060bd1fbf`.
+their final contents remain available at Git commit `02e0b751df`.
 
 Use permanent `docs/` pages for shipped contracts and update live references
 when retiring a plan. Preserve immutable historical learning records. New or

@@ -46,6 +46,10 @@ Releases are listed newest first.
 - Fixed `array_unshift()` through references freeing packed-array storage still owned by a value copy, including when prepending multiple values or growing the array.
 - Fixed prefix increment and decrement of static array elements, including `self::`, `parent::`, and `static::` receivers, string values, computed keys, and copy-on-write aliases.
 - Fixed nested array writes and updates to create missing parents, preserve key and RHS evaluation order, handle false-to-array diagnostics and throwing handlers, and dispatch appended object children through `ArrayAccess` without losing ownership.
+- Fixed enum metadata and validation for imported trait constants, declaration-order Reflection, final and abstract methods, lexical magic constants, and trait/interface method contracts.
+- Fixed enum interface calls to bind the selected implementation's names and defaults, preserve unpacked and variadic arguments, check types before coercion, and transfer compatible returned references; interface adapters also honor added optional parameters.
+- Fixed boxed `iterable` argument ownership and reference-return rebinding, so payloads stay alive and replacement aliases remain visible when cleanup throws, including repeated bindings in loops.
+- Fixed stream notification callbacks in heterogeneous literal parameter arrays being lost behind compiler temporaries, including named arguments and conditional entries inside `try` blocks.
 - Fixed buffer overruns when encoding large top-level indexed-array trees containing integers by sizing and allocating the complete JSON output before writing.
 - Fixed extern C `bool` returns using unspecified upper register bits, which could turn an ABI-valid false into true on AArch64 and x86_64.
 
