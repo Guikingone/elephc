@@ -887,6 +887,13 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
     mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
+    // A literal name on a C struct receiver is the named field read (`$r->{'y'}` is `$r->y`): it
+    // keeps the width-aware load and the owned copy of a `char*` field the named read takes.
+    if let (PropertyFetchMode::Read, ExprKind::StringLiteral(name)) = (mode, &property.kind) {
+        if extern_receiver_class(ctx, &ctx.builder.value_php_type(object.value)).is_some() {
+            return lower_property_get_from_value(ctx, object, name, Op::PropGet, expr);
+        }
+    }
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
     let property = lower_expr(ctx, property);
     let property = coerce_runtime_property_name(ctx, property, expr.span);

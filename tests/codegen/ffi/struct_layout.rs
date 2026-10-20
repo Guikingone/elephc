@@ -468,3 +468,31 @@ function second(ptr<Node> $n): int {
     );
     assert_eq!(out, "7 7 0 24 16\n");
 }
+
+/// Verifies a literal dynamic name (`$r->{'y'}`) reads a C struct field like `$r->y`: the narrow
+/// width is sign-extended, a `char*` field is copied into a PHP string, and a null receiver
+/// aborts with the null-dereference fatal.
+#[test]
+fn test_ffi_extern_class_literal_dynamic_name_reads_the_field() {
+    let out = compile_and_run(
+        r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr;
+extern class Tag { public i32 $id; public i16 $delta; public string $name; }
+$t = ptr_cast<Tag>(calloc(1, ptr_sizeof("Tag")));
+$t->delta = -3;
+$t->name = "left";
+$name = $t->{'name'};
+$t->name = "right";
+echo $t->{'delta'}, " ", $name, " ", $t->{'name'}, "\n";
+"#,
+    );
+    assert_eq!(out, "-3 left right\n");
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+extern class Tag { public i32 $id; public i16 $delta; }
+function delta(ptr<Tag> $t): int { return $t->{'delta'}; }
+echo delta(ptr_cast<Tag>(ptr_null()));
+"#,
+    );
+    assert!(err.contains("null pointer dereference"), "{}", err);
+}
