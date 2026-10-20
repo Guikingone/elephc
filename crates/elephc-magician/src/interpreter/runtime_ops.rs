@@ -1082,15 +1082,15 @@ pub trait RuntimeValueOps {
     fn ob_implicit_flush(&mut self, enable: bool) -> Result<(), EvalStatus>;
 }
 
-pub(super) const EVAL_TAG_INT: u64 = 0;
-pub(super) const EVAL_TAG_STRING: u64 = 1;
-pub(super) const EVAL_TAG_FLOAT: u64 = 2;
-pub(super) const EVAL_TAG_BOOL: u64 = 3;
+pub(crate) const EVAL_TAG_INT: u64 = 0;
+pub(crate) const EVAL_TAG_STRING: u64 = 1;
+pub(crate) const EVAL_TAG_FLOAT: u64 = 2;
+pub(crate) const EVAL_TAG_BOOL: u64 = 3;
 pub(super) const EVAL_TAG_ARRAY: u64 = 4;
 pub(super) const EVAL_TAG_ASSOC: u64 = 5;
 pub(super) const EVAL_TAG_OBJECT: u64 = 6;
 pub(super) const EVAL_TAG_MIXED: u64 = 7;
-pub(super) const EVAL_TAG_NULL: u64 = 8;
+pub(crate) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
 pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;

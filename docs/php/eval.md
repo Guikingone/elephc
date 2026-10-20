@@ -57,8 +57,11 @@ parsing, but execution remains interpreted. Repeated native function activations
 also share an immutable catalog of the module's native callable signatures,
 class metadata and constants. Each thread retains up to eight module catalogs;
 activation scopes, dynamic declarations, references, handlers and materialized
-default values remain separate. Force-linking with `--with-eval` also increases binary size even if no
-call ultimately requires fallback.
+default values remain separate. On a catalog cache miss, short numeric-only
+fragments can postpone metadata setup for up to 512 eval executions in one
+activation. The next eval initializes the complete catalog before synchronizing
+scope, bounding proof overhead in long loops. Force-linking with `--with-eval`
+also increases binary size even if no call ultimately requires fallback.
 
 ## Quick start
 

@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// A bounded numeric prefix cannot impose unbounded proof work or spend another activation's budget.
+#[test]
+fn native_catalog_deferral_budget_saturates_and_resets_per_activation() {
+    let mut context = ElephcEvalContext::new();
+    for _ in 0..MAX_NATIVE_CATALOG_DEFERRALS {
+        assert!(context.native_catalog_deferral_budget_remaining());
+        context.record_native_catalog_deferral();
+    }
+    assert!(!context.native_catalog_deferral_budget_remaining());
+    for _ in 0..10 { context.record_native_catalog_deferral(); }
+    assert_eq!(context.native_catalog_deferrals, MAX_NATIVE_CATALOG_DEFERRALS);
+    assert!(ElephcEvalContext::new().native_catalog_deferral_budget_remaining());
+    assert!(ElephcEvalContext::for_abi_version(ABI_VERSION).native_catalog_deferral_budget_remaining());
+}
+
 /// Starts with a deterministic cache local to this test thread.
 fn reset_cache() {
     NATIVE_CATALOGS.with(|cache| cache.borrow_mut().clear());

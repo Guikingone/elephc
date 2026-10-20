@@ -37,6 +37,8 @@ pub struct ElephcEvalContext {
     pub(super) native_catalog_generation: u64,
     pub(super) native_catalog_ready: bool,
     pub(super) native_catalog_registration_failed: bool,
+    /// Numeric evals admitted without catalog registration in this activation.
+    pub(super) native_catalog_deferrals: u16,
     /// Sticky fallback after one fragment can retain or invoke indirect scope state.
     pub(super) scope_sync_requires_full: bool,
     pub(super) classes: HashMap<String, EvalClass>,
@@ -143,6 +145,7 @@ impl ElephcEvalContext {
             native_catalog_generation: 0,
             native_catalog_ready: false,
             native_catalog_registration_failed: false,
+            native_catalog_deferrals: 0,
             scope_sync_requires_full: false,
             classes: HashMap::new(),
             class_aliases: HashMap::new(),
@@ -245,6 +248,7 @@ impl ElephcEvalContext {
             native_catalog_generation: 0,
             native_catalog_ready: false,
             native_catalog_registration_failed: false,
+            native_catalog_deferrals: 0,
             scope_sync_requires_full: false,
             classes: HashMap::new(),
             class_aliases: HashMap::new(),

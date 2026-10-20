@@ -8,6 +8,7 @@
 //! - Only Rust metadata and module-lifetime callback addresses enter the catalog.
 //! - Runtime cells, scopes, declarations, handlers and aliases stay context-local.
 //! - The thread-local cache retains at most eight module generations.
+//! - Numeric-deferral counters stay activation-local and never enter the shared catalog.
 
 use super::*;
 use std::collections::VecDeque;
@@ -17,6 +18,8 @@ mod shared;
 pub(crate) use shared::SharedNative;
 
 const CATALOG_CACHE_LIMIT: usize = 8;
+// Bound repeated proof work while retaining the cold-activation benefit for short numeric evals.
+const MAX_NATIVE_CATALOG_DEFERRALS: u16 = 512;
 
 thread_local! {
     static NATIVE_CATALOGS: RefCell<VecDeque<(u64, NativeCatalog)>> =
@@ -90,12 +93,22 @@ impl ElephcEvalContext {
         self.native_catalog_ready
     }
 
+    /// Requests the existing eager path once repeated numeric proofs have spent this activation's budget.
+    pub(crate) fn native_catalog_deferral_budget_remaining(&self) -> bool {
+        self.native_catalog_deferrals < MAX_NATIVE_CATALOG_DEFERRALS
+    }
+
+    /// Records one admitted deferred execution, saturating without sharing activation state.
+    pub(crate) fn record_native_catalog_deferral(&mut self) {
+        if self.native_catalog_deferral_budget_remaining() { self.native_catalog_deferrals += 1; }
+    }
+
     /// Remembers a failed registration so a partial catalog cannot be published.
     pub(crate) fn fail_native_catalog_registration(&mut self) {
         self.native_catalog_registration_failed = true;
     }
 
-    /// Publishes only a complete generated catalog before any dynamic execution.
+    /// Publishes complete generated metadata before any declaration or metadata-dependent execution.
     pub(crate) fn publish_native_catalog(&mut self) -> bool {
         if self.native_catalog_generation == 0 || self.native_catalog_ready
             || self.native_catalog_registration_failed || !self.classes.is_empty()
