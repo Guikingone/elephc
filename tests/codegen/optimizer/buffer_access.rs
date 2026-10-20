@@ -1,6 +1,6 @@
 //! Purpose:
 //! End-to-end regression coverage for `buffer<T>` hot-loop optimization: exact packed field
-//! effects.
+//! effects and concat-reset elimination around packed fields.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests optimizer::buffer_access`.
@@ -98,4 +98,14 @@ fn test_packed_field_accesses_carry_exact_effects() {
     }
     assert_eq!(run_variant(INTEGRATE_SOURCE, true), INTEGRATE_OUTPUT);
     assert_eq!(run_variant(INTEGRATE_SOURCE, false), INTEGRATE_OUTPUT);
+}
+
+/// A loop body made only of packed field traffic and float arithmetic never touches the concat
+/// scratch, so every statement-boundary `concat_reset` inside it is eliminated.
+#[test]
+fn test_packed_field_loop_drops_statement_concat_resets() {
+    let unoptimized = function_ir(INTEGRATE_SOURCE, false, "step");
+    let optimized = function_ir(INTEGRATE_SOURCE, true, "step");
+    assert!(unoptimized.contains("concat_reset"), "{unoptimized}");
+    assert!(!optimized.contains("concat_reset"), "{optimized}");
 }
