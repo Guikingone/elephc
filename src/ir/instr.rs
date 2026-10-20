@@ -65,6 +65,7 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 /// Optimization pass recorded as an instruction's provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOrigin {
+    BufferAccess,
     ConstFold,
     IntegerRange,
     Licm,
@@ -75,6 +76,7 @@ impl PassOrigin {
     /// Returns the lower-case spelling used by source maps and the EIR printer.
     pub fn name(self) -> &'static str {
         match self {
+            PassOrigin::BufferAccess => "buffer_access",
             PassOrigin::ConstFold => "const_fold",
             PassOrigin::IntegerRange => "integer_range",
             PassOrigin::Licm => "licm",
@@ -1094,6 +1096,15 @@ pub enum Op {
     BufferLen,
     BufferGet,
     BufferSet,
+    /// Speculatively resolves a buffer handle to its static descriptor address, or 0 for an
+    /// invalid, freed, or stale handle. Never faults: the access that consumes the descriptor
+    /// reports the use-after-free, so the resolution can run ahead of it in a loop preheader.
+    BufferResolve,
+    /// `buffer_get` through a descriptor from `BufferResolve`: `[descriptor, index]`. Faults
+    /// with the use-after-free diagnostic on a zero descriptor, then bounds-checks the index.
+    BufferGetResolved,
+    /// `buffer_set` through a descriptor from `BufferResolve`: `[descriptor, index, value]`.
+    BufferSetResolved,
     BufferFree,
     PackedFieldGet,
     PackedFieldSet,
@@ -1264,9 +1275,13 @@ impl Op {
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
             IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
-            | PtrReadString => {
+            | PtrReadString | BufferGetResolved => {
                 E::READS_HEAP | E::MAY_FATAL
             }
+            // Reads the static descriptor registry and never faults.
+            BufferResolve => E::READS_HEAP,
+            // One scalar store into the validated payload: no refcounted element is replaced.
+            BufferSetResolved => E::WRITES_HEAP | E::MAY_FATAL,
             ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset | DescriptorArgKeyExists => {
                 E::READS_HEAP
             }
@@ -1772,6 +1787,9 @@ impl Op {
             BufferLen => "buffer_len",
             BufferGet => "buffer_get",
             BufferSet => "buffer_set",
+            BufferResolve => "buffer_resolve",
+            BufferGetResolved => "buffer_get_resolved",
+            BufferSetResolved => "buffer_set_resolved",
             BufferFree => "buffer_free",
             PackedFieldGet => "packed_field_get",
             PackedFieldSet => "packed_field_set",

@@ -806,6 +806,9 @@ impl<'a> ConcatInertAnalysis<'a> {
             | Op::BufferLen
             | Op::BufferGet
             | Op::BufferSet
+            | Op::BufferResolve
+            | Op::BufferGetResolved
+            | Op::BufferSetResolved
             | Op::BufferFree
             | Op::ArrayNew
             | Op::HashNew

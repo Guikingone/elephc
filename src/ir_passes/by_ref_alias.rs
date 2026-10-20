@@ -104,6 +104,6 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | Acquire | Release | Move | Borrow | EnsureOwned
             // Buffer element access reads its handle and index operands by value; the stored
             // element is a scalar copied into the payload, never an alias of a local slot.
-            | BufferGet | BufferSet
+            | BufferGet | BufferSet | BufferResolve | BufferGetResolved | BufferSetResolved
     )
 }

@@ -438,6 +438,33 @@ finalization. The scalar passes run again on the new loops. It uses the same EIR
 branch lowering on every supported target and is disabled by `--no-ir-opt`.
 See `examples/tail-recursion/main.php` for Euclid and a deep mutual countdown.
 
+### Buffer loops
+
+With `--ir-opt` enabled, a loop over `buffer<T>` elements resolves the buffer
+handle once in front of the loop instead of at every `$b[$i]`:
+
+```php
+function step(buffer<Particle> $p, int $count, float $dt): void {
+    for ($i = 0; $i < $count; $i++) {
+        $p[$i]->x = $p[$i]->x + $p[$i]->vx * $dt;
+    }
+}
+```
+
+Diagnostics are unchanged. A stale handle still dies with `use of buffer after
+buffer_free()` at the first access, an out-of-range index still dies with
+`buffer index out of bounds`, and a loop that never runs its body reports
+nothing. The loop must not be able to free, allocate or rebind a buffer: a call,
+a `buffer_free()`, an assignment to the buffer variable, output, a warning, or a
+throw inside it keeps the ordinary per-access resolution, because user code could
+free the buffer through another handle. Generators, functions with `try`, dynamic
+`eval`, and programs that call `pcntl_async_signals()` are left alone.
+
+Packed field reads and writes are also known to be plain loads and stores, so
+the loop index and locals stored into packed fields stay in registers and no
+`concat_reset` is kept between statements. The rewrite is target-independent and
+disabled by `--no-ir-opt`. See `examples/buffer-loops/main.php`.
+
 ### Fresh Mixed assignment transfer
 
 `FreshMixedTransfer` (`src/ir_passes/fresh_mixed_transfer.rs`) is registered with

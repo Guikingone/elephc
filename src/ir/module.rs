@@ -213,6 +213,32 @@ impl Module {
         self.closures.push(function);
         id
     }
+
+    /// Returns whether any function-like body calls one typed PCNTL runtime operation.
+    ///
+    /// `pcntl_async_signals()` makes the backend dispatch pending signal handlers after every
+    /// instruction, so optimizations that assume no user code runs between two instructions
+    /// must check it module-wide.
+    pub(crate) fn uses_pcntl_runtime(&self, target: crate::ir::PcntlRuntime) -> bool {
+        self.functions
+            .iter()
+            .chain(self.class_methods.iter())
+            .chain(self.closures.iter())
+            .chain(self.fiber_wrappers.iter())
+            .chain(self.callback_wrappers.iter())
+            .chain(self.extern_callback_trampolines.iter())
+            .chain(self.runtime_callable_invokers.iter())
+            .any(|function| {
+                function.instructions.iter().any(|inst| {
+                    matches!(
+                        inst.immediate,
+                        Some(crate::ir::Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::Pcntl(found)
+                        )) if found == target
+                    )
+                })
+            })
+    }
 }
 
 /// Deterministic literal/name pool used by IR immediates and printer output.

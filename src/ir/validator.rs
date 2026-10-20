@@ -918,6 +918,17 @@ fn validate_opcode_rules(
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
         }
+        BufferResolve => check_heap_unary(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)"),
+        BufferGetResolved => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::I64, "I64 buffer descriptor")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64 buffer index")
+        }
+        BufferSetResolved => {
+            check_count(inst_id, inst, 3, "3")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::I64, "I64 buffer descriptor")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64 buffer index")
+        }
         DynamicObjectNewWithoutConstructorMixed
         | PropGet
         | PropGetForWrite

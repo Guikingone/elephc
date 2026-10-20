@@ -1,14 +1,17 @@
 //! Purpose:
 //! End-to-end regression coverage for `buffer<T>` hot-loop optimization: exact packed field
-//! effects, concat-reset elimination around packed fields, and scalar promotion of the loop
-//! index and of locals stored into packed fields.
+//! effects, concat-reset elimination around packed fields, scalar promotion of the loop
+//! index and of locals stored into packed fields, and loop-hoisted buffer handle resolution.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests optimizer::buffer_access`.
 //!
 //! Key details:
 //! - Textual EIR pins the optimized loop shape; every fixture also runs natively with the
-//!   optimizer on and off and must print the same result.
+//!   optimizer on and off and must print the same result or die with the same fatal.
+//! - Hoisting fixtures cover the cases that must NOT be rewritten: a call that frees the
+//!   buffer, a reassigned handle, and modules that enable `pcntl_async_signals()`.
+//! - The non-faulting runtime resolver is checked on all five targets' runtime assembly.
 
 use super::*;
 
@@ -120,4 +123,234 @@ fn test_buffer_index_and_packed_store_locals_are_promoted() {
     assert!(unoptimized.contains("store_local"), "{unoptimized}");
     assert!(!optimized.contains("store_local"), "{optimized}");
     assert!(optimized.contains("for.cond(v"), "{optimized}");
+}
+
+/// Compiles and runs one PHP program with the EIR optimizer on or off and returns its output,
+/// whether or not the program succeeded.
+fn run_variant_output(source: &str, optimized: bool) -> std::process::Output {
+    let dir = make_cli_test_dir("elephc_buffer_access_fatal");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write PHP fixture");
+    let mut command = elephc_cli_command(&dir);
+    if !optimized {
+        command.arg("--no-ir-opt");
+    }
+    let compile = command.arg(&php_path).output().expect("compile PHP fixture");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = run_binary(&dir.join("main"), &dir);
+    fs::remove_dir_all(dir).expect("remove fixture directory");
+    run
+}
+
+/// Asserts both optimizer modes print `stdout` and then die with `fatal` on stderr.
+fn assert_both_modes_fail_after(source: &str, stdout: &str, fatal: &str) {
+    for optimized in [true, false] {
+        let run = run_variant_output(source, optimized);
+        assert!(!run.status.success(), "optimized={optimized} unexpectedly succeeded");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), stdout, "optimized={optimized}");
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(stderr.contains(fatal), "optimized={optimized}: {stderr}");
+    }
+}
+
+/// A float buffer summed through a parameter alias; `$alias` outlives `buffer_free($b)`.
+const STALE_ALIAS_SOURCE: &str = r#"<?php
+function sum(buffer<float> $b, int $n): float {
+    $s = 0.0;
+    for ($i = 0; $i < $n; $i++) {
+        $s = $s + $b[$i];
+    }
+    return $s;
+}
+$b = buffer_new<float>(4);
+$b[1] = 2.5;
+$alias = $b;
+echo sum($alias, 2), "\n";
+buffer_free($b);
+echo sum($alias, 0), "\n";
+echo sum($alias, 1), "\n";
+"#;
+
+/// The packed integration loop resolves its handle once in the preheader, and every access in
+/// the loop goes through the hoisted descriptor.
+#[test]
+fn test_buffer_loop_resolves_handle_once_in_the_preheader() {
+    let ir = function_ir(INTEGRATE_SOURCE, true, "step");
+    let preheader = ir.split("for.cond(").next().expect("loop preheader");
+    assert_eq!(ir.matches("= buffer_resolve ").count(), 1, "{ir}");
+    assert!(preheader.contains("= buffer_resolve "), "{ir}");
+    assert!(ir.contains("= buffer_get_resolved "), "{ir}");
+    assert!(!ir.contains("= buffer_get "), "{ir}");
+}
+
+/// The hoisted resolution never faults: a stale handle still dies at the first access with the
+/// use-after-free diagnostic, and a loop that never runs its body reports nothing.
+#[test]
+fn test_hoisted_buffer_loop_reports_stale_handle_at_the_access() {
+    let ir = function_ir(STALE_ALIAS_SOURCE, true, "sum");
+    assert!(ir.contains("= buffer_resolve "), "{ir}");
+    assert_both_modes_fail_after(STALE_ALIAS_SOURCE, "2.5\n0\n", "use of buffer after buffer_free()");
+}
+
+/// The hoisted descriptor keeps the per-access bounds check.
+#[test]
+fn test_hoisted_buffer_loop_still_traps_out_of_range_index() {
+    let source = r#"<?php
+function total(buffer<float> $b, int $n): float {
+    $s = 0.0;
+    for ($i = 0; $i < $n; $i++) {
+        $s = $s + $b[$i];
+    }
+    return $s;
+}
+$b = buffer_new<float>(2);
+$b[1] = 4.0;
+echo total($b, 2), "\n";
+echo total($b, 3), "\n";
+"#;
+    assert!(function_ir(source, true, "total").contains("= buffer_resolve "));
+    assert_both_modes_fail_after(source, "4\n", "buffer index out of bounds");
+}
+
+/// A call that frees the buffer through its parameter copy keeps every access resolving the
+/// handle again, so the next iteration reports the use-after-free instead of reading freed
+/// memory.
+#[test]
+fn test_buffer_loop_calling_a_free_keeps_per_access_resolution() {
+    let source = r#"<?php
+function release(buffer<int> $x): void {
+    buffer_free($x);
+}
+function walk(buffer<int> $b, int $n): int {
+    $t = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $t = $t ^ $b[$i];
+        if ($i == 0) {
+            release($b);
+        }
+    }
+    return $t;
+}
+$b = buffer_new<int>(4);
+$b[0] = 5;
+echo walk($b, 1), "\n";
+$c = buffer_new<int>(4);
+echo walk($c, 2), "\n";
+"#;
+    let ir = function_ir(source, true, "walk");
+    assert!(!ir.contains("buffer_resolve"), "{ir}");
+    assert!(ir.contains("= buffer_get "), "{ir}");
+    assert_both_modes_fail_after(source, "5\n", "use of buffer after buffer_free()");
+}
+
+/// Reassigning the buffer variable inside the loop makes the handle loop-variant.
+#[test]
+fn test_buffer_loop_reassigning_the_handle_keeps_per_access_resolution() {
+    let source = r#"<?php
+function pick(buffer<int> $a, buffer<int> $b, int $n): int {
+    $t = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $t = $t ^ $a[$i];
+        $a = $b;
+    }
+    return $t;
+}
+$a = buffer_new<int>(2);
+$b = buffer_new<int>(2);
+$a[0] = 1;
+$a[1] = 2;
+$b[0] = 4;
+$b[1] = 8;
+echo pick($a, $b, 2), "\n";
+"#;
+    let ir = function_ir(source, true, "pick");
+    assert!(!ir.contains("buffer_resolve"), "{ir}");
+    assert_eq!(run_variant(source, true), "9\n");
+    assert_eq!(run_variant(source, false), "9\n");
+}
+
+/// Element writes go through the hoisted descriptor too, and an inner loop shares the outer
+/// loop's resolution.
+#[test]
+fn test_buffer_writes_and_nested_loops_use_the_outer_descriptor() {
+    let source = r#"<?php
+function fill(buffer<int> $b, int $rows, int $cols): void {
+    for ($r = 0; $r < $rows; $r++) {
+        for ($c = 0; $c < $cols; $c++) {
+            $b[$r * $cols + $c] = $r ^ $c;
+        }
+    }
+}
+function checksum(buffer<int> $b, int $n): int {
+    $t = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $t = $t ^ ($b[$i] << ($i % 4));
+    }
+    return $t;
+}
+$b = buffer_new<int>(12);
+fill($b, 3, 4);
+echo checksum($b, 12), "\n";
+echo $b[5], " ", $b[11], "\n";
+"#;
+    let ir = function_ir(source, true, "fill");
+    assert_eq!(ir.matches("= buffer_resolve ").count(), 1, "{ir}");
+    assert!(ir.contains("buffer_set_resolved "), "{ir}");
+    assert!(!ir.contains(" buffer_set "), "{ir}");
+    let expected = run_variant(source, false);
+    assert_eq!(run_variant(source, true), expected);
+    assert!(expected.ends_with("0 1\n"), "{expected}");
+}
+
+/// `pcntl_async_signals()` lets a signal handler run after any instruction, so no loop in the
+/// module may assume its buffers stay valid between accesses.
+#[test]
+fn test_pcntl_async_signals_disable_buffer_resolution_hoisting() {
+    let source = r#"<?php
+pcntl_async_signals(true);
+function sum(buffer<float> $b, int $n): float {
+    $s = 0.0;
+    for ($i = 0; $i < $n; $i++) {
+        $s = $s + $b[$i];
+    }
+    return $s;
+}
+$b = buffer_new<float>(2);
+$b[0] = 1.5;
+echo sum($b, 2), "\n";
+"#;
+    let ir = function_ir(source, true, "sum");
+    assert!(!ir.contains("buffer_resolve"), "{ir}");
+    assert_eq!(run_variant(source, true), "1.5\n");
+}
+
+/// The documented example prints the same result with the optimizer on and off and resolves
+/// its buffer handle once in front of the `step` loop.
+#[test]
+fn test_buffer_loops_example_hoists_resolution() {
+    let source = include_str!("../../../examples/buffer-loops/main.php");
+    assert!(function_ir(source, true, "step").contains("= buffer_resolve "));
+    let expected = "particles=8; sum=350\n";
+    assert_eq!(run_variant(source, true), expected);
+    assert_eq!(run_variant(source, false), expected);
+}
+
+/// Every target's runtime carries the non-faulting resolver, and its invalid path answers 0
+/// instead of reaching the use-after-free fatal.
+#[test]
+fn test_every_target_runtime_carries_the_non_faulting_resolver() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).expect("supported target");
+        let runtime = elephc::codegen::generate_runtime(8_388_608, target);
+        let start = runtime
+            .find("__rt_buffer_try_resolve:")
+            .unwrap_or_else(|| panic!("{name} runtime lacks __rt_buffer_try_resolve"));
+        let rest = &runtime[start..];
+        let body = &rest[..rest.find("\n\n").unwrap_or(rest.len())];
+        assert!(!body.contains("__rt_buffer_use_after_free"), "{name}: {body}");
+        assert!(
+            body.contains("mov x0, #0") || body.contains("xor eax, eax"),
+            "{name}: {body}"
+        );
+    }
 }
