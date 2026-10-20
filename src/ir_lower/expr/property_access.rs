@@ -888,8 +888,10 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     // A literal name on a C struct receiver is the named field read (`$r->{'y'}` is `$r->y`): it
-    // keeps the width-aware load and the owned copy of a `char*` field the named read takes.
-    if let (PropertyFetchMode::Read, ExprKind::StringLiteral(name)) = (mode, &property.kind) {
+    // keeps the width-aware load and the owned copy of a `char*` field the named read takes. That
+    // holds in probe mode too: the checker only admits declared fields, which always exist, so
+    // `isset($r->{'y'})`, `empty(...)` and `?? ...` read the field exactly like their named forms.
+    if let ExprKind::StringLiteral(name) = &property.kind {
         if extern_receiver_class(ctx, &ctx.builder.value_php_type(object.value)).is_some() {
             return lower_property_get_from_value(ctx, object, name, Op::PropGet, expr);
         }

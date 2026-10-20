@@ -496,3 +496,35 @@ echo delta(ptr_cast<Tag>(ptr_null()));
     );
     assert!(err.contains("null pointer dereference"), "{}", err);
 }
+
+/// Verifies `isset()`, `empty()` and `??` with a literal dynamic name (`$r->{'y'}`) probe a C
+/// struct field exactly like their named forms: the same answers, an owned copy of a `char*`
+/// field, and the null-dereference fatal on a null receiver.
+#[test]
+fn test_ffi_extern_class_literal_dynamic_name_probes_the_field() {
+    let out = compile_and_run(
+        r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr;
+extern class Tag { public i32 $id; public i16 $delta; public string $name; }
+$t = ptr_cast<Tag>(calloc(1, ptr_sizeof("Tag")));
+$t->delta = -3;
+$t->name = "left";
+echo isset($t->delta) ? "set" : "unset", " ", empty($t->id) ? "empty" : "full", " ",
+    empty($t->delta) ? "empty" : "full", " ", $t->delta ?? 9, "\n";
+echo isset($t->{'delta'}) ? "set" : "unset", " ", empty($t->{'id'}) ? "empty" : "full", " ",
+    empty($t->{'delta'}) ? "empty" : "full", " ", $t->{'delta'} ?? 9, "\n";
+$name = $t->{'name'} ?? "none";
+$t->name = "right";
+echo $name, " ", $t->{'name'} ?? "none", "\n";
+"#,
+    );
+    assert_eq!(out, "set empty full -3\nset empty full -3\nleft right\n");
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+extern class Tag { public i32 $id; public i16 $delta; }
+function has_delta(ptr<Tag> $t): bool { return isset($t->{'delta'}); }
+echo has_delta(ptr_cast<Tag>(ptr_null())) ? "set" : "unset";
+"#,
+    );
+    assert!(err.contains("null pointer dereference"), "{}", err);
+}
