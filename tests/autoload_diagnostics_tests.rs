@@ -111,6 +111,26 @@ fn checker_error_in_the_entry_file_names_the_file() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// An include-resolution error in the entry file names the entry file as well: the path is
+/// registered before the resolver runs, so `require 'missing.php'` reports
+/// `error[<dir>/main.php:2:1]` instead of the file-less `error[2:1]`.
+#[test]
+fn missing_require_in_the_entry_file_names_the_file() {
+    let dir = project(
+        "elephc_entry_missing_require",
+        &[("main.php", "<?php\nrequire 'missing.php';\necho 'x';\n")],
+    );
+    let output = check(&dir);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected an include error, got success");
+    let expected = format!("error[{}:2:1]", dir.join("main.php").display());
+    assert!(
+        stderr.contains(&expected),
+        "include error should name the entry file ({expected}), got:\n{stderr}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A class file reached only through autoload that types against `PDO` and `CurlHandle` gets
 /// the PDO and curl preludes, without `--with-pdo` / `--with-curl`.
 #[test]

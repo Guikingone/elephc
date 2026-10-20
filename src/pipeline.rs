@@ -226,6 +226,11 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("resolve");
     let phase_started = Instant::now();
+    // The entry file lexes with the default source identity 0, which the resolver never hands
+    // out again (it rewinds the include counter to 1, and that does not touch the path registry).
+    // Registered before the resolver so an include error in the entry file names it too
+    // (`error[main.php:2:1]: Required file not found`).
+    Span::register_source_path(0, filename.to_string());
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
     let (ast, opcache_included_files) =
@@ -237,10 +242,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
             process::exit(1);
         }
     };
-    // The entry file lexes with the default source identity. Registered after the resolver,
-    // which rewinds the identity counter, so later diagnostics can name it (`Span::source_path`).
-    Span::register_source_path(0, filename.to_string());
-    let ast = match autoload::collect_aliases(ast) {
+    let ast =match autoload::collect_aliases(ast) {
         Ok(ast) => ast,
         Err(error) => {
             crate::progress::clear();
