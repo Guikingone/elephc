@@ -41,6 +41,7 @@ Physical source (.php or .lfc)
   -> autoload-run       run autoload insertion
   -> (test-discovery)   find test classes and append the runner driver (elephc test)
   -> dom-html-autoload-prelude discover DOM usage in newly autoloaded classes
+  -> testing-autoload-prelude discover testing runtime use in newly autoloaded classes
   -> object-cast-prelude inject stdClass declarations when object casts need them
   -> func-args          desugar func_num_args/get_args/get_arg to a hidden variadic
   -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest

@@ -1,6 +1,6 @@
 # Repository plans and working specifications
 
-Reviewed on 2026-10-19 against code candidate `df57a9800f`. This index
+Reviewed on 2026-10-20 against code candidate `40c2d2ab3c`. This index
 distinguishes remaining work and retained specifications. Implementation status
 comes from source and recorded integration evidence; this cleanup ran no tests
 or behavioral probes.
@@ -15,6 +15,7 @@ or behavioral probes.
 | [Mbstring qualification](mbstring-extension.md) | Exact probe-to-test mapping and remaining ownership/strictness/host qualification. All 65 baseline function bindings are shipped on both backends. |
 | [Native dependencies](native-dependencies-v1.md) | Explicit future providers, cache migration decision and recipe-revision diagnostics. Managed dependencies v1 is shipped. |
 | [PHP extension bridge](bidirectional-php-extension-bridge.md) | Producer stack integration on open PRs and the separate consumer-hosting design. The producer is not in this release code candidate. |
+| [Native test runner](elephc-test.md) | Shipped runner and assertion contract, with the remaining runtime acceptance checklist and deferred assertion specialization. |
 | [PDO parity](pdo-full-maintained-php-parity.md) | Broader registry migration, unintended common divergences and proprietary-client/cross-target live qualification. |
 | [PhpStorm plugin](phpstorm-plugin.md) | Unimplemented IDE proposal; SDK choice, language integration and qualification remain open. |
 
@@ -40,14 +41,14 @@ are preserved in a permanent regression or resolved with current evidence.
 
 The cleanup removed 46 completed/superseded planning records and merged the
 second Core log into its surviving backlog. The complete original collection is
-recoverable from Git commit `611d8743e9`, for example:
+recoverable from Git commit `6e7bb842bb`, for example:
 
 ```bash
-git show 611d8743e9:.plans/<original-filename>.md
+git show 6e7bb842bb:.plans/<original-filename>.md
 ```
 
 The completed 0.27.4 release-preparation records were retired after approval;
-their final contents remain available at Git commit `6dea70d873`.
+their final contents remain available at Git commit `6060bd1fbf`.
 
 Use permanent `docs/` pages for shipped contracts and update live references
 when retiring a plan. Preserve immutable historical learning records. New or

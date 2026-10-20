@@ -15,6 +15,7 @@ Releases are listed newest first.
 - Added missing PHP 8.5 Core classes and constants, including `WeakReference`, `WeakMap`, `Serializable`, `ErrorException`, enum interfaces, and runtime `PHP_BINARY`, in compiled and `eval()` code.
 - Added a pay-for-use DOM HTML fragment walker for Termwind-style rendering, including `DOMDocument::loadHTML()`, node traversal, attributes, and `saveXML()`; this remains an HTML-only subset.
 - Added `JSON_UNESCAPED_LINE_TERMINATORS` and `JSON_ERROR_NON_BACKED_ENUM`, with corresponding line-separator and enum encoding behavior, including enum `JsonSerializable` overrides, in compiled and `eval()` code.
+- Added `elephc test` to compile and run native test suites, with Composer test autoloading, a PHPUnit-compatible assertion subset, data providers, per-test process isolation and timeouts, filtering, and JUnit reports.
 - Added Developer ID signing and required Apple notarization for macOS release and nightly binaries before packaging and publication.
 - Added bounded-stack lowering for eligible direct self- and mutually tail-recursive scalar functions, preserving each public entry point and argument evaluation order.
 - Reduced duplicate code and immutable data for equivalent generic instantiations while preserving nominal identities and callable contracts, and added `--report-generics`.
@@ -31,6 +32,7 @@ Releases are listed newest first.
 - Reduced heap-release and `gc_mem_caches()` overhead by skipping free-list tail scans when a freed block cannot reach the heap frontier.
 - Improved `json_decode()` memory use for integer arrays by keeping initial signed 64-bit values packed and widening to mixed storage only when needed.
 - Reduced native string-append metadata allocations by reusing unique unresolved mbstring origins, while preserving replacement behavior for shared, resolved, and literal origins.
+- Reduced compilation work and generated code for literal `eval()` fragments by retaining only the declarations and builtin surfaces they can reach, with conservative fallback for runtime source and dynamic lookups.
 - Fixed property and parameter defaults to bind `self::` and `parent::` in their declaring or trait-consuming scope, defer catchable default errors until use, and preserve those defaults in Reflection and `eval()`; invalid late-static property defaults are rejected.
 - Fixed literal `false` and `null` parameter contracts across inherited methods and runtime callables so invalid arguments raise `TypeError` before coercion or receiver mutation.
 - Fixed `(array)` casts of scalar, string, null, packed-array, mixed, and union values, including returns declared as `array`.
@@ -41,6 +43,9 @@ Releases are listed newest first.
 - Fixed object writes through named, lexical, and late-static property receivers, preserving RHS ordering, nested append ownership, and catchable null-write errors.
 - Fixed leaks in nullable and mixed-receiver property writes, including Stringable sources and cleanup when destructors throw.
 - Fixed `json_decode()` retaining construction owners, temporary keys, and source arguments, including cleanup of partial graphs before throwing.
+- Fixed `array_unshift()` through references freeing packed-array storage still owned by a value copy, including when prepending multiple values or growing the array.
+- Fixed prefix increment and decrement of static array elements, including `self::`, `parent::`, and `static::` receivers, string values, computed keys, and copy-on-write aliases.
+- Fixed nested array writes and updates to create missing parents, preserve key and RHS evaluation order, handle false-to-array diagnostics and throwing handlers, and dispatch appended object children through `ArrayAccess` without losing ownership.
 - Fixed buffer overruns when encoding large top-level indexed-array trees containing integers by sizing and allocating the complete JSON output before writing.
 - Fixed extern C `bool` returns using unspecified upper register bits, which could turn an ABI-valid false into true on AArch64 and x86_64.
 
