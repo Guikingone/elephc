@@ -1,6 +1,7 @@
 //! Purpose:
 //! End-to-end regression coverage for `buffer<T>` hot-loop optimization: exact packed field
-//! effects and concat-reset elimination around packed fields.
+//! effects, concat-reset elimination around packed fields, and scalar promotion of the loop
+//! index and of locals stored into packed fields.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests optimizer::buffer_access`.
@@ -108,4 +109,15 @@ fn test_packed_field_loop_drops_statement_concat_resets() {
     let optimized = function_ir(INTEGRATE_SOURCE, true, "step");
     assert!(unoptimized.contains("concat_reset"), "{unoptimized}");
     assert!(!optimized.contains("concat_reset"), "{optimized}");
+}
+
+/// The loop index used only as a buffer index and the float local stored into a packed field
+/// are plain values, so scalar promotion keeps both in SSA and the loop does no local traffic.
+#[test]
+fn test_buffer_index_and_packed_store_locals_are_promoted() {
+    let unoptimized = function_ir(INTEGRATE_SOURCE, false, "step");
+    let optimized = function_ir(INTEGRATE_SOURCE, true, "step");
+    assert!(unoptimized.contains("store_local"), "{unoptimized}");
+    assert!(!optimized.contains("store_local"), "{optimized}");
+    assert!(optimized.contains("for.cond(v"), "{optimized}");
 }
