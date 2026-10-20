@@ -74,10 +74,12 @@ pub(super) fn lower_arguments(
         ctx.builder.position_at_end(named_value);
         let value = hash_value(ctx, &container_slot, &name, span);
         store_value_into_temp(ctx, &slot, PhpType::Mixed, value, span);
+        clear_consumed_argument(ctx, &container_slot, &name, span);
         branch(ctx, value_ready);
         ctx.builder.position_at_end(position_value);
         let value = hash_value(ctx, &container_slot, &position, span);
         store_value_into_temp(ctx, &slot, PhpType::Mixed, value, span);
+        clear_consumed_argument(ctx, &container_slot, &position, span);
         branch(ctx, value_ready);
         ctx.builder.position_at_end(value_ready);
         guard_parameter(ctx, signature, index, &variable(&slot, span), class, method, span);
@@ -86,7 +88,7 @@ pub(super) fn lower_arguments(
                 &signature.params[index].1, &variable(&slot, span),
             )).flatten();
         if let Some(binding) = binding {
-            store_expr_into_temp(ctx, &slot, PhpType::Mixed, &binding, span);
+            bind_checked_parameter(ctx, &slot, &binding, span);
         }
         branch(ctx, ready);
         ctx.builder.position_at_end(omitted);
@@ -103,6 +105,7 @@ pub(super) fn lower_arguments(
         let value = ctx.load_local(&slot, Some(span));
         let value = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
         values.push(root_evaluated_call_argument(ctx, value, span).value);
+        release_snapshot_payload(ctx, &slot, span);
     }
     if crate::func_args::sig_has_hidden_argc_param(signature) {
         values.push(ctx.load_local(&argc, Some(span)).value);
@@ -132,6 +135,43 @@ pub(super) fn call_intermediate(ctx: &mut LoweringContext<'_, '_>, value: Lowere
     ctx.call_argument_evaluation_scopes.last_mut().expect("selected method argument scope")
         .owners.push(owner);
     slot
+}
+
+/// Releases a private snapshot while retaining its empty unwind record for balanced LIFO pops.
+pub(super) fn release_snapshot_payload(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
+    let slot = ctx.local_slots[name];
+    if !Ownership::php_type_needs_lifetime_tracking(&ctx.builder.local_php_type(slot)) { return; }
+    debug_assert!(!ctx.is_ref_bound_local(name), "snapshot retirement must not release a caller alias");
+    // Newer final-argument roots may be above this record. Do not pop those roots to
+    // release an older snapshot: ReleaseLocalSlot zeroes it before a destructor can throw.
+    ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(), Some(span));
+}
+
+/// Drops one consumed private-container payload without altering its keys or caller storage.
+fn clear_consumed_argument(ctx: &mut LoweringContext<'_, '_>, source: &str, key: &Expr, span: Span) {
+    let source = ctx.load_local(source, Some(span));
+    let key = lower_expr(ctx, key);
+    let null = lower_null(ctx, &Expr::new(ExprKind::Null, span));
+    let null = ctx.box_value_as_mixed(null, PhpType::Mixed, Some(span));
+    ctx.emit_void(Op::DescriptorArgSet, vec![source.value, key.value, null.value], None,
+        Op::DescriptorArgSet.default_effects(), Some(span));
+    crate::ir_lower::ownership::release_if_owned(ctx, null, Some(span));
+    crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+}
+
+/// Protects a converted value before retiring an old parameter payload that can throw.
+fn bind_checked_parameter(ctx: &mut LoweringContext<'_, '_>, slot: &str, binding: &Expr, span: Span) {
+    let value = lower_expr(ctx, binding);
+    let ty = ctx.builder.value_php_type(value.value);
+    let owner = Ownership::php_type_needs_lifetime_tracking(&ty)
+        .then(|| own_value(ctx, value, ty, span));
+    release_snapshot_payload(ctx, slot, span);
+    let value = owner.as_ref().map_or(value, |name| ctx.load_local(name, Some(span)));
+    store_value_into_temp(ctx, slot, PhpType::Mixed, value, span);
+    // This short-lived root is the newest record and is balanced inside the provided
+    // branch. Omitted parameters never push it or add it to the enclosing scope ledger.
+    if let Some(owner) = owner { retire_slot(ctx, &owner, span); }
 }
 
 /// Checks unknown names before types, and counts only PHP-visible positional slots.
@@ -232,6 +272,11 @@ fn collect_tail(
         let done = ctx.builder.create_named_block("enum.unpack.tail.done", Vec::new());
         conditional(ctx, wanted.value, append, done);
         ctx.builder.position_at_end(append);
+        let ExprKind::Variable(value_slot) = &value.kind else {
+            unreachable!("runtime unpack walks private value slots");
+        };
+        let value_slot = value_slot.clone();
+        clear_consumed_argument(ctx, source, &key, span);
         let mut element_signature = signature.clone();
         let parameter = element_signature.params.len() - 1;
         if let Some(element) = crate::types::signatures::variadic_source_element_type_expr(signature) {
@@ -282,6 +327,7 @@ fn collect_tail(
         branch(ctx, stored);
         ctx.builder.position_at_end(stored);
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        release_snapshot_payload(ctx, &value_slot, span);
         branch(ctx, done);
         ctx.builder.position_at_end(done);
     });

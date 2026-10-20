@@ -78,7 +78,7 @@ pub(super) fn guard_argument(
             Op::MixedClone.default_effects(), Some(span))
     } else { ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)) };
     let slot = enum_method_args::call_intermediate(ctx, value, span);
-    let value = Expr::new(ExprKind::Variable(slot), span);
+    let value = Expr::new(ExprKind::Variable(slot.clone()), span);
     if let Some(position) = position {
         let position = Expr::new(ExprKind::IntLiteral(position as i64), span);
         enum_argument_guards::guard_variadic_element(ctx, &logical, index, &value,
@@ -92,4 +92,5 @@ pub(super) fn guard_argument(
         let bound = lower_expr(ctx, &binding);
         store_value_into_temp(ctx, alias, ctx.local_type(alias), bound, span);
     }
+    enum_method_args::release_snapshot_payload(ctx, &slot, span);
 }

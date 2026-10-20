@@ -22,6 +22,7 @@ mod enum_argument_boundaries;
 mod enum_selected_type_review;
 mod enum_reference_type_review;
 mod enum_boxed_reference_review;
+mod enum_argument_lifetime_review;
 mod enum_result_owner_review;
 mod enum_omission_review;
 #[path = "types/enum_keyed_review.rs"]

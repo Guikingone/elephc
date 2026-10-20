@@ -171,5 +171,8 @@ fn bind_argument(
         let value = ctx.load_local(original, Some(span));
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
     };
-    root_evaluated_call_argument(ctx, value, span).value
+    let value = root_evaluated_call_argument(ctx, value, span);
+    enum_method_args::release_snapshot_payload(ctx, original, span);
+    enum_method_args::release_snapshot_payload(ctx, checked, span);
+    value.value
 }

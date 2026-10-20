@@ -98,6 +98,32 @@ function selected_reference_union(SelectedReferenceUnion $target, mixed $input):
 selected_reference_union(SelectedReferenceUnionTight::A, []);
 selected_reference_union(SelectedReferenceUnionTight::A, true);
 selected_reference_union(SelectedReferenceUnionLoose::A, []);
+class SelectedArgumentLifetime {
+    public function __toString(): string { return str_repeat('x', 3); }
+    public function __destruct() { echo 'released'; }
+}
+interface SelectedLifetimeContract {
+    public function reference(string|bool &$input): string;
+    public function value(string|bool ...$items): string;
+}
+enum SelectedLifetimeTight implements SelectedLifetimeContract {
+    case A;
+    public function reference(string|bool &$input): string { return (string)$input; }
+    public function value(string|bool ...$items): string { return 'value'; }
+}
+enum SelectedLifetimeLoose implements SelectedLifetimeContract {
+    case A;
+    public function reference(mixed &$input): string { return 'loose'; }
+    public function value(mixed ...$items): string { return 'loose'; }
+}
+function selected_lifetime_source(): mixed { return new SelectedArgumentLifetime(); }
+function selected_lifetime_args(): array { return [selected_lifetime_source()]; }
+function selected_lifetime_call(SelectedLifetimeContract $target): void {
+    $input = selected_lifetime_source();
+    echo $target->reference($input), $target->value(selected_lifetime_source());
+    echo $target->value(...selected_lifetime_args());
+}
+selected_lifetime_call(SelectedLifetimeTight::A);
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     assert!(crate::ir::print_module(&module).contains("implicit_int_cast"), "{target}: diagnostic EIR cast");
