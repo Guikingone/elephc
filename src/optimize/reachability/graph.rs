@@ -125,12 +125,13 @@ pub fn compute(
     reach
 }
 
-/// Keeps every packed class embedded as a field of a reachable packed class.
+/// Keeps every packed class embedded in, or pointed to by, a field of a reachable packed class.
 ///
-/// A nested packed field (`packed class Body { public Vec2 $pos; }`) names its record type only
-/// in the outer declaration, which carries no code and no graph edges, so `Vec2` would be pruned
-/// while `Body` survives and `$b[0]->pos->x` would lower against a missing layout. Packed classes
-/// hold only POD fields, so closing over their field types after the fixed point is complete.
+/// A nested packed field (`packed class Body { public Vec2 $pos; }`) or a typed pointer field
+/// (`public ptr<Vec2> $p;`) names its record type only in the outer declaration, which carries no
+/// code and no graph edges, so `Vec2` would be pruned while `Body` survives and `$b[0]->pos->x`
+/// or `$b[0]->p->x` would lower against a missing layout. Packed classes hold only POD fields,
+/// so closing over their field types after the fixed point is complete.
 fn retain_embedded_packed_classes(reach: &mut Reachability, check_result: &CheckResult) {
     let packed: HashMap<String, &crate::types::PackedClassInfo> = check_result
         .packed_classes
@@ -148,7 +149,9 @@ fn retain_embedded_packed_classes(reach: &mut Reachability, check_result: &Check
             continue;
         };
         for field in &info.fields {
-            let crate::types::PhpType::Packed(inner) = &field.php_type else {
+            let (crate::types::PhpType::Packed(inner)
+            | crate::types::PhpType::Pointer(Some(inner))) = &field.php_type
+            else {
                 continue;
             };
             let inner_key = php_symbol_key(inner);

@@ -8,8 +8,8 @@
 //! Key details:
 //! - Covers reads, writes and compound assignments through buffer elements and `ptr<T>` typed
 //!   pointers, three levels of nesting, layout offsets and stride, whole-record copies, inner
-//!   classes declared after the outer one, and the null-pointer guard on typed pointer
-//!   receivers.
+//!   classes declared after the outer one, pruning of classes named only by fields, and the
+//!   null-pointer guard on typed pointer receivers.
 
 use crate::support::*;
 
@@ -265,4 +265,21 @@ echo $w[1]->player->id, " ", $w[1]->tick, " ", $w[0]->player->pos->y, "\n";
 "#,
     );
     assert_eq!(out, "32 24 2.5 7 3 0\n");
+}
+
+/// Verifies a packed class named only as the target of a `ptr<T>` field of a reachable packed
+/// class keeps its layout after declaration pruning, so the field access through it compiles
+/// and reaches the null-pointer guard at run time.
+#[test]
+fn test_packed_class_named_only_by_a_pointer_field_is_kept() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+packed class Holder { public ptr<Vec2> $p; }
+function first_x(buffer<Holder> $h): float { return $h[0]->p->x; }
+$h = buffer_new<Holder>(1);
+echo first_x($h);
+"#,
+    );
+    assert!(err.contains("null pointer dereference"), "{}", err);
 }
