@@ -29,6 +29,12 @@ use crate::types::{CheckResult, ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 mod metadata;
 mod runtime_features;
 mod eval_aot;
+mod eval_demand;
+/// Read by `reflection` and `builtin_datetime`: which builtin surfaces the module's bridge-run
+/// eval fragments can name, so those surfaces are lowered in proportion to the fragments.
+pub(in crate::ir_lower) use eval_demand::{eval_demand, instruction_uses_eval};
+#[allow(unused_imports)] // matched by the eval demand tests only
+pub(in crate::ir_lower) use eval_demand::EvalDemand;
 /// Read by `builtin_datetime`, which decides whether a module's eval fragments can reach the
 /// date alias surface — a question only the fragment text can answer.
 /// Read by `builtin_datetime`, which asks whether a module's eval fragments can reach the date
