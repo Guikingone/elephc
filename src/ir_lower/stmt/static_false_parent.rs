@@ -1,5 +1,5 @@
 //! Purpose:
-//! Promotes retained false parents across nested array write contexts.
+//! Promotes retained null and false parents across nested array write contexts.
 //!
 //! Called from:
 //! - `super::nested_array_writes::lower_static_update_key_and_guard()`.
@@ -7,11 +7,36 @@
 //!
 //! Key details:
 //! - The writable cell is updated before the deprecation callback observes it.
+//! - Update-only null conversion is silent and precedes missing-key diagnostics.
 //! - Static updates stop on callback throws; plain writes preserve opcode completion separately.
 //! - Existing receiver owners stay published across notification on every target.
 //! - A sole pending owner after notification means the original parent was detached.
 
 use super::*;
+
+/// Converts a retained null update receiver before its write-context dimension is read.
+pub(super) fn normalize_null_for_update(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
+) {
+    if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
+        return;
+    }
+    let null = ctx.emit_value(Op::IsNull, vec![parent.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(span));
+    let promote = ctx.builder.create_named_block("static.update.null.promote", Vec::new());
+    let done = ctx.builder.create_named_block("static.update.null.done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: null.value, then_target: promote, then_args: Vec::new(),
+        else_target: done, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(promote);
+    let empty = lower_expr(ctx, &Expr::new(ExprKind::ArrayLiteral(Vec::new()), span));
+    ctx.emit_void(Op::RuntimeCall, vec![parent.value, empty.value], None,
+        effects_lookup::runtime_effects(), Some(span));
+    crate::ir_lower::ownership::release_if_owned(ctx, empty, Some(span));
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(done);
+}
 
 /// Converts false and reports whether the selected cell remains attached after notification.
 /// Non-false parents retain the caller's ordinary read and scalar-guard behavior.

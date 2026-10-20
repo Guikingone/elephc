@@ -10,6 +10,63 @@
 
 use crate::support::*;
 
+/// Mixed null roots autovivify before compound, prefix and postfix leaf diagnostics.
+#[test]
+fn test_nested_write_null_root_updates() {
+    assert_write(r#"<?php
+set_error_handler(function($level, $message) { echo $level, '|'; return true; });
+function compoundRoot(mixed $items): void {
+    $copy = $items; $items[0][0] += 1;
+    echo json_encode($items), ':', json_encode($copy), '|';
+}
+function prefixRoot(mixed $items): void {
+    $copy = $items; $next = ++$items[0][0];
+    echo $next, ':', json_encode($items), ':', json_encode($copy), '|';
+}
+function postfixRoot(mixed $items): void {
+    $copy = $items; $previous = $items[0][0]++;
+    echo json_encode($previous), ':', json_encode($items), ':', json_encode($copy), '|';
+}
+mixed $root = null;
+compoundRoot($root); prefixRoot($root); postfixRoot($root);
+echo json_encode($root); unset($root);
+restore_error_handler();
+"#, "2|2|[[1]]:null|2|2|1:[[1]]:null|2|2|null:[[1]]:null|null");
+}
+
+/// Null-root update conversion is unchanged without EIR optimization.
+#[test]
+fn test_nested_write_null_root_updates_no_ir_opt() {
+    without_ir_opt(test_nested_write_null_root_updates);
+}
+
+/// Null conversion preserves reference aliases, static roots and state before throwing warnings.
+#[test]
+fn test_nested_write_null_root_storage_and_unwind() {
+    assert_write(r#"<?php
+class NullRootState { public static mixed $items = null; }
+function updateRoot(mixed &$items): void { ++$items[0][0]; }
+set_error_handler(function($level, $message) { echo $level, '|'; return true; });
+mixed $items = null; $copy = $items; $alias = &$items; updateRoot($alias);
+echo json_encode($items), ':', json_encode($copy), '|';
+NullRootState::$items[0][0] += 2; echo json_encode(NullRootState::$items), '|';
+$items = null; $copy = $items;
+set_error_handler(function($level, $message) { throw new Error('stop'); });
+try { $items[0][0] += 1; }
+catch (Error $error) {
+    echo $error->getMessage(), ':', json_encode($items), ':', json_encode($copy);
+}
+restore_error_handler(); restore_error_handler(); NullRootState::$items = null;
+unset($items, $copy, $alias, $error);
+"#, "2|2|[[1]]:null|2|2|[[2]]|stop:[]:null");
+}
+
+/// Reference and exception cleanup stays balanced without EIR optimization.
+#[test]
+fn test_nested_write_null_root_storage_and_unwind_no_ir_opt() {
+    without_ir_opt(test_nested_write_null_root_storage_and_unwind);
+}
+
 /// Checks output and complete owner cleanup for one nested write fixture.
 fn assert_write(source: &str, expected: &str) {
     let out = compile_and_run_with_heap_debug(source);

@@ -327,6 +327,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame before the tail-call
     emitter.instruction("b __rt_throw_object_not_array");                       // never returns
 
+    // -- reject a Closure after retiring the consumed write value --
     // A callable descriptor has no class id to look up, but PHP still names it as Closure.
     emitter.label("__rt_mixed_array_set_closure_not_indexable");
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the owned boxed value consumed by the rejected write
@@ -623,6 +624,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before the tail-call
     emitter.instruction("jmp __rt_throw_object_not_array");                     // never returns
 
+    // -- reject a Closure after retiring the consumed write value --
     // A callable descriptor has no class id to look up, but PHP still names it as Closure.
     emitter.label("__rt_mixed_array_set_closure_not_indexable");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the owned boxed value consumed by the rejected write

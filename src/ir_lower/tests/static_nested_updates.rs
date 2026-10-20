@@ -55,6 +55,7 @@ function falsePlainWrite(mixed $key): void { NestedUpdate::$items[0][0][$key] = 
 function falsePlainAppend(): void { NestedUpdate::$items[0][0][] = 9; }
 function falseLocalWrite(bool $flag): void { $items = [[$flag]]; $items[0][0][1] = 9; }
 function falseLocalCompound(array $items): void { $items[0][0][1] += 4; }
+function nullRootUpdate(mixed $items): void { $items[0][0] += 1; }
 function falseStaticCoalesce(): void { NestedUpdate::$items[0][0][1] ??= 4; }
 function recursiveFalseWrite(): void { $items = [false]; $items[0][0][1] = 9; }
 function scalarPlainWrite(mixed $value): void { $items = [[$value]]; $items[0][0][1] = 9; }
@@ -102,6 +103,9 @@ echo json_encode(NestedUpdate::$items);
         inst.op == Op::RuntimeCall && inst.result.is_none()
             && inst.immediate == Some(Immediate::Bool(true))
     }).count() >= 2, "{target}: captured static expression stores reuse diagnosed keys");
+    let null_root = module.functions.iter().find(|function| function.name == "nullRootUpdate").unwrap();
+    assert!(null_root.blocks.iter().any(|block| block.name.starts_with("static.update.null.promote")),
+        "{target}: null roots convert before missing-key reads and scalar rejection");
     let scalar = module.functions.iter().find(|function| function.name == "scalarUpdate").unwrap();
     assert!(scalar.blocks.iter().any(|block| block.name.starts_with("static.update.scalar")
         && matches!(block.terminator, Some(crate::ir::Terminator::Throw { .. }))),
