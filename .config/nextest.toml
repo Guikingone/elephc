@@ -1,6 +1,20 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 1 }
 
+# A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as
+# one: one catalog compile per optimizer mode instead of one per fixture, but the run itself
+# still executes every case under heap diagnostics, so the single test runs longer than any of
+# the fixtures it replaced. Six periods bound a hang while leaving the bundle its savings.
+# Nextest takes the FIRST matching override for a setting, so this block stays ahead of the
+# family-wide `binary(codegen_tests)` budgets below, which would otherwise win on Linux.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(/::test_[a-z0-9_]*_bundle$/)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(/::test_[a-z0-9_]*_bundle$/)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
 # The embedder stack tests run whole compiler phases on a deliberately small thread stack and
 # the security-limit tests compile programs nested right up to the depth cap;
 # `eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack` (37s) and
