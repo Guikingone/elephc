@@ -51,6 +51,7 @@ mod boxed_array_reduce;
 mod boxed_array_aggregates;
 mod boxed_array_multisort;
 mod builtin_datetime_methods;
+mod eval_demand;
 mod instanceof_operand_owners;
 mod iter_start_origin;
 mod iterator_cleanup;

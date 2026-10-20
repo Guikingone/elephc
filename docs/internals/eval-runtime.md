@@ -38,9 +38,14 @@ eval($code)
   -> target-aware assembly and optional bridge linking
 ```
 
-The checker and AST optimizer deliberately stay conservative even for a source
-literal. The more precise AOT decision happens during EIR lowering, after the
-front end has already preserved PHP's dynamic semantics and diagnostics.
+The front end reads a parsable source literal as inline code: reachability,
+prelude pruning and the throwable, SPL and Reflection checker gates keep what
+the fragment names and drop the rest, exactly as for the same statements written
+outside `eval`. Only a runtime-sourced or unparsable `eval`, or a dynamic hazard
+inside the fragment (a computed call or callable, `new $c`, `include`, a
+namespace), keeps the previous whole-surface behaviour. The AOT decision itself
+still happens during EIR lowering, after the front end has preserved PHP's
+dynamic semantics and diagnostics.
 
 ## Execution-path decision
 

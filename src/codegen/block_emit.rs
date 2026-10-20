@@ -1059,9 +1059,14 @@ fn is_main(function: &Function) -> bool {
 pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let mut default_initializers = Vec::new();
     let mut uninitialized_static_properties = Vec::new();
-    let mut class_names = super::runtime_referenced_class_names(ctx.module)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut referenced = super::runtime_referenced_class_names(ctx.module);
+    // The eval bridge's static-property helpers (`eval_static_property_helpers`) cover every
+    // compiled class, so a fragment can read a static property of a class no native code
+    // references; its default and uninitialized sentinel must then exist as well.
+    if ctx.module.required_runtime_features.eval_bridge {
+        referenced.extend(ctx.module.class_infos.keys().cloned());
+    }
+    let mut class_names = referenced.into_iter().collect::<Vec<_>>();
     class_names.sort();
     for class_name in class_names {
         let Some(class_info) = ctx.module.class_infos.get(&class_name) else {
