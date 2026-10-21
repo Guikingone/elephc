@@ -322,8 +322,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // malformed handler so JSON_INVALID_UTF8_* and JSON_ERROR_UTF8 see
     // the same input each implementation observes on ARM64.
     emitter.instruction("cmp r14b, 0xC2");                                      // is the lead byte below the smallest valid 2-byte start (0xC2)?
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // route to the malformed handler
     emitter.instruction("cmp r14b, 0xF5");                                      // is the lead byte at/above the first invalid 4+ byte range (0xF5)?
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // route to the malformed handler
 
     emitter.instruction("cmp r14b, 0xE0");                                      // lead byte 0xE0+ → 3- or 4-byte sequence
@@ -339,13 +341,16 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // malformed handler instead of reading past the buffer.
     emitter.instruction("lea r8, [r13 + 1]");                                   // index of the continuation byte
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is the continuation byte within the input?
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated 2-byte sequence → malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
     emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2 without disturbing the cached flag register
     // Validate b2 is a continuation byte (0x80..0xBF).
     emitter.instruction("cmp r8, 0x80");                                        // continuation bytes start at 0x80
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
     emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx rax, r14b");                                     // widen the lead byte for arithmetic
     emitter.instruction("and rax, 0x1F");                                       // b1 & 0x1F → top 5 bits
@@ -362,19 +367,24 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // both r13+1 and r13+2 fit too.
     emitter.instruction("lea r8, [r13 + 2]");                                   // index of byte 3 (last byte of the sequence)
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is the last byte within the input?
+    emitter.instruction("mov r12, 2");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated 3-byte sequence → malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
     emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2 without disturbing the cached flag register
     // Validate b2 is a continuation byte.
     emitter.instruction("cmp r8, 0x80");                                        // continuation bytes start at 0x80
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
     emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx rcx, BYTE PTR [r10 + r13 + 2]");                 // load b3
     // Validate b3 is a continuation byte.
     emitter.instruction("cmp rcx, 0x80");                                       // continuation bytes start at 0x80
+    emitter.instruction("mov r12, 2");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
     emitter.instruction("cmp rcx, 0xC0");                                       // continuation bytes end at 0xBF
+    emitter.instruction("mov r12, 2");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx rax, r14b");                                     // widen the lead byte
     emitter.instruction("and rax, 0x0F");                                       // b1 & 0x0F → top 4 bits
@@ -385,10 +395,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and rcx, 0x3F");                                       // b3 & 0x3F → low 6 bits
     emitter.instruction("or rax, rcx");                                         // assemble the codepoint in rax
     emitter.instruction("cmp rax, 0x800");                                      // reject overlong 3-byte sequences (codepoint < 0x800)
+    emitter.instruction("mov r12, 3");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // PHP rejects overlong UTF-8 encodings
     emitter.instruction("mov r8, rax");                                         // copy the codepoint for the surrogate-range test
     emitter.instruction("sub r8, 0xD800");                                      // offset into the surrogate range, if any
     emitter.instruction("cmp r8, 0x800");                                       // does the codepoint fall in 0xD800..0xDFFF?
+    emitter.instruction("mov r12, 3");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // PHP rejects surrogate code points in UTF-8
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the codepoint for the emit helper
     emitter.instruction("mov r12, 3");                                          // 3 source bytes consumed
@@ -399,25 +411,32 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // Bounds check the final byte of the 4-byte sequence.
     emitter.instruction("lea r8, [r13 + 3]");                                   // index of byte 4 (last byte of the sequence)
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is the last byte within the input?
+    emitter.instruction("mov r12, 3");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated 4-byte sequence → malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
     emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2 without disturbing the cached flag register
     // Validate b2 is a continuation byte.
     emitter.instruction("cmp r8, 0x80");                                        // continuation bytes start at 0x80
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
     emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx rcx, BYTE PTR [r10 + r13 + 2]");                 // load b3
     // Validate b3 is a continuation byte.
     emitter.instruction("cmp rcx, 0x80");                                       // continuation bytes start at 0x80
+    emitter.instruction("mov r12, 2");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
     emitter.instruction("cmp rcx, 0xC0");                                       // continuation bytes end at 0xBF
+    emitter.instruction("mov r12, 2");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx r9, BYTE PTR [r10 + r13 + 3]");                  // load b4
     // Validate b4 is a continuation byte.
     emitter.instruction("cmp r9, 0x80");                                        // continuation bytes start at 0x80
+    emitter.instruction("mov r12, 3");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
     emitter.instruction("cmp r9, 0xC0");                                        // continuation bytes end at 0xBF
+    emitter.instruction("mov r12, 3");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx rax, r14b");                                     // widen the lead byte
     emitter.instruction("and rax, 0x07");                                       // b1 & 0x07 → top 3 bits
@@ -431,8 +450,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and r9, 0x3F");                                        // b4 & 0x3F → low 6 bits
     emitter.instruction("or rax, r9");                                          // full 21-bit codepoint
     emitter.instruction("cmp rax, 0x10000");                                    // reject overlong 4-byte sequences (codepoint < 0x10000)
+    emitter.instruction("mov r12, 4");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // PHP rejects overlong UTF-8 encodings
     emitter.instruction("cmp rax, 0x110000");                                   // is the codepoint above U+10FFFF?
+    emitter.instruction("mov r12, 4");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // PHP rejects out-of-range UTF-8
     emitter.instruction("mov r12, 4");                                          // four source bytes belong to this Unicode scalar
     emitter.instruction("test r15, 256");                                       // does JSON_UNESCAPED_UNICODE permit a literal scalar?
@@ -506,6 +527,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     //     JsonException is raised when JSON_THROW_ON_ERROR is set, and
     //     fall through to the IGNORE recovery on the no-throw path.
     emitter.label("__rt_json_str_utf8_malformed_x");
+    emitter.instruction("mov QWORD PTR [rbp - 72], r12");                       // preserve the malformed-sequence skip count
     emitter.instruction("mov QWORD PTR [rbp - 48], r13");                       // park the source index across the helper-call sequence
     emitter.instruction("test r15, 0x100000");                                  // JSON_INVALID_UTF8_IGNORE bit (cached flag)
     emitter.instruction("jne __rt_json_str_utf8_skip_byte_x");                  // skip the byte and keep encoding
@@ -529,7 +551,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- malformed UTF-8: skip a single byte and resume the main loop --
     emitter.label("__rt_json_str_utf8_skip_byte_x");
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // restore the source index parked above
-    emitter.instruction("add r13, 1");                                          // advance past exactly one malformed byte (PHP-faithful recovery)
+    emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // reload the bytes this malformed sequence consumed
+    emitter.instruction("add r13, r12");                                        // skip the whole invalid sequence, matching PHP's recovery
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source index for the next loop iteration
     emitter.instruction("jmp __rt_json_str_loop");                              // resume scanning the remaining source bytes
 

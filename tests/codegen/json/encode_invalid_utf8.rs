@@ -291,3 +291,29 @@ echo json_encode($s, JSON_INVALID_UTF8_IGNORE);
     );
     assert_eq!(out, "\"ab\"");
 }
+
+/// A surrogate sequence is one invalid Unicode scalar, so SUBSTITUTE emits exactly one
+/// U+FFFD for the whole sequence instead of one per byte.
+#[test]
+fn test_json_encode_surrogate_substitute_emits_one_replacement() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "a" . chr(0xED) . chr(0xA0) . chr(0x80) . "b";
+echo json_encode($s, JSON_INVALID_UTF8_SUBSTITUTE);
+"#,
+    );
+    assert_eq!(out, "\"a\\ufffdb\"");
+}
+
+/// A valid lead byte followed by a non-continuation byte consumes only the lead byte;
+/// the following ASCII resumes normally. PHP renders `E0 41 42` as U+FFFD + "AB".
+#[test]
+fn test_json_encode_bad_continuation_resumes_at_next_ascii() {
+    let out = compile_and_run(
+        r#"<?php
+$s = chr(0xE0) . "AB";
+echo json_encode($s, JSON_INVALID_UTF8_SUBSTITUTE);
+"#,
+    );
+    assert_eq!(out, "\"\\ufffdAB\"");
+}
