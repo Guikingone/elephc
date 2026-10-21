@@ -639,9 +639,10 @@ class GuardedPayload {
 $wire = serialize(new GuardedPayload());
 $value = unserialize($wire, ['allowed_classes' => false]);
 echo get_class($value), "\n";
+var_dump($value instanceof __PHP_Incomplete_Class);
 "#,
     );
-    assert_eq!(out, "__PHP_Incomplete_Class\n");
+    assert_eq!(out, "__PHP_Incomplete_Class\nbool(true)\n");
 }
 
 /// Verifies an `allowed_classes` allow-list hydrates and wakes only the named
