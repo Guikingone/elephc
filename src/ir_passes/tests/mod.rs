@@ -24,6 +24,7 @@ mod driver_test;
 mod fresh_mixed_transfer_test;
 mod identity_arith_test;
 mod inline_test;
+mod numeric_closure_calls_test;
 mod integer_range_test;
 mod integer_range_regression_test;
 mod immutable_local_loads_test;

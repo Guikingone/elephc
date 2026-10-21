@@ -3,11 +3,12 @@
 //!
 //! Called from:
 //! - `crate::ir::module`, `crate::ir::builder`, `crate::ir::validator`, and
-//!   future IR codegen.
+//!   `crate::codegen`.
 //!
 //! Key details:
 //! - Function-local tables own blocks, instructions, values, and locals. IDs
 //!   are zero-based indices into those tables.
+//! - Private entry variants retain a source name separately from their physical symbol.
 
 use crate::ir::block::{BasicBlock, BlockId};
 use crate::ir::instr::{Immediate, InstId, Instruction, Op};
@@ -52,6 +53,8 @@ impl LocalSlotId {
 pub struct Function {
     pub id: FunctionId,
     pub name: String,
+    /// PHP source identity retained by a private implementation variant for observability.
+    pub source_name: Option<String>,
     pub params: Vec<FunctionParam>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
@@ -84,6 +87,16 @@ pub struct Function {
 }
 
 impl Function {
+    /// Returns the PHP source identity while keeping the physical entry symbol private.
+    pub(crate) fn display_name(&self) -> &str {
+        self.source_name.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Includes implementation variants of PHP functions while excluding runtime scaffolding.
+    pub(crate) fn has_source_identity(&self) -> bool {
+        !self.flags.is_synthetic || self.source_name.is_some()
+    }
+
     /// Counts instruction and terminator value uses without counting definitions.
     pub(crate) fn value_use_counts(&self) -> std::collections::HashMap<ValueId, usize> {
         let mut counts = std::collections::HashMap::new();
@@ -107,6 +120,7 @@ impl Function {
         Self {
             id: FunctionId::from_raw(0),
             name,
+            source_name: None,
             params: Vec::new(),
             return_type,
             return_php_type,

@@ -1,0 +1,97 @@
+//! Purpose:
+//! Checks numeric closure specialization, exact scalar gates and name resolution with explicit EIR.
+//!
+//! Called from:
+//! - The IR pass library test harness.
+//!
+//! Key details:
+//! - Original Mixed entry points are retained and the rewritten module remains validator-clean.
+
+use crate::ir::{Builder, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind,
+    MixedNumericOp, Module, Op, Ownership, Terminator};
+use crate::codegen::platform::{Arch, Platform, Target};
+use crate::types::PhpType;
+use super::super::numeric_closure_calls::specialize;
+
+/// Builds a Mixed identity-plus-one closure and a direct call with the requested physical type.
+fn fixture(argument: PhpType) -> Module {
+    let mut module = Module::new(Target::new(Platform::Linux, Arch::X86_64));
+    let mixed = IrType::Heap(IrHeapKind::Mixed);
+    let mut closure = Function::new("closure_numeric".into(), mixed, PhpType::Mixed);
+    closure.flags.is_closure = true;
+    closure.flags.is_static = true;
+    closure.params.push(FunctionParam { name: "x".into(), ir_type: mixed, php_type: PhpType::Mixed, by_ref: false, variadic: false });
+    let input = closure.add_local(Some("x".into()), mixed, PhpType::Mixed, LocalKind::PhpLocal);
+    let shadow = closure.add_local(Some("shadow".into()), mixed, PhpType::Mixed, LocalKind::PhpLocal);
+    let mut builder = Builder::new(&mut closure);
+    let entry = builder.create_named_block("entry", Vec::new());
+    builder.set_entry(entry); builder.position_at_end(entry);
+    let load = builder.emit_load_local(input, mixed, PhpType::Mixed);
+    let clone = builder.emit(Op::MixedClone, vec![load], None, mixed, PhpType::Mixed, Ownership::Owned).unwrap();
+    builder.emit_store_local(shadow, clone);
+    let load = builder.emit_load_local(shadow, mixed, PhpType::Mixed);
+    let one = builder.emit_const_i64(1);
+    let result = builder.emit(Op::MixedNumericBinop, vec![load, one], Some(Immediate::MixedNumericOp(MixedNumericOp::Add)),
+        mixed, PhpType::Mixed, Ownership::Owned).unwrap();
+    builder.terminate(Terminator::Return { value: Some(result) });
+    module.add_closure(closure);
+    let mut caller = Function::new("caller".into(), mixed, PhpType::Mixed);
+    let mut builder = Builder::new(&mut caller);
+    let entry = builder.create_named_block("entry", Vec::new());
+    builder.set_entry(entry); builder.position_at_end(entry);
+    let argument = match argument {
+        PhpType::Int => builder.emit_const_i64(7),
+        PhpType::Float => builder.emit_const_f64(1.5),
+        PhpType::Bool => builder.emit_const_bool(true),
+        PhpType::Void => builder.emit_const_null(),
+        _ => unreachable!(),
+    };
+    let target = module.data.intern_function_name("closure_numeric");
+    let result = builder.emit(Op::Call, vec![argument], Some(Immediate::Data(target)), mixed,
+        PhpType::Mixed, Ownership::Owned).unwrap();
+    builder.terminate(Terminator::Return { value: Some(result) });
+    module.add_function(caller);
+    module
+}
+
+/// Exact int and float arguments receive private entry points without changing the descriptor ABI.
+#[test]
+fn numeric_closure_calls_exact_scalar_specialization_is_idempotent() {
+    for argument in [PhpType::Int, PhpType::Float] {
+        let mut module = fixture(argument.clone());
+        crate::ir::validate_module(&module).unwrap();
+        assert!(specialize(&mut module));
+        crate::ir::validate_module(&module).unwrap();
+        assert_eq!(module.closures.len(), 2);
+        assert_eq!(module.closures[0].params[0].php_type, PhpType::Mixed);
+        assert_eq!(module.closures[1].params[0].php_type, argument);
+        assert_eq!(module.closures[1].display_name(), module.closures[0].name);
+        assert!(module.closures[1].has_source_identity());
+        assert!(module.closures[1].flags.is_static, "preserve the PHP closure flags");
+        assert!(!module.closures[1].instructions.iter().any(|inst| inst.op == Op::MixedClone));
+        assert!(!specialize(&mut module));
+    }
+}
+
+/// Bool and null share I64 storage with integers but must never inherit an integer proof.
+#[test]
+fn numeric_closure_calls_reject_bool_null_and_by_reference() {
+    for argument in [PhpType::Bool, PhpType::Void] {
+        let mut module = fixture(argument);
+        assert!(!specialize(&mut module));
+        assert_eq!(module.closures.len(), 1);
+    }
+    let mut module = fixture(PhpType::Int);
+    module.closures[0].params[0].by_ref = true;
+    assert!(!specialize(&mut module));
+}
+
+/// Direct-call lookup gives a free function precedence over a same-named closure table entry.
+#[test]
+fn numeric_closure_calls_respect_first_callee_metadata() {
+    let mut module = fixture(PhpType::Int);
+    let mut shadow = module.closures[0].clone();
+    shadow.flags.is_closure = false;
+    module.add_function(shadow);
+    assert!(!specialize(&mut module));
+}
