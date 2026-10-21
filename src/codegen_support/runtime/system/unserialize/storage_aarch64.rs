@@ -92,7 +92,8 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x3, #8]");                                    // typed scalar/object/hash: unbox the low word
     emitter.instruction("str x9, [x8]");                                        // store it inline in the slot
     emitter.instruction("str xzr, [x8, #8]");                                   // the high word marks the typed property initialized
-    emitter.instruction("ret");                                                 // property stored
+    emitter.instruction("mov x0, x3");                                         // hand the parsed box to the post-store finisher
+    emitter.instruction("b __rt_unser_finish_stored_prop");                    // tail-call the finisher so the decoder return address stays intact
     emitter.label("__rt_obj_store_prop_tagged");
     // Only an int or null reaches this arm: the declared-type check above already raised the
     // TypeError for a string, float, bool or array, so a non-int tag here is the canonical null.
@@ -103,27 +104,35 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x8]");                                        // payload word of the tagged slot
     emitter.instruction(&format!("mov x9, #{}", TAGGED_SCALAR_TAG_INT));        // runtime tag of a non-null tagged int
     emitter.instruction("str x9, [x8, #8]");                                    // tag word of the tagged slot
-    emitter.instruction("ret");                                                 // property stored
+    emitter.instruction("mov x0, x3");                                         // hand the parsed box to the post-store finisher
+    emitter.instruction("b __rt_unser_finish_stored_prop");                    // tail-call the finisher so the decoder return address stays intact
     emitter.label("__rt_obj_store_prop_tagged_null");
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x9", crate::codegen_support::NULL_SENTINEL);
     emitter.instruction("str x9, [x8]");                                        // canonical tagged-null payload word
     emitter.instruction(&format!("mov x9, #{}", TAGGED_SCALAR_TAG_NULL));       // runtime tag of PHP null
     emitter.instruction("str x9, [x8, #8]");                                    // tag word of the tagged slot
-    emitter.instruction("ret");                                                 // property stored
+    emitter.instruction("mov x0, x3");                                         // hand the parsed box to the post-store finisher
+    emitter.instruction("b __rt_unser_finish_stored_prop");                    // tail-call the finisher so the decoder return address stays intact
     emitter.label("__rt_obj_store_prop_arr");
-    emitter.instruction("stp x8, x30, [sp, #-16]!");                            // save the slot address and return address
+    emitter.instruction("sub sp, sp, #32");                                    // reserve slot, box, and return-address spills
+    emitter.instruction("stp x8, x30, [sp, #16]");                              // save the slot address and return address
+    emitter.instruction("str x3, [sp, #8]");                                    // preserve the parsed box across the conversion
     emitter.instruction("ldr x0, [x3, #8]");                                    // parsed hash pointer (box low word)
     emitter.instruction("bl __rt_hash_to_indexed_array");                       // materialize a native indexed array
-    emitter.instruction("ldp x8, x30, [sp], #16");                              // restore the slot address and return address
+    emitter.instruction("ldr x3, [sp, #8]");                                    // recover the parsed box after the conversion
+    emitter.instruction("ldp x8, x30, [sp, #16]");                             // restore the slot address and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the conversion spills
     emitter.instruction("str x0, [x8]");                                        // store the indexed-array pointer
     emitter.instruction("str xzr, [x8, #8]");                                   // the high word marks the typed property initialized
-    emitter.instruction("ret");                                                 // property stored
+    emitter.instruction("mov x0, x3");                                         // hand the parsed box to the parse-owner release
+    emitter.instruction("b __rt_decref_mixed");                                // retire the source hash box now the slot owns the new array
     emitter.label("__rt_obj_store_prop_str");
     emitter.instruction("ldr x9, [x3, #8]");                                    // string pointer from the box
     emitter.instruction("str x9, [x8]");                                        // store the string pointer
     emitter.instruction("ldr x9, [x3, #16]");                                   // string length from the box
     emitter.instruction("str x9, [x8, #8]");                                    // store the string length
-    emitter.instruction("ret");                                                 // property stored
+    emitter.instruction("mov x0, x3");                                         // hand the parsed box to the post-store finisher
+    emitter.instruction("b __rt_unser_finish_stored_prop");                    // tail-call the finisher so the decoder return address stays intact
     // A parsed null keeps its boxed tag-8 cell like every other value: the in-band
     // NULL_SENTINEL is not a Mixed cell pointer, and every reader of the slot
     // (`=== null`, var_dump, json_encode) dereferenced it.
@@ -151,7 +160,8 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("add x13, x13, #1");                                    // advance to the next row
     emitter.instruction("b __rt_obj_store_prop_loop");                          // continue scanning
     emitter.label("__rt_obj_store_prop_done");
-    emitter.instruction("ret");                                                 // no matching property, ignore the value
+    emitter.instruction("mov x0, x3");                                         // hand the ignored value box to the context owner
+    emitter.instruction("b __rt_unserialize_defer_data");                      // keep the unclaimed value alive until the decode completes
 
     // -- __rt_hash_to_indexed_array(x0=hash) -> x0=indexed array: rebuild a parsed
     // hash (with boxed-Mixed values) as a native value_type-7 indexed array so

@@ -42,6 +42,7 @@ mod magic_call;
 mod custom;
 mod legacy_context;
 mod parser_owners;
+mod property_cleanup;
 mod reference_registry;
 mod refused_classes;
 mod storage_aarch64;
@@ -72,6 +73,7 @@ pub(crate) fn emit_unserialize(emitter: &mut Emitter) {
     diagnostics::emit_unserialize_object_to_string_helper(emitter);
     refused_classes::emit_refuse_class(emitter);
     duplicate_keys::emit(emitter);
+    property_cleanup::emit(emitter);
 
     match emitter.target.arch {
         Arch::AArch64 => {

@@ -74,6 +74,25 @@ unset($value);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Scalar property slots copy the parsed payload inline; the parser's box must be
+/// released after the store, and an unknown serialized key must not strand its value.
+#[test]
+fn test_unserialize_inline_scalar_properties_release_their_boxes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ScalarProps { public int $i = 0; public float $f = 0.0; public $inferred = 7; }
+$value = unserialize('O:11:"ScalarProps":3:{s:1:"i";i:9;s:1:"f";d:1.5;s:8:"inferred";i:7;}');
+echo $value->i, ":", $value->f, ":", $value->inferred, "|";
+unset($value);
+class EmptyProps { }
+$other = unserialize('O:10:"EmptyProps":1:{s:1:"m";i:9;}');
+echo get_class($other), "|done";
+unset($other);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "9:1.5:7|EmptyProps|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// The `__unserialize` data hash is built with the same duplicate-key rule, so a later
 /// back-reference inside the property list follows the replacement value.
 #[test]
