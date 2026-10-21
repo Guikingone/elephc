@@ -88,6 +88,7 @@ fn printed_effects(line: &str) -> &str {
 /// Packed field reads and writes carry their exact effects instead of the object-property
 /// contract, so the read no longer advertises warnings (which published the diagnostic source
 /// location before every field load) and the write no longer advertises refcounting or throws.
+/// A write keeps `reads_heap` because a nested record field store copies its source record.
 #[test]
 fn test_packed_field_accesses_carry_exact_effects() {
     let ir = function_ir(INTEGRATE_SOURCE, true, "step");
@@ -98,7 +99,7 @@ fn test_packed_field_accesses_carry_exact_effects() {
         assert_eq!(printed_effects(line), "reads_heap", "{line}");
     }
     for line in writes {
-        assert_eq!(printed_effects(line), "writes_heap, may_fatal", "{line}");
+        assert_eq!(printed_effects(line), "reads_heap, writes_heap, may_fatal", "{line}");
     }
     assert_eq!(run_variant(INTEGRATE_SOURCE, true), INTEGRATE_OUTPUT);
     assert_eq!(run_variant(INTEGRATE_SOURCE, false), INTEGRATE_OUTPUT);
@@ -366,4 +367,41 @@ fn test_every_target_runtime_carries_the_non_faulting_resolver() {
             "{name}: __rt_buffer_try_resolve has no zero result path"
         );
     }
+}
+
+/// A loop that copies one nested packed record into another field of the same element, in the
+/// shape of a physics step that keeps the previous position.
+const RECORD_COPY_SOURCE: &str = r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+packed class Body { public Vec2 $pos; public Vec2 $prev; public int $id; }
+function shift(buffer<Body> $b, int $n): void {
+    for ($i = 0; $i < $n; $i++) {
+        $b[$i]->prev = $b[$i]->pos;
+        $b[$i]->pos->x = $b[$i]->pos->x + 1.0;
+    }
+}
+$b = buffer_new<Body>(2);
+$b[0]->pos->x = 1.5;
+$b[0]->pos->y = 2.0;
+$b[1]->pos->x = -3.0;
+$b[1]->pos->y = 0.5;
+shift($b, 2);
+echo $b[0]->prev->x, " ", $b[0]->prev->y, " ", $b[0]->pos->x, " ", $b[1]->prev->x, " ", $b[1]->pos->x, "\n";
+"#;
+
+/// A nested record copy reads its source record, so its `prop_set` advertises `reads_heap`
+/// alongside the write, and a loop of record copies still hoists buffer resolution and prints
+/// the same result with the optimizer on and off.
+#[test]
+fn test_nested_record_copy_reads_its_source_in_a_hoisted_loop() {
+    let ir = function_ir(RECORD_COPY_SOURCE, true, "shift");
+    let writes: Vec<&str> = ir.lines().filter(|line| line.contains(" prop_set ")).collect();
+    assert_eq!(writes.len(), 2, "{ir}");
+    for line in writes {
+        assert_eq!(printed_effects(line), "reads_heap, writes_heap, may_fatal", "{line}");
+    }
+    assert!(ir.contains("buffer_get_resolved"), "{ir}");
+    let expected = "1.5 2 2.5 -3 -2\n";
+    assert_eq!(run_variant(RECORD_COPY_SOURCE, true), expected);
+    assert_eq!(run_variant(RECORD_COPY_SOURCE, false), expected);
 }

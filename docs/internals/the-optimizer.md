@@ -600,8 +600,9 @@ promotion leaves at each join. Scalar element reads are not shared: a
 `buffer_set_resolved` between them can change the loaded value.
 
 Packed field reads and writes (`prop_get`/`prop_set` on a packed record) also get
-their exact effects during effect refinement (`reads_heap`; `writes_heap` and
-`may_fatal`), count as concat-inert, and consume their operands by value for the
+their exact effects during effect refinement (`reads_heap` for a read;
+`reads_heap`, `writes_heap` and `may_fatal` for a write, which may copy a whole
+nested record), count as concat-inert, and consume their operands by value for the
 by-reference alias analysis, so the loop index and the locals they store stay in
 SSA. See the [compilation guide](../compiling/optimization.md#buffer-loops).
 
