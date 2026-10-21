@@ -39,12 +39,13 @@ impl IrPass for ImmutableLocalLoads {
         "immutable_local_loads"
     }
 
-    /// Skips functions without an effectful concrete integer or float local load to refine.
+    /// Skips functions without an effectful numeric local load whose arithmetic can use it.
     fn is_applicable(&self, function: &Function) -> bool {
-        function
-            .instructions
-            .iter()
-            .any(|inst| actionable_numeric_load_slot(function, inst).is_some())
+        let consumers = NumericConsumers::of(function);
+        function.instructions.iter().any(|inst| {
+            actionable_numeric_load_slot(function, inst)
+                .is_some_and(|slot| consumers.admits(function.locals[slot.as_raw() as usize].ir_type))
+        })
     }
 
     /// Refines effects for every load whose local slot satisfies the immutable contract.
@@ -73,6 +74,39 @@ impl IrPass for ImmutableLocalLoads {
             }
         }
         changed
+    }
+}
+
+/// Which numeric kinds have arithmetic in a function that a pure local load can feed.
+///
+/// Integer loads are refined only next to checked integer arithmetic and float loads only next to
+/// float arithmetic, so a function without such arithmetic (for example a generic identity body
+/// that shape merging folds with its other instantiations) keeps its loads unchanged.
+#[derive(Clone, Copy)]
+struct NumericConsumers {
+    /// The function contains checked integer add, subtract or multiply.
+    checked_int: bool,
+    /// The function contains float add, subtract, multiply or divide.
+    float: bool,
+}
+
+impl NumericConsumers {
+    /// Scans one function's instructions for the arithmetic that justifies each kind.
+    fn of(function: &Function) -> Self {
+        let has = |ops: &[Op]| function.instructions.iter().any(|inst| ops.contains(&inst.op));
+        Self {
+            checked_int: has(&[Op::ICheckedAdd, Op::ICheckedSub, Op::ICheckedMul]),
+            float: has(&[Op::FAdd, Op::FSub, Op::FMul, Op::FDiv]),
+        }
+    }
+
+    /// Returns whether loads of this storage kind are worth refining in the function.
+    fn admits(self, ir_type: IrType) -> bool {
+        match ir_type {
+            IrType::I64 => self.checked_int,
+            IrType::F64 => self.float,
+            _ => false,
+        }
     }
 }
 

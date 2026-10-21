@@ -1000,7 +1000,10 @@ acquire/release cancellation, string-literal concat folding, redundant
 `move`/`borrow` cleanup), then scalar local promotion into SSA values with block
 parameters at joins and loop back edges, then immutable concrete numeric-local
 classification and integer-sink specialization for checked add/subtract/multiply.
-Immutable-load classification also covers concrete float locals. It accepts an
+Immutable-load classification also covers concrete float locals. It refines integer
+loads only in functions with checked integer arithmetic and float loads only in
+functions with float arithmetic, so identical generic bodies stay identical for
+shape merging. It accepts an
 unwritten by-value parameter or one entry-block store that dominates every load,
 and rejects by-reference aliases, dynamic `eval`, other storage representations,
 and any unrecognized slot operation. Those passes make proven-stable integer and

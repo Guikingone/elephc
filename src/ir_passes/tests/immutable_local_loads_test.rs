@@ -75,7 +75,10 @@ fn classifies_read_only_float_parameter_as_immutable() {
             LocalKind::PhpLocal,
         );
         let value = builder.emit_load_local(slot, IrType::F64, PhpType::Float);
-        builder.terminate(Terminator::Return { value: Some(value) });
+        let sum = builder
+            .emit(Op::FAdd, vec![value, value], None, IrType::F64, PhpType::Float, Ownership::NonHeap)
+            .expect("fadd result");
+        builder.terminate(Terminator::Return { value: Some(sum) });
     }
 
     assert!(ImmutableLocalLoads.is_applicable(&function));
@@ -159,12 +162,48 @@ fn classifies_float_with_single_dominating_entry_store() {
         let seed = builder.emit_const_f64(7.5);
         builder.emit_store_local(slot, seed);
         let value = builder.emit_load_local(slot, IrType::F64, PhpType::Float);
-        builder.terminate(Terminator::Return { value: Some(value) });
+        let product = builder
+            .emit(Op::FMul, vec![value, seed], None, IrType::F64, PhpType::Float, Ownership::NonHeap)
+            .expect("fmul result");
+        builder.terminate(Terminator::Return { value: Some(product) });
     }
 
     assert!(classify(&mut function));
     assert!(function.instructions[2].effects.is_pure());
     assert!(validate_function(&function).is_ok());
+}
+
+/// Without arithmetic that could use them, read-only integer and float parameters keep their
+/// loads unchanged, so identical generic bodies (`id<int>`, `id<float>`, `id<bool>`) stay
+/// identical for shape merging.
+#[test]
+fn leaves_numeric_loads_alone_without_matching_arithmetic() {
+    for (ir_type, php_type) in [(IrType::I64, PhpType::Int), (IrType::F64, PhpType::Float)] {
+        let mut function = Function::new("identity".to_string(), ir_type, php_type.clone());
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type,
+            php_type: php_type.clone(),
+            by_ref: false,
+            variadic: false,
+        });
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let slot = builder.add_local(
+                Some("value".to_string()),
+                ir_type,
+                php_type.clone(),
+                LocalKind::PhpLocal,
+            );
+            let value = builder.emit_load_local(slot, ir_type, php_type.clone());
+            builder.terminate(Terminator::Return { value: Some(value) });
+        }
+
+        assert!(!ImmutableLocalLoads.is_applicable(&function), "{php_type:?}");
+    }
 }
 
 /// Sharing `I64` storage with integers does not admit a concrete boolean local.
