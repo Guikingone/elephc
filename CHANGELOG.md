@@ -5,6 +5,18 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.5] - 2026-10-21
+
+- Security: blocked session-file injection through `--web` upload-progress keys and filenames, which could cause a later `session_start()` to hydrate attacker-supplied objects; `php` and `php_binary` readers also refuse `php_serialize` files.
+- Security: cleared request-scoped state between `--web` worker and pool requests to prevent use-after-free and stale output buffers, including state recreated by cleanup destructors.
+- Changed `extern class` fields to use natural C sizes and alignment (**breaking** for `bool`, now one byte), with narrow integer and `f32` fields and reads/writes through typed pointers.
+- Improved function-local loops by keeping boxed counters as integers when every update is proven to stay in range.
+- Improved local numeric reductions by storing nonescaping checked arithmetic results in stack cells instead of allocating on the heap.
+- Improved `buffer<T>` loops by resolving stable handles outside the loop and sharing repeated packed-element addresses, while preserving bounds and stale-handle diagnostics.
+- Fixed pointer concatenation, interpolation, casts, and `printf` formatting to use consistent hexadecimal addresses, including scratch-buffer overruns and truncated digits on Linux x86_64.
+- Fixed packed and extern class names in class-member signatures, including `buffer<T>` and `ptr<T>` properties, promoted parameters, method signatures, and generic type arguments.
+- Fixed nested packed record reads, writes, compound assignments, and whole-record copies through buffers and typed pointers, including forward declarations and namespaced pointer targets.
+
 ## [0.27.4] - 2026-10-21
 
 - Changed extern C integer handling (**breaking**): `int`/`i64` now preserve 64-bit values, and explicit signed/unsigned 8-, 16-, 32-, and 64-bit widths control argument and return conversion; declarations for C `int` and `unsigned` must use `i32` and `u32`.
@@ -818,7 +830,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.4...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.5...HEAD
+[0.27.5]: https://github.com/illegalstudio/elephc/compare/v0.27.4...v0.27.5
 [0.27.4]: https://github.com/illegalstudio/elephc/compare/v0.27.3...v0.27.4
 [0.27.3]: https://github.com/illegalstudio/elephc/compare/v0.27.2...v0.27.3
 [0.27.2]: https://github.com/illegalstudio/elephc/compare/v0.27.1...v0.27.2
