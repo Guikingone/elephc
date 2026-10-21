@@ -284,3 +284,63 @@ C::readE();
     assert_eq!(out.stdout, "2:E|2:E\n");
     // The equivalent reviewed baseline has the same independent Reflection context retention.
 }
+
+/// Trait constants imported by an enum lower the magic constants against the DECLARING trait
+/// (`__TRAIT__`, `__NAMESPACE__`) and rebind `__CLASS__` to the consuming enum; a class reads
+/// them across namespaces (#1827 review).
+#[test]
+fn test_enum_imported_trait_constants_lower_magic_constants() {
+    let out = compile_and_run(
+        r#"<?php
+namespace A;
+trait T { const N = __CLASS__; const TR = __TRAIT__; const NS = __NAMESPACE__; }
+enum E { use T; case One; }
+namespace B;
+class C { public static function read(): string { return \A\E::N . "|" . \A\E::TR . "|" . \A\E::NS; } }
+echo C::read(), "\n";
+"#,
+    );
+    assert_eq!(out, "A\\E|A\\T|A\n");
+}
+
+/// A `parent::` constant in an enum body keeps the declaration compiling (scalar and array
+/// forms); reading it raises PHP's catchable `Error` (#1827 review).
+#[test]
+fn test_enum_parent_constant_defers_to_a_catchable_error() {
+    let out = compile_and_run(
+        r#"<?php
+enum E { case One; const A = parent::X; const B = [parent::Y]; }
+echo "declared\n";
+try { echo E::A; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+try { echo count(E::B); } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "declared\ncaught:Cannot access \"parent\" when current class scope has no parent\ncaught:Cannot access \"parent\" when current class scope has no parent\n"
+    );
+}
+
+/// Private and protected trait constants imported by an enum stay readable inside the enum and
+/// raise PHP's `Error` outside it (#1827 review).
+#[test]
+fn test_enum_imported_trait_constant_visibility_is_enforced() {
+    let out = compile_and_run(
+        r#"<?php
+trait T {
+    private const A = 1;
+    protected const B = 2;
+    public function readA(): int { return self::A; }
+    public function readB(): int { return self::B; }
+}
+enum E { use T; case One; }
+echo E::One->readA(), E::One->readB(), "\n";
+try { echo E::A, "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+try { echo E::B, "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "12\ncaught:Cannot access private constant E::A\ncaught:Cannot access protected constant E::B\n"
+    );
+}
