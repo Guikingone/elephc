@@ -387,6 +387,15 @@ fn test_proven_buffer_loop_assembly_omits_length_compare() {
 fn test_packed_accesses_of_one_iteration_share_one_record_address() {
     let ir = function_ir(INTEGRATE_SOURCE, true, "step");
     assert_eq!(ir.matches("= buffer_get_resolved ").count(), 1, "{ir}");
+
+    let arm = function_assembly(INTEGRATE_SOURCE, "linux-aarch64", "step");
+    assert!(arm.contains("fcmp d1, d0"), "{arm}");
+    assert!(!arm.contains("cset x0, mi"), "{arm}");
+
+    let x86 = function_assembly(INTEGRATE_SOURCE, "linux-x86_64", "step");
+    assert!(x86.contains("ucomisd xmm0, xmm1"), "{x86}");
+    assert!(!x86.contains("setb al"), "{x86}");
+    assert!(!x86.contains("setnp r10b"), "{x86}");
     assert_eq!(run_variant(INTEGRATE_SOURCE, true), INTEGRATE_OUTPUT);
 }
 

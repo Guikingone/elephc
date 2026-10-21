@@ -548,8 +548,9 @@ uses the same layout on every supported target. See
 After the EIR passes, the backend makes a final round of target-aware choices
 while it emits assembly: constant multiplies become shift/add/`lea` sequences
 when that is cheaper on the target (`x * 31` becomes `(x << 5) - x`), loop and
-`if` tests branch directly on compare flags instead of materializing a boolean,
-jumps to the next block and redundant register moves are removed, and the
+`if` tests branch directly on integer and ordered relational float compare flags
+instead of materializing a boolean, jumps to the next block and redundant
+register moves are removed, and the
 overflow paths of checked integer arithmetic are moved after the function's last
 block so hot loops fall straight through. These choices never change program
 behavior and apply with `--ir-opt` on or off. Inspect them with `--emit-asm`; see
