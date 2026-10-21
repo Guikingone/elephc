@@ -10,19 +10,120 @@
 
 use crate::support::*;
 
-/// A later array reference survives replacement of the earlier key that originally owned its box.
+/// A later back-reference follows the replacement written under a duplicate key, like PHP.
 #[test]
 fn test_unserialize_completed_array_reference_survives_duplicate_key_replacement() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 for ($i = 0; $i < 3; $i++) {
     $value = unserialize('a:3:{i:0;a:1:{s:4:"name";s:4:"kept";}i:0;i:5;i:1;R:2;}');
-    echo $value[0], ":", $value[1]["name"], "|";
+    echo $value[0], ":", $value[1], "|";
     unset($value);
 }
 echo "done";
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "5:kept|5:kept|5:kept|done", "{}", out.stderr);
+    assert_eq!(out.stdout, "5:5|5:5|5:5|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An object overwritten by a duplicate key leaves the later reference pointing at the
+/// replacement; the replaced object is destroyed only after the parser completes.
+#[test]
+fn test_unserialize_object_reference_follows_duplicate_key_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class DupObject { public function __destruct() { echo "drop|"; } }
+for ($i = 0; $i < 3; $i++) {
+    $value = unserialize('a:3:{i:0;O:9:"DupObject":0:{}i:0;i:5;i:1;R:2;}');
+    echo $value[0], ":", $value[1], "|";
+    unset($value);
+}
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop|5:5|drop|5:5|drop|5:5|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The PHP 8.5.12 `var_destroy` shape: a destructor runs during duplicate-key cleanup and
+/// recursively calls `unserialize('R:1500;')`. Elephc isolates the nested parse, so the
+/// inner reference cannot reach the outer registry and the outer result stays intact.
+#[test]
+fn test_unserialize_destructor_reentry_cannot_read_the_outer_registry() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Reentrant {
+    public function __destruct() {
+        $inner = @unserialize('R:1500;');
+        echo $inner === false ? "isolated|" : "outer-state|";
+    }
+}
+$n = 2000;
+$payload = 'a:' . ($n + 3) . ':{';
+for ($i = 0; $i < $n; $i++) {
+    $payload .= "i:$i;i:$i;";
+}
+$payload .= 'i:99999;O:9:"Reentrant":0:{}';
+$payload .= 'i:99999;i:42;';
+$payload .= 'i:' . $n . ';R:' . ($n + 2) . ';';
+$payload .= '}';
+$value = unserialize($payload);
+echo $value[$n], "|done";
+unset($value);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "isolated|42|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The `__unserialize` data hash is built with the same duplicate-key rule, so a later
+/// back-reference inside the property list follows the replacement value.
+#[test]
+fn test_unserialize_hook_data_reference_follows_duplicate_key_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Plain {}
+class Hydrated {
+    public function __unserialize(array $data): void {
+        echo $data["x"], ":", $data["y"], "|";
+    }
+}
+$value = unserialize('O:8:"Hydrated":3:{s:1:"x";O:5:"Plain":0:{}s:1:"x";i:5;s:1:"y";R:2;}');
+echo "done";
+unset($value);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "5:5|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A duplicate key can replace an object with any other wire value: the old object's
+/// destructor runs once, and both a scalar replacement and an object replacement stay
+/// reachable from their published reference slots.
+#[test]
+fn test_unserialize_duplicate_key_replaces_object_with_scalar_and_object() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Source { public function __destruct() { echo "drop|"; } }
+class Target { }
+$scalar = unserialize('a:3:{i:0;O:6:"Source":0:{}i:0;s:3:"new";i:1;R:2;}');
+echo $scalar[0], ":", $scalar[1], "|";
+$object = unserialize('a:3:{i:0;O:6:"Source":0:{}i:0;O:6:"Target":0:{}i:1;r:2;}');
+echo get_class($object[1]), "|done";
+unset($scalar, $object);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop|new:new|drop|Target|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The duplicate container's own reference slot follows the reused storage as well, so
+/// both the replaced key and the duplicate occurrence observe the same array.
+#[test]
+fn test_unserialize_duplicate_container_reference_slot_stays_live() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$value = unserialize('a:3:{i:0;a:1:{s:1:"x";i:1;}i:0;a:1:{s:1:"x";i:9;}i:1;R:4;}');
+echo $value[0]["x"], ":", $value[1]["x"], "|done";
+unset($value);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "9:9|done", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

@@ -35,6 +35,7 @@ mod allowed_classes_aarch64;
 mod allowed_classes_x86_64;
 mod context;
 mod decoder_aarch64;
+mod duplicate_keys;
 mod decoder_x86_64;
 mod diagnostics;
 mod magic_call;
@@ -70,6 +71,7 @@ pub(crate) fn emit_unserialize(emitter: &mut Emitter) {
     diagnostics::emit_unserialize_object_string_error_helper(emitter);
     diagnostics::emit_unserialize_object_to_string_helper(emitter);
     refused_classes::emit_refuse_class(emitter);
+    duplicate_keys::emit(emitter);
 
     match emitter.target.arch {
         Arch::AArch64 => {
