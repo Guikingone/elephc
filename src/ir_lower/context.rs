@@ -4609,6 +4609,36 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Retypes a packed record address only when a pointer sink consumes it.
+    ///
+    /// Packed producers keep their record-shaped metadata so field-access optimization still
+    /// recognizes them and does not insert pointer null checks. `Move` is the existing pure
+    /// forwarding operation, so this changes only the sink-facing PHP and EIR types while
+    /// preserving the raw address payload. The sink's pointer type wins even when it names
+    /// another class: the checker accepts any pointer for any pointer, and the payload is the
+    /// same address either way.
+    pub(crate) fn retype_packed_address_for_pointer_sink(
+        &mut self,
+        value: LoweredValue,
+        expected: &PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        if !matches!(self.builder.value_php_type(value.value).codegen_repr(), PhpType::Packed(_)) {
+            return value;
+        }
+        let PhpType::Pointer(target) = expected.codegen_repr() else {
+            return value;
+        };
+        self.emit_value(
+            Op::Move,
+            vec![value.value],
+            None,
+            PhpType::Pointer(target),
+            Op::Move.default_effects(),
+            span,
+        )
+    }
+
     /// Emits a value-producing opcode whose result is an unconditional owned reference.
     ///
     /// This is reserved for runtime transfers such as `CatchBind`, where the opcode clears

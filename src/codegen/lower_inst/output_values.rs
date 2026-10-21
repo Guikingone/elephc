@@ -21,10 +21,11 @@ pub(super) fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     let ty = ctx.load_value_to_result(value)?;
     let raw_ty = ctx.raw_value_php_type(value)?;
-    let output_ty = if matches!(raw_ty, PhpType::Resource(_)) {
-        raw_ty
-    } else {
-        ty
+    let output_ty = match raw_ty {
+        PhpType::Resource(_) => raw_ty,
+        // A packed record address prints like the `ptr<T>` the checker types it as.
+        PhpType::Packed(class_name) => PhpType::Pointer(Some(class_name)),
+        _ => ty,
     };
     emit_loaded_value_to_stdout(ctx, &output_ty)
 }

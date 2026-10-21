@@ -156,6 +156,32 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
+    if is_extern {
+        if let Some(signature) = sig.as_ref() {
+            for (operand, (_, expected)) in operands.iter_mut().zip(&signature.params) {
+                let value = lowered_value_from_id(ctx, *operand);
+                *operand = ctx
+                    .retype_packed_address_for_pointer_sink(value, expected, Some(expr.span))
+                    .value;
+            }
+        }
+    }
+    let builtin_name = php_symbol_key(canonical.trim_start_matches('\\'));
+    if !is_extern
+        && !is_user_function
+        && builtin_name
+            .trim_start_matches("__elephc_")
+            .starts_with("ptr_")
+    {
+        if let Some(signature) = sig.as_ref() {
+            for (operand, (_, expected)) in operands.iter_mut().zip(&signature.params) {
+                let value = lowered_value_from_id(ctx, *operand);
+                *operand = ctx
+                    .retype_packed_address_for_pointer_sink(value, expected, Some(expr.span))
+                    .value;
+            }
+        }
+    }
     let php_type = if is_extern || is_user_function {
         call_return_type(ctx, canonical, &operands)
     } else if let Some(php_type) =

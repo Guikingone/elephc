@@ -386,7 +386,8 @@ pub(super) fn lower_int_like_to_string(
             abi::emit_call_label(ctx.emitter, "__rt_itoa");
             store_if_result(ctx, inst)
         }
-        PhpType::Pointer(_) => {
+        // A packed record address prints like the `ptr<T>` the checker types it as.
+        PhpType::Pointer(_) | PhpType::Packed(_) => {
             abi::emit_call_label(ctx.emitter, "__rt_ptoa");
             store_if_result(ctx, inst)
         }

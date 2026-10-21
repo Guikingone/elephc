@@ -16,6 +16,8 @@ pub(super) fn coerce_to_return_type(
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
+    let return_php_type = ctx.return_php_type.clone();
+    let value = ctx.retype_packed_address_for_pointer_sink(value, &return_php_type, span);
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
