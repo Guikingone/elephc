@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{ClassConst, Program, StmtKind, TypeExpr};
+use crate::parser::ast::{ClassConst, ExprKind, Program, StmtKind, TypeExpr};
 use crate::types::checker::builtin_types::InterfaceDeclInfo;
 use crate::types::traits::FlattenedClass;
 use crate::types::{PhpType, TypeEnv};
@@ -87,6 +87,13 @@ fn validate_constant_declaration(
     };
     let value = constant_value(checker, owner, &constant.name)
         .unwrap_or_else(|| constant.value.clone());
+    // A `parent::` initializer is stored as a deferred `Throw` that raises PHP's catchable
+    // Error only when the constant is READ. Its declared type cannot be checked at the
+    // declaration (the deferred value infers as void), and PHP accepts the declaration:
+    // `enum E { const int P = parent::X; }` compiles and only reading `E::P` fails.
+    if matches!(value.kind, ExprKind::Throw(_)) {
+        return;
+    }
     let previous_class = checker.current_class.replace(owner.to_string());
     let actual = checker.infer_type(&value, &TypeEnv::default());
     checker.current_class = previous_class;

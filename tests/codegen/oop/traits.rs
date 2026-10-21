@@ -344,3 +344,20 @@ try { echo E::B, "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\
         "12\ncaught:Cannot access private constant E::A\ncaught:Cannot access protected constant E::B\n"
     );
 }
+
+/// A declared type on a deferred `parent::` enum constant does not reject the declaration:
+/// PHP compiles it, and only reading the constant raises the catchable `Error` (#1827 review).
+#[test]
+fn test_typed_parent_constant_defers_to_a_catchable_error() {
+    let out = compile_and_run(
+        r#"<?php
+enum E { const int P = parent::X; }
+echo "unused\n";
+try { echo E::P, "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "unused\ncaught:Cannot access \"parent\" when current class scope has no parent\n"
+    );
+}
