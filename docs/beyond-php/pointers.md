@@ -46,7 +46,11 @@ $q = ptr_offset($p, 8);   // advance by 8 bytes
 $typed = ptr_cast<MyClass>($p);   // change type tag, same address
 ```
 
-`ptr_cast<T>()` is compile-time only.
+`ptr_cast<T>()` is compile-time only. When `T` is a packed class, fields are read and
+written through the typed pointer (`$typed->field`, including nested records); see
+[Packed Classes](packed-classes.md#typed-pointers). When `T` is an extern class (a C
+struct), each field is read and written at its natural C offset with its declared width;
+see [Extern classes](extern.md#extern-classes-c-structs).
 
 ## Querying sizes
 

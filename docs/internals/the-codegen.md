@@ -330,6 +330,9 @@ Folded values apply last-wins keys and compact lists recursively; arrays inside 
 retain all folded keys. Null or fractional keys keep the array's written form instead.
 String key identity uses PHP bytes, so equivalent Unicode and byte-escape spellings overwrite
 the same key. Constant references left in the AST retain their names without being evaluated.
+Global and scoped array-valued constants fall back to that source export when the scalar-only
+constant metadata evaluator cannot retain a value, including inside object default arguments.
+Declaring-class constant metadata remains limited to scalar, null and enum-case values.
 
 ## Eval Lowering Boundary
 

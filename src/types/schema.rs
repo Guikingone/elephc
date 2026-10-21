@@ -853,8 +853,8 @@ pub struct ExternFunctionSig {
     pub library: Option<String>,
 }
 
-/// Extern (FFI) class metadata with name, fields, total size, and field offsets
-/// for codegen to emit packed struct layout.
+/// Extern (FFI) class metadata: the C struct's fields in declaration order with their natural
+/// offsets, and `total_size`, the C `sizeof` (padded to the largest field alignment).
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ExternClassInfo {
@@ -863,14 +863,15 @@ pub struct ExternClassInfo {
     pub total_size: usize,
 }
 
-/// Extern (FFI) field metadata with name, PHP type, and offset into the
-/// containing extern class struct for codegen layout.
+/// Extern (FFI) field metadata: name, PHP-visible type, byte offset into the C struct, and the
+/// declared C shape (`abi`) that decides the access width, extension, and float precision.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ExternFieldInfo {
     pub name: String,
     pub php_type: PhpType,
     pub offset: usize,
+    pub abi: ExternAbiType,
 }
 
 /// Packed (non-nullable) class metadata with fields, total size, and per-field

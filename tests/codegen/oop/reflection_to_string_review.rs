@@ -327,3 +327,48 @@ foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
         Parameter #2 [ <optional> array $c = [null => 1, 'é' => 2, 'é' => 3] ]\n\
         Parameter #3 [ <optional> array $d = ['\\xC3\\x89Key' => 2] ]\n");
 }
+
+/// Array-valued scoped constants retain their names across parameter, function and method dumps.
+#[test]
+fn test_reflection_dump_scoped_array_constant_defaults() {
+    let out = compile_and_run(r#"<?php
+class Items { const ITEMS = [1, 2]; }
+interface ItemContract { const ITEMS = [3]; }
+trait ItemTrait { public const ITEMS = [4]; }
+class TraitItems { use ItemTrait; }
+function f($a = Items::ITEMS, $b = ItemContract::ITEMS, $c = TraitItems::ITEMS) {}
+class Methods {
+    public function run($a = Items::ITEMS, $b = ItemContract::ITEMS, $c = TraitItems::ITEMS) {}
+}
+echo new ReflectionParameter('f', 0), "\n";
+echo new ReflectionFunction('f');
+echo new ReflectionMethod('Methods', 'run');
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> $a = Items::ITEMS ]\n\
+        Function [ <user> function f ] {\n\n  - Parameters [3] {\n\
+        \x20   Parameter #0 [ <optional> $a = Items::ITEMS ]\n\
+        \x20   Parameter #1 [ <optional> $b = ItemContract::ITEMS ]\n\
+        \x20   Parameter #2 [ <optional> $c = TraitItems::ITEMS ]\n  }\n}\n\
+        Method [ <user> public method run ] {\n\n  - Parameters [3] {\n\
+        \x20   Parameter #0 [ <optional> $a = Items::ITEMS ]\n\
+        \x20   Parameter #1 [ <optional> $b = ItemContract::ITEMS ]\n\
+        \x20   Parameter #2 [ <optional> $c = TraitItems::ITEMS ]\n  }\n}\n");
+}
+
+/// Scoped array constants inside object defaults print without executing constructors.
+#[test]
+fn test_reflection_dump_scoped_array_constants_in_object_defaults() {
+    let out = compile_and_run(r#"<?php
+class Items { const ITEMS = [1, 2]; }
+interface ItemContract { const ITEMS = [3]; }
+trait ItemTrait { public const ITEMS = [4]; }
+class TraitItems { use ItemTrait; }
+class Foo { public function __construct(public array $a = []) { echo 'constructed'; } }
+function f(Foo $a = new Foo(Items::ITEMS), Foo $b = new Foo(ItemContract::ITEMS),
+    Foo $c = new Foo(TraitItems::ITEMS)) {}
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> Foo $a = new \\Foo(Items::ITEMS) ]\n\
+        Parameter #1 [ <optional> Foo $b = new \\Foo(ItemContract::ITEMS) ]\n\
+        Parameter #2 [ <optional> Foo $c = new \\Foo(TraitItems::ITEMS) ]\n");
+}

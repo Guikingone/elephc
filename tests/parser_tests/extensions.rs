@@ -176,6 +176,30 @@ fn test_parse_extern_class() {
     }
 }
 
+/// Parses an extern class whose fields use explicit C widths, keeping each field's C type.
+#[test]
+fn test_parse_extern_class_with_c_widths() {
+    use elephc::parser::ast::{CIntWidth, CType};
+    let stmts = parse_source(
+        "<?php extern class Event { public u32 $type; public u16 $mod; public bool $down; public f32 $x; }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ExternClassDecl { fields, .. } => {
+            let types: Vec<&CType> = fields.iter().map(|field| &field.c_type).collect();
+            assert_eq!(
+                types,
+                vec![
+                    &CType::IntWidth(CIntWidth::U32),
+                    &CType::IntWidth(CIntWidth::U16),
+                    &CType::Bool,
+                    &CType::F32,
+                ]
+            );
+        }
+        _ => panic!("Expected ExternClassDecl"),
+    }
+}
+
 /// Parses `extern global int $errno;` as an `ExternGlobalDecl`.
 /// Verifies the name and C type are captured correctly.
 #[test]

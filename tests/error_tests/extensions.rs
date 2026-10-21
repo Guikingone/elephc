@@ -124,6 +124,69 @@ fn test_error_buffer_packed_element_requires_field_assignment() {
     );
 }
 
+/// Verifies a nested packed field rejects a scalar where a whole record is expected.
+#[test]
+fn test_error_nested_packed_field_rejects_scalar_record_assignment() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $b[0]->pos = 5;",
+        "cannot assign int to packed field Body::pos of type Vec2; a nested packed field takes a Vec2 record",
+    );
+}
+
+/// Verifies a nested packed field rejects a record of a different packed class.
+#[test]
+fn test_error_nested_packed_field_rejects_other_record_class() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Other { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $o = buffer_new<Other>(1); $b[0]->pos = $o[0];",
+        "cannot assign ptr<Other> to packed field Body::pos of type Vec2",
+    );
+}
+
+/// Verifies a packed class that embeds itself has no finite layout and is reported.
+#[test]
+fn test_error_packed_class_embedding_itself_is_rejected() {
+    expect_error(
+        "<?php packed class Node { public int $value; public Node $next; }",
+        "Packed class Node embeds itself through its packed class fields",
+    );
+}
+
+/// Verifies packed classes that embed each other in a cycle are reported.
+#[test]
+fn test_error_packed_classes_embedding_each_other_are_rejected() {
+    expect_error(
+        "<?php packed class A { public B $b; } packed class B { public A $a; }",
+        "Packed class A embeds itself through its packed class fields",
+    );
+}
+
+/// Verifies reading an undefined field of a nested record names the inner packed class.
+#[test]
+fn test_error_nested_packed_field_read_of_undefined_inner_field() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); echo $b[0]->pos->z;",
+        "Undefined packed field: Vec2::z",
+    );
+}
+
+/// Verifies writing an undefined field of a nested record names the inner packed class.
+#[test]
+fn test_error_nested_packed_field_write_of_undefined_inner_field() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $b[0]->pos->z = 1.0;",
+        "Undefined packed field: Vec2::z",
+    );
+}
+
+/// Verifies a nested record's scalar field keeps the packed field type check.
+#[test]
+fn test_error_nested_packed_inner_field_type_mismatch() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } packed class Body { public Vec2 $pos; } $b = buffer_new<Body>(1); $b[0]->pos->x = \"far\";",
+        "cannot assign string to packed field Vec2::x of type float",
+    );
+}
+
 /// Verifies that buffer_len rejects a non-buffer argument (int).
 #[test]
 fn test_error_buffer_len_requires_buffer_argument() {
@@ -205,13 +268,13 @@ fn test_error_extern_unknown_int_width() {
     );
 }
 
-/// Verifies that explicit C integer widths are rejected on extern class fields, which still use
-/// 8-byte slots.
+/// Verifies that a `string` value cannot be stored into an extern class `f32` field: float fields
+/// take a float or an int, nothing else.
 #[test]
-fn test_error_extern_class_field_rejects_int_width() {
+fn test_error_extern_float_field_rejects_string_value() {
     expect_error(
-        "<?php extern class Bad { i32 $field; }",
-        "Extern class 'Bad' field $field uses an explicit C width",
+        "<?php extern class FRect { public f32 $x; } $r = ptr_cast<FRect>(ptr_null()); $r->x = \"wide\";",
+        "cannot assign Str to extern field FRect::x of type Float",
     );
 }
 
@@ -241,12 +304,21 @@ fn test_error_ptr_read_f64_rejects_int_argument() {
     expect_error("<?php echo ptr_read_f64(42);", "ptr_read_f64()");
 }
 
-/// Verifies that the C `float` width is rejected on extern class fields like the integer widths.
+/// Verifies that an `int` cannot be stored into a one-byte extern `bool` field without a cast.
 #[test]
-fn test_error_extern_class_field_rejects_f32() {
+fn test_error_extern_bool_field_rejects_int_value() {
     expect_error(
-        "<?php extern class Bad { f32 $field; }",
-        "Extern class 'Bad' field $field uses an explicit C width",
+        "<?php extern class Key { public bool $down; } $k = ptr_cast<Key>(ptr_null()); $k->down = 1;",
+        "cannot assign Int to extern field Key::down of type Bool",
+    );
+}
+
+/// Verifies that a callable cannot be an extern class field: it has no C struct layout.
+#[test]
+fn test_error_extern_class_callable_field() {
+    expect_error(
+        "<?php extern class Bad { callable $field; }",
+        "Extern class 'Bad' field $field uses an unsupported type",
     );
 }
 

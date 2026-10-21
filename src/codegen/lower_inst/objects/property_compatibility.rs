@@ -35,6 +35,24 @@ pub(super) fn ensure_property_type_supported(php_type: &PhpType, inst: &Instruct
     }
 }
 
+/// Returns whether `value_ty` addresses a record a nested packed field of `slot_ty` can copy.
+///
+/// A nested packed field is assigned as a whole by copying the record's bytes, so the source
+/// must be the address of a record of the same packed class: a buffer element or another nested
+/// field (`packed T`) or a typed pointer (`ptr<T>`).
+pub(super) fn packed_record_copy_source(slot_ty: &PhpType, value_ty: &PhpType) -> bool {
+    let PhpType::Packed(record) = slot_ty else {
+        return false;
+    };
+    let record = record.trim_start_matches('\\');
+    match value_ty.codegen_repr() {
+        PhpType::Packed(source) | PhpType::Pointer(Some(source)) => {
+            source.trim_start_matches('\\').eq_ignore_ascii_case(record)
+        }
+        _ => false,
+    }
+}
+
 /// Verifies the assigned value already has the property storage representation.
 pub(super) fn ensure_property_value_supported(
     ctx: &FunctionContext<'_>,
@@ -44,6 +62,9 @@ pub(super) fn ensure_property_value_supported(
     inst: &Instruction,
 ) -> Result<()> {
     if value_ty == &slot.php_type {
+        return Ok(());
+    }
+    if slot.is_packed && packed_record_copy_source(&slot.php_type, value_ty) {
         return Ok(());
     }
     if can_store_assoc_array_with_same_value_type(value_ty, &slot.php_type) {

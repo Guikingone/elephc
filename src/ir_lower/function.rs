@@ -103,6 +103,7 @@ pub(crate) fn lower_main(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
 
@@ -242,6 +243,7 @@ pub(crate) fn lower_user_function(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
 
@@ -366,6 +368,7 @@ pub(crate) fn lower_class_method(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
 
@@ -483,6 +486,7 @@ pub(crate) fn lower_eval_aot_function(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
 
@@ -611,6 +615,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
 
@@ -729,6 +734,7 @@ pub(crate) fn lower_property_init_thunk(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
 
@@ -1095,6 +1101,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
 
@@ -1217,6 +1224,7 @@ pub(crate) fn lower_clone_override_function(
         &module.declared_trait_methods,
         &module.declared_trait_properties,
         &check_result.packed_classes,
+        &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.boxed_reference_promotion_sites,
@@ -1383,6 +1391,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &module.declared_trait_methods,
             &module.declared_trait_properties,
             &check_result.packed_classes,
+            &check_result.extern_classes,
             &check_result.throw_access_sites,
             &check_result.builtin_call_types,
             &check_result.boxed_reference_promotion_sites,
@@ -1615,6 +1624,7 @@ fn lower_closure_function_with_signature(
         parent.declared_trait_methods,
         parent.declared_trait_properties,
         parent.packed_classes,
+        parent.extern_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
 
@@ -1669,6 +1679,7 @@ fn lower_body_into_function(
     >,
     declared_trait_properties: &std::collections::HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
+    extern_classes: &std::collections::HashMap<String, crate::types::ExternClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 
@@ -1736,6 +1747,7 @@ fn lower_body_into_function(
         declared_trait_methods,
         declared_trait_properties,
         packed_classes,
+        extern_classes,
         throw_access_sites,
         builtin_call_types,
 
