@@ -258,7 +258,9 @@ pub(super) fn reflection_constant_value(
         ExprKind::Null => Ok(ReflectionConstantValue::Null),
         ExprKind::Negate(inner) => {
             match reflection_constant_value(ctx, current_class, current_info, inner, depth + 1)? {
-                ReflectionConstantValue::Int(value) => Ok(ReflectionConstantValue::Int(-value)),
+                ReflectionConstantValue::Int(value) => Ok(value.checked_neg()
+                    .map(ReflectionConstantValue::Int)
+                    .unwrap_or_else(|| ReflectionConstantValue::Float(-(value as f64)))),
                 ReflectionConstantValue::Float(value) => Ok(ReflectionConstantValue::Float(-value)),
                 other => Err(unsupported_reflection_constant_value(other)),
             }
