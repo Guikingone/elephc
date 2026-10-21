@@ -11,7 +11,8 @@
 //! - Loose equality mirrors the legacy scalar paths for int/bool/null/string
 //!   combinations and delegates string numeric parsing to shared runtime helpers.
 //! - Mixed/int equality compares integer-tagged payloads without floating-point promotion.
-//! - Mixed ordering delegates to the shared PHP comparison table so floats retain
+//! - Proven integer/float ordering uses direct tag dispatch; all other Mixed ordering
+//!   delegates to the shared PHP comparison table so floats retain
 //!   their fractional payload, boolean operands keep PHP truthiness semantics, and
 //!   relational operators can reject unordered NaN results independently of spaceship.
 
@@ -902,6 +903,9 @@ pub(super) fn lower_php_rel_cmp(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if crate::codegen::stack_numeric::numeric_comparison(ctx.function, inst) {
+        return super::numeric_comparisons::lower(ctx, inst);
+    }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;

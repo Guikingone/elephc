@@ -149,6 +149,46 @@ fn bounded_mixed_counter_promotes_strict_bounded_recurrences() {
     }
 }
 
+/// Numeric consumers preserve their Mixed opcode while proven counters become raw integers.
+#[test]
+fn bounded_mixed_counter_allows_numeric_reads_only_after_range_proof() {
+    use crate::ir::{LocalSlotId, MixedNumericOp};
+    for op in [MixedNumericOp::Add, MixedNumericOp::Sub, MixedNumericOp::Mul] {
+        for (predicate, accepted) in [(CmpPredicate::Slt, true), (CmpPredicate::Sle, false)] {
+            let mut f = counter(predicate, 1, 0, false);
+            let body = f.blocks[2].id;
+            let term = f.blocks[2].terminator.take().unwrap();
+            let result = {
+                let mut builder = Builder::new(&mut f);
+                builder.position_at_end(body);
+                let value = builder.emit_load_local(LocalSlotId::from_raw(1),
+                    IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+                let one = builder.emit_const_i64(1);
+                let result = builder.emit(Op::MixedNumericBinop, vec![value, one],
+                    Some(Immediate::MixedNumericOp(op)), IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed, Ownership::Owned).unwrap();
+                builder.emit(Op::Release, vec![result], None, IrType::Void,
+                    PhpType::Void, Ownership::NonHeap);
+                builder.terminate(term);
+                result
+            };
+            validate_function(&f).unwrap();
+            let before = format!("{f:?}");
+            assert_eq!(BoundedMixedCounter::default().run(&mut f, &mut DataPool::default()), accepted);
+            validate_function(&f).unwrap();
+            if accepted {
+                assert_eq!(f.locals[1].ir_type, IrType::I64);
+                let crate::ir::ValueDef::Instruction { inst, .. } = f.value(result).unwrap().def else { panic!("numeric result"); };
+                let math = f.instruction(inst).unwrap();
+                assert_eq!(math.op, Op::MixedNumericBinop);
+                assert_eq!(f.value(math.operands[0]).unwrap().php_type, PhpType::Int);
+            } else {
+                assert_eq!(format!("{f:?}"), before);
+            }
+        }
+    }
+}
+
 /// An inclusive maximum can overflow, so a failed trial must leave the entire function alone.
 #[test]
 fn bounded_mixed_counter_rejects_possible_overflow() {

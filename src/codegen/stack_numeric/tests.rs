@@ -99,6 +99,34 @@ fn stack_numeric_local_and_return_gates() {
     assert!(candidates(&function).is_empty());
 }
 
+/// A numeric loop input can stay on the frame after its int-to-float promotion.
+#[test]
+fn stack_numeric_mixed_numeric_domain_and_escape() {
+    let (mut function, value) = fixture(false, false);
+    let load = function.instructions.iter().find(|inst| inst.op == Op::LoadLocal).unwrap().result.unwrap();
+    let ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else { panic!("producer"); };
+    let producer = &mut function.instructions[inst.as_raw() as usize];
+    producer.op = Op::MixedNumericBinop;
+    producer.immediate = Some(Immediate::MixedNumericOp(crate::ir::MixedNumericOp::Add));
+    producer.operands[0] = load;
+    assert_eq!(candidates(&function), vec![value]);
+    let mut unseeded = function.clone();
+    let seed = unseeded.instructions.iter_mut().find(|inst| inst.op == Op::StoreLocal).unwrap();
+    seed.op = Op::Nop;
+    seed.immediate = None;
+    seed.operands.clear();
+    seed.effects = Op::Nop.default_effects();
+    assert!(candidates(&unseeded).is_empty(), "a cycle cannot prove its own entry tag");
+    let mut escaping = function.clone();
+    escaping.blocks[0].terminator = Some(Terminator::Return { value: Some(value) });
+    escaping.return_type = IrType::Heap(IrHeapKind::Mixed);
+    escaping.return_php_type = PhpType::Mixed;
+    assert!(candidates(&escaping).is_empty());
+    let slot = function.locals[0].id;
+    function.locals[slot.as_raw() as usize].kind = LocalKind::StaticLocal;
+    assert!(candidates(&function).is_empty());
+}
+
 /// Converting an old pointer after the cell has been reused would read the new payload.
 #[test]
 fn stack_numeric_rejects_delayed_borrowed_read() {
@@ -208,4 +236,56 @@ fn stack_numeric_rejects_cleanup_excluded_local() {
         .no_epilogue_cleanup_slots
         .insert(LocalSlotId::from_raw(0));
     assert!(candidates(&function).is_empty());
+}
+
+/// Reusing both inputs of a deep numeric DAG must not expand the same proof exponentially.
+#[test]
+fn stack_numeric_shared_arithmetic_dag_has_bounded_analysis() {
+    let mut function = Function::new("numeric_dag".into(), IrType::I64, PhpType::Int);
+    let mut builder = Builder::new(&mut function);
+    let entry = builder.create_named_block("entry", Vec::new());
+    builder.set_entry(entry); builder.position_at_end(entry);
+    let one = builder.emit_const_i64(1);
+    let mut value = builder.emit(Op::MixedBox, vec![one], None, IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed, Ownership::Owned).unwrap();
+    for _ in 0..36 {
+        let next = builder.emit(Op::MixedNumericBinop, vec![value, value],
+            Some(Immediate::MixedNumericOp(crate::ir::MixedNumericOp::Add)),
+            IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+        builder.emit(Op::Release, vec![value], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        value = next;
+    }
+    let scalar = builder.emit(Op::Cast, vec![value], Some(Immediate::CastTarget(IrType::I64)),
+        IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+    builder.emit(Op::Release, vec![value], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+    builder.terminate(Terminator::Return { value: Some(scalar) });
+    crate::ir::validate_function(&function).unwrap();
+    assert_eq!(candidates(&function), vec![value]);
+    let crate::ir::ValueDef::Instruction { inst, .. } = function.value(one).unwrap().def else { panic!("seed"); };
+    let seed = &mut function.instructions[inst.as_raw() as usize];
+    seed.op = Op::ConstNull; seed.immediate = None; seed.result_php_type = PhpType::Void;
+    function.values[one.as_raw() as usize].php_type = PhpType::Void;
+    crate::ir::validate_function(&function).unwrap();
+    assert!(candidates(&function).is_empty(), "a cached subgraph cannot erase a nonnumeric input");
+}
+
+/// A unary numeric update needs a numeric seed; strings and boolean writers keep the runtime path.
+#[test]
+fn stack_numeric_increment_requires_closed_numeric_domain() {
+    let (mut function, result) = fixture(false, false);
+    let (id, _) = definition(&function, result).unwrap();
+    let old = function.instructions.iter().find(|inst| inst.op == Op::LoadLocal).unwrap().result.unwrap();
+    let inst = &mut function.instructions[id.as_raw() as usize];
+    inst.op = Op::StrIncDec; inst.operands = vec![old]; inst.immediate = Some(Immediate::I64(1));
+    inst.effects = Op::StrIncDec.default_effects();
+    crate::ir::validate_function(&function).unwrap();
+    assert_eq!(candidates(&function), vec![result]);
+    let zero = function.instructions.iter().find(|inst| inst.op == Op::ConstI64).unwrap().result.unwrap();
+    function.values[zero.as_raw() as usize].php_type = PhpType::Bool;
+    let ValueDef::Instruction { inst, .. } = function.values[zero.as_raw() as usize].def else { panic!("seed"); };
+    let seed = &mut function.instructions[inst.as_raw() as usize];
+    seed.op = Op::ConstBool; seed.immediate = Some(Immediate::Bool(false));
+    seed.result_php_type = PhpType::Bool;
+    crate::ir::validate_function(&function).unwrap();
+    assert!(candidates(&function).is_empty(), "a nonnumeric seed must fail closed");
 }

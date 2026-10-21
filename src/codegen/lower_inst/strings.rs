@@ -452,13 +452,19 @@ fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// Lowers `Op::StrIncDec`: PHP's `++` / `--` applied to a string value.
 ///
 /// The operand is either a concrete `Str` payload or a boxed `Mixed` cell, and the result is
-/// ALWAYS a freshly allocated boxed `Mixed` cell because the operator can change the value's
+/// an owned boxed `Mixed` value because the operator can change the value's
 /// type (`"9"++` is `int(10)`, `"az"++` is `"ba"`). A concrete string goes straight to
 /// `__rt_str_inc_dec`; a boxed value goes through `__rt_mixed_inc_dec`, which routes a string
 /// payload to the same helper and keeps every other payload on the existing numeric path.
 ///
+/// A proven nonescaping numeric update may instead use a frame cell; string or unknown
+/// tags retain the runtime path. Both paths preserve overflow promotion to float.
+///
 /// The `i64` immediate carries the delta and is `+1` for `++` and `-1` for `--`.
 pub(super) fn lower_str_inc_dec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return super::arithmetic::stack_cell::lower_increment(ctx, inst, offset);
+    }
     let value = expect_operand(inst, 0)?;
     let delta = super::expect_i64(inst)?;
     let operand_ty = ctx.value_php_type(value)?.codegen_repr();

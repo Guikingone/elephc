@@ -5,7 +5,7 @@
 //! - Frame layout before any generated instruction is emitted.
 //!
 //! Key details:
-//! - Only numeric casts and one ordinary local may observe the cell.
+//! - Only numeric casts, proven numeric observations and one ordinary local may observe the cell.
 //! - Pointer reads cannot survive another execution of the producing instruction.
 //! - References, eval, suspension, unknown consumers and escaping values fail closed.
 
@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
 mod tests;
+mod domain;
 
 /// Stack cells and the exclusively numeric locals proven while selecting them.
 #[derive(Default)]
@@ -28,7 +29,7 @@ pub(super) struct NumericFrame {
 
 /// Returns checked producers whose complete pointer lifetime stays inside their frame.
 pub(super) fn plan(function: &Function) -> NumericFrame {
-    if !function.instructions.iter().any(|inst| checked(inst.op)) {
+    if !function.instructions.iter().any(producer_op) {
         return NumericFrame::default();
     }
     if function.flags.is_main
@@ -56,7 +57,7 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
         let mut epoch = 0;
         for (index, &id) in block.instructions.iter().enumerate() {
             let inst = &function.instructions[id.as_raw() as usize];
-            if checked(inst.op) {
+            if producer_op(inst) {
                 epoch += 1;
             }
             locations.insert(id, (block.id, index, epoch));
@@ -92,7 +93,7 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
     let cells = function
         .instructions
         .iter()
-        .filter(|inst| checked(inst.op))
+        .filter(|inst| producer_op(inst))
         .filter_map(|inst| inst.result)
         .filter(|&value| proof.producer(value))
         .collect();
@@ -122,16 +123,17 @@ impl Proof<'_> {
         let Some((id, definition)) = definition(self.function, value) else {
             return false;
         };
-        if !checked(definition.op)
+        if !producer_op(definition)
             || definition.result_type != IrType::Heap(IrHeapKind::Mixed)
             || definition.result_php_type != PhpType::Mixed
             || definition.result_ownership != Ownership::Owned
-            || definition.operands.len() != 2
-            || definition.operands.iter().any(|&input| {
+            || definition.operands.len() != if domain::increment(definition) { 1 } else { 2 }
+            || (!tagged_producer(definition) && definition.operands.iter().any(|&input| {
                 self.function.value(input).is_none_or(|input| {
                     input.ir_type != IrType::I64 || input.php_type != PhpType::Int
                 })
-            })
+            }))
+            || (tagged_producer(definition) && !domain::inputs(self.function, &definition.operands))
         {
             return false;
         }
@@ -263,9 +265,10 @@ impl Proof<'_> {
                         })
                     })
                 }
-                op if checked(op) => {
+                _ if producer_op(inst) => {
                     let mut stores = HashSet::new();
-                    return self.value_uses(value, id, &mut HashSet::new(), &mut stores)
+                    return (!tagged_producer(inst) || domain::inputs(self.function, &inst.operands))
+                        && self.value_uses(value, id, &mut HashSet::new(), &mut stores)
                         && stores == HashSet::from([slot]);
                 }
                 _ => return false,
@@ -285,14 +288,17 @@ impl Proof<'_> {
                 if inst.op == Op::Release {
                     return true;
                 }
-                if !numeric_cast(inst) {
+                let arithmetic = tagged_producer(inst);
+                let comparison = domain::comparison(inst) && domain::inputs(self.function, &inst.operands);
+                if !numeric_cast(inst) && !arithmetic && !comparison {
                     return false;
                 }
                 self.locations
                     .get(&load)
                     .zip(self.locations.get(&user))
                     .is_some_and(|(load, user)| {
-                        load.0 == user.0 && load.1 < user.1 && load.2 == user.2
+                        load.0 == user.0 && load.1 < user.1
+                            && load.2 + usize::from(arithmetic) == user.2
                     })
             })
         })
@@ -302,6 +308,21 @@ impl Proof<'_> {
 /// Identifies operations whose result owns no heap children, even after overflow.
 fn checked(op: Op) -> bool {
     matches!(op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+}
+
+/// Includes tagged arithmetic only when its emitter preserves concrete numeric tags.
+fn producer_op(inst: &crate::ir::Instruction) -> bool {
+    checked(inst.op) || tagged_producer(inst)
+}
+
+/// Includes unary updates only when their complete input graph is numeric.
+fn tagged_producer(inst: &crate::ir::Instruction) -> bool {
+    domain::mixed(inst) || domain::increment(inst)
+}
+
+/// Shares the closed numeric proof with comparison lowering; no pointer lifetime is extended.
+pub(super) fn numeric_comparison(function: &Function, inst: &crate::ir::Instruction) -> bool {
+    domain::comparison(inst) && inst.operands.len() == 2 && domain::inputs(function, &inst.operands)
 }
 
 /// Accepts only scalar casts that copy the value rather than expose its address.

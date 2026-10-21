@@ -15,7 +15,7 @@ use super::driver::IrPass;
 use super::rewrite::{defining_instruction, neutralize_to_nop, replace_all_uses, resolve_chains};
 use crate::ir::{
     DataPool, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind, LocalSlotId,
-    Module, Op, Ownership, Value, ValueDef, ValueId,
+    MixedNumericOp, Module, Op, Ownership, Value, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
@@ -258,6 +258,10 @@ impl CounterProof {
                     Op::PhpRelCmp => {
                         proof.comparisons.insert(id);
                     }
+                    // Numeric helpers borrow their inputs. The unchanged opcode accepts
+                    // a raw integer after the recurrence's complete range proof succeeds.
+                    Op::MixedNumericBinop if matches!(inst.immediate,
+                        Some(Immediate::MixedNumericOp(MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul))) => {}
                     // Lowering already fixed the physical call signature and any by-ref storage.
                     // Re-materialization boxes a proven integer for an unchanged Mixed parameter.
                     Op::Call if pass.safe_call_use(inst, value, data) => {}

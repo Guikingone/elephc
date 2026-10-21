@@ -118,7 +118,23 @@ the same comparison selection. Checked integer-to-int arithmetic enters the cold
 overflow path with one not-taken conditional branch (`b.vs`, `b.ne` for AArch64
 multiply, or `jo` on x86_64); the in-range result falls through. The overflow
 path reconstructs an immediate operand only when conversion needs it. Boxed
-checked arithmetic still follows its runtime call ABI.
+checked arithmetic uses the runtime call ABI unless its entire lifetime fits a
+proven numeric frame cell.
+
+Loop-carried numeric locals must preserve an overflow-promoted float on later
+iterations. Lowering discovers integer reads of a final Mixed slot inside a
+cyclic region, then replays the body with Mixed storage from its first store.
+Constraints belong to individual storage bindings, so a name reused after
+`unset` retains its new representation. This decision is separate from the
+sealed per-call-site closure proof.
+`src/codegen/stack_numeric/domain.rs` can prove an integer/float domain from a
+dominating numeric seed and every writer of a private local. A nonescaping
+add/subtract/multiply or numeric increment can reuse a 24-byte frame cell: two integer tags take
+checked integer arithmetic, while an existing float remains a float. Both input
+payloads are read before the output cell changes. Proven numeric relational
+comparisons avoid temporary boxes, compare integer pairs exactly and reject
+unordered NaN predicates. Unknown tags, calls, references
+and escaping pointers keep ordinary heap-backed operations.
 
 `examples/constant-rematerialization/main.php` demonstrates bounded sample
 accumulation with immediate masks, scaling, increments, and a fixed loop bound.
