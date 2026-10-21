@@ -1465,6 +1465,7 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type. Publ
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_buffer_resolve` | Validate handle index, non-zero generation, active state, and exact descriptor generation | `x0` = opaque buffer handle | `x0` = static descriptor address |
+| `__rt_buffer_try_resolve` | Apply the same validation without reporting a fatal error, so loop preheaders can resolve speculatively and the actual access retains the diagnostic | `x0` = opaque buffer handle | `x0` = descriptor address, or zero for an invalid or stale handle |
 | `__rt_buffer_new` | Reuse or claim a descriptor, allocate and exactly zero `length * stride` payload bytes, then publish the new handle | `x0` = element count, `x1` = element stride | `x0` = opaque buffer handle |
 | `__rt_buffer_free` | Invalidate a resolved descriptor, recycle it unless its u32 generation is saturated, then release the detached payload | `x0` = opaque buffer handle | — |
 | `__rt_buffer_len` | Resolve the handle and read the logical element count from descriptor offset 8 | `x0` = opaque buffer handle | `x0` = length |

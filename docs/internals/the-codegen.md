@@ -66,6 +66,7 @@ and link the resulting user object against the cached runtime object.
 | `src/codegen/machine_peephole.rs` | Late per-function machine peepholes over emitted assembly text |
 | `src/codegen/context.rs` | EIR function emission state and value materialization helpers |
 | `src/codegen/frame.rs` | Stack-frame sizing, local slots, register allocation integration |
+| `src/codegen/stack_numeric.rs` | Escape and lifetime proofs for frame-local checked numeric results |
 | `src/codegen/value_placement.rs` | Stack/register placement for EIR values |
 | `src/codegen/runtime_callable_invoker.rs` | Generated uniform `(descriptor, argument array) -> Mixed` invoker trampolines |
 | `src/codegen_support/abi/` | Target ABI helpers for registers, calls, stack slots, symbols, and frame mechanics |
@@ -118,10 +119,28 @@ the same comparison selection. Checked integer-to-int arithmetic enters the cold
 overflow path with one not-taken conditional branch (`b.vs`, `b.ne` for AArch64
 multiply, or `jo` on x86_64); the in-range result falls through. The overflow
 path reconstructs an immediate operand only when conversion needs it. Boxed
-checked arithmetic still follows its runtime call ABI.
+checked arithmetic follows its runtime call ABI unless its entire lifetime is
+proven eligible for a frame-local cell.
 
 `examples/constant-rematerialization/main.php` demonstrates bounded sample
 accumulation with immediate masks, scaling, increments, and a fixed loop bound.
+
+## Frame-local checked numeric cells
+
+`src/codegen/stack_numeric.rs::plan()` runs before frame sizing and selects only
+owned checked integer add/subtract/multiply results whose complete pointer
+lifetime remains in the current activation. Numeric observations and one
+ordinary local are permitted; delayed reads, escaping consumers, aliases,
+references, executable main, `eval` and suspension fail the proof.
+
+Each selected producer reserves a 24-byte `mixed` cell in the frame, without a
+heap header. `src/codegen/lower_inst/arithmetic/stack_cell.rs` writes its runtime
+tag and payload directly, using the original operands for overflow-to-float
+conversion. Selected local stores copy scalar bits and ownership operations
+skip heap retirement for these cells. A cell must never escape, acquire heap
+children or reach the heap free path. AArch64 and x86_64 use the same layout
+through target-aware frame helpers. This storage plan also applies with
+`--no-ir-opt`; it is separate from the EIR bounded-counter pass.
 
 ## Late Instruction Selection and Machine Peepholes
 
