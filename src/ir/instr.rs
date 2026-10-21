@@ -118,15 +118,34 @@ impl Instruction {
         self.result.is_none() || self.result_type.is_void()
     }
 
+    /// Returns whether this instruction writes a FRESH transient string: new bytes in concat
+    /// scratch or, once the scratch is full, a new heap block stamped `CONCAT_TEMP_HEAP_KIND`.
+    ///
+    /// Only these results can be claimed with `EnsureOwned`. The other values whose release is a
+    /// no-op ([`Self::string_release_is_noop`]) include borrowed views: `substr($s, 0)`,
+    /// `ltrim($s)` with nothing to trim and `$s[0]` answer with a pointer into a live string, and
+    /// claiming one would hand the caller a release of storage another owner still holds.
+    pub fn creates_transient_string(&self) -> bool {
+        matches!(
+            self.op,
+            Op::StrConcat
+                | Op::StrInterpolate
+                | Op::IToStr
+                | Op::FToStr
+                | Op::BoolToStr
+                | Op::ResourceToStr
+        )
+    }
+
     /// Returns whether a string result of this instruction is a transient the backend never
     /// releases.
     ///
     /// These producers answer in concat scratch while the result fits and otherwise in a heap
     /// block stamped `CONCAT_TEMP_HEAP_KIND`, which no release frees: the first consumer that
     /// persists the value adopts that block in place. A `release` of such a value is therefore a
-    /// no-op, and any other owner that can end up holding the same payload (a user call that
-    /// hands the argument back) must first claim the block with `EnsureOwned`. Runtime calls
-    /// count as transient unless their result is fresh or independently owned storage.
+    /// no-op. Runtime calls count as transient unless their result is fresh or independently
+    /// owned storage, which also covers results that borrow a view into an argument; see
+    /// [`Self::creates_transient_string`] for the fresh producers a user call may claim.
     pub fn string_release_is_noop(&self) -> bool {
         if self.op == Op::RuntimeCall {
             let result_is_releasable = match self.immediate {

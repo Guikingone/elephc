@@ -213,3 +213,34 @@ fn transient_string_claimed_argument_edge_cases_no_ir_opt() {
     without_ir_opt(transient_string_claimed_argument_survives_a_throwing_callee);
     without_ir_opt(transient_string_claimed_argument_returned_through_a_boxed_result);
 }
+
+/// A borrowed view of a live string (a builtin slice or a string offset) is never claimed.
+///
+/// Claiming one made the post-call release free the live string it points into, which the
+/// trailing reads expose. Only the bytes are asserted: the copy that persisting a builtin view
+/// makes before a may-return call is never released, a leak that predates the claim and is
+/// tracked separately (Code Journal task b3641d28).
+#[test]
+fn transient_string_views_of_live_strings_are_not_claimed() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function shortOrX(string $s): string { if (strlen($s) > 0) { return "x"; } return $s; }
+function boxed(string $s): mixed { return $s; }
+$width = 69999 + $argc;
+$big = str_repeat("a", $width) . "b";
+for ($i = 0; $i < 3; $i++) {
+    echo shortOrX(substr($big, 0)), shortOrX($big[0]), shortOrX(ltrim($big, "z"));
+    echo strlen(boxed(substr($big, 0))), ",";
+    $pad = str_repeat("z", $width + 1);
+    echo strlen($big), substr($big, -2), ";";
+}
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "xxx70001,70001ab;xxx70001,70001ab;xxx70001,70001ab;\n");
+}
+
+/// Views of live strings stay unclaimed with IR optimization disabled too.
+#[test]
+fn transient_string_views_of_live_strings_are_not_claimed_no_ir_opt() {
+    without_ir_opt(transient_string_views_of_live_strings_are_not_claimed);
+}

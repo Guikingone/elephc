@@ -492,8 +492,9 @@ pub(super) fn root_user_call_operands(
 /// The caller pins the claimed value across the call (see `root_user_call_operands`), so a throw
 /// out of the callee releases it through the unwind chain.
 ///
-/// A transient string (concat scratch, or a heap block stamped `CONCAT_TEMP_HEAP_KIND`) has no
-/// owner that frees it: the first consumer that persists it adopts the block in place. Passed to
+/// A fresh transient string (a `.`, interpolation or scalar-to-string result in concat scratch,
+/// or a heap block stamped `CONCAT_TEMP_HEAP_KIND`) has no owner that frees it: the first
+/// consumer that persists it adopts the block in place. Passed to
 /// a callee that may return it, the same block came back as the call result, an owning temporary
 /// the caller releases, while a store of that result (or the callee itself) had already adopted
 /// it, so the release freed a string a variable, element or property still held. `EnsureOwned`
@@ -509,10 +510,13 @@ fn claim_transient_string_operand(
     if ctx.builder.value_php_type(operand).codegen_repr() != PhpType::Str {
         return operand;
     }
+    // Only a FRESH transient is claimed. A builtin view or a string offset also has a no-op
+    // release, but its pointer belongs to a live string: claiming it would make the post-call
+    // release free that string.
     if !ctx
         .builder
         .value_defining_instruction(operand)
-        .is_some_and(crate::ir::Instruction::string_release_is_noop)
+        .is_some_and(crate::ir::Instruction::creates_transient_string)
     {
         return operand;
     }
