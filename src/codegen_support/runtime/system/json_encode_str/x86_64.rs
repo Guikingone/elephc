@@ -31,6 +31,7 @@ use crate::codegen_support::abi;
 /// - Malformed UTF-8 triggers `JSON_ERROR_UTF8` via `__rt_json_throw_error`
 ///   when neither sanitization flag is active.
 pub(super) fn emit(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     emitter.blank();
     emitter.comment("--- runtime: json_encode_str ---");
     emitter.label_global("__rt_json_encode_str");
@@ -46,6 +47,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 80], r15");                       // save callee-saved r15 across the encode call
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source string pointer across the JSON escaping loop
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source string length across the JSON escaping loop
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base for the guard limit
+    emitter.instruction("mov r11, 65520");                                      // leave room for one multibyte escape
+    emitter.instruction("add r10, r11");                                        // compute the last write position that still leaves escape headroom
+    emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the scratch guard limit for every write site
 
     // Cache _json_active_flags in r15 so the per-byte escape loop reads
     // the bitmask from a register instead of reloading from memory at
@@ -68,6 +73,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base
     emitter.instruction("add r11, r10");                                        // compute the write pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the output start pointer for the return slice
+    emitter.instruction(&format!("mov r9, {}", cap));                           // load the full scratch capacity
+    emitter.instruction("sub r9, r10");                                         // remaining bytes before the arena end
+    emitter.instruction("cmp rdx, r9");                                         // does the raw numeric copy still fit?
+    emitter.instruction("ja __rt_json_str_overflow_x");                         // fail closed instead of copying past the arena
     emitter.instruction("xor rcx, rcx");                                        // initialize the copy index
     emitter.label("__rt_json_str_numeric_copy_x");
     emitter.instruction("cmp rcx, rdx");                                        // have we copied every byte?
@@ -91,6 +100,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base pointer for the current JSON append
     emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the encoded-string start pointer for the final result slice
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the scratch guard limit
+    emitter.instruction("cmp r11, r9");                                         // does the opening quote leave escape headroom?
+    emitter.instruction("jae __rt_json_str_overflow_x");                        // fail closed when the arena is already nearly full
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the current concat-buffer write pointer for the escape loop
     emitter.instruction("mov BYTE PTR [r11], 34");                              // write the opening JSON quote before any escaped payload bytes
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the opening quote
@@ -103,6 +115,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_json_str_close");                             // finish by writing the closing quote once the whole source slice has been escaped
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source string pointer for the current byte fetch
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the current concat-buffer write pointer before appending the next escaped byte
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the scratch guard limit
+    emitter.instruction("cmp r11, r9");                                         // does one more input byte still leave escape headroom?
+    emitter.instruction("jae __rt_json_str_overflow_x");                        // fail closed instead of escaping past the arena
     emitter.instruction("movzx r14, BYTE PTR [r10 + r13]");                     // load the next source byte and widen it so escape comparisons stay unsigned
     emitter.instruction("cmp r14b, 34");                                        // does the source byte equal a JSON double quote?
     emitter.instruction("je __rt_json_str_esc_quote");                          // escape embedded double quotes as \\"
@@ -369,6 +384,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("or rax, r8");                                          // merge middle bits
     emitter.instruction("and rcx, 0x3F");                                       // b3 & 0x3F → low 6 bits
     emitter.instruction("or rax, rcx");                                         // assemble the codepoint in rax
+    emitter.instruction("cmp rax, 0x800");                                      // reject overlong 3-byte sequences (codepoint < 0x800)
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // PHP rejects overlong UTF-8 encodings
+    emitter.instruction("mov r8, rax");                                         // copy the codepoint for the surrogate-range test
+    emitter.instruction("sub r8, 0xD800");                                      // offset into the surrogate range, if any
+    emitter.instruction("cmp r8, 0x800");                                       // does the codepoint fall in 0xD800..0xDFFF?
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // PHP rejects surrogate code points in UTF-8
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the codepoint for the emit helper
     emitter.instruction("mov r12, 3");                                          // 3 source bytes consumed
     emitter.instruction("jmp __rt_json_str_utf8_emit_bmp_x");                   // emit a single \uXXXX
@@ -409,6 +430,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("or rax, rcx");                                         // merge bits 6..11
     emitter.instruction("and r9, 0x3F");                                        // b4 & 0x3F → low 6 bits
     emitter.instruction("or rax, r9");                                          // full 21-bit codepoint
+    emitter.instruction("cmp rax, 0x10000");                                    // reject overlong 4-byte sequences (codepoint < 0x10000)
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // PHP rejects overlong UTF-8 encodings
+    emitter.instruction("cmp rax, 0x110000");                                   // is the codepoint above U+10FFFF?
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // PHP rejects out-of-range UTF-8
     emitter.instruction("mov r12, 4");                                          // four source bytes belong to this Unicode scalar
     emitter.instruction("test r15, 256");                                       // does JSON_UNESCAPED_UNICODE permit a literal scalar?
     emitter.instruction("jne __rt_json_str_utf8_copy_x");                       // copy the validated four-byte scalar literally
@@ -667,8 +692,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("xor rax, rax");                                        // signal non-numeric
     emitter.instruction("ret");                                                 // return from the JSON string encoder helper
 
+    emitter.label("__rt_json_str_overflow_x");
+    emitter.instruction("jmp __rt_concat_overflow");                            // report the oversized result instead of overwriting adjacent BSS
+
     emitter.label("__rt_json_str_close");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the concat-buffer write pointer after the final escaped payload byte
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the scratch guard limit
+    emitter.instruction("cmp r11, r9");                                         // is there room for the closing quote?
+    emitter.instruction("jae __rt_json_str_overflow_x");                        // fail closed instead of writing the closing quote past the arena
     emitter.instruction("mov BYTE PTR [r11], 34");                              // append the closing JSON quote to complete the encoded string slice
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing quote
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the encoded-string start pointer in the leading x86_64 string result register

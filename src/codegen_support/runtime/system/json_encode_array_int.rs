@@ -96,6 +96,9 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
 
     // -- loop through elements --
     emitter.label("__rt_json_arr_int_loop");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
+    emitter.instruction("mov x1, #4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared scratch arena
     emitter.instruction("ldr x4, [sp, #32]");                                   // load index
     emitter.instruction("ldr x3, [sp, #24]");                                   // load length
     emitter.instruction("cmp x4, x3");                                          // check if done
@@ -228,6 +231,9 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the integer-array element loop counter to zero
 
     emitter.label("__rt_json_arr_int_loop");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
+    emitter.instruction("mov rsi, 4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared scratch arena
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current integer-array element index at the top of the JSON loop
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have we already encoded every integer-array element?
     emitter.instruction("jae __rt_json_arr_int_close");                         // finish by writing the closing bracket once the loop index reaches the array length

@@ -97,6 +97,9 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize the loop index to zero
 
     emitter.label("__rt_json_arr_dyn_loop");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
+    emitter.instruction("mov x1, #4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared scratch arena
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload the array length
     emitter.instruction("cmp x4, x3");                                          // have we encoded every element?
@@ -361,6 +364,9 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the indexed-array element loop counter to zero
 
     emitter.label("__rt_json_arr_dyn_loop");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
+    emitter.instruction("mov rsi, 4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared scratch arena
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index at the top of the JSON loop
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have we already encoded every indexed-array element?
     emitter.instruction("jae __rt_json_arr_dyn_close");                         // finish by writing the closing bracket once the loop index reaches the array length

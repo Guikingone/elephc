@@ -23,6 +23,7 @@ use crate::codegen_support::emit::Emitter;
 /// ABI: x0 = source ptr, x1 = source len, returns x1 = output ptr, x2 = output length.
 /// Caller: `crate::codegen_support::runtime::system`.
 pub(super) fn emit(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     emitter.blank();
     emitter.comment("--- runtime: json_encode_str ---");
     emitter.label_global("__rt_json_encode_str");
@@ -41,6 +42,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- save inputs --
     emitter.instruction("str x1, [sp, #0]");                                    // save source ptr
     emitter.instruction("str x2, [sp, #8]");                                    // save source len
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    let guard_limit = cap - 16;
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", guard_limit as i64); // leave room for one multibyte escape
+    emitter.instruction("add x9, x9, x10");                                     // compute the last write position that still leaves escape headroom
+    emitter.instruction("str x9, [sp, #48]");                                   // save the scratch guard limit for every write site
 
     // Cache _json_active_flags in x19 so the per-byte escape loop reads the
     // bitmask from a register instead of reloading from memory at every
@@ -62,6 +68,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x11, x11, x10");                                   // compute the write pointer
     emitter.instruction("str x11, [sp, #16]");                                  // save the output start pointer for the return slice
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", cap as i64); // load the full scratch capacity
+    emitter.instruction("sub x12, x12, x10");                                   // remaining bytes before the arena end
+    emitter.instruction("cmp x2, x12");                                         // does the raw numeric copy still fit?
+    emitter.instruction("b.hi __rt_json_str_overflow");                         // fail closed instead of copying past the arena
     emitter.instruction("mov x12, #0");                                         // initialize the copy index
     emitter.label("__rt_json_str_numeric_copy");
     emitter.instruction("cmp x12, x2");                                         // have we copied every byte?
@@ -88,6 +98,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x11, x11, x10");                                   // output position
     emitter.instruction("str x11, [sp, #16]");                                  // save output start
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the scratch guard limit
+    emitter.instruction("cmp x11, x12");                                        // does the opening quote leave escape headroom?
+    emitter.instruction("b.hs __rt_json_str_overflow");                         // fail closed when the arena is already nearly full
     emitter.instruction("str x11, [sp, #24]");                                  // save output write pos
 
     // -- write opening quote --
@@ -106,6 +119,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload source ptr
     emitter.instruction("ldrb w14, [x1, x13]");                                 // load source byte
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload write pos
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the scratch guard limit
+    emitter.instruction("cmp x11, x12");                                        // does one more input byte still leave escape headroom?
+    emitter.instruction("b.hs __rt_json_str_overflow");                         // fail closed instead of escaping past the arena
 
     // -- check for special characters that need escaping --
     emitter.instruction("cmp w14, #34");                                        // check for double quote
@@ -389,6 +405,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("orr w16, w16, w9");                                    // merge middle bits
     emitter.instruction("and w17, w17, #0x3F");                                 // b3 & 0x3F → low 6 bits
     emitter.instruction("orr w16, w16, w17");                                   // assemble the codepoint in w16
+    emitter.instruction("cmp w16, #0x800");                                     // reject overlong 3-byte sequences (codepoint < 0x800)
+    emitter.instruction("b.lo __rt_json_str_utf8_malformed");                   // PHP rejects overlong UTF-8 encodings
+    emitter.instruction("mov w9, #0xD800");                                     // start of the UTF-16 surrogate range
+    emitter.instruction("sub w9, w16, w9");                                     // offset into the surrogate range, if any
+    emitter.instruction("cmp w9, #0x800");                                      // does the codepoint fall in 0xD800..0xDFFF?
+    emitter.instruction("b.lo __rt_json_str_utf8_malformed");                   // PHP rejects surrogate code points in UTF-8
     emitter.instruction("mov x12, #3");                                         // 3 source bytes consumed
     emitter.instruction("b __rt_json_str_utf8_emit_bmp");                       // emit a single \uXXXX
 
@@ -430,6 +452,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("orr w16, w16, w3");                                    // merge bits 6..11
     emitter.instruction("and w9, w9, #0x3F");                                   // b4 & 0x3F → low 6 bits
     emitter.instruction("orr w16, w16, w9");                                    // full 21-bit codepoint
+    emitter.instruction("cmp w16, #0x10000");                                   // reject overlong 4-byte sequences (codepoint < 0x10000)
+    emitter.instruction("b.lo __rt_json_str_utf8_malformed");                   // PHP rejects overlong UTF-8 encodings
+    emitter.instruction("mov w3, #0x110000");                                   // first codepoint above the Unicode range
+    emitter.instruction("cmp w16, w3");                                         // is the codepoint above U+10FFFF?
+    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // PHP rejects out-of-range UTF-8
     emitter.instruction("mov x12, #4");                                         // four source bytes belong to this Unicode scalar
     emitter.instruction("tst x19, #256");                                       // does JSON_UNESCAPED_UNICODE permit a literal scalar?
     emitter.instruction("b.ne __rt_json_str_utf8_copy");                        // copy the validated four-byte scalar literally
@@ -694,8 +721,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 
     // -- write closing quote --
+    emitter.label("__rt_json_str_overflow");
+    emitter.instruction("b __rt_concat_overflow");                              // report the oversized result instead of overwriting adjacent BSS
+
     emitter.label("__rt_json_str_close");
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload write pos
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the scratch guard limit
+    emitter.instruction("cmp x11, x12");                                        // is there room for the closing quote?
+    emitter.instruction("b.hs __rt_json_str_overflow");                         // fail closed instead of writing the closing quote past the arena
     emitter.instruction("mov w12, #34");                                        // ASCII double quote
     emitter.instruction("strb w12, [x11]");                                     // write closing "
     emitter.instruction("add x11, x11, #1");                                    // advance past closing quote

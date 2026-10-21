@@ -218,6 +218,9 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #32]");                                  // initialize the property loop index to zero
 
     emitter.label("__rt_json_obj_loop");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
+    emitter.instruction("mov x1, #4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared scratch arena
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the current property loop index
     emitter.instruction("ldr x14, [sp, #40]");                                  // reload the total public property count
     emitter.instruction("cmp x10, x14");                                        // are there more properties to encode?
@@ -610,6 +613,9 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the property loop index to zero
 
     emitter.label("__rt_json_obj_loop_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
+    emitter.instruction("mov rsi, 4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared scratch arena
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the current property loop index
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the total public property count
     emitter.instruction("cmp rcx, rdx");                                        // are there more properties to encode?

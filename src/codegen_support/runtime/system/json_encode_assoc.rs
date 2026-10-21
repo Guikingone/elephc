@@ -93,6 +93,9 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
 
     // -- iterate hash table entries --
     emitter.label("__rt_json_assoc_loop");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
+    emitter.instruction("mov x1, #4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared scratch arena
     emitter.instruction("ldr x4, [sp, #40]");                                   // load items written
     emitter.instruction("ldr x3, [sp, #24]");                                   // load total count
     emitter.instruction("cmp x4, x3");                                          // check if all items written
@@ -479,6 +482,9 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the number of encoded key/value pairs to zero
 
     emitter.label("__rt_json_assoc_loop");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
+    emitter.instruction("mov rsi, 4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared scratch arena
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source associative-array pointer for the next insertion-order iteration step
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the current hash iterator cursor for the next insertion-order iteration step
     emitter.instruction("call __rt_hash_iter_next_value");                      // advance one insertion-order hash entry and return its key plus payload in the x86_64 result registers

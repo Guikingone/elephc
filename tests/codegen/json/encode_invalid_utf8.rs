@@ -250,3 +250,44 @@ fn test_json_encode_clean_multibyte_unaffected_by_substitute_flag() {
     );
     assert_eq!(out, "\"caf\\u00e9\"");
 }
+
+/// Verifies UTF-8 encoded surrogate code points are rejected by default. PHP never
+/// accepts a surrogate as a standalone UTF-8 scalar, so `json_encode` must return
+/// false and set JSON_ERROR_UTF8 instead of emitting `\ud800`.
+#[test]
+fn test_json_encode_surrogate_is_malformed() {
+    let out = compile_and_run(
+        r#"<?php
+$s = chr(0xED) . chr(0xA0) . chr(0x80);
+var_dump(json_encode($s));
+echo json_last_error();
+"#,
+    );
+    assert_eq!(out, "bool(false)\n5");
+}
+
+/// Verifies a 4-byte sequence above U+10FFFF is rejected by default.
+#[test]
+fn test_json_encode_out_of_range_utf8_is_malformed() {
+    let out = compile_and_run(
+        r#"<?php
+$s = chr(0xF4) . chr(0x90) . chr(0x80) . chr(0x80);
+var_dump(json_encode($s));
+echo json_last_error();
+"#,
+    );
+    assert_eq!(out, "bool(false)\n5");
+}
+
+/// Verifies JSON_INVALID_UTF8_IGNORE drops a malformed surrogate sequence and keeps
+/// the surrounding text instead of emitting a lone surrogate escape.
+#[test]
+fn test_json_encode_surrogate_ignore_keeps_surrounding_text() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "a" . chr(0xED) . chr(0xA0) . chr(0x80) . "b";
+echo json_encode($s, JSON_INVALID_UTF8_IGNORE);
+"#,
+    );
+    assert_eq!(out, "\"ab\"");
+}
