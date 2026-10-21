@@ -95,3 +95,32 @@ fn numeric_closure_calls_respect_first_callee_metadata() {
     module.add_function(shadow);
     assert!(!specialize(&mut module));
 }
+
+/// Every function-like host table can contain an already-direct closure call.
+#[test]
+fn numeric_closure_calls_cover_every_caller_table() {
+    for table in 0..7 {
+        let mut module = fixture(PhpType::Int);
+        let mut caller = module.functions.pop().unwrap();
+        match table {
+            0 => { module.add_function(caller); }
+            1 => {
+                caller.name = "C::caller".into();
+                caller.flags.is_method = true;
+                caller.flags.is_static = true;
+                caller.lexical_class = Some("C".into());
+                module.class_methods.push(caller);
+            }
+            2 => { caller.flags.is_closure = true; module.add_closure(caller); }
+            3 => module.fiber_wrappers.push(caller),
+            4 => module.callback_wrappers.push(caller),
+            5 => module.extern_callback_trampolines.push(caller),
+            6 => module.runtime_callable_invokers.push(caller),
+            _ => unreachable!(),
+        }
+        crate::ir::validate_module(&module).unwrap();
+        assert!(specialize(&mut module), "caller table {table}");
+        crate::ir::validate_module(&module).unwrap();
+        assert!(module.closures.iter().any(|function| function.source_name.is_some()), "caller table {table}");
+    }
+}

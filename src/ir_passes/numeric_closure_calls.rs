@@ -33,7 +33,14 @@ pub(super) fn specialize(module: &mut Module) -> bool {
     let mut variants = HashMap::new();
     let mut generated = Vec::new();
     let mut changed = false;
-    for function in module.functions.iter_mut().chain(&mut module.closures) {
+    for function in module.functions.iter_mut()
+        .chain(&mut module.class_methods)
+        .chain(&mut module.closures)
+        .chain(&mut module.fiber_wrappers)
+        .chain(&mut module.callback_wrappers)
+        .chain(&mut module.extern_callback_trampolines)
+        .chain(&mut module.runtime_callable_invokers)
+    {
         for index in 0..function.instructions.len() {
             let call = &function.instructions[index];
             if call.op != Op::Call || call.result_type != IrType::Heap(IrHeapKind::Mixed)

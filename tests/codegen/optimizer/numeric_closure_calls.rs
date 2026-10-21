@@ -214,3 +214,38 @@ echo function_exists($name) ? 'bad' : 'hidden', '|', __eir_numeric_closure_0_i_0
         assert_eq!(run(collision, optimized).0, "2|public|hidden|42");
     }
 }
+
+/// Method callers receive the same exact-argument entry variants as ordinary functions.
+#[test]
+fn test_numeric_closure_calls_method_caller_reduces_argument_allocations() {
+    let source = r#"<?php
+final class NumericClosureCaller {
+    public static function total(int $n): int {
+        $f = function($x) { return $x + 1; };
+        $sum = 0;
+        for ($i = 0; $i < $n; $i++) { $sum += $f($i); }
+        return (int)$sum;
+    }
+}
+echo NumericClosureCaller::total($argc * 1000);
+"#;
+    let plain = run(source, false);
+    let optimized = run(source, true);
+    assert_eq!(plain.0, "500500");
+    assert_eq!(optimized.0, plain.0);
+    let (plain_allocs, _) = parse_gc_stats(&plain.1);
+    let (allocs, frees) = parse_gc_stats(&optimized.1);
+    assert_eq!(allocs, frees);
+    assert!(allocs + 1000 < plain_allocs, "method allocations: {plain_allocs} -> {allocs}");
+    let dir = make_cli_test_dir("elephc_numeric_closure_method_target");
+    let path = dir.join("main.php"); fs::write(&path, source).unwrap();
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut command = elephc_cli_command(&dir);
+        command.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") { command.args(["--emit", "staticlib"]); }
+        let output = command.arg(&path).output().unwrap();
+        assert!(output.status.success(), "{target}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(fs::read_to_string(path.with_extension("s")).unwrap().contains("__eir_numeric_closure_"), "{target}");
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
