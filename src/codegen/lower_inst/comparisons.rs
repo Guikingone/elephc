@@ -1175,7 +1175,7 @@ fn move_float_result_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) {
             ctx.emitter.instruction(&format!("fmov {}, {}", reg, result_reg));  // preserve the normalized mixed float comparison operand
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movapd {}, {}", reg, result_reg));// preserve the normalized mixed float comparison operand
+            ctx.emitter.instruction(&format!("movapd {}, {}", reg, result_reg)); // preserve the normalized mixed float comparison operand
         }
     }
 }

@@ -35,7 +35,7 @@ pub(super) fn float(ctx: &mut FunctionContext<'_>, ty: &PhpType, payload: &str, 
     if *ty == PhpType::Mixed {
         // -- distinguish an integer payload from existing IEEE double bits --
         match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {tag}, {float}")),// a nonzero numeric tag already contains a PHP double
+            Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {tag}, {float}")), // a nonzero numeric tag already contains a PHP double
             Arch::X86_64 => {
                 ctx.emitter.instruction(&format!("test {tag}, {tag}"));         // distinguish integer payload bits from a PHP double
                 ctx.emitter.instruction(&format!("jnz {float}"));               // preserve existing doubles without another integer conversion
@@ -44,8 +44,8 @@ pub(super) fn float(ctx: &mut FunctionContext<'_>, ty: &PhpType, payload: &str, 
     }
     if *ty != PhpType::Float {
         match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction(&format!("scvtf {dest}, {payload}")),// convert the original signed integer into a double
-            Arch::X86_64 => ctx.emitter.instruction(&format!("cvtsi2sd {dest}, {payload}")),// convert the original signed integer into a double
+            Arch::AArch64 => ctx.emitter.instruction(&format!("scvtf {dest}, {payload}")), // convert the original signed integer into a double
+            Arch::X86_64 => ctx.emitter.instruction(&format!("cvtsi2sd {dest}, {payload}")), // convert the original signed integer into a double
         }
         if *ty == PhpType::Mixed { ctx.emit_branch(&done); }
     }

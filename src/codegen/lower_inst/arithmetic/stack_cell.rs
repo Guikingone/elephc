@@ -82,7 +82,7 @@ fn tagged(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: usize, op: 
     // -- keep a promoted float on every subsequent execution of the loop body --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("orr {combined}, {left_tag}, {right_tag}"));// a zero combined tag means both payloads are PHP integers
+            ctx.emitter.instruction(&format!("orr {combined}, {left_tag}, {right_tag}")); // a zero combined tag means both payloads are PHP integers
             ctx.emitter.instruction(&format!("cbz {combined}, {integer}"));     // use checked integer arithmetic only for two integer tags
         }
         Arch::X86_64 => {

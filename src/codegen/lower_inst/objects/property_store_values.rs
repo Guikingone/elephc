@@ -242,7 +242,11 @@ pub(super) fn emit_packed_field_store(
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            ctx.load_value_to_reg(value, float_reg)?;
+            if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                load_property_store_value_to_result(ctx, value, slot)?;
+            } else {
+                ctx.load_value_to_reg(value, float_reg)?;
+            }
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, float_reg, base_reg, slot.offset);
         }

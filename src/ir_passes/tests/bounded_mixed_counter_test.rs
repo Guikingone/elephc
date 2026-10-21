@@ -343,3 +343,85 @@ fn bounded_mixed_counter_uses_canonical_first_callee_metadata() {
         assert!(validate_function(&f).is_ok(), "{:?}", validate_function(&f));
     }
 }
+
+/// Joint storage trials prove every mutually observed recurrence before accepting either slot.
+#[test]
+fn bounded_mixed_counter_storage_joint_checks_every_update() {
+    use std::collections::HashMap;
+    use crate::ir::LocalSlotId;
+    for (seed, accepted) in [(0, true), (i64::MAX, false)] {
+        let mut function = counter(CmpPredicate::Slt, 1, 0, false);
+        let first = LocalSlotId::from_raw(1);
+        let second = function.add_local(Some("other".into()), IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed, LocalKind::PhpLocal);
+        let entry = function.blocks[0].id;
+        let body = function.blocks[2].id;
+        let entry_term = function.blocks[0].terminator.take().unwrap();
+        let body_term = function.blocks[2].terminator.take().unwrap();
+        {
+            let mut builder = Builder::new(&mut function);
+            builder.position_at_end(entry);
+            let seed = builder.emit_const_i64(seed);
+            builder.emit_store_local(second, seed);
+            builder.terminate(entry_term);
+            builder.position_at_end(body);
+            let left = builder.emit_load_local(first, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let right = builder.emit_load_local(second, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            builder.emit(Op::PhpRelCmp, vec![left, right], Some(Immediate::CmpPredicate(CmpPredicate::Sgt)),
+                IrType::I64, PhpType::Bool, Ownership::NonHeap);
+            let update = builder.emit(Op::StrIncDec, vec![right], Some(Immediate::I64(1)),
+                IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+            let owner = builder.emit(Op::Acquire, vec![update], None,
+                IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+            builder.emit_store_local(second, owner);
+            builder.emit(Op::Release, vec![update], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            builder.terminate(body_term);
+        }
+        assert!(validate_function(&function).is_ok());
+        let original = crate::ir::print_function(&function);
+        let slots = crate::ir_passes::proven_integer_slots(&function, &mut DataPool::default(), &HashMap::new());
+        assert_eq!(slots.contains(&first), accepted);
+        assert_eq!(slots.contains(&second), accepted);
+        assert_eq!(crate::ir::print_function(&function), original, "analysis must not commit its trial");
+    }
+}
+
+
+/// A numeric temporary's computed store initializes it, but a prior uninitialized read rejects.
+#[test]
+fn stack_numeric_domain_requires_initialized_numeric_temporaries() {
+    for initialized in [false, true] {
+        let mut function = counter(CmpPredicate::Slt, 1, 0, false);
+        let slot = function.add_local(Some("square".into()), IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed, LocalKind::PhpLocal);
+        let body = function.blocks[2].id;
+        let term = function.blocks[2].terminator.take().unwrap();
+        let read = {
+            let mut builder = Builder::new(&mut function); builder.position_at_end(body);
+            if !initialized { builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed); }
+            let input = builder.emit_load_local(crate::ir::LocalSlotId::from_raw(1),
+                IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let square = builder.emit(Op::MixedNumericBinop, vec![input, input],
+                Some(Immediate::MixedNumericOp(crate::ir::MixedNumericOp::Mul)),
+                IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+            builder.emit_store_local(slot, square);
+            let read = builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            builder.terminate(term); read
+        };
+        validate_function(&function).unwrap();
+        assert_eq!(crate::ir_passes::numeric_domain::inputs(&function, &[read]), initialized);
+    }
+}
+
+/// Another reference local does not alias a closed counter, while its own storage never narrows.
+#[test]
+fn bounded_mixed_counter_storage_ignores_unrelated_reference_slots() {
+    let mut function = counter(CmpPredicate::Slt, 1, 0, false);
+    let unrelated = function.add_local(Some("reference".into()), IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed, LocalKind::RefCell);
+    validate_function(&function).unwrap();
+    let slots = crate::ir_passes::proven_integer_slots(&function, &mut DataPool::default(),
+        &std::collections::HashMap::new());
+    assert!(slots.contains(&crate::ir::LocalSlotId::from_raw(1)));
+    assert!(!slots.contains(&unrelated));
+}

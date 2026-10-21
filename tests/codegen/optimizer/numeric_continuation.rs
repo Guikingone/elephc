@@ -43,6 +43,7 @@ function add_continue(int $n): int {
     for ($i = 0; $i < $n; $i++) { $s += 1; }
     return @(int)$s;
 }
+
 function sub_continue(int $n): int {
     $s = PHP_INT_MIN + 1;
     for ($i = 0; $i < $n; $i++) { $s -= 1; }
@@ -55,6 +56,40 @@ function fractional_continue(int $n): int {
 }
 echo add_continue($argc + 2), '|', sub_continue($argc + 2), '|', fractional_continue($argc + 2);
 "#, "-9223372036854775808|-9223372036854775808|-9223372036854775808");
+}
+
+/// Copying through another ordinary local cannot turn the next iteration's float back into int.
+#[test]
+fn test_numeric_continuation_through_local_copy() {
+    assert_modes(r#"<?php
+function copied_for(int $n): int {
+    $sum = PHP_INT_MAX - 1;
+    for ($i = 0; $i < $n; $i++) { $temporary = $sum + 1; $sum = $temporary; }
+    return @(int)$sum;
+}
+function copied_while(int $n): int {
+    $sum = PHP_INT_MAX - 1; $i = 0;
+    while ($i < $n) { $first = $sum + 1; $second = $first; $sum = $second; $i++; }
+    return @(int)$sum;
+}
+echo copied_for($argc + 2), '|', copied_while($argc + 2);
+"#, "-9223372036854775808|-9223372036854775808");
+}
+
+/// A bound promoted beyond the integer domain cannot justify narrowing its induction variable.
+#[test]
+fn test_numeric_continuation_promoted_bound_keeps_counter_tags() {
+    assert_modes(r#"<?php
+function growing_bound(int $n): void {
+    $limit = PHP_INT_MAX; $value = PHP_INT_MAX - 1; $iterations = 0;
+    while ($value < $limit) {
+        $limit += 4096; $value++; $iterations++;
+        if ($iterations == $n) { break; }
+    }
+    echo gettype($value), ':', @(int)$value;
+}
+growing_bound($argc + 2);
+"#, "double:-9223372036854775808");
 }
 
 /// While and do/while loops share the same numeric storage requirement as for loops.
@@ -290,4 +325,71 @@ echo scalar_increment($argc+2), '|', scalar_decrement($argc+2), '|';
 signed_zero($argc+1, $argc-1, -0.0);
 "#;
     assert_modes(source, "0000|-9223372036854775808|1100|-9223372036854775808|10|-9223372036854775808|-9223372036854775808|0101");
+}
+
+/// An actually promoted index must publish float payloads rather than box addresses to packed fields.
+#[test]
+fn test_numeric_continuation_promoted_value_into_packed_float() {
+    let source = r#"<?php
+packed class NumericContinuationCell { public float $value; }
+function stored_promotion(int $n): float {
+    $items = buffer_new<NumericContinuationCell>(1);
+    $value = PHP_INT_MAX - 1;
+    for ($i = 0; $i < $n; $i++) {
+        $items[0]->value = $value * 1.5;
+        $value++;
+    }
+    $result = $items[0]->value;
+    buffer_free($items);
+    return $result;
+}
+echo stored_promotion($argc + 2);
+"#;
+    let model = source.replace("packed class ", "class ")
+        .replace("buffer_new<NumericContinuationCell>(1)", "[new NumericContinuationCell()]")
+        .replace("buffer_free($items);", "unset($items);");
+    let dir = make_cli_test_dir("elephc_numeric_continuation_packed");
+    let path = dir.join("main.php");
+    let model_path = dir.join("model.php");
+    fs::write(&path, source).unwrap();
+    fs::write(&model_path, model).unwrap();
+    let expected = b"1.3835058055282E+19";
+    if std::env::var_os("ELEPHC_PHP_CHECK").is_some() {
+        let php = Command::new("php").arg("-n").arg(&model_path).output().unwrap();
+        assert!(php.status.success(), "{}", String::from_utf8_lossy(&php.stderr));
+        assert_eq!(php.stdout, expected);
+    }
+    for optimized in [false, true] {
+        let mut command = elephc_cli_command(&dir);
+        command.args(["--heap-debug", "--gc-stats"]);
+        if !optimized { command.arg("--no-ir-opt"); }
+        let compiled = command.arg(&path).output().unwrap();
+        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+        let output = run_binary(&path.with_extension(""), &dir);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(output.stdout, expected, "optimized={optimized}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut command = elephc_cli_command(&dir);
+            command.args(["--emit-asm", "--target", target]);
+            if target.starts_with("ios-") { command.args(["--emit", "staticlib"]); }
+            if !optimized { command.arg("--no-ir-opt"); }
+            let compiled = command.arg(&path).output().unwrap();
+            assert!(compiled.status.success(), "{target}: {}", String::from_utf8_lossy(&compiled.stderr));
+        }
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Heterogeneous foreach values preserve float tags after an integer accumulator seed.
+#[test]
+fn test_numeric_continuation_mixed_foreach_preserves_fractional_sum() {
+    assert_modes(r#"<?php
+function fractional_foreach(int $seed): void {
+    $values = [$seed, 1.5, 1.5]; $sum = 0;
+    foreach ($values as $value) { $sum += $value; }
+    echo $sum, ':', gettype($sum);
+}
+fractional_foreach($argc);
+"#, "4:double");
 }

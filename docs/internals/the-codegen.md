@@ -127,7 +127,7 @@ cyclic region, then replays the body with Mixed storage from its first store.
 Constraints belong to individual storage bindings, so a name reused after
 `unset` retains its new representation. This decision is separate from the
 sealed per-call-site closure proof.
-`src/codegen/stack_numeric/domain.rs` can prove an integer/float domain from a
+`src/ir_passes/numeric_domain.rs` can prove an integer/float domain from a
 dominating numeric seed and every writer of a private local. A nonescaping
 add/subtract/multiply or numeric increment can reuse a 24-byte frame cell: two integer tags take
 checked integer arithmetic, while an existing float remains a float. Both input

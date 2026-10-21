@@ -139,7 +139,16 @@ storage contract. A borrowed pointer must be converted before another checked
 producer executes. Returns of the cell, pointer-valued block arguments, a second
 local, container stores and unknown consumers retain heap storage. Parameters,
 globals, statics, references, eval storage and suspended activations do not receive
-this local storage optimization. The executable main frame is also excluded.
+this local storage optimization. Private slots in the executable main frame use
+the same complete lifetime proof; global-visible values still retain heap storage.
+
+Loop-carried numeric slots are lowered with their final Mixed representation from
+entry, including arithmetic results copied through another local. Closed numeric
+add/subtract/multiply and increment inputs preserve an existing float tag on later
+iterations. Counters retain scalar lowering only after a discarded SSA/range trial
+proves every update safe; mutually observed counters are proved together, and nested
+loop invariants are simplified before the range check. Unknown aliases and dynamic
+scope access reject the proof.
 
 These frame cells have no heap header and cannot own children. Proven retains and
 releases of their SSA pointers emit no refcount calls. A selected local may still

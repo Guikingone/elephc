@@ -10,7 +10,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{BlockId, Function, Immediate, IrType, LocalKind, Op, ValueDef, ValueId};
+use crate::ir::{BlockId, Function, Immediate, InstId, IrType, LocalKind, LocalSlotId, Op,
+    RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId};
 use crate::parser::ast::Stmt;
 use crate::types::PhpType;
 use super::context::LoweringContext;
@@ -22,11 +23,28 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
     // with handlers, including a loop whose body always reaches its backedge via catch.
     let exceptional = function.instructions.iter().any(|inst| matches!(inst.op,
         Op::TryPushHandler | Op::CatchBind | Op::FinallyEnter));
-    let writers: HashSet<_> = function.instructions.iter().filter_map(|inst| {
-        if inst.op != Op::StoreLocal { return None; }
-        let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return None; };
-        inst.operands.first().is_some_and(|&value| numeric_writer(function, value)).then_some(slot)
-    }).collect();
+    let cyclic_blocks: HashSet<_> = function.blocks.iter()
+        .filter(|block| exceptional || cyclic(function, block.id)).map(|block| block.id).collect();
+    let mut local_writers: HashMap<LocalSlotId, Vec<ValueId>> = HashMap::new();
+    for inst in &function.instructions {
+        if inst.op == Op::StoreLocal {
+            if let (Some(Immediate::LocalSlot(slot)), Some(&source)) = (&inst.immediate, inst.operands.first()) {
+                local_writers.entry(*slot).or_default().push(source);
+            }
+        }
+    }
+    let mut writers = HashSet::new();
+    for block in &function.blocks {
+        if !cyclic_blocks.contains(&block.id) { continue; }
+        for &id in &block.instructions {
+            let inst = &function.instructions[id.as_raw() as usize];
+            if inst.op != Op::StoreLocal { continue; }
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { continue; };
+            if inst.operands.first().is_some_and(|&value| numeric_writer(function, &local_writers, value)) {
+                writers.insert(slot);
+            }
+        }
+    }
     if writers.is_empty() { return HashMap::new(); }
     let mut narrow = HashSet::new();
     for block in &function.blocks {
@@ -38,7 +56,7 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return None; };
             writers.contains(&slot).then_some(slot)
         }).collect();
-        if loads.is_empty() || (!exceptional && !cyclic(function, block.id)) {
+        if loads.is_empty() || !cyclic_blocks.contains(&block.id) {
             continue;
         }
         narrow.extend(loads);
@@ -48,34 +66,35 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
         if !narrow.contains(&local.id) || local.kind != LocalKind::PhpLocal
             || local.php_type.codegen_repr() != PhpType::Mixed
         { continue; }
-        let name = ctx.local_slots.iter().find(|(_, slot)| **slot == local.id)
-            .map(|(name, _)| name.as_str()).or_else(|| local.name.as_deref().map(|name| {
-                name.strip_suffix("#cow").unwrap_or(name)
-            }));
-        let Some(name) = name else { continue; };
-        if !ctx.is_ref_bound_local(name) {
-            bindings.entry(name.to_owned()).or_default()
-                .insert(ctx.local_binding_ordinal(name, Some(local.id)));
+        let Some((name, ordinal)) = binding(ctx, local.id) else { continue; };
+        if !ctx.is_ref_bound_local(&name) && !ctx.local_uses_global_storage(&name) {
+            bindings.entry(name).or_default().insert(ordinal);
         }
     }
     bindings
 }
 
 /// Follows assignment ownership wrappers to arithmetic that can promote to a PHP float.
-fn numeric_writer(function: &Function, mut value: ValueId) -> bool {
-    for _ in 0..function.values.len() {
+fn numeric_writer(function: &Function, writers: &HashMap<LocalSlotId, Vec<ValueId>>, value: ValueId) -> bool {
+    let mut pending = vec![value];
+    let mut seen = HashSet::new();
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value) { continue; }
         let Some(ValueDef::Instruction { inst, .. }) = function.value(value).map(|value| value.def) else {
-            return false;
+            continue;
         };
         let inst = &function.instructions[inst.as_raw() as usize];
         match inst.op {
             Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow
                 | Op::MixedNumericBinop | Op::StrIncDec => return true,
             Op::Acquire | Op::MixedClone | Op::Move | Op::Borrow | Op::EnsureOwned => {
-                let Some(&source) = inst.operands.first() else { return false; };
-                value = source;
+                pending.extend(inst.operands.first().copied());
             }
-            _ => return false,
+            Op::LoadLocal => {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else { continue; };
+                pending.extend(writers.get(&slot).into_iter().flatten().copied());
+            }
+            _ => {}
         }
     }
     false
@@ -143,13 +162,39 @@ pub(crate) fn lower_body(
     if !suppress && force.is_empty() {
         return;
     }
-    ctx.restore(checkpoint);
+    let mut final_force = if suppress { scalar_force } else { force };
+    ctx.restore(checkpoint.clone());
+    replay(ctx, body, &sites, suppress, &final_force);
+    // Every trial sees all not-yet-proven recurrences widened. A promoted float bound
+    // cannot masquerade as integer. Removing proven constraints can expose a copied
+    // counter's integer seed or a surrounding loop, so repeat to a bounded fixed point.
+    for _ in 0..16 {
+        let calls = readonly_calls(ctx);
+        let proven = crate::ir_passes::proven_integer_slots(ctx.builder.function(), ctx.data, &calls);
+        let safe_bindings: Vec<_> = proven.into_iter().filter_map(|slot| binding(ctx, slot)).collect();
+        let mut changed = false;
+        for (name, ordinal) in safe_bindings {
+            if let Some(bindings) = final_force.get_mut(&name) {
+                changed |= bindings.remove(&ordinal);
+            }
+        }
+        if !changed { break; }
+        ctx.restore(checkpoint.clone());
+        replay(ctx, body, &sites, suppress, &final_force);
+    }
+}
+
+/// Replays one body with a binding-scoped storage contract and the original call-site proofs.
+fn replay(
+    ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], sites: &HashSet<crate::span::Span>,
+    suppress: bool, force: &HashMap<String, HashSet<usize>>,
+) {
     ctx.numeric_proof_sealed = true;
     if !suppress {
-        ctx.numeric_closure_sites = sites;
+        ctx.numeric_closure_sites = sites.clone();
     }
-    for (name, bindings) in if suppress { scalar_force } else { force } {
-        ctx.final_mixed_locals.entry(name).or_default().extend(bindings);
+    for (name, bindings) in force {
+        ctx.final_mixed_locals.entry(name.clone()).or_default().extend(bindings);
     }
     // Parameters already have slots at the checkpoint. Their prologue boxes an incoming
     // scalar when its final frame representation is Mixed, without changing the call ABI.
@@ -161,6 +206,56 @@ pub(crate) fn lower_body(
         }
     }
     lower_stmts(ctx, body);
+}
+
+/// Resolves a physical storage epoch even after unset removed its active name binding.
+fn binding(ctx: &LoweringContext<'_, '_>, slot: LocalSlotId) -> Option<(String, usize)> {
+    let local = ctx.builder.function().locals.get(slot.as_raw() as usize)?;
+    let name = ctx.local_slots.iter().find(|(_, candidate)| **candidate == slot)
+        .map(|(name, _)| name.as_str()).or_else(|| local.name.as_deref().map(|name| {
+            name.strip_suffix("#cow").unwrap_or(name)
+        }))?;
+    Some((name.to_owned(), ctx.local_binding_ordinal(name, Some(slot))))
+}
+
+/// Identifies call positions that copy scalar values rather than alias their originating slot.
+fn readonly_calls(ctx: &LoweringContext<'_, '_>) -> HashMap<InstId, HashSet<usize>> {
+    let function = ctx.builder.function();
+    function.instructions.iter().enumerate().filter_map(|(index, inst)| {
+        let parameters = match (inst.op, &inst.immediate) {
+            (Op::Call, Some(Immediate::Data(target))) => {
+                let name = ctx.data.function_names.get(target.as_raw() as usize)?;
+                let signature = ctx.functions.get(name)?;
+                if signature.variadic.is_some() || inst.operands.len() != signature.params.len() {
+                    return None;
+                }
+                signature.ref_params.clone()
+            }
+            (Op::RuntimeCall, Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))) => {
+                let definition = crate::builtins::registry::lookup(target.as_eir())?;
+                if !definition.spec.semantics.runtime_functions.contains(*target) { return None; }
+                if definition.variadic.is_some() {
+                    // array_push keeps individual by-value variadic operands in EIR;
+                    // its first operand alone is a by-reference receiver address.
+                    if *target != RuntimeFnId::ArrayPush
+                        || definition.ref_params.len() != definition.params.len()
+                    { return None; }
+                    let regular = definition.params.len().checked_sub(1)?;
+                    if inst.operands.len() < regular { return None; }
+                    let mut parameters = definition.ref_params[..regular].to_vec();
+                    parameters.resize(inst.operands.len(), *definition.ref_params.last()?);
+                    parameters
+                } else {
+                    if inst.operands.len() != definition.params.len() { return None; }
+                    definition.ref_params.clone()
+                }
+            }
+            _ => return None,
+        };
+        let positions = parameters.iter().enumerate()
+            .filter_map(|(index, by_ref)| (!by_ref).then_some(index)).collect();
+        Some((InstId::from_raw(index as u32), positions))
+    }).collect()
 }
 
 /// Lowers each statement in source order.

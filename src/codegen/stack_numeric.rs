@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
 mod tests;
-mod domain;
+use crate::ir_passes::numeric_domain as domain;
 
 /// Stack cells and the exclusively numeric locals proven while selecting them.
 #[derive(Default)]
@@ -32,8 +32,7 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
     if !function.instructions.iter().any(producer_op) {
         return NumericFrame::default();
     }
-    if function.flags.is_main
-        || function.flags.is_generator
+    if function.flags.is_generator
         || function.flags.is_fiber_wrapper
         || function.locals.iter().any(|local| {
             matches!(
@@ -323,6 +322,11 @@ fn tagged_producer(inst: &crate::ir::Instruction) -> bool {
 /// Shares the closed numeric proof with comparison lowering; no pointer lifetime is extended.
 pub(super) fn numeric_comparison(function: &Function, inst: &crate::ir::Instruction) -> bool {
     domain::comparison(inst) && inst.operands.len() == 2 && domain::inputs(function, &inst.operands)
+}
+
+/// Shares the complete scalar-origin proof with retirement, without admitting any pointer escape.
+pub(super) fn numeric_value(function: &Function, value: ValueId) -> bool {
+    domain::inputs(function, &[value])
 }
 
 /// Accepts only scalar casts that copy the value rather than expose its address.

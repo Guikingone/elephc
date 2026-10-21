@@ -341,7 +341,18 @@ echo sum($b, 2), "\n";
 fn test_buffer_loops_example_hoists_resolution() {
     let source = include_str!("../../../examples/buffer-loops/main.php");
     assert!(function_ir(source, true, "step").contains("= buffer_resolve "));
-    let expected = "particles=8; sum=350\n";
+    let expected = "particles=8; sum=380\n";
+    if std::env::var_os("ELEPHC_PHP_CHECK").is_some() {
+        let model = source.replace("packed class ", "class ").replace("buffer<Particle>", "array")
+            .replace("buffer_new<Particle>($count)", "array_map(fn($unused) => new Particle(), range(1, $count))")
+            .replace("buffer_free($p);", "unset($p);");
+        let dir = make_cli_test_dir("elephc_buffer_loops_php_model");
+        let path = dir.join("model.php"); fs::write(&path, model).unwrap();
+        let php = Command::new("php").arg("-n").arg(&path).output().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(php.status.success(), "{}", String::from_utf8_lossy(&php.stderr));
+        assert_eq!(php.stdout, expected.as_bytes());
+    }
     assert_eq!(run_variant(source, true), expected);
     assert_eq!(run_variant(source, false), expected);
 }

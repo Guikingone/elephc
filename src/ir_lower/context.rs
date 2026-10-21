@@ -163,6 +163,7 @@ pub(crate) struct ReferenceCallContext {
 }
 
 /// Rollback point for a speculative statement lowering.
+#[derive(Clone)]
 pub(crate) struct LoweringSnapshot {
     function: Function,
     insertion_block: Option<BlockId>,
@@ -216,6 +217,7 @@ pub(crate) struct LoweringSnapshot {
 }
 
 /// Lengths of append-only intern pools captured for speculative rollback.
+#[derive(Clone)]
 struct DataPoolLengths {
     strings: usize,
     float_literals: usize,

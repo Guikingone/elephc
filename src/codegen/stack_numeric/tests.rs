@@ -99,6 +99,19 @@ fn stack_numeric_local_and_return_gates() {
     assert!(candidates(&function).is_empty());
 }
 
+/// Main's private numeric slots obey the same complete lifetime proof as ordinary frames.
+#[test]
+fn stack_numeric_private_main_and_global_escape_gates() {
+    let (mut function, value) = fixture(false, false);
+    function.flags.is_main = true;
+    function.return_type = IrType::Void;
+    function.return_php_type = PhpType::Void;
+    function.blocks[0].terminator = Some(Terminator::Return { value: None });
+    assert_eq!(candidates(&function), vec![value]);
+    function.locals[0].kind = LocalKind::GlobalAlias;
+    assert!(candidates(&function).is_empty());
+}
+
 /// A numeric loop input can stay on the frame after its int-to-float promotion.
 #[test]
 fn stack_numeric_mixed_numeric_domain_and_escape() {
