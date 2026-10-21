@@ -60,6 +60,9 @@ and link the resulting user object against the cached runtime object.
 | `src/codegen/lower_inst.rs`, `src/codegen/lower_inst/` | Instruction lowering, including typed runtime-target dispatch with no PHP-name lookup |
 | `src/codegen/lower_inst/runtime_calls.rs`, `runtime_functions/` | Validates and lowers typed `RuntimeCallTarget` / `RuntimeFnId` operations into target-aware backend implementations |
 | `src/codegen/lower_inst/builtins/eval.rs` | Literal-eval AOT bodies, scope synchronization, bridge calls, and dynamic post-barrier dispatch |
+| `src/codegen/eval_inventory_helper.rs` | The one module-level helper that seeds a fresh eval context with the AOT metadata inventory |
+| `src/codegen/eval_status_helper.rs` | The one module-level helper that turns an eval bridge status into its throw/fatal handler |
+| `src/codegen/shared_helper.rs` | Synthetic EIR scaffolding and frames for sequences emitted once per module instead of at every call site |
 | `src/codegen/lower_term.rs` | Terminator lowering for returns, branches, switches, and unreachable paths |
 | `src/codegen/block_layout.rs` | Machine block order (cold blocks last) and compare-branch fusion eligibility |
 | `src/codegen/parallel_moves.rs` | Direct scalar block-argument copies ordered as a parallel move |
@@ -310,6 +313,52 @@ boxes values into the shared `Mixed` cell representation, and uses the normal
 target-aware call helpers on the three executable hosts: macOS ARM64, Linux
 ARM64, and Linux x86_64. See [Eval Runtime Architecture](eval-runtime.md) for the
 complete boundary.
+
+### Sequences that are identical at every call site are emitted once
+
+Two eval sequences are the same at every site that needs them, and are therefore
+module-level helpers rather than inline copies:
+
+- seeding a fresh eval context with the AOT metadata inventory
+  (`src/codegen/eval_inventory_helper.rs`), and
+- turning a bridge status into its throw/fatal handler
+  (`src/codegen/eval_status_helper.rs`).
+
+Both were inlined at first, which made assembly size quadratic in the number of
+eval call sites. On `examples/eval/main.php` (169 sites) the inlined form emitted
+32.4M lines / 770 MB of assembly and took 477 s to compile on the reference
+machine; the hoisted form emits 5.6M lines / 156 MB and takes 81 s, with the same
+program output. Their runtime guards never made the duplicate copies execute;
+only their presence cost anything. Emit such a sequence once, measure the
+assembly, and only then decide it needs its own helper.
+
+A helper built this way has three hard constraints.
+
+Its label must be GLOBAL (`emit_global_shared_helper`). This is not about
+reachability — a forward `bl` to a local label resolves inside one object file —
+it is about section and atom ownership: `label_global` opens a per-symbol
+`.text.<name>` section on Linux so `--gc-sections` can drop the helper
+independently and cannot attribute it to whatever function happened to be open,
+and it marks the helper `.globl` on macOS so `-dead_strip` treats it as its own
+atom.
+
+Its state must not live in a frame-POINTER local: the shared-helper prologue
+builds a fixed frame (32 bytes on AArch64, 24 on x86_64) with no room for one, so
+a local addressed from the frame pointer would land in the caller's stack. An
+`sp`-relative slot is no substitute here, because these bodies displace `sp` while
+staging constant values. The eval catalog instead parks its context handle in a
+module-level symbol declared in `src/codegen_support/runtime/data/fixed.rs`, which
+is deliberately process-global: no registration call executes user PHP or
+suspends a fiber, and `--web` workers are separate processes, so the transaction
+cannot re-enter itself. A registration path that ever gains a user callback would
+have to make that slot per-thread.
+
+A helper CANNOT read the caller's eval scratch frame, because inside it `sp`
+belongs to the helper: any `EVAL_*_OFFSET` access would pick up unrelated bytes.
+Caller-frame values must be passed as arguments — the status dispatch receives
+the pending Throwable in argument register 1 (`x1` / `rsi`) for exactly this
+reason. Getting it wrong produced a program that ran, but raised an empty-class
+`Uncaught` instead of the real exception.
 
 ## Emit Modes
 
