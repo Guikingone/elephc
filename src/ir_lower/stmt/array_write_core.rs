@@ -242,16 +242,48 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     ) {
         let (index_value, value_value, slots) =
             lower_pinned_write_key_and_value(ctx, index, value, span);
-        let array_value = load_array_local_for_write(ctx, array, span);
-        if array_value_is_boxed(array_value) {
-            lower_boxed_array_set_values(
-                ctx, array_value, index_value, value_value, span, key_already_diagnosed,
-            );
-        } else {
-            finish_array_local_set(
-                ctx, array, array_value, index, value, index_value, value_value, Vec::new(), span,
-                key_already_diagnosed,
-            );
+        let mut array_value = load_array_local_for_write(ctx, array, span);
+        // An operand may have retyped the receiver. PHP then applies the rules of the value it
+        // holds NOW, not of the type the write was lowered from: a string rewrites a string
+        // offset (the static form is refused at the checker, the runtime writer exists for
+        // mixed parents), null autovivifies an empty array, and the other scalars raise the
+        // catchable `Cannot use a scalar value as an array`. Without this dispatch the typed
+        // writer rejects the retyped receiver in the backend.
+        match ctx.builder.value_php_type(array_value.value).codegen_repr() {
+            PhpType::Str => {
+                super::nested_scalar_writes::lower_string_write_to_local(
+                    ctx, array, array_value, index_value, value_value, span,
+                );
+            }
+            PhpType::Int | PhpType::Float | PhpType::Resource(_) => {
+                crate::ir_lower::stmt::control_exit::lower_throw_access_error(
+                    ctx, "Cannot use a scalar value as an array", span,
+                );
+            }
+            PhpType::Void => {
+                let empty = crate::ir_lower::expr::lower_expr(
+                    ctx,
+                    &Expr::new(ExprKind::ArrayLiteral(Vec::new()), span),
+                );
+                let empty_ty = ctx.builder.value_php_type(empty.value);
+                ctx.store_local(array, empty, empty_ty, Some(span));
+                array_value = load_array_local_for_write(ctx, array, span);
+                finish_array_local_set(
+                    ctx, array, array_value, index, value, index_value, value_value,
+                    Vec::new(), span, key_already_diagnosed,
+                );
+            }
+            _ if array_value_is_boxed(array_value) => {
+                lower_boxed_array_set_values(
+                    ctx, array_value, index_value, value_value, span, key_already_diagnosed,
+                );
+            }
+            _ => {
+                finish_array_local_set(
+                    ctx, array, array_value, index, value, index_value, value_value,
+                    Vec::new(), span, key_already_diagnosed,
+                );
+            }
         }
         // The write lowers may end the block with a throw (a coerced key, a boxed writer
         // guard); the published slots stay for the unwinder, and emitting the retires after a

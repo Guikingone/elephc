@@ -453,3 +453,53 @@ f([1]);
     );
     assert!(err.contains("[] operator not supported for strings"), "{err}");
 }
+
+/// An operand that retypes the receiver makes the write follow the value it holds at write
+/// time: PHP rewrites a string offset, autovivifies a null into an array, and raises the
+/// catchable `Cannot use a scalar value as an array` for the other scalars (review follow-up
+/// for #1653).
+#[test]
+fn test_element_write_into_a_retyped_receiver_follows_php() {
+    let out = compile_and_run(
+        r#"<?php
+function str_offset(mixed $a): void {
+    $a = [1];
+    $a[0] = ($a = "abc") ? "Z" : "q";
+    echo $a, "\n";
+}
+function via_null(): void {
+    global $n;
+    $n = [1];
+    $n["k"] = clear();
+    echo json_encode($n), "\n";
+}
+function clear(): string { global $n; $n = null; return "q"; }
+function scalar(mixed $a): void {
+    $a = [1];
+    try { $a[0] = ($a = 5) ? "Z" : "q"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+}
+str_offset(null);
+via_null();
+scalar(null);
+"#,
+    );
+    assert_eq!(out, "Zbc\n{\"k\":\"q\"}\ncaught:Cannot use a scalar value as an array\n");
+}
+
+/// The ordering gate walks the expression targets that run when an operand is evaluated: the
+/// object expression of a first-class callable (a constructor there can write the receiver).
+#[test]
+fn test_element_write_order_walks_first_class_callable_object() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public function __construct() { global $m; $m = ["y" => "z"]; }
+    public function m(): void {}
+}
+$m = ["a" => "x"];
+$m["k"] = (new C())->m(...) ? "p" : "q";
+echo json_encode($m), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"y\":\"z\",\"k\":\"p\"}\n");
+}

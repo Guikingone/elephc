@@ -50,7 +50,7 @@
 //!   (`nested_array_writes::lower_nested_array_assign`).
 
 use crate::ir::LocalKind;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget};
 
 use super::*;
 
@@ -209,7 +209,12 @@ fn expr_any(expr: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
                 || result_target.as_ref().is_some_and(|target| expr_any(target, pred))
         }
         ExprKind::BinaryOp { left, right, .. } => expr_any(left, pred) || expr_any(right, pred),
-        ExprKind::InstanceOf { value, .. } => expr_any(value, pred),
+        ExprKind::InstanceOf { value, target } => {
+            // `$x instanceof (expr)` evaluates the target expression, so a call inside it runs
+            // while the operand is evaluated and can write the receiver (`expr_any`).
+            expr_any(value, pred)
+                || matches!(target, InstanceOfTarget::Expr(target) if expr_any(target, pred))
+        }
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
@@ -253,12 +258,15 @@ fn expr_any(expr: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
         | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             expr_any(object, pred) || expr_any(property, pred)
         }
+        // `$obj->m(...)` creates a first-class callable: the method is not called, but the
+        // object expression IS evaluated (a constructor or call there can write the receiver).
+        ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => expr_any(object, pred),
+        ExprKind::FirstClassCallable(_) => false,
         ExprKind::Yield { key, value } => {
             key.as_ref().is_some_and(|key| expr_any(key, pred))
                 || value.as_ref().is_some_and(|value| expr_any(value, pred))
         }
         ExprKind::Closure { .. }
-        | ExprKind::FirstClassCallable(_)
         | ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
