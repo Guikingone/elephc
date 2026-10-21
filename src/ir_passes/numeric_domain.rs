@@ -89,6 +89,11 @@ fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<Loc
             if local.kind != LocalKind::PhpLocal || (slot.as_raw() as usize) < function.params.len() {
                 return false;
             }
+            // Active slots already passed the immutable access checks. Their outer
+            // visit still requires every writer and dominating initialization.
+            if slots.contains(&slot) { return true; }
+            #[cfg(test)]
+            SLOT_VALIDATIONS.with(|checks| checks.set(checks.get() + 1));
             if crate::ir_passes::address_escaping_slots(function).contains(&slot) {
                 return false;
             }
@@ -100,7 +105,7 @@ fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<Loc
             }) {
                 return false;
             }
-            if !slots.insert(slot) { return true; }
+            slots.insert(slot);
             let writers: Vec<_> = function.instructions.iter().filter(|inst| {
                 inst.immediate == Some(Immediate::LocalSlot(slot)) && inst.op == Op::StoreLocal
             }).collect();
@@ -136,4 +141,61 @@ fn initialized(function: &Function, slot: LocalSlotId, dominance: &crate::ir_pas
         if seed_block == block { seed_position < position }
         else { dominance.dominates(seed_block, block) }
     }))
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Counts expensive slot eligibility checks within this test thread's proof.
+    static SLOT_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{Builder, Ownership, Terminator};
+
+    /// Shared local cycles validate accesses once while retaining all-writer checks.
+    #[test]
+    fn numeric_domain_reuses_prechecked_slot_eligibility() {
+        let mut function = Function::new("numeric_domain_work".into(), IrType::I64, PhpType::Int);
+        let slot = function.add_local(
+            Some("sum".into()), IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, LocalKind::PhpLocal,
+        );
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let zero = builder.emit_const_i64(0);
+        let one = builder.emit_const_i64(1);
+        let nonnumeric = builder.emit_const_bool(false);
+        builder.emit_store_local(slot, zero);
+        for _ in 0..128 {
+            let previous = builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let next = builder.emit(
+                Op::MixedNumericBinop, vec![previous, one],
+                Some(Immediate::MixedNumericOp(MixedNumericOp::Add)),
+                IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned,
+            ).unwrap();
+            builder.emit_store_local(slot, next);
+        }
+        let loaded = builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+        builder.terminate(Terminator::Return { value: Some(zero) });
+
+        SLOT_VALIDATIONS.with(|checks| checks.set(0));
+        assert!(inputs(&function, &[loaded]));
+        assert_eq!(SLOT_VALIDATIONS.with(|checks| checks.get()), 1,
+            "revisited loads must reuse the active slot's validated accesses");
+
+        let mut tainted = function.clone();
+        let writer = tainted.instructions.iter_mut().rev().find(|inst| inst.op == Op::StoreLocal).unwrap();
+        writer.operands[0] = nonnumeric;
+        assert!(!inputs(&tainted, &[loaded]), "a later nonnumeric writer must still reject the whole cycle");
+
+        let seed = function.instructions.iter_mut().find(|inst| inst.op == Op::StoreLocal).unwrap();
+        seed.op = Op::Nop;
+        seed.immediate = None;
+        seed.operands.clear();
+        seed.effects = Op::Nop.default_effects();
+        assert!(!inputs(&function, &[loaded]), "an active cycle must not initialize its own entry value");
+    }
 }
