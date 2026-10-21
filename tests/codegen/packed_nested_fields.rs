@@ -382,6 +382,52 @@ function slot_matches(): string {
     assert_eq!(out, "0:5:5:16 same 24\n");
 }
 
+/// Verifies a fully qualified `ptr_cast<\T>` inside a namespace names the rooted class, while a
+/// bare `ptr_cast<T>` names the current namespace's one: three same-named packed classes with
+/// different fields each resolve through their own spelling.
+#[test]
+fn test_rooted_ptr_cast_targets_skip_the_current_namespace() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr;
+packed class Pair { public int $left; public int $right; public int $extra; }
+require "other.php";
+require "app.php";
+echo App\demo(calloc(1, 24)), "\n";
+"#,
+            ),
+            (
+                "other.php",
+                r#"<?php
+namespace Other;
+packed class Pair { public int $a; public int $b; }
+"#,
+            ),
+            (
+                "app.php",
+                r#"<?php
+namespace App;
+packed class Pair { public int $only; public int $other; }
+function demo(ptr $raw): string {
+    $global = ptr_cast<\Pair>($raw);
+    $global->extra = 3;
+    $other = ptr_cast<\Other\Pair>($raw);
+    $other->b = 4;
+    $local = ptr_cast<Pair>($raw);
+    return $global->extra . ":" . $other->b . ":" . $local->other . ":"
+        . ptr_get(ptr_offset($raw, 16));
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "3:4:4:3\n");
+}
+
 /// Verifies a `ptr<T>` return type of a global extern function resolves a `use` alias to the
 /// namespaced packed class it imports, so field access through the returned pointer compiles.
 #[test]
