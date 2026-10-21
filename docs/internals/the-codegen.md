@@ -321,10 +321,13 @@ and after the eval fragment:
 A parameter default whose dump PHP prints from its written AST, rather than from its value
 (`new Foo(...)`, `Foo::BAR`), goes through
 `src/codegen/lower_inst/objects/reflection/default_export.rs`. It exports only the subset PHP
-8.5.10 was measured on; anything else falls back to the evaluated value.
+8.5.11 was measured on; anything else falls back to the evaluated value.
 AST string exports preserve raw PHP bytes through the compiler's literal-byte representation.
 The dedicated dump property emitter decodes it at the final storage boundary; genuine private-use
 Unicode names are encoded first so they cannot be mistaken for escaped bytes.
+Array defaults are rendered from their source expression to distinguish folded values from ASTs.
+Folded values apply last-wins keys and compact lists recursively; arrays inside an AST export
+retain all folded keys. Null or fractional keys keep the array's written form instead.
 
 ## Eval Lowering Boundary
 

@@ -11,8 +11,8 @@
 //! - Top-level strings use the bytewise Reflection formatter; nested AST strings follow PHP's
 //!   source export rules instead.
 //! - PHP folds what it can at compile time and exports the rest as written, and the dump shows
-//!   the difference: `new \N\Foo(N\LIMIT)` keeps a user constant's name, while an array made only
-//!   of literals prints every key (`[0 => 1]`). The rules below are measured on PHP 8.5.10.
+//!   the difference: folded parameter arrays compact list keys, while a folded array inside
+//!   an AST export prints every key. Null and non-integral float keys keep the written AST.
 //! - Anything outside the supported subset answers `None`, and the dump then falls back to the
 //!   evaluated value it printed before.
 //! - Exported strings retain the compiler's private byte markers until dump property emission.
@@ -29,6 +29,11 @@ pub(super) fn reflection_parameter_default_export(
     needs_source_export: bool,
 ) -> Option<String> {
     let exporter = DefaultExporter { ctx, current_class, current_info };
+    if matches!(default.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
+        return if exporter.is_literal(default) {
+            exporter.export_value(default)
+        } else { exporter.export(default) };
+    }
     if needs_source_export {
         if let Some(value) = reflection_literal_parameter_default_value(default) {
             return Some(reflection_dump_default_value(&value));
@@ -144,9 +149,33 @@ impl DefaultExporter<'_, '_> {
             ExprKind::ArrayLiteral(items) => items.iter().all(|item| self.is_literal(item)),
             ExprKind::ArrayLiteralAssoc(pairs) => pairs
                 .iter()
-                .all(|(key, value)| self.is_literal(key) && self.is_literal(value)),
+                .all(|(key, value)| self.literal_key(key).is_some() && self.is_literal(value)),
             _ => false,
         }
+    }
+
+    /// Prints an evaluated parameter array, compacting lists recursively and escaping value bytes.
+    fn export_value(&self, expr: &Expr) -> Option<String> {
+        if matches!(expr.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
+            let entries = self.literal_array_entries(expr)?;
+            let packed = entries.iter().enumerate().all(|(index, (key, _))|
+                *key == LiteralKey::Int(index as i64));
+            let rendered = entries.iter().map(|(key, value)| {
+                let value = self.export_value(value)?;
+                if packed { return Some(value); }
+                let key = match key {
+                    LiteralKey::Int(key) => key.to_string(),
+                    LiteralKey::Str(key) => reflection_dump_default_value(
+                        &ReflectionParameterDefaultValue::Str(key.clone())),
+                };
+                Some(format!("{key} => {value}"))
+            }).collect::<Option<Vec<_>>>()?;
+            return Some(format!("[{}]", rendered.join(", ")));
+        }
+        let value = if let ExprKind::ClassConstant { receiver } = &expr.kind {
+            ReflectionParameterDefaultValue::Str(reflection_dump_text(&self.class_name_of(receiver)?))
+        } else { reflection_literal_parameter_default_value(expr)? };
+        Some(reflection_dump_default_value(&value))
     }
 
     /// Exports a folded value the way PHP prints a compile-time constant.
@@ -188,20 +217,26 @@ impl DefaultExporter<'_, '_> {
         let written: Vec<(Option<&Expr>, &Expr)> = match &expr.kind {
             ExprKind::ArrayLiteral(items) => items.iter().map(|item| (None, item)).collect(),
             ExprKind::ArrayLiteralAssoc(pairs) => {
-                pairs.iter().map(|(key, value)| (Some(key), value)).collect()
+                pairs.iter().map(|(key, value)| {
+                    let implicit = key.span == value.span && matches!(key.kind, ExprKind::IntLiteral(_));
+                    ((!implicit).then_some(key), value)
+                }).collect()
             }
             _ => return None,
         };
         let mut entries: Vec<(LiteralKey, &Expr)> = Vec::with_capacity(written.len());
         let mut next_index: Option<i64> = None;
+        let mut index_overflowed = false;
         for (key, value) in written {
             let key = match key {
                 Some(key) => self.literal_key(key)?,
-                None => LiteralKey::Int(next_index.unwrap_or(0)),
+                None if !index_overflowed => LiteralKey::Int(next_index.unwrap_or(0)),
+                None => return None,
             };
             if let LiteralKey::Int(index) = key {
-                let following = index.checked_add(1)?;
-                next_index = Some(next_index.map_or(following, |next| next.max(following)));
+                if let Some(following) = index.checked_add(1) {
+                    next_index = Some(next_index.map_or(following, |next| next.max(following)));
+                } else { index_overflowed = true; }
             }
             match entries.iter_mut().find(|(existing, _)| *existing == key) {
                 Some(entry) => entry.1 = value,
@@ -217,10 +252,11 @@ impl DefaultExporter<'_, '_> {
             ExprKind::IntLiteral(value) => Some(LiteralKey::Int(*value)),
             ExprKind::Negate(inner) => match inner.kind {
                 ExprKind::IntLiteral(value) => Some(LiteralKey::Int(value.checked_neg()?)),
+                ExprKind::FloatLiteral(value) => integral_float_key(-value).map(LiteralKey::Int),
                 _ => None,
             },
             ExprKind::BoolLiteral(value) => Some(LiteralKey::Int(i64::from(*value))),
-            ExprKind::Null => Some(LiteralKey::Str(String::new())),
+            ExprKind::FloatLiteral(value) => integral_float_key(*value).map(LiteralKey::Int),
             ExprKind::StringLiteral(value) => Some(match canonical_integer_key(value) {
                 Some(index) => LiteralKey::Int(index),
                 None => LiteralKey::Str(value.clone()),
@@ -258,6 +294,12 @@ impl DefaultExporter<'_, '_> {
         }
         Some(reflection_dump_text(key))
     }
+}
+
+/// Returns a float key only when PHP can fold it losslessly into a signed integer key.
+fn integral_float_key(value: f64) -> Option<i64> {
+    (value.fract() == 0.0 && value >= i64::MIN as f64 && value < -(i64::MIN as f64))
+        .then_some(value as i64)
 }
 
 /// Quotes a string as PHP's AST exporter does, switching to double quotes for control bytes.

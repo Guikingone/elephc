@@ -318,8 +318,8 @@ echo (new ReflectionFunction('f'))->__toString();
 
 /// An object default keeps what was WRITTEN: a constant stays a name instead of its value, a
 /// named argument keeps its name, a nested `new` and an array holding a constant print as
-/// written, and a string is escaped. An array made only of literals is folded by PHP, so it
-/// prints every key. Expected output measured on PHP 8.5.10.
+/// written, and a string is escaped. A foldable literal array inside this AST export prints
+/// every key, while an evaluated top-level parameter list omits packed keys. Checked on PHP 8.5.11.
 #[test]
 fn test_object_default_exports_its_written_argument_expressions() {
     let out = compile_and_run(

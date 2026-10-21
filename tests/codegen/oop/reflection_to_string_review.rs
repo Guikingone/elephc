@@ -240,3 +240,55 @@ echo new ReflectionParameter('f', 0);
 "#);
     assert_eq!(out, "Parameter #0 [ <optional> array $items = [new \\Box()] ]");
 }
+
+/// Evaluated arrays compact packed keys recursively and apply PHP's last-wins key normalization.
+#[test]
+fn test_reflection_dump_folded_array_defaults() {
+    let out = compile_and_run(r#"<?php
+function f(array $a = [0 => 1, 1 => 2], array $b = [false => 2],
+    array $c = [0 => 1, 0 => 2], array $d = [[0 => 1]],
+    array $e = [1.0 => 4, false => 5], array $f = [true => 1, 8, "2" => 3, 9],
+    array $g = [9223372036854775807 => 1]) {}
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> array $a = [1, 2] ]\n\
+        Parameter #1 [ <optional> array $b = [2] ]\n\
+        Parameter #2 [ <optional> array $c = [2] ]\n\
+        Parameter #3 [ <optional> array $d = [[1]] ]\n\
+        Parameter #4 [ <optional> array $e = [1 => 4, 0 => 5] ]\n\
+        Parameter #5 [ <optional> array $f = [1 => 1, 2 => 3, 3 => 9] ]\n\
+        Parameter #6 [ <optional> array $g = [9223372036854775807 => 1] ]\n");
+}
+
+/// Null and fractional keys preserve the written array, including its other keys and nested forms.
+#[test]
+fn test_reflection_dump_unfolded_array_defaults() {
+    let out = compile_and_run(r#"<?php
+function f(array $a = [null => 3], array $b = [1.5 => 4], array $c = [null => 3, 1],
+    array $d = [null => 3, "5" => 1, true => 2, false => 3, 1.5 => 4],
+    array $e = [[null => 3], "5" => 1], array $f = [null => null]) {}
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> array $a = [null => 3] ]\n\
+        Parameter #1 [ <optional> array $b = [1.5 => 4] ]\n\
+        Parameter #2 [ <optional> array $c = [null => 3, 1] ]\n\
+        Parameter #3 [ <optional> array $d = [null => 3, '5' => 1, true => 2, false => 3, 1.5 => 4] ]\n\
+        Parameter #4 [ <optional> array $e = [[null => 3], '5' => 1] ]\n\
+        Parameter #5 [ <optional> array $f = [null => null] ]\n");
+}
+
+/// Folded arrays inside object AST exports keep keys, while nonfoldable arrays keep written keys.
+#[test]
+fn test_reflection_dump_object_array_defaults() {
+    let out = compile_and_run(r#"<?php
+class Foo { public function __construct(public array $a) { echo 'constructed'; } }
+function f(Foo $a = new Foo([0 => 1, 1 => 2]), Foo $b = new Foo([[0 => 1]]),
+    Foo $c = new Foo([false => 2, "5" => 1, null => 3, 1.5 => 4, 0 => 1, 1 => 2]),
+    Foo $d = new Foo([true => 1, 1.0 => 4, "05" => 2])) {}
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> Foo $a = new \\Foo([0 => 1, 1 => 2]) ]\n\
+        Parameter #1 [ <optional> Foo $b = new \\Foo([0 => [0 => 1]]) ]\n\
+        Parameter #2 [ <optional> Foo $c = new \\Foo([false => 2, '5' => 1, null => 3, 1.5 => 4, 0 => 1, 1 => 2]) ]\n\
+        Parameter #3 [ <optional> Foo $d = new \\Foo([1 => 4, '05' => 2]) ]\n");
+}
