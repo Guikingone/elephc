@@ -363,8 +363,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     // -- 3-byte UTF-8 (codepoint 0x800..0xFFFF) --
     emitter.label("__rt_json_str_utf8_3_x");
-    emitter.instruction("lea r8, [r13 + 1]");                                   // index of byte 2
-    emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is byte 2 within the input?
+    emitter.instruction("lea rax, [r13 + 1]");                                  // index of byte 2
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 2 within the input?
     emitter.instruction("mov r12, 1");                                          // only the lead byte is known consumed when byte 2 is missing
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after the lead byte -> malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
@@ -375,8 +375,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
     emitter.instruction("mov r12, 1");                                          // an invalid b2 consumes only the lead byte
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
-    emitter.instruction("lea r8, [r13 + 2]");                                   // index of byte 3
-    emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is byte 3 within the input?
+    emitter.instruction("lea rax, [r13 + 2]");                                  // index of byte 3
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 3 within the input?
     emitter.instruction("mov r12, 2");                                          // the lead byte and b2 are valid when byte 3 is missing
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after b2 -> malformed
     emitter.instruction("movzx rcx, BYTE PTR [r10 + r13 + 2]");                 // load b3
@@ -408,8 +408,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     // -- 4-byte UTF-8 (codepoint 0x10000..0x10FFFF) → emit a surrogate pair --
     emitter.label("__rt_json_str_utf8_4_x");
-    emitter.instruction("lea r8, [r13 + 1]");                                   // index of byte 2
-    emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is byte 2 within the input?
+    emitter.instruction("lea rax, [r13 + 1]");                                  // index of byte 2
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 2 within the input?
     emitter.instruction("mov r12, 1");                                          // only the lead byte is known consumed when byte 2 is missing
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after the lead byte -> malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
@@ -420,8 +420,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
     emitter.instruction("mov r12, 1");                                          // an invalid b2 consumes only the lead byte
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
-    emitter.instruction("lea r8, [r13 + 2]");                                   // index of byte 3
-    emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is byte 3 within the input?
+    emitter.instruction("lea rax, [r13 + 2]");                                  // index of byte 3
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 3 within the input?
     emitter.instruction("mov r12, 2");                                          // the lead byte and b2 are valid when byte 3 is missing
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after b2 -> malformed
     emitter.instruction("movzx rcx, BYTE PTR [r10 + r13 + 2]");                 // load b3
@@ -431,8 +431,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 0xC0");                                       // continuation bytes end at 0xBF
     emitter.instruction("mov r12, 2");                                          // an invalid b3 consumes the lead byte and b2
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
-    emitter.instruction("lea r8, [r13 + 3]");                                   // index of byte 4
-    emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is byte 4 within the input?
+    emitter.instruction("lea rax, [r13 + 3]");                                  // index of byte 4
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 4 within the input?
     emitter.instruction("mov r12, 3");                                          // the lead byte, b2 and b3 are valid when byte 4 is missing
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after b3 -> malformed
     emitter.instruction("movzx r9, BYTE PTR [r10 + r13 + 3]");                  // load b4
@@ -508,7 +508,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_str_utf8_copy_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source slice pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the output cursor
-    emitter.instruction("lea r8, [r13 + r12]");                                 // compute the source index after this scalar
+    emitter.instruction("lea rax, [r13 + r12]");                                // compute the source index after this scalar
     emitter.label("__rt_json_str_utf8_copy_loop_x");
     emitter.instruction("mov r9b, BYTE PTR [r10 + r13]");                       // load the next validated UTF-8 byte
     emitter.instruction("mov BYTE PTR [r11], r9b");                             // append the validated byte
