@@ -268,13 +268,13 @@ fn test_error_extern_unknown_int_width() {
     );
 }
 
-/// Verifies that explicit C integer widths are rejected on extern class fields, which still use
-/// 8-byte slots.
+/// Verifies that a `string` value cannot be stored into an extern class `f32` field: float fields
+/// take a float or an int, nothing else.
 #[test]
-fn test_error_extern_class_field_rejects_int_width() {
+fn test_error_extern_float_field_rejects_string_value() {
     expect_error(
-        "<?php extern class Bad { i32 $field; }",
-        "Extern class 'Bad' field $field uses an explicit C width",
+        "<?php extern class FRect { public f32 $x; } $r = ptr_cast<FRect>(ptr_null()); $r->x = \"wide\";",
+        "cannot assign Str to extern field FRect::x of type Float",
     );
 }
 
@@ -304,12 +304,21 @@ fn test_error_ptr_read_f64_rejects_int_argument() {
     expect_error("<?php echo ptr_read_f64(42);", "ptr_read_f64()");
 }
 
-/// Verifies that the C `float` width is rejected on extern class fields like the integer widths.
+/// Verifies that an `int` cannot be stored into a one-byte extern `bool` field without a cast.
 #[test]
-fn test_error_extern_class_field_rejects_f32() {
+fn test_error_extern_bool_field_rejects_int_value() {
     expect_error(
-        "<?php extern class Bad { f32 $field; }",
-        "Extern class 'Bad' field $field uses an explicit C width",
+        "<?php extern class Key { public bool $down; } $k = ptr_cast<Key>(ptr_null()); $k->down = 1;",
+        "cannot assign Int to extern field Key::down of type Bool",
+    );
+}
+
+/// Verifies that a callable cannot be an extern class field: it has no C struct layout.
+#[test]
+fn test_error_extern_class_callable_field() {
+    expect_error(
+        "<?php extern class Bad { callable $field; }",
+        "Extern class 'Bad' field $field uses an unsupported type",
     );
 }
 

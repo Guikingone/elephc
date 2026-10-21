@@ -1324,6 +1324,22 @@ pub(super) fn packed_receiver_class(ctx: &FunctionContext<'_>, object_ty: &PhpTy
     }
 }
 
+/// Returns the extern class a `ptr<T>` receiver addresses, or `None` for any other receiver.
+///
+/// The sibling of `packed_receiver_class` for C structs declared with `extern class`. Their
+/// fields have natural C widths rather than packed 8-byte words, so they are lowered by
+/// `extern_fields` instead of through a `PropertySlot`, with the same null-receiver fatal.
+pub(super) fn extern_receiver_class(ctx: &FunctionContext<'_>, object_ty: &PhpType) -> Option<String> {
+    let PhpType::Pointer(Some(class_name)) = object_ty.codegen_repr() else {
+        return None;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    ctx.module
+        .extern_class_infos
+        .contains_key(normalized)
+        .then(|| normalized.to_string())
+}
+
 /// Aborts with the pointer extension's null-dereference fatal when a `ptr<T>` receiver is null.
 ///
 /// Buffer elements and nested records are never null, but a typed pointer can be (`ptr_null()`,

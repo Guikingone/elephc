@@ -732,6 +732,27 @@ fn merge_associative_property_slot_type(
     }
 }
 
+/// Returns whether a value of `val_ty` can be stored into an extern class field of `field_ty`.
+///
+/// Integer fields of every width take an `int` (narrow widths keep its low bits, as C would),
+/// and also the `mixed` or `int|float` result of integer arithmetic, which lowering narrows with
+/// a strict runtime check exactly like a packed `int` field;
+/// float fields of either width also take an `int`, converted like PHP's int-to-float coercion;
+/// `bool` fields take a bool; pointer fields take any pointer or `null`; `string` fields take a
+/// string, copied into a fresh null-terminated buffer the struct then owns.
+fn extern_field_accepts(field_ty: &PhpType, val_ty: &PhpType) -> bool {
+    match field_ty {
+        PhpType::Int => {
+            matches!(val_ty, PhpType::Int | PhpType::Mixed) || val_ty.is_int_float_union()
+        }
+        PhpType::Float => matches!(val_ty, PhpType::Float | PhpType::Int),
+        PhpType::Bool => matches!(val_ty, PhpType::Bool | PhpType::False),
+        PhpType::Pointer(_) => matches!(val_ty, PhpType::Pointer(_) | PhpType::Void),
+        PhpType::Str => matches!(val_ty, PhpType::Str),
+        _ => false,
+    }
+}
+
 /// Validates a write to a property of a typed pointer (extern or packed class).
 ///
 /// Checks that the field exists in `extern_field_type` or `packed_field_type` and that the
@@ -744,7 +765,7 @@ fn check_pointer_property_write(
     span: Span,
 ) -> Result<(), CompileError> {
     if let Some(field_ty) = checker.extern_field_type(class_name, property) {
-        if field_ty == PhpType::Int && val_ty != &PhpType::Int {
+        if !extern_field_accepts(&field_ty, val_ty) {
             return Err(CompileError::new(
                 span,
                 &format!(

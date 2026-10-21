@@ -14,7 +14,7 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind, TypeExpr};
 use crate::types::{
-    ctype_stack_size, ctype_to_abi_type, ctype_to_php_type, packed_type_size, ExternClassInfo, ExternFieldInfo,
+    align_up, ctype_field_layout, ctype_to_abi_type, ctype_to_php_type, packed_type_size, ExternClassInfo, ExternFieldInfo,
     ExternFunctionSig, FunctionSig, PackedClassInfo, PackedFieldInfo,
 };
 
@@ -208,8 +208,10 @@ impl Checker {
     }
 
     /// Validates and registers an extern class declaration if no prior declaration exists.
-    /// Computes field offsets sequentially, checks for duplicate fields, converts C types
-    /// to PHP types, and stores an `ExternClassInfo` with total size and field metadata.
+    /// Lays the fields out like a C compiler does (each field at the next multiple of its
+    /// natural alignment, the total size padded to the largest alignment), checks for duplicate
+    /// fields, converts C types to PHP types, and stores an `ExternClassInfo` with the C
+    /// `sizeof` and per-field offsets and ABI shapes.
     fn prescan_extern_class(
         &mut self,
         name: &str,
@@ -229,6 +231,7 @@ impl Checker {
         }
         let mut extern_fields = Vec::new();
         let mut offset = 0usize;
+        let mut struct_align = 1usize;
         let mut seen_fields = std::collections::HashSet::new();
         let mut class_has_errors = false;
         for f in fields {
@@ -246,11 +249,18 @@ impl Checker {
                 continue;
             }
             let php_type = ctype_to_php_type(&f.c_type);
-            let size = ctype_stack_size(&f.c_type);
+            let Some((size, align)) = ctype_field_layout(&f.c_type) else {
+                // `validate_extern_field_decl` already refused the types without a layout.
+                class_has_errors = true;
+                continue;
+            };
+            offset = align_up(offset, align);
+            struct_align = struct_align.max(align);
             extern_fields.push(ExternFieldInfo {
                 name: f.name.clone(),
                 php_type,
                 offset,
+                abi: ctype_to_abi_type(&f.c_type),
             });
             offset += size;
         }
@@ -261,7 +271,7 @@ impl Checker {
             name.to_string(),
             ExternClassInfo {
                 name: name.to_string(),
-                total_size: offset,
+                total_size: align_up(offset, struct_align),
                 fields: extern_fields,
             },
         );

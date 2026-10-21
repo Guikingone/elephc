@@ -288,7 +288,7 @@ Proper type system for PHP compatibility.
 - [x] `--link` / `-l` and `--link-path` / `-L` CLI flags
 - [x] `--framework` flag for macOS frameworks
 - [x] Owned null-terminated string ↔ length-prefixed string conversion (`__rt_str_to_cstr`, `__rt_cstr_to_str`)
-- [x] `extern class` for C struct mapping (flat layout, available to `ptr_sizeof()` and typed pointer field access)
+- [x] `extern class` for C struct mapping (natural C layout with explicit field widths, available to `ptr_sizeof()` and typed pointer field access)
 - [x] `extern global` for accessing C global variables
 - [x] Callback support: pass elephc functions as C function pointers (`callable` params)
 - [x] C memory management via extern libc: `malloc()`, `free()`, `memcpy()`, `memset()`

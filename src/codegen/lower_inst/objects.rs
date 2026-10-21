@@ -190,6 +190,7 @@ mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
 mod mixed_property_type_guard;
+mod extern_fields;
 pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
 
 #[allow(unused_imports)]
@@ -246,6 +247,7 @@ use typed_property_guards::*;
 use instanceof_helpers::*;
 #[allow(unused_imports)]
 use mixed_property_type_guard::*;
+use extern_fields::*;
 
 pub(super) use dynamic_property_read_entry::{lower_dynamic_prop_get, lower_nullsafe_prop_get};
 pub(super) use fiber_dynamic_entry::{

@@ -96,6 +96,11 @@ pub fn compute(
         check_result,
     );
     state.apply_usage(executable_usage, true);
+    // An extern class is C struct layout metadata with no emitted code. Besides `ptr_cast<T>`
+    // (recorded by the usage scan) it is named through types the scan does not walk: `ptr<T>`
+    // in extern function signatures and in fields of other extern classes. Keeping every
+    // declared one costs nothing and keeps `$ptr->field` lowering able to find the layout.
+    state.reach.classes.extend(state.index.extern_classes.iter().cloned());
     for name in options.exported_functions {
         let name = php_symbol_key(name);
         state.reach.functions.insert(name.clone());
@@ -126,14 +131,16 @@ pub fn compute(
 }
 
 /// Keeps every packed class embedded in, or pointed to by, a field of a reachable packed class,
-/// and every packed class a reachable extern function or an extern global names as `ptr<T>`.
+/// and every packed class a reachable extern function, an extern global or an extern class field
+/// names as `ptr<T>`.
 ///
 /// A nested packed field (`packed class Body { public Vec2 $pos; }`) or a typed pointer field
 /// (`public ptr<Vec2> $p;`) names its record type only in the outer declaration, which carries no
 /// code and no graph edges, so `Vec2` would be pruned while `Body` survives and `$b[0]->pos->x`
 /// or `$b[0]->p->x` would lower against a missing layout. Extern declarations name pointer
-/// targets the same way (`extern function make(): ptr<Vec2>;`, `extern global ptr<Vec2> $g;`),
-/// so their packed targets seed the closure too. Packed classes hold only POD fields, so closing
+/// targets the same way (`extern function make(): ptr<Vec2>;`, `extern global ptr<Vec2> $g;`,
+/// `extern class Holder { public ptr<Vec2> $p; }`, kept whole by `compute`), so their packed
+/// targets seed the closure too. Packed classes hold only POD fields, so closing
 /// over their field types after the fixed point is complete.
 fn retain_embedded_packed_classes(reach: &mut Reachability, check_result: &CheckResult) {
     let packed: HashMap<String, &crate::types::PackedClassInfo> = check_result
@@ -154,7 +161,13 @@ fn retain_embedded_packed_classes(reach: &mut Reachability, check_result: &Check
         .flat_map(|(_, sig)| {
             sig.params.iter().map(|(_, ty)| ty).chain(std::iter::once(&sig.return_type))
         })
-        .chain(check_result.extern_globals.values());
+        .chain(check_result.extern_globals.values())
+        .chain(
+            check_result
+                .extern_classes
+                .values()
+                .flat_map(|info| info.fields.iter().map(|field| &field.php_type)),
+        );
     for ty in extern_types {
         let crate::types::PhpType::Pointer(Some(inner)) = ty else {
             continue;

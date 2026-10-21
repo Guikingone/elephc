@@ -217,13 +217,13 @@ pub(super) fn expand_qualified_namespace_alias(name: &Name, imports: &Imports) -
 /// Resolves the class a `ptr<T>` target names in the C grammar or in `ptr_cast<T>`, applying the
 /// same namespace/import rules as a `ptr<T>` type expression.
 ///
-/// Extern function signatures, extern globals and `ptr_cast<T>` spell the target as a bare
-/// string, so `ptr<Pair>` inside `namespace App` must name `App\Pair` (or a `use` alias) exactly
-/// like `function f(ptr<Pair> $p)` does; otherwise a field access through it looks up a class that
-/// does not exist, or a same-named global one with another layout. The target spellings the
-/// checker treats as builtins (`int`, `float`, `bool`, `string`, `ptr` and their aliases) pass
-/// through unchanged. A leading `\` (kept by the `ptr_cast<T>` parser) marks a fully qualified
-/// target that the current namespace must not prefix.
+/// Extern function signatures, extern class fields, extern globals and `ptr_cast<T>` spell the
+/// target as a bare string, so `ptr<Pair>` inside `namespace App` must name `App\Pair` (or a
+/// `use` alias) exactly like `function f(ptr<Pair> $p)` does; otherwise a field access through
+/// it looks up a class that does not exist, or a same-named global one with another layout.
+/// The target spellings the checker treats as builtins (`int`, `float`, `bool`, `string`, `ptr`
+/// and their aliases) pass through unchanged. A leading `\` (kept by the `ptr_cast<T>` parser)
+/// marks a fully qualified target that the current namespace must not prefix.
 pub(super) fn resolve_pointer_target(
     target: &str,
     current_namespace: Option<&str>,
