@@ -63,8 +63,10 @@ pub(super) fn lower_extern_prop_get(
     property: &str,
 ) -> Result<()> {
     let field = resolve_extern_field(ctx, class_name, property, inst)?;
+    // -- null-check the struct pointer --
     ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_ptr_check_nonnull");
+    // -- load the field at its C width --
     let operand = extern_field_operand(ctx, &field);
     emit_extern_field_load(ctx, &field, &operand)?;
     store_if_result(ctx, inst)
@@ -80,10 +82,12 @@ pub(super) fn lower_extern_prop_set(
     property: &str,
 ) -> Result<()> {
     let field = resolve_extern_field(ctx, class_name, property, inst)?;
+    // -- null-check the struct pointer and keep it while the value loads --
     ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_ptr_check_nonnull");
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let in_float_reg = materialize_extern_field_value(ctx, &field, value)?;
+    // -- park the payload and restore the struct pointer --
     let arch = ctx.emitter.target.arch;
     if !in_float_reg {
         let scratch = store_scratch_reg(arch);
@@ -91,6 +95,7 @@ pub(super) fn lower_extern_prop_set(
         ctx.emitter.instruction(&format!("mov {}, {}", scratch, result));       // keep the field payload while the struct pointer is restored
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    // -- store the field at its C width --
     let operand = extern_field_operand(ctx, &field);
     emit_extern_field_store(ctx, &field, &operand)?;
     store_if_result(ctx, inst)
@@ -153,6 +158,7 @@ fn extern_field_operand(ctx: &mut FunctionContext<'_>, field: &ExternFieldInfo) 
             } else if offset % size == 0 && offset / size <= 4095 {
                 format!("[x0, #{}]", offset)
             } else {
+                // -- move the base onto a field past the scaled-immediate range --
                 abi::emit_load_int_immediate(ctx.emitter, "x9", offset as i64);
                 ctx.emitter.instruction("add x0, x0, x9");                      // move the struct pointer onto a field beyond the scaled-immediate range
                 "[x0]".to_string()
@@ -189,6 +195,7 @@ fn emit_extern_field_load(
     operand: &str,
 ) -> Result<()> {
     let arch = ctx.emitter.target.arch;
+    // -- load the C field into the PHP result register --
     match (arch, field.abi) {
         (Arch::AArch64, ExternAbiType::Int { bits: 64, .. } | ExternAbiType::Ptr) => {
             ctx.emitter.instruction(&format!("ldr x0, {}", operand));           // load the 64-bit C field as the PHP value
@@ -212,6 +219,7 @@ fn emit_extern_field_load(
             ctx.emitter.instruction(&format!("ldrb w0, {}", operand));          // load the C uint8 field and zero-extend it into the PHP int
         }
         (Arch::AArch64, ExternAbiType::Bool) => {
+            // -- read the C bool byte as a PHP bool --
             ctx.emitter.instruction(&format!("ldrb w0, {}", operand));          // load the one-byte C bool field
             ctx.emitter.instruction("cmp w0, #0");                              // test whether the C bool byte is set
             ctx.emitter.instruction("cset x0, ne");                             // read any nonzero C bool byte as PHP true
@@ -220,12 +228,14 @@ fn emit_extern_field_load(
             ctx.emitter.instruction(&format!("ldr d0, {}", operand));           // load the C double field as the PHP float
         }
         (Arch::AArch64, ExternAbiType::Float32) => {
+            // -- widen the C float into the PHP double --
             ctx.emitter.instruction(&format!("ldr s0, {}", operand));           // load the C float field as an IEEE 754 single
             abi::emit_float_result_single_to_double(ctx.emitter);
         }
         (Arch::AArch64, ExternAbiType::CStr) => {
             let scan = ctx.next_label("extern_cstr_scan");
             let done = ctx.next_label("extern_cstr_done");
+            // -- borrow the C string and measure it up to its terminator --
             ctx.emitter.instruction(&format!("ldr x1, {}", operand));           // load the C char* field as the borrowed string pointer
             ctx.emitter.instruction("mov x2, #0");                              // start the borrowed view at length zero
             ctx.emitter.instruction(&format!("cbz x1, {}", done));              // read a NULL char* as the empty string
@@ -279,6 +289,7 @@ fn emit_extern_field_load(
             ));                                                                 // load the C uint8 field and zero-extend it into the PHP int
         }
         (Arch::X86_64, ExternAbiType::Bool) => {
+            // -- read the C bool byte as a PHP bool --
             ctx.emitter.instruction(&format!(
                 "movzx eax, BYTE PTR {}",
                 operand
@@ -294,6 +305,7 @@ fn emit_extern_field_load(
             ));                                                                 // load the C double field as the PHP float
         }
         (Arch::X86_64, ExternAbiType::Float32) => {
+            // -- widen the C float into the PHP double --
             ctx.emitter.instruction(&format!(
                 "movss xmm0, DWORD PTR {}",
                 operand
@@ -303,6 +315,7 @@ fn emit_extern_field_load(
         (Arch::X86_64, ExternAbiType::CStr) => {
             let scan = ctx.next_label("extern_cstr_scan");
             let done = ctx.next_label("extern_cstr_done");
+            // -- borrow the C string and measure it up to its terminator --
             ctx.emitter.instruction(&format!(
                 "mov rax, QWORD PTR {}",
                 operand
@@ -335,6 +348,7 @@ fn emit_extern_field_store(
     operand: &str,
 ) -> Result<()> {
     let arch = ctx.emitter.target.arch;
+    // -- store the payload into the C field --
     match (arch, field.abi) {
         (Arch::AArch64, ExternAbiType::Int { bits: 64, .. } | ExternAbiType::Ptr | ExternAbiType::CStr) => {
             ctx.emitter.instruction(&format!("str x10, {}", operand));          // store the 64-bit payload into the C field
@@ -352,6 +366,7 @@ fn emit_extern_field_store(
             ctx.emitter.instruction(&format!("str d0, {}", operand));           // store the PHP float into the C double field
         }
         (Arch::AArch64, ExternAbiType::Float32) => {
+            // -- round the PHP double into the C float --
             abi::emit_float_result_double_to_single(ctx.emitter);
             ctx.emitter.instruction(&format!("str s0, {}", operand));           // store the rounded IEEE 754 single into the C float field
         }
@@ -380,6 +395,7 @@ fn emit_extern_field_store(
             ));                                                                 // store the PHP float into the C double field
         }
         (Arch::X86_64, ExternAbiType::Float32) => {
+            // -- round the PHP double into the C float --
             abi::emit_float_result_double_to_single(ctx.emitter);
             ctx.emitter.instruction(&format!(
                 "movss DWORD PTR {}, xmm0",
