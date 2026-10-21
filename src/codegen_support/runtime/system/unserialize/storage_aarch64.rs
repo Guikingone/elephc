@@ -81,6 +81,14 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [x14, #16]");                                  // property byte offset
     emitter.instruction("ldr x7, [x14, #24]");                                  // property value tag
     emitter.instruction("add x8, x0, x6");                                      // address of the property slot
+    emitter.instruction("stp x3, x7, [sp, #-32]!");                            // preserve box and tag across the previous-value release
+    emitter.instruction("stp x8, x30, [sp, #16]");                              // preserve slot and return address across the release
+    emitter.instruction("mov x0, x8");                                         // pass the property slot to the previous-value release
+    emitter.instruction("mov x1, x7");                                         // pass the compile-time property tag
+    emitter.instruction("bl __rt_unser_release_prev_prop");                    // release the default value this hydration overwrites
+    emitter.instruction("ldp x3, x7, [sp]");                                    // recover the parsed box and property tag
+    emitter.instruction("ldp x8, x30, [sp, #16]");                              // recover the slot address and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the previous-value spills
     emitter.instruction("cmp x7, #7");                                          // is this a Mixed/untyped slot?
     emitter.instruction("b.eq __rt_obj_store_prop_mixed");                      // store the boxed cell directly
     emitter.instruction("cmp x7, #1");                                          // is this a string slot?

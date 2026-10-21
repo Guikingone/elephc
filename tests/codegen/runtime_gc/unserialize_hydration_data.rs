@@ -93,6 +93,32 @@ unset($other);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Hydration overwrites each property's default value, so the default Mixed, string,
+/// array, or object owner must be released before the parsed value replaces it. A
+/// duplicate property key must release the value it overwrites as well.
+#[test]
+fn test_unserialize_overwritten_property_defaults_release_their_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class O { }
+class DefaultProps {
+    public mixed $m = null;
+    public string $s = "";
+    public array $a = [];
+    public ?O $x = null;
+}
+$value = unserialize('O:12:"DefaultProps":4:{s:1:"m";i:9;s:1:"s";s:1:"x";s:1:"a";a:1:{i:0;i:1;}s:1:"x";O:1:"O":0:{}}');
+echo $value->m, ":", $value->s, ":", count($value->a), ":", get_class($value->x), "|";
+unset($value);
+class DupProps { public mixed $m = null; }
+$dup = unserialize('O:8:"DupProps":2:{s:1:"m";i:1;s:1:"m";i:2;}');
+echo $dup->m, "|done";
+unset($dup);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "9:x:1:O|2|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// The `__unserialize` data hash is built with the same duplicate-key rule, so a later
 /// back-reference inside the property list follows the replacement value.
 #[test]

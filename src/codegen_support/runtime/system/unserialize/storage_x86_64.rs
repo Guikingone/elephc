@@ -100,6 +100,14 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, r8");                                         // address of the property slot
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value box
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // preserve the property tag across the previous-value release
+    emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // preserve the slot address across the previous-value release
+    emitter.instruction("mov rdi, r10");                                       // pass the property slot to the previous-value release
+    emitter.instruction("mov rsi, r9");                                        // pass the compile-time property tag
+    emitter.instruction("call __rt_unser_release_prev_prop");                  // release the default value this hydration overwrites
+    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // recover the property tag
+    emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // recover the slot address
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // recover the parsed value box
     emitter.instruction("cmp r9, 7");                                           // is this a Mixed/untyped slot?
     emitter.instruction("je __rt_obj_store_prop_mixed");                        // store the boxed cell directly
     emitter.instruction("cmp r9, 1");                                           // is this a string slot?

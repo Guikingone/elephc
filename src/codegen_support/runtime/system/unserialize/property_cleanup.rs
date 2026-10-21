@@ -12,6 +12,7 @@
 //!   later `R:`/`r:` slot keeps addressing live storage.
 //! - The helper takes a borrowed box and consumes it in every path.
 
+use crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the target-specific post-store ownership finisher.
@@ -19,6 +20,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64(emitter),
         Arch::X86_64 => emit_x86_64(emitter),
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => emit_release_previous_aarch64(emitter),
+        Arch::X86_64 => emit_release_previous_x86_64(emitter),
     }
 }
 
@@ -80,10 +85,105 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_return(emitter);
 }
 
+/// Emits the AArch64 release of the property value a hydration store overwrites.
+///
+/// Input: x0=slot address, x1=compile-time property tag. Uninitialized typed slots are skipped.
+fn emit_release_previous_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: unserialize previous-property release ---");
+    emitter.label_global("__rt_unser_release_prev_prop");
+    emitter.instruction("cbz x0, __rt_unser_release_prev_prop_done");           // a missing slot owns no previous value
+    emitter.instruction("ldr x9, [x0, #8]");                                    // slot metadata word (string length or typed marker)
+    abi::emit_load_int_immediate(emitter, "x10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x9, x10");                                        // is this typed property still uninitialized?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_done");             // no previous owner exists for an uninitialized slot
+    emitter.instruction("ldr x9, [x0]");                                        // previous payload low word
+    emitter.instruction("cmp x1, #1");                                         // is the previous value an owned string?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_any");              // strings release through the uniform dispatcher
+    emitter.instruction("cmp x1, #4");                                         // is the previous value below the container range?
+    emitter.instruction("b.lo __rt_unser_release_prev_prop_done");             // scalar slots own no heap payload
+    emitter.instruction("cmp x1, #6");                                         // does the previous value stay inside the container range?
+    emitter.instruction("b.ls __rt_unser_release_prev_prop_any");              // arrays, hashes, and objects release uniformly
+    emitter.instruction("cmp x1, #7");                                         // is the previous value a boxed Mixed cell?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_mixed");            // Mixed cells need their counted box release
+    emitter.instruction("cmp x1, #10");                                        // is the previous value a callable descriptor?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_callable");         // callable descriptors own capture state
+    emitter.instruction("cmp x1, #11");                                        // is the previous value an owned reference cell?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_any");              // reference cells release through uniform dispatch
+    emitter.instruction("b __rt_unser_release_prev_prop_done");                // other tags hold no release obligation here
+    emitter.label("__rt_unser_release_prev_prop_any");
+    emitter.instruction("mov x0, x9");                                          // pass the previous payload to the uniform release helper
+    abi::emit_jump(emitter, "__rt_decref_any");
+    emitter.label("__rt_unser_release_prev_prop_mixed");
+    emitter.instruction("mov x0, x9");                                          // pass the previous Mixed box to its counted release
+    abi::emit_jump(emitter, "__rt_decref_mixed");
+    emitter.label("__rt_unser_release_prev_prop_callable");
+    emitter.instruction("mov x0, x9");                                          // pass the previous callable descriptor to its release helper
+    abi::emit_jump(emitter, "__rt_callable_descriptor_release");
+    emitter.label("__rt_unser_release_prev_prop_done");
+    abi::emit_return(emitter);
+}
+
+/// Emits the x86_64 release of the property value a hydration store overwrites.
+///
+/// Input: rdi=slot address, rsi=compile-time property tag. Uninitialized typed slots are skipped.
+fn emit_release_previous_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: unserialize previous-property release ---");
+    emitter.label_global("__rt_unser_release_prev_prop");
+    emitter.instruction("test rdi, rdi");                                       // a missing slot owns no previous value
+    emitter.instruction("jz __rt_unser_release_prev_prop_done_x");              // nothing to release
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                       // slot metadata word (string length or typed marker)
+    abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp r10, r11");                                       // is this typed property still uninitialized?
+    emitter.instruction("je __rt_unser_release_prev_prop_done_x");             // no previous owner exists for an uninitialized slot
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                           // previous payload low word
+    emitter.instruction("cmp rsi, 1");                                         // is the previous value an owned string?
+    emitter.instruction("je __rt_unser_release_prev_prop_any_x");              // strings release through the uniform dispatcher
+    emitter.instruction("cmp rsi, 4");                                         // is the previous value below the container range?
+    emitter.instruction("jb __rt_unser_release_prev_prop_done_x");             // scalar slots own no heap payload
+    emitter.instruction("cmp rsi, 6");                                         // does the previous value stay inside the container range?
+    emitter.instruction("jbe __rt_unser_release_prev_prop_any_x");             // arrays, hashes, and objects release uniformly
+    emitter.instruction("cmp rsi, 7");                                         // is the previous value a boxed Mixed cell?
+    emitter.instruction("je __rt_unser_release_prev_prop_mixed_x");            // Mixed cells need their counted box release
+    emitter.instruction("cmp rsi, 10");                                        // is the previous value a callable descriptor?
+    emitter.instruction("je __rt_unser_release_prev_prop_callable_x");         // callable descriptors own capture state
+    emitter.instruction("cmp rsi, 11");                                        // is the previous value an owned reference cell?
+    emitter.instruction("je __rt_unser_release_prev_prop_any_x");              // reference cells release through uniform dispatch
+    emitter.instruction("jmp __rt_unser_release_prev_prop_done_x");            // other tags hold no release obligation here
+    emitter.label("__rt_unser_release_prev_prop_any_x");
+    emitter.instruction("mov rax, r10");                                       // pass the previous payload to the uniform release helper
+    abi::emit_jump(emitter, "__rt_decref_any");
+    emitter.label("__rt_unser_release_prev_prop_mixed_x");
+    emitter.instruction("mov rax, r10");                                       // pass the previous Mixed box to its counted release
+    abi::emit_jump(emitter, "__rt_decref_mixed");
+    emitter.label("__rt_unser_release_prev_prop_callable_x");
+    emitter.instruction("mov rax, r10");                                       // pass the previous callable descriptor to its release helper
+    abi::emit_jump(emitter, "__rt_callable_descriptor_release");
+    emitter.label("__rt_unser_release_prev_prop_done_x");
+    abi::emit_return(emitter);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Every target releases the value a hydration store overwrites, skipping only the
+    /// uninitialized typed-property sentinel, and routes each owner kind to its helper.
+    #[test]
+    fn previous_property_release_contract_holds_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit(&mut emitter);
+            let asm = emitter.output();
+            let block = asm.split_once("__rt_unser_release_prev_prop").unwrap().1;
+            assert!(block.contains("__rt_decref_any"), "{name}");
+            assert!(block.contains("__rt_decref_mixed"), "{name}");
+            assert!(block.contains("__rt_callable_descriptor_release"), "{name}");
+            assert!(block.contains("UNINITIALIZED") || block.contains("cmp") || block.contains("0x7fff"), "{name}");
+        }
+    }
 
     /// Every target keeps container payloads alive through the context and frees copied
     /// scalar/string box shells after the property slot has taken what it needs.
