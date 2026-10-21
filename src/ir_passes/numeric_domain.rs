@@ -34,30 +34,67 @@ pub(crate) fn comparison(inst: &crate::ir::Instruction) -> bool {
 /// Checks a closed numeric graph, constructing dominance only for otherwise numeric private slots.
 /// Local cycles are accepted inductively only after every writer and dominating seed passes.
 pub(crate) fn inputs(function: &Function, values: &[ValueId]) -> bool {
-    if function.instructions.iter().any(|inst| matches!(inst.op,
-        Op::TryPushHandler | Op::CatchBind | Op::FinallyEnter))
-    {
-        return false;
+    NumericInputs::new(function).query(values, false)
+}
+
+/// Retains completed numeric facts for one immutably borrowed function.
+/// Provisional cycle facts stay private until the entire conjunctive query succeeds.
+pub(crate) struct NumericInputs<'a> {
+    function: &'a Function,
+    enabled: bool,
+    proven: HashSet<ValueId>,
+    working: HashMap<ValueId, bool>,
+}
+
+impl<'a> NumericInputs<'a> {
+    /// Binds all cached facts to an immutable function and its handler policy.
+    pub(crate) fn new(function: &'a Function) -> Self {
+        let enabled = !function.instructions.iter().any(|inst| matches!(inst.op,
+            Op::TryPushHandler | Op::CatchBind | Op::FinallyEnter));
+        Self { function, enabled, proven: HashSet::new(), working: HashMap::new() }
     }
-    let mut dominance = None;
-    let mut slots = HashSet::new();
-    let mut known = HashMap::new();
-    values.iter().all(|&value| numeric(function, value, &mut slots, &mut dominance, &mut known))
+
+    /// Publishes only complete successes; a failed query contributes no provisional facts.
+    pub(crate) fn prove(&mut self, values: &[ValueId]) -> bool {
+        self.query(values, true)
+    }
+
+    /// Avoids retaining a second value set when the caller needs only one query.
+    fn query(&mut self, values: &[ValueId], retain: bool) -> bool {
+        self.working.clear();
+        if !self.enabled { return false; }
+        let mut dominance = None;
+        let mut slots = HashSet::new();
+        let safe = values.iter().all(|&value| numeric(
+            self.function, value, &mut slots, &mut dominance, &self.proven, &mut self.working,
+        ));
+        if safe && retain {
+            self.proven.extend(self.working.iter().filter_map(|(&value, &safe)| safe.then_some(value)));
+        }
+        self.working.clear();
+        safe
+    }
+
+    /// Freezes complete facts for codegen after the function's frame proof is finished.
+    pub(crate) fn into_proven_values(self) -> HashSet<ValueId> {
+        self.proven
+    }
 }
 
 /// Shares value decisions within one conjunctive proof, avoiding exponential shared-DAG walks.
 ///
 /// Local cycles may provisionally succeed while their writers are visited. Every writer
 /// must succeed for the whole proof to pass; a failed proof discards this entire cache.
-fn numeric(function: &Function, value: ValueId, slots: &mut HashSet<LocalSlotId>, dominance: &mut Option<crate::ir_passes::DominanceInfo>, known: &mut HashMap<ValueId, bool>) -> bool {
+fn numeric(function: &Function, value: ValueId, slots: &mut HashSet<LocalSlotId>, dominance: &mut Option<crate::ir_passes::DominanceInfo>, proven: &HashSet<ValueId>, known: &mut HashMap<ValueId, bool>) -> bool {
+    if proven.contains(&value) { return true; }
     if let Some(&safe) = known.get(&value) { return safe; }
-    let safe = numeric_uncached(function, value, slots, dominance, known);
+    let safe = numeric_uncached(function, value, slots, dominance, proven, known);
     known.insert(value, safe);
     safe
 }
 
 /// Requires scalar metadata or a boxed value whose complete origin is numeric.
-fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<LocalSlotId>, dominance: &mut Option<crate::ir_passes::DominanceInfo>, known: &mut HashMap<ValueId, bool>) -> bool {
+fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<LocalSlotId>, dominance: &mut Option<crate::ir_passes::DominanceInfo>, proven: &HashSet<ValueId>, known: &mut HashMap<ValueId, bool>) -> bool {
     let Some(metadata) = function.value(value) else { return false; };
     if matches!((&metadata.ir_type, &metadata.php_type),
         (IrType::I64, PhpType::Int) | (IrType::F64, PhpType::Float))
@@ -72,16 +109,16 @@ fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<Loc
     let Some(inst) = super::rewrite::defining_instruction(function, value) else { return false; };
     match inst.op {
         Op::Acquire | Op::MixedClone | Op::Move | Op::Borrow | Op::EnsureOwned | Op::MixedBox => {
-            inst.operands.first().is_some_and(|&value| numeric(function, value, slots, dominance, known))
+            inst.operands.first().is_some_and(|&value| numeric(function, value, slots, dominance, proven, known))
         }
         Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
-            inst.operands.len() == 2 && inst.operands.iter().all(|&value| numeric(function, value, slots, dominance, known))
+            inst.operands.len() == 2 && inst.operands.iter().all(|&value| numeric(function, value, slots, dominance, proven, known))
         }
         Op::MixedNumericBinop if mixed(inst) => {
-            inst.operands.len() == 2 && inst.operands.iter().all(|&value| numeric(function, value, slots, dominance, known))
+            inst.operands.len() == 2 && inst.operands.iter().all(|&value| numeric(function, value, slots, dominance, proven, known))
         }
         Op::StrIncDec if increment(inst) => {
-            inst.operands.len() == 1 && numeric(function, inst.operands[0], slots, dominance, known)
+            inst.operands.len() == 1 && numeric(function, inst.operands[0], slots, dominance, proven, known)
         }
         Op::LoadLocal => {
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
@@ -110,7 +147,7 @@ fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<Loc
                 inst.immediate == Some(Immediate::LocalSlot(slot)) && inst.op == Op::StoreLocal
             }).collect();
             let safe = !writers.is_empty() && writers.iter().all(|writer| {
-                writer.operands.first().is_some_and(|&value| numeric(function, value, slots, dominance, known))
+                writer.operands.first().is_some_and(|&value| numeric(function, value, slots, dominance, proven, known))
             }) && initialized(function, slot, dominance.get_or_insert_with(|| {
                 crate::ir_passes::compute_dominance(function)
             }));
@@ -154,9 +191,8 @@ mod tests {
     use super::*;
     use crate::ir::{Builder, Ownership, Terminator};
 
-    /// Shared local cycles validate accesses once while retaining all-writer checks.
-    #[test]
-    fn numeric_domain_reuses_prechecked_slot_eligibility() {
+    /// Builds a shared local cycle and returns its final load and scalar witnesses.
+    fn shared_cycle() -> (Function, ValueId, ValueId, ValueId) {
         let mut function = Function::new("numeric_domain_work".into(), IrType::I64, PhpType::Int);
         let slot = function.add_local(
             Some("sum".into()), IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, LocalKind::PhpLocal,
@@ -180,7 +216,13 @@ mod tests {
         }
         let loaded = builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
         builder.terminate(Terminator::Return { value: Some(zero) });
+        (function, loaded, nonnumeric, one)
+    }
 
+    /// Shared local cycles validate accesses once while retaining all-writer checks.
+    #[test]
+    fn numeric_domain_reuses_prechecked_slot_eligibility() {
+        let (mut function, loaded, nonnumeric, _) = shared_cycle();
         SLOT_VALIDATIONS.with(|checks| checks.set(0));
         assert!(inputs(&function, &[loaded]));
         assert_eq!(SLOT_VALIDATIONS.with(|checks| checks.get()), 1,
@@ -197,5 +239,46 @@ mod tests {
         seed.operands.clear();
         seed.effects = Op::Nop.default_effects();
         assert!(!inputs(&function, &[loaded]), "an active cycle must not initialize its own entry value");
+    }
+
+    /// Complete facts survive unrelated failures and eliminate repeated function-local queries.
+    #[test]
+    fn numeric_domain_reuses_only_completed_function_facts() {
+        let (function, loaded, nonnumeric, _) = shared_cycle();
+        let mut proof = NumericInputs::new(&function);
+        SLOT_VALIDATIONS.with(|checks| checks.set(0));
+        assert!(proof.prove(&[loaded]));
+        let completed = proof.proven.clone();
+        for inst in function.instructions.iter().filter(|inst| inst.op == Op::LoadLocal) {
+            assert!(proof.prove(&[inst.result.unwrap()]));
+        }
+        assert!(!proof.prove(&[nonnumeric]));
+        assert_eq!(proof.proven, completed);
+        assert!(proof.working.is_empty());
+        assert!(proof.prove(&[loaded]));
+        assert_eq!(SLOT_VALIDATIONS.with(|checks| checks.get()), 1);
+    }
+
+    /// Failed cycles and conjunctions never publish provisional successes into later queries.
+    #[test]
+    fn numeric_domain_failed_queries_do_not_publish_cycle_facts() {
+        let (mut function, loaded, nonnumeric, one) = shared_cycle();
+        let first_load = function.instructions.iter().find(|inst| inst.op == Op::LoadLocal).unwrap().result.unwrap();
+        let writer = function.instructions.iter_mut().rev().find(|inst| inst.op == Op::StoreLocal).unwrap();
+        writer.operands[0] = nonnumeric;
+        let mut proof = NumericInputs::new(&function);
+        assert!(proof.prove(&[one]));
+        assert!(!proof.prove(&[loaded]));
+        assert_eq!(proof.proven, HashSet::from([one]));
+        assert!(proof.working.is_empty());
+        assert!(!proof.prove(&[first_load]));
+        assert_eq!(proof.proven, HashSet::from([one]));
+
+        let (valid, loaded, nonnumeric, _) = shared_cycle();
+        let mut proof = NumericInputs::new(&valid);
+        assert!(!proof.prove(&[loaded, nonnumeric]));
+        assert!(proof.proven.is_empty());
+        assert!(proof.working.is_empty());
+        assert!(proof.prove(&[loaded]));
     }
 }

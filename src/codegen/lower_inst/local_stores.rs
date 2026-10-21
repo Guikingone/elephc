@@ -596,7 +596,7 @@ fn mixed_value_is_statically_destructor_free(
     let Some(inst) = instruction_for_value(ctx, value)? else {
         return Ok(false);
     };
-    if super::super::stack_numeric::numeric_value(ctx.function, value) {
+    if super::super::stack_numeric::numeric_value(ctx.function, &ctx.numeric_values, value) {
         return Ok(true);
     }
     if matches!(inst.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow) {

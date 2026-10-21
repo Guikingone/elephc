@@ -903,7 +903,7 @@ pub(super) fn lower_php_rel_cmp(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    if crate::codegen::stack_numeric::numeric_comparison(ctx.function, inst) {
+    if crate::codegen::stack_numeric::numeric_comparison(ctx.function, &ctx.numeric_values, inst) {
         return super::numeric_comparisons::lower(ctx, inst);
     }
     let lhs = expect_operand(inst, 0)?;
