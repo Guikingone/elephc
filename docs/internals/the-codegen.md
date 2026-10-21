@@ -333,6 +333,11 @@ the same key. Constant references left in the AST retain their names without bei
 Global and scoped array-valued constants fall back to that source export when the scalar-only
 constant metadata evaluator cannot retain a value, including inside object default arguments.
 Declaring-class constant metadata remains limited to scalar, null and enum-case values.
+Relative class-name defaults resolve in the method's declaring scope. Trait-relative class names
+remain written even through composition and aliases; the EIR module retains imported trait method
+keys separately so display scope does not change `getDefaultValue()` binding.
+An implicit item after the maximum integer key also retains its written form. The parser keeps
+that item as an append entry, and mixed-literal effects preserve its catchable runtime error.
 
 ## Eval Lowering Boundary
 

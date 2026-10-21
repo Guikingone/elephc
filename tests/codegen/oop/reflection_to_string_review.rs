@@ -372,3 +372,64 @@ foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
         Parameter #1 [ <optional> Foo $b = new \\Foo(ItemContract::ITEMS) ]\n\
         Parameter #2 [ <optional> Foo $c = new \\Foo(TraitItems::ITEMS) ]\n");
 }
+
+/// Inherited defaults fold relative class names in their declaration's scope.
+#[test]
+fn test_reflection_dump_inherited_default_class_scope() {
+    let out = compile_and_run(r#"<?php
+class BaseP { const NAME = 'base'; }
+class ParentC extends BaseP {
+    public function f($a = [self::class, self::NAME]) {}
+    public function h($a = [parent::class]) {}
+}
+class ChildC extends ParentC {}
+class Grand extends ChildC {}
+echo (new ReflectionMethod('ChildC', 'f'))->getParameters()[0], "\n";
+echo (new ReflectionMethod('Grand', 'h'))->getParameters()[0], "\n";
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> $a = ['ParentC', self::NAME] ]\n\
+        Parameter #0 [ <optional> $a = ['BaseP'] ]\n");
+}
+
+/// Trait source syntax survives composition and aliases while evaluated values bind to the class.
+#[test]
+fn test_reflection_dump_trait_default_class_scope() {
+    let out = compile_and_run(r#"<?php
+trait Tself {
+    public function f($a = [self::class]) {}
+    public function g($a = self::class) {}
+}
+trait Outer { use Tself; }
+class Cuse { use Outer { g as aliasG; } }
+class ChildUse extends Cuse {}
+class Own { use Tself; public function g($a = self::class) {} }
+echo (new ReflectionMethod('Tself', 'f'))->getParameters()[0], "\n";
+echo (new ReflectionMethod('Cuse', 'f'))->getParameters()[0], "\n";
+$p = (new ReflectionMethod('ChildUse', 'aliasG'))->getParameters()[0];
+echo $p, "\n", $p->getDefaultValue(), "\n";
+echo (new ReflectionMethod('Own', 'g'))->getParameters()[0], "\n";
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> $a = [self::class] ]\n\
+        Parameter #0 [ <optional> $a = [self::class] ]\n\
+        Parameter #0 [ <optional> $a = self::class ]\nCuse\n\
+        Parameter #0 [ <optional> $a = 'Own' ]\n");
+}
+
+/// Overflowing implicit keys stay written in dumps and never execute object constructors.
+#[test]
+fn test_reflection_dump_array_implicit_after_max_key() {
+    let out = compile_and_run(r#"<?php
+class Box { public function __construct(public array $a) { echo 'constructed'; } }
+function f($a = [9223372036854775807 => 'a', 'b'],
+    Box $b = new Box([9223372036854775807 => 1, 2]),
+    $c = [9223372036854775807 => 'a', 9223372036854775807 => 'b', 'c'],
+    $d = [1, 9223372036854775807 => 2, 3],
+    $e = [9223372036854775806 => 1, 2]) {}
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> $a = [9223372036854775807 => 'a', 'b'] ]\n\
+        Parameter #1 [ <optional> Box $b = new \\Box([9223372036854775807 => 1, 2]) ]\n\
+        Parameter #2 [ <optional> $c = [9223372036854775807 => 'a', 9223372036854775807 => 'b', 'c'] ]\n\
+        Parameter #3 [ <optional> $d = [1, 9223372036854775807 => 2, 3] ]\n\
+        Parameter #4 [ <optional> $e = [9223372036854775806 => 1, 9223372036854775807 => 2] ]\n");
+}

@@ -33,6 +33,9 @@ pub(super) fn reflection_parameter_default_export(
             exporter.export_value(default)
         } else { exporter.export(default) };
     }
+    if matches!(default.kind, ExprKind::ArrayLiteralMixed(_)) {
+        return exporter.export(default);
+    }
     if needs_source_export {
         if let Some(value) = reflection_literal_parameter_default_value(default) {
             return Some(reflection_dump_default_value(&value));
@@ -44,6 +47,7 @@ pub(super) fn reflection_parameter_default_export(
         ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named(_), .. } => {
             exporter.export(default)
         }
+        ExprKind::ClassConstant { receiver } if exporter.class_name_of(receiver).is_none() => exporter.export(default),
         _ => None,
     }
 }
@@ -95,6 +99,11 @@ impl DefaultExporter<'_> {
                 };
                 Some(format!("{receiver}::{}", reflection_dump_text(name)))
             }
+            ExprKind::ClassConstant { receiver } => match receiver {
+                StaticReceiver::Self_ => Some("self::class".to_string()),
+                StaticReceiver::Parent => Some("parent::class".to_string()),
+                _ => None,
+            },
             ExprKind::NewObject { class_name, args } => {
                 let args = args.iter().map(|arg| self.export(arg)).collect::<Option<Vec<_>>>()?;
                 Some(format!(
@@ -115,6 +124,17 @@ impl DefaultExporter<'_> {
             ExprKind::NamedArg { name, value } => Some(format!("{}: {}", reflection_dump_text(name), self.export(value)?)),
             ExprKind::ArrayLiteral(items) => {
                 let items = items.iter().map(|item| self.export(item)).collect::<Option<Vec<_>>>()?;
+                Some(format!("[{}]", items.join(", ")))
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                let items = entries.iter().map(|entry| match entry {
+                    crate::parser::ast::ArrayEntry::Keyed(key, value)
+                        if key.span == value.span && matches!(key.kind, ExprKind::IntLiteral(_)) => self.export(value),
+                    crate::parser::ast::ArrayEntry::Keyed(key, value) =>
+                        Some(format!("{} => {}", self.export(key)?, self.export(value)?)),
+                    crate::parser::ast::ArrayEntry::Value(value) => self.export(value),
+                    crate::parser::ast::ArrayEntry::Spread(_) => None,
+                }).collect::<Option<Vec<_>>>()?;
                 Some(format!("[{}]", items.join(", ")))
             }
             ExprKind::ArrayLiteralAssoc(pairs) => {
@@ -150,7 +170,8 @@ impl DefaultExporter<'_> {
             ExprKind::ArrayLiteral(items) => items.iter().all(|item| self.is_literal(item)),
             ExprKind::ArrayLiteralAssoc(pairs) => pairs
                 .iter()
-                .all(|(key, value)| self.literal_key(key).is_some() && self.is_literal(value)),
+                .all(|(key, value)| self.literal_key(key).is_some() && self.is_literal(value))
+                && self.literal_array_entries(expr).is_some(),
             _ => false,
         }
     }

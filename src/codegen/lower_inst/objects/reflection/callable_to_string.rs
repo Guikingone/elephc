@@ -61,8 +61,7 @@ pub(super) fn reflection_method_to_string(
         .and_then(elephc_builtin_contract::lookup_class)
         .or_else(|| declaring_class_name.and_then(elephc_builtin_contract::lookup_class))
         .map(|class| class.module);
-    let mut origin_parts = vec![reflection_origin_label(is_internal, module)];
-    if is_deprecated { origin_parts.push("deprecated".into()); }
+    let mut origin_parts = vec![reflection_origin_label(is_internal, is_deprecated, module)];
     if let Some(class_name) = overwritten_class_name {
         origin_parts.push(format!("overwrites {}", reflection_dump_text(class_name)));
     }
@@ -105,23 +104,22 @@ pub(super) fn reflection_function_to_string(
     };
     let module = elephc_builtin_contract::lookup(name).map(|contract| contract.module);
     let header = format!(
-        "Function [ <{}{}> function {} ]",
-        reflection_origin_label(is_internal, module),
-        if is_deprecated { ", deprecated" } else { "" },
+        "Function [ <{}> function {} ]",
+        reflection_origin_label(is_internal, is_deprecated, module),
         display_name
     );
     reflection_callable_body(&header, parameters, return_type, false)
 }
 
 /// Returns PHP's callable origin label, including the owning module when it is known.
-fn reflection_origin_label(is_internal: bool, module: Option<PhpModule>) -> String {
-    if !is_internal {
-        return "user".to_string();
+fn reflection_origin_label(is_internal: bool, is_deprecated: bool, module: Option<PhpModule>) -> String {
+    let mut label = if is_internal { "internal" } else { "user" }.to_string();
+    if is_deprecated { label.push_str(", deprecated"); }
+    if let Some(module) = module.filter(|_| is_internal) {
+        label.push(':');
+        label.push_str(module.registered_name());
     }
-    match module {
-        Some(module) => format!("internal:{}", module.registered_name()),
-        None => "internal".to_string(),
-    }
+    label
 }
 
 /// Appends PHP's parameter/return block to a rendered function or method header.
@@ -352,4 +350,18 @@ pub(super) fn reflection_listed_method_to_string(
         &member.parameters,
         member.type_metadata.as_ref(),
     )
+}
+
+/// Internal deprecation precedes the module suffix in both callable headers.
+#[test]
+fn test_reflection_dump_internal_deprecated_headers() {
+    let function = reflection_function_to_string("xml_set_object", true, true, false, &[], None);
+    assert!(function.starts_with("Function [ <internal, deprecated:xml> function xml_set_object ]"));
+    let method = reflection_method_to_string(
+        "__wakeup", Some("DateTime"), ReflectionMemberFlags::default(),
+        Some("DateTimeInterface"), None, None, true, true, false, &[], None,
+    );
+    assert!(method.starts_with("Method [ <internal, deprecated:date, prototype DateTimeInterface>"));
+    assert_eq!(reflection_origin_label(false, true, None), "user, deprecated");
+    assert_eq!(reflection_origin_label(true, true, None), "internal, deprecated");
 }

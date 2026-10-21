@@ -113,6 +113,8 @@ pub struct Module {
     pub declared_trait_source_lines: HashMap<String, u32>,
     pub declared_trait_uses: HashMap<String, Vec<String>>,
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
+    /// Class methods imported from traits, including aliases, before lexical provenance is lost.
+    pub imported_trait_method_names: HashMap<String, HashSet<String>>,
     pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
     pub declared_trait_property_names: HashMap<String, Vec<String>>,
     pub declared_trait_properties: HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
@@ -175,6 +177,7 @@ impl Module {
             declared_trait_source_lines: HashMap::new(),
             declared_trait_uses: HashMap::new(),
             declared_trait_method_names: HashMap::new(),
+            imported_trait_method_names: HashMap::new(),
             declared_trait_methods: HashMap::new(),
             declared_trait_property_names: HashMap::new(),
             declared_trait_properties: HashMap::new(),
