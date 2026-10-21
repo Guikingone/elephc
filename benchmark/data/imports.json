@@ -9058,5 +9058,541 @@
         }
       }
     }
+  },
+  "12331565097": {
+    "timestamp": "2026-10-21T08:26:17Z",
+    "suites": [
+      "hot-path",
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T08:26:17Z",
+        "run_id": 39567097133,
+        "run_attempt": 1,
+        "artifact_id": 12331565097,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "magician": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T08:26:17Z",
+        "run_id": 39567097133,
+        "run_attempt": 1,
+        "artifact_id": 12331565097,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "hot-path": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T08:26:17Z",
+        "run_id": 39567097133,
+        "run_attempt": 1,
+        "artifact_id": 12331565097,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      }
+    }
+  },
+  "12334719432": {
+    "timestamp": "2026-10-21T09:46:40Z",
+    "suites": [
+      "hot-path",
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T09:46:40Z",
+        "run_id": 39577569620,
+        "run_attempt": 1,
+        "artifact_id": 12334719432,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "magician": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T09:46:40Z",
+        "run_id": 39577569620,
+        "run_attempt": 1,
+        "artifact_id": 12334719432,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "hot-path": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T09:46:40Z",
+        "run_id": 39577569620,
+        "run_attempt": 1,
+        "artifact_id": 12334719432,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      }
+    }
+  },
+  "12340078749": {
+    "timestamp": "2026-10-21T11:05:02Z",
+    "suites": [
+      "hot-path",
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T11:05:02Z",
+        "run_id": 39587165967,
+        "run_attempt": 1,
+        "artifact_id": 12340078749,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "magician": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T11:05:02Z",
+        "run_id": 39587165967,
+        "run_attempt": 1,
+        "artifact_id": 12340078749,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "hot-path": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T11:05:02Z",
+        "run_id": 39587165967,
+        "run_attempt": 1,
+        "artifact_id": 12340078749,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      }
+    }
+  },
+  "12343555714": {
+    "timestamp": "2026-10-21T11:44:25Z",
+    "suites": [
+      "hot-path",
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T11:44:25Z",
+        "run_id": 39590496392,
+        "run_attempt": 1,
+        "artifact_id": 12343555714,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "magician": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T11:44:25Z",
+        "run_id": 39590496392,
+        "run_attempt": 1,
+        "artifact_id": 12343555714,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "hot-path": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T11:44:25Z",
+        "run_id": 39590496392,
+        "run_attempt": 1,
+        "artifact_id": 12343555714,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      }
+    }
+  },
+  "12345451899": {
+    "timestamp": "2026-10-21T12:25:19Z",
+    "suites": [
+      "hot-path",
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T12:25:19Z",
+        "run_id": 39597612886,
+        "run_attempt": 1,
+        "artifact_id": 12345451899,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "magician": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T12:25:19Z",
+        "run_id": 39597612886,
+        "run_attempt": 1,
+        "artifact_id": 12345451899,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "hot-path": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T12:25:19Z",
+        "run_id": 39597612886,
+        "run_attempt": 1,
+        "artifact_id": 12345451899,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      }
+    }
+  },
+  "12347018644": {
+    "timestamp": "2026-10-21T13:07:06Z",
+    "suites": [
+      "hot-path",
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T13:07:06Z",
+        "run_id": 39602578481,
+        "run_attempt": 1,
+        "artifact_id": 12347018644,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "magician": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T13:07:06Z",
+        "run_id": 39602578481,
+        "run_attempt": 1,
+        "artifact_id": 12347018644,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "hot-path": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T13:07:06Z",
+        "run_id": 39602578481,
+        "run_attempt": 1,
+        "artifact_id": 12347018644,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      }
+    }
+  },
+  "12365444197": {
+    "timestamp": "2026-10-21T17:18:44Z",
+    "suites": [
+      "hot-path",
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T17:18:44Z",
+        "run_id": 39638709488,
+        "run_attempt": 1,
+        "artifact_id": 12365444197,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "magician": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T17:18:44Z",
+        "run_id": 39638709488,
+        "run_attempt": 1,
+        "artifact_id": 12365444197,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "hot-path": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T17:18:44Z",
+        "run_id": 39638709488,
+        "run_attempt": 1,
+        "artifact_id": 12365444197,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      }
+    }
+  },
+  "12367459186": {
+    "timestamp": "2026-10-21T18:01:44Z",
+    "suites": [
+      "hot-path",
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T18:01:44Z",
+        "run_id": 39643663056,
+        "run_attempt": 1,
+        "artifact_id": 12367459186,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "magician": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T18:01:44Z",
+        "run_id": 39643663056,
+        "run_attempt": 1,
+        "artifact_id": 12367459186,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "hot-path": {
+        "date": "2026-10-21",
+        "timestamp": "2026-10-21T18:01:44Z",
+        "run_id": 39643663056,
+        "run_attempt": 1,
+        "artifact_id": 12367459186,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      }
+    }
   }
 }
