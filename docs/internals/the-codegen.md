@@ -328,6 +328,8 @@ Unicode names are encoded first so they cannot be mistaken for escaped bytes.
 Array defaults are rendered from their source expression to distinguish folded values from ASTs.
 Folded values apply last-wins keys and compact lists recursively; arrays inside an AST export
 retain all folded keys. Null or fractional keys keep the array's written form instead.
+String key identity uses PHP bytes, so equivalent Unicode and byte-escape spellings overwrite
+the same key. Constant references left in the AST retain their names without being evaluated.
 
 ## Eval Lowering Boundary
 

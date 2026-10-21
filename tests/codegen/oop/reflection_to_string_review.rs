@@ -292,3 +292,38 @@ foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
         Parameter #2 [ <optional> Foo $c = new \\Foo([false => 2, '5' => 1, null => 3, 1.5 => 4, 0 => 1, 1 => 2]) ]\n\
         Parameter #3 [ <optional> Foo $d = new \\Foo([1 => 4, '05' => 2]) ]\n");
 }
+
+/// Written defaults keep builtin and unresolved constant names without evaluating them.
+#[test]
+fn test_reflection_dump_written_constant_names() {
+    let out = compile_and_run(r#"<?php
+class Foo { public function __construct(public mixed $a = null) { echo 'constructed'; } }
+function f($a = [1, E_WARNING, PHP_VERSION], Foo $b = new Foo(E_WARNING),
+    Foo $c = new Foo([PHP_VERSION => 1]), Foo $d = new Foo(MISSING_DUMP_CONSTANT),
+    $e = [MISSING_DUMP_CONSTANT]) {}
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> $a = [1, E_WARNING, PHP_VERSION] ]\n\
+        Parameter #1 [ <optional> Foo $b = new \\Foo(E_WARNING) ]\n\
+        Parameter #2 [ <optional> Foo $c = new \\Foo([PHP_VERSION => 1]) ]\n\
+        Parameter #3 [ <optional> Foo $d = new \\Foo(MISSING_DUMP_CONSTANT) ]\n\
+        Parameter #4 [ <optional> $e = [MISSING_DUMP_CONSTANT] ]\n");
+}
+
+/// String keys use PHP byte identity across Unicode, byte escapes and class-name literals.
+#[test]
+fn test_reflection_dump_array_byte_key_identity() {
+    let out = compile_and_run(r#"<?php
+class Foo { public function __construct(public array $a) {} }
+class ÉKey {}
+function f(array $a = ["é" => 1, "\xC3\xA9" => 2],
+    Foo $b = new Foo(["é" => 1, "\xC3\xA9" => 2]),
+    array $c = [null => 1, "é" => 2, "\xC3\xA9" => 3],
+    array $d = [ÉKey::class => 1, "\xC3\x89Key" => 2]) {}
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
+"#);
+    assert_eq!(out, "Parameter #0 [ <optional> array $a = ['\\xC3\\xA9' => 2] ]\n\
+        Parameter #1 [ <optional> Foo $b = new \\Foo(['é' => 2]) ]\n\
+        Parameter #2 [ <optional> array $c = [null => 1, 'é' => 2, 'é' => 3] ]\n\
+        Parameter #3 [ <optional> array $d = ['\\xC3\\x89Key' => 2] ]\n");
+}

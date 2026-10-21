@@ -22,13 +22,12 @@ use super::*;
 
 /// Exports a default whose dump PHP renders from its written AST, or `None` to keep the value.
 pub(super) fn reflection_parameter_default_export(
-    ctx: &FunctionContext<'_>,
     current_class: &str,
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
     needs_source_export: bool,
 ) -> Option<String> {
-    let exporter = DefaultExporter { ctx, current_class, current_info };
+    let exporter = DefaultExporter { current_class, current_info };
     if matches!(default.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
         return if exporter.is_literal(default) {
             exporter.export_value(default)
@@ -50,8 +49,7 @@ pub(super) fn reflection_parameter_default_export(
 }
 
 /// The class scope a default is written in, which `self::class` and `parent::class` resolve against.
-struct DefaultExporter<'a, 'ctx> {
-    ctx: &'a FunctionContext<'ctx>,
+struct DefaultExporter<'a> {
     current_class: &'a str,
     current_info: Option<&'a crate::types::ClassInfo>,
 }
@@ -60,17 +58,20 @@ struct DefaultExporter<'a, 'ctx> {
 #[derive(Clone, PartialEq)]
 enum LiteralKey {
     Int(i64),
+    /// Canonical literal-byte encoding, independent of how the source escaped the key.
     Str(String),
 }
 
-impl DefaultExporter<'_, '_> {
+impl DefaultExporter<'_> {
     /// Exports one expression, choosing the folded literal form whenever PHP folds it.
     fn export(&self, expr: &Expr) -> Option<String> {
         if self.is_literal(expr) {
             return self.export_literal(expr);
         }
         match &expr.kind {
-            ExprKind::ConstRef(name) => self.user_constant_name(name.as_str()),
+            // A dump exports syntax without evaluating it, even if resolving the constant
+            // later would fail. Builtin and user references use the same resolved spelling.
+            ExprKind::ConstRef(name) => Some(reflection_dump_text(name.as_str().trim_start_matches('\\'))),
             ExprKind::Negate(inner) => Some(format!("-{}", self.export(inner)?)),
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 let receiver = match receiver {
@@ -257,12 +258,9 @@ impl DefaultExporter<'_, '_> {
             },
             ExprKind::BoolLiteral(value) => Some(LiteralKey::Int(i64::from(*value))),
             ExprKind::FloatLiteral(value) => integral_float_key(*value).map(LiteralKey::Int),
-            ExprKind::StringLiteral(value) => Some(match canonical_integer_key(value) {
-                Some(index) => LiteralKey::Int(index),
-                None => LiteralKey::Str(value.clone()),
-            }),
+            ExprKind::StringLiteral(value) => Some(literal_string_key(value)),
             ExprKind::ClassConstant { receiver } => {
-                Some(LiteralKey::Str(reflection_dump_text(&self.class_name_of(receiver)?)))
+                Some(literal_string_key(&reflection_dump_text(&self.class_name_of(receiver)?)))
             }
             _ => None,
         }
@@ -283,17 +281,19 @@ impl DefaultExporter<'_, '_> {
         }
     }
 
-    /// Returns a user constant's name as PHP exports it. An internal constant is folded by PHP
-    /// outside a namespace, so its name is not what the dump shows and the value is kept instead.
-    fn user_constant_name(&self, name: &str) -> Option<String> {
-        let key = name.trim_start_matches('\\');
-        if elephc_builtin_contract::lookup_constant(key).is_some()
-            || !self.ctx.module.global_constants.contains_key(key)
-        {
-            return None;
-        }
-        Some(reflection_dump_text(key))
+}
+
+/// Normalizes key identity from PHP bytes before comparing different source escape spellings.
+fn literal_string_key(value: &str) -> LiteralKey {
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if let Some(index) = std::str::from_utf8(&bytes).ok().and_then(canonical_integer_key) {
+        return LiteralKey::Int(index);
     }
+    let mut canonical = String::with_capacity(value.len());
+    for byte in bytes {
+        elephc_builtin_contract::string_literal::push_escaped_byte(byte, &mut canonical);
+    }
+    LiteralKey::Str(canonical)
 }
 
 /// Returns a float key only when PHP can fold it losslessly into a signed integer key.

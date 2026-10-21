@@ -244,7 +244,7 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
             .and_then(reflection_parameter_default_constant_name);
         let default_value_export = source_default_expr.or(default_expr).and_then(|default| {
             reflection_parameter_default_export(
-                ctx, current_class, current_info, default,
+                current_class, current_info, default,
                 matches!(default_value, None | Some(ReflectionParameterDefaultValue::EirHelper(_))),
             )
         });
