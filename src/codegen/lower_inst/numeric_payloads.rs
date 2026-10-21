@@ -55,4 +55,3 @@ pub(super) fn float(ctx: &mut FunctionContext<'_>, ty: &PhpType, payload: &str, 
     }
     ctx.emitter.label(&done);
 }
-

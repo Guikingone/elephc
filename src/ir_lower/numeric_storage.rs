@@ -184,4 +184,3 @@ fn narrow_load_of_mixed_slot(ctx: &LoweringContext<'_, '_>, name: &str) -> bool 
             && inst.result_php_type.codegen_repr() != PhpType::Mixed
     })
 }
-
