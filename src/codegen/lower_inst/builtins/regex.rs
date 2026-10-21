@@ -646,7 +646,7 @@ fn box_split_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmn x0, #1");                              // compare the array pointer against the failure sentinel
             ctx.emitter.instruction(&format!("b.eq {}", false_label));          // -1 boxes PHP false
-            crate::codegen::emit_box_current_value_as_mixed(
+            crate::codegen::emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Array(Box::new(PhpType::Mixed)),
             );
@@ -661,7 +661,7 @@ fn box_split_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, -1");                             // compare the array pointer against the failure sentinel
             ctx.emitter.instruction(&format!("je {}", false_label));            // -1 boxes PHP false
-            crate::codegen::emit_box_current_value_as_mixed(
+            crate::codegen::emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Array(Box::new(PhpType::Mixed)),
             );

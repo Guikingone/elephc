@@ -2637,6 +2637,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::ZvalUnpack
                 // Parsed values own their storage independently of the wire input and options.
                 | RuntimeFnId::Unserialize
+                // Both callback replacement and shell output reserve or persist their own
+                // result storage; failure paths copy the borrowed subject/empty output.
+                | RuntimeFnId::PregReplaceCallback
+                | RuntimeFnId::ShellExec
         ) {
             BuiltinResultOwnership::Fresh
         } else if matches!(

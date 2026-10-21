@@ -2182,6 +2182,19 @@ var_dump(preg_split("/(/", "subject"));
     assert_eq!(out, "0|:0|||subject:0|bool(false)\n");
 }
 
+/// Verifies a small callback replacement allocates its output block with the
+/// right size on x86_64 and that an empty subject returns an empty string.
+#[test]
+fn test_preg_replace_callback_small_output_and_empty_subject() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace_callback('/[a-z]/', function ($m) { return strtoupper($m[0]); }, 'ab'), '|';
+echo preg_replace_callback('/x/', function ($m) { return 'y'; }, ''), '|';
+"#,
+    );
+    assert_eq!(out, "AB||");
+}
+
 /// Verifies `preg_replace` substitutes the first matching occurrence of a literal pattern.
 #[test]
 fn test_preg_replace_simple() {

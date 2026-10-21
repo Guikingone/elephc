@@ -202,7 +202,7 @@ fn emit_alloc_overflow_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: alloc_overflow (fatal) ---");
     emitter.label_global("__rt_alloc_overflow");
 
-    emit_cdylib_allocation_escape(emitter);
+    emit_cdylib_allocation_escape(emitter, "__rt_alloc_overflow_fatal");
 
     emitter.instruction("mov x0, #2");                                          // fd = stderr for the allocation-overflow diagnostic
     abi::emit_symbol_address(emitter, "x1", "_alloc_overflow_msg");
@@ -319,7 +319,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: alloc_overflow (fatal) ---");
     emitter.label_global("__rt_alloc_overflow");
 
-    emit_cdylib_allocation_escape(emitter);
+    emit_cdylib_allocation_escape(emitter, "__rt_alloc_overflow_fatal");
 
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the allocation-overflow diagnostic
     abi::emit_symbol_address(emitter, "rsi", "_alloc_overflow_msg");
@@ -359,6 +359,7 @@ fn emit_concat_headroom_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: concat_overflow (fatal) ---");
     emitter.label_global("__rt_concat_overflow");
+    emit_cdylib_allocation_escape(emitter, "__rt_concat_overflow_fatal");
     emitter.instruction("mov x0, #2");                                          // write the capacity diagnostic to stderr
     abi::emit_symbol_address(emitter, "x1", "_concat_overflow_msg");
     emitter.instruction(&format!("mov x2, #{}", CONCAT_OVERFLOW_MSG.len()));    // exact diagnostic byte length
@@ -392,6 +393,7 @@ fn emit_concat_headroom_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: concat_overflow (fatal) ---");
     emitter.label_global("__rt_concat_overflow");
+    emit_cdylib_allocation_escape(emitter, "__rt_concat_overflow_fatal");
     emitter.instruction("mov edi, 2");                                          // write the capacity diagnostic to stderr
     abi::emit_symbol_address(emitter, "rsi", "_concat_overflow_msg");
     emitter.instruction(&format!("mov edx, {}", CONCAT_OVERFLOW_MSG.len()));    // exact diagnostic byte length
@@ -403,7 +405,7 @@ fn emit_concat_headroom_linux_x86_64(emitter: &mut Emitter) {
 }
 
 /// Converts an impossible allocation into a recoverable cdylib boundary escape.
-fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
+fn emit_cdylib_allocation_escape(emitter: &mut Emitter, fatal_label: &str) {
     if !emitter.cdylib_boundary {
         return;
     }
@@ -415,7 +417,7 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
                 crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
             );
             emitter.instruction("ldr x9, [x9]");                                // read whether a native recovery boundary is active
-            emitter.instruction("cbz x9, __rt_alloc_overflow_fatal");           // retain executable fatal behavior without a boundary
+            emitter.instruction(&format!("cbz x9, {}", fatal_label));           // retain executable fatal behavior without a boundary
             abi::emit_store_imm_to_symbol(
                 emitter,
                 crate::codegen_support::cdylib::BOUNDARY_STATUS,
@@ -424,7 +426,7 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
             );
             abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // unwind to the cdylib handler with allocation status recorded
-            emitter.label("__rt_alloc_overflow_fatal");
+            emitter.label(fatal_label);
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(
@@ -434,7 +436,7 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
             );
             emitter.instruction("mov r8, QWORD PTR [r8]");                      // read whether a native recovery boundary is active
             emitter.instruction("test r8, r8");                                 // distinguish cdylib recovery from executable fatal handling
-            emitter.instruction("jz __rt_alloc_overflow_fatal");                // retain executable fatal behavior without a boundary
+            emitter.instruction(&format!("jz {}", fatal_label));                // retain executable fatal behavior without a boundary
             abi::emit_store_imm_to_symbol(
                 emitter,
                 crate::codegen_support::cdylib::BOUNDARY_STATUS,
@@ -443,7 +445,7 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
             );
             abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // unwind to the cdylib handler with allocation status recorded
-            emitter.label("__rt_alloc_overflow_fatal");
+            emitter.label(fatal_label);
         }
     }
 }

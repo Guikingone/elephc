@@ -95,8 +95,9 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, x10");                                   // output position
     emitter.instruction(&format!("str x11, [sp, #{}]", output_start_off));      // save output start
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save output write pos
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", cap as i64); // load the shared scratch capacity
-    emitter.instruction("add x12, x11, x12");                                   // compute the one-past-end scratch address
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_concat_buf"); // load the arena base
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x13", cap as i64); // load the shared scratch capacity
+    emitter.instruction("add x12, x12, x13");                                   // compute the one-past-end arena address
     emitter.instruction(&format!("str x12, [sp, #{}]", output_end_off));        // save the output guard for every copy loop
 
     // -- initialize current position --
@@ -353,7 +354,9 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, r11");                                        // compute the first free byte inside the concat scratch buffer for the replacement output
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_start_off));// preserve the start of the replacement output string inside the concat scratch buffer
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_write_off));// initialize the replacement output write cursor from the output start pointer
-    emitter.instruction(&format!("add rax, {}", cap));                          // compute the one-past-end scratch address
+    abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // load the arena base instead of the already-offset output cursor
+    abi::emit_load_int_immediate(emitter, "r10", cap as i64);                   // load the shared scratch capacity
+    emitter.instruction("add rax, r10");                                        // compute the one-past-end arena address
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_end_off));// save the output guard for every copy loop
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", current_pos_off));// reserve the current position slot before storing the initial subject cursor
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_cstr_off));// reload the subject C string pointer as the initial regex execution cursor

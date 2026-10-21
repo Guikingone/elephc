@@ -935,6 +935,7 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, -1");                                         // global lexical scope
     emitter.instruction("call __rt_object_to_hash");                            // project the synthetic name and opaque properties
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the projected hash for release
+    emitter.instruction("mov rdi, rax");                                        // pass the projected hash to the walker
     emitter.instruction("call __rt_var_dump_hash");                             // dump the projected rows
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the projected hash
     emitter.instruction("call __rt_hash_free_deep");                            // release the throwaway projection
