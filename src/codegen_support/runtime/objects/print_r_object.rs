@@ -464,8 +464,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, -1");                                         // global lexical scope
     emitter.instruction("call __rt_object_to_hash");                            // project the synthetic name and opaque properties
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the projected hash for release
-    emitter.instruction("mov rdi, rax");                                        // pass the projected hash to the entry walker
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // entry indent
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // entry indent
     emitter.instruction("call __rt_print_r_hash_entries");                      // write one `[name] => value` line per row
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the projected hash
     emitter.instruction("call __rt_hash_free_deep");                            // release the throwaway projection

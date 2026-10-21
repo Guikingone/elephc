@@ -383,26 +383,28 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     // -- 3-byte UTF-8 (codepoint 0x800..0xFFFF) --
     emitter.label("__rt_json_str_utf8_3");
-    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length before probing the second byte
-    emitter.instruction("add x10, x13, #1");                                    // index of byte 2
-    emitter.instruction("cmp x10, x2");                                         // is byte 2 within the input?
-    emitter.instruction("mov x12, #1");                                         // only the lead byte is known consumed when byte 2 is missing
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // truncated after the lead byte -> malformed
+    // Bounds check the final byte of the 3-byte sequence; if x13+2 is in
+    // range, both x13+1 and x13+2 are valid offsets into the input buffer.
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length for the bounds check
+    emitter.instruction("add x10, x13, #2");                                    // index of byte 3 (last byte of the sequence)
+    emitter.instruction("cmp x10, x2");                                         // is the last byte within the input?
+    emitter.instruction("mov x12, #2");                                         // bytes consumed before this malformed sequence
+    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // truncated 3-byte sequence → malformed
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer
+    emitter.instruction("add x10, x13, #1");                                    // index of byte 2
     emitter.instruction("ldrb w15, [x1, x10]");                                 // load b2
-    emitter.instruction("sub w10, w15, #0x80");                                 // bias b2 into the continuation range
-    emitter.instruction("cmp w10, #0x40");                                      // is b2 outside the continuation range?
-    emitter.instruction("mov x12, #1");                                         // an invalid b2 consumes only the lead byte
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation -> malformed
+    // Validate b2 is a continuation byte (0x80..0xBF).
+    emitter.instruction("sub w10, w15, #0x80");                                 // bias the byte so valid continuations land in 0..0x3F
+    emitter.instruction("cmp w10, #0x40");                                      // is the byte outside the continuation range?
+    emitter.instruction("mov x12, #1");                                         // bytes consumed before this malformed sequence
+    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("add x10, x13, #2");                                    // index of byte 3
-    emitter.instruction("cmp x10, x2");                                         // is byte 3 within the input?
-    emitter.instruction("mov x12, #2");                                         // the lead byte and b2 are valid when byte 3 is missing
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // truncated after b2 -> malformed
     emitter.instruction("ldrb w17, [x1, x10]");                                 // load b3
-    emitter.instruction("sub w10, w17, #0x80");                                 // bias b3 into the continuation range
-    emitter.instruction("cmp w10, #0x40");                                      // is b3 outside the continuation range?
-    emitter.instruction("mov x12, #2");                                         // an invalid b3 consumes the lead byte and b2
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation -> malformed
+    // Validate b3 is a continuation byte.
+    emitter.instruction("sub w10, w17, #0x80");                                 // bias the byte so valid continuations land in 0..0x3F
+    emitter.instruction("cmp w10, #0x40");                                      // is the byte outside the continuation range?
+    emitter.instruction("mov x12, #2");                                         // bytes consumed before this malformed sequence
+    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("and w16, w14, #0x0F");                                 // b1 & 0x0F → high 4 bits
     emitter.instruction("lsl w16, w16, #12");                                   // shift into bits 12..15
     emitter.instruction("and w9, w15, #0x3F");                                  // b2 & 0x3F (w9: x18 is reserved on Apple)
@@ -423,35 +425,34 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     // -- 4-byte UTF-8 (codepoint 0x10000..0x10FFFF) → emit a surrogate pair --
     emitter.label("__rt_json_str_utf8_4");
-    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length before probing continuation bytes
-    emitter.instruction("add x10, x13, #1");                                    // index of byte 2
-    emitter.instruction("cmp x10, x2");                                         // is byte 2 within the input?
-    emitter.instruction("mov x12, #1");                                         // only the lead byte is known consumed when byte 2 is missing
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // truncated after the lead byte -> malformed
+    // Bounds check the final byte of the 4-byte sequence.
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length for the bounds check
+    emitter.instruction("add x10, x13, #3");                                    // index of byte 4 (last byte of the sequence)
+    emitter.instruction("cmp x10, x2");                                         // is the last byte within the input?
+    emitter.instruction("mov x12, #3");                                         // bytes consumed before this malformed sequence
+    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // truncated 4-byte sequence → malformed
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer
+    emitter.instruction("add x10, x13, #1");                                    // index of byte 2
     emitter.instruction("ldrb w15, [x1, x10]");                                 // load b2
-    emitter.instruction("sub w10, w15, #0x80");                                 // bias b2 into the continuation range
-    emitter.instruction("cmp w10, #0x40");                                      // is b2 outside the continuation range?
-    emitter.instruction("mov x12, #1");                                         // an invalid b2 consumes only the lead byte
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation -> malformed
+    // Validate b2 is a continuation byte.
+    emitter.instruction("sub w10, w15, #0x80");                                 // bias the byte so valid continuations land in 0..0x3F
+    emitter.instruction("cmp w10, #0x40");                                      // is the byte outside the continuation range?
+    emitter.instruction("mov x12, #1");                                         // bytes consumed before this malformed sequence
+    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("add x10, x13, #2");                                    // index of byte 3
-    emitter.instruction("cmp x10, x2");                                         // is byte 3 within the input?
-    emitter.instruction("mov x12, #2");                                         // the lead byte and b2 are valid when byte 3 is missing
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // truncated after b2 -> malformed
     emitter.instruction("ldrb w17, [x1, x10]");                                 // load b3
-    emitter.instruction("sub w10, w17, #0x80");                                 // bias b3 into the continuation range
-    emitter.instruction("cmp w10, #0x40");                                      // is b3 outside the continuation range?
-    emitter.instruction("mov x12, #2");                                         // an invalid b3 consumes the lead byte and b2
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation -> malformed
+    // Validate b3 is a continuation byte.
+    emitter.instruction("sub w10, w17, #0x80");                                 // bias the byte so valid continuations land in 0..0x3F
+    emitter.instruction("cmp w10, #0x40");                                      // is the byte outside the continuation range?
+    emitter.instruction("mov x12, #2");                                         // bytes consumed before this malformed sequence
+    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("add x10, x13, #3");                                    // index of byte 4
-    emitter.instruction("cmp x10, x2");                                         // is byte 4 within the input?
-    emitter.instruction("mov x12, #3");                                         // the lead byte, b2 and b3 are valid when byte 4 is missing
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // truncated after b3 -> malformed
-    emitter.instruction("ldrb w9, [x1, x10]");                                  // load b4
-    emitter.instruction("sub w10, w9, #0x80");                                  // bias b4 into the continuation range
-    emitter.instruction("cmp w10, #0x40");                                      // is b4 outside the continuation range?
-    emitter.instruction("mov x12, #3");                                         // an invalid b4 consumes the lead byte, b2 and b3
-    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation -> malformed
+    emitter.instruction("ldrb w9, [x1, x10]");                                  // load b4 (w9: x18 is reserved on Apple)
+    // Validate b4 is a continuation byte.
+    emitter.instruction("sub w10, w9, #0x80");                                  // bias the byte so valid continuations land in 0..0x3F
+    emitter.instruction("cmp w10, #0x40");                                      // is the byte outside the continuation range?
+    emitter.instruction("mov x12, #3");                                         // bytes consumed before this malformed sequence
+    emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("and w16, w14, #0x07");                                 // b1 & 0x07 → top 3 bits
     emitter.instruction("lsl w16, w16, #18");                                   // shift into bits 18..20
     // w3/w4/w5 are the scratch here, NOT w19/w20/w21: w19 caches the flag bitmask for
