@@ -75,3 +75,11 @@ echo "spawn order: ", $system->spawnOrder[0], ",", $system->spawnOrder[1], ",", 
 
 $ring = new Ring<Particle>(buffer_new<Particle>(16));
 echo "ring capacity: ", $ring->capacity(), "\n";
+
+// Buffers have no automatic cleanup: free each one once nothing reads it any more.
+buffer<int> $spawnOrder = $system->spawnOrder;
+buffer_free($spawnOrder);
+buffer<Particle> $particles = $system->snapshot();
+buffer_free($particles);
+buffer<Particle> $slots = $ring->slots;
+buffer_free($slots);
