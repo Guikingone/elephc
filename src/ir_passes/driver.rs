@@ -176,6 +176,15 @@ pub fn optimize_module(module: &mut Module) {
         }
         run_module_function_passes(module, &passes);
     }
+    // Buffer resolution hoisting needs the module-wide `pcntl_async_signals()` answer and runs
+    // once on the converged loops; the scalar passes then clean up what it leaves behind.
+    if super::buffer_access::hoist_buffer_resolution(module) {
+        #[cfg(debug_assertions)]
+        if let Err(error) = crate::ir::validate_module(module) {
+            panic!("buffer resolution hoisting produced invalid module: {:?}", error);
+        }
+        run_module_function_passes(module, &passes);
+    }
     run_module_function_passes(module, &finalizers);
 }
 

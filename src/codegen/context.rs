@@ -1699,23 +1699,7 @@ pub(super) fn module_uses_pcntl_signal_handlers(module: &Module) -> bool {
 
 /// Scans every emitted function-like body for one typed PCNTL operation.
 fn module_uses_pcntl_operation(module: &Module, target: crate::ir::PcntlRuntime) -> bool {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-        .any(|function| {
-            function.instructions.iter().any(|inst| {
-                matches!(
-                    inst.immediate,
-                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(found))) if found == target
-                )
-            })
-        })
+    module.uses_pcntl_runtime(target)
 }
 
 /// Rejects local ref-cell operations whose frame representation spans multiple words.
