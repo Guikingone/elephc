@@ -1101,9 +1101,10 @@ pub enum Op {
     /// reports the use-after-free, so the resolution can run ahead of it in a loop preheader.
     BufferResolve,
     /// `buffer_get` through a descriptor from `BufferResolve`: `[descriptor, index]`. Faults
-    /// with the use-after-free diagnostic on a zero descriptor, then bounds-checks the index.
+    /// on a zero descriptor; a true immediate records a same-buffer proof that omits bounds.
     BufferGetResolved,
     /// `buffer_set` through a descriptor from `BufferResolve`: `[descriptor, index, value]`.
+    /// A true immediate has the same proven-in-range meaning as `BufferGetResolved`.
     BufferSetResolved,
     BufferFree,
     PackedFieldGet,

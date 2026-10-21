@@ -593,6 +593,20 @@ iterations, so the pass appends one `buffer_resolve` to the preheader and turns
 each access with a loop-invariant handle into `buffer_get_resolved` or
 `buffer_set_resolved`.
 
+The pass also recognizes a zero-initialized, unit-step induction parameter whose
+loop continuation is a strict signed comparison against `buffer_len` of that
+same handle. When the continuation block dominates an access using the exact
+induction value and the access is not in the loop header itself, the resolved
+instruction receives a true immediate. Header accesses keep the bounds check
+because they may precede a header-local continuation comparison. This proof also
+accepts a dominating cached length value. When the cached length and the access
+use different loads of one local handle slot, that slot must not escape by
+reference or be written anywhere in the function. It deliberately refuses
+inclusive comparisons, unrelated or other-buffer bounds, negative starts,
+decreasing or non-unit recurrences, and derived indexes. The handle identity is
+the same `HandleSource` used for descriptor hoisting, so a length from another
+buffer cannot justify removing an access check.
+
 The hoisted `buffer_resolve` calls `__rt_buffer_try_resolve`, which applies the
 same registry, activity and generation checks but answers 0 instead of failing.
 The resolved access tests the descriptor before its bounds check, so a stale
@@ -617,6 +631,12 @@ reuses its dominator's result. Index operands are compared after seeing through
 block parameters whose every incoming edge passes the same value, which scalar
 promotion leaves at each join. Scalar element reads are not shared: a
 `buffer_set_resolved` between them can change the loaded value.
+
+Codegen always tests a resolved descriptor for zero. It omits the descriptor
+length load and unsigned comparison only for the true-immediate form. Every
+other resolved or unresolved access uses one unsigned `index < length`
+comparison; a negative signed index has a large unsigned representation and
+therefore reaches the same bounds fatal without a separate signed test.
 
 Packed field reads and writes (`prop_get`/`prop_set` on a packed record) also get
 their exact effects during effect refinement (`reads_heap` for a read;

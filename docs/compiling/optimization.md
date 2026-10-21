@@ -468,7 +468,20 @@ function step(buffer<Particle> $p, int $count, float $dt): void {
 Diagnostics are unchanged. A stale handle still dies with `use of buffer after
 buffer_free()` at the first access, an out-of-range index still dies with
 `buffer index out of bounds`, and a loop that never runs its body reports
-nothing. The loop must not be able to free, allocate or rebind a buffer: a
+nothing. The ordinary bounds check uses one unsigned comparison, which rejects
+negative indexes as well as indexes at or above the logical length. A zero-based,
+unit-step loop guarded by strict `< buffer_len($b)` can omit that comparison for
+the exact `$b[$i]` access in a distinct body block dominated by the continuation
+guard. An access in the loop header itself keeps the comparison because it may
+execute before a header-local guard. The length may be read directly in the
+condition or cached before the loop, but it must come from the same stable buffer
+handle. A cached length and an in-loop access may use separate loads of one local
+handle only when that local cannot escape by reference and is never assigned
+anywhere in the function.
+Inclusive bounds, unrelated or other-buffer lengths, negative starts, decreasing
+or non-unit steps, and adjusted indexes such as `$b[$i + 1]` keep the check.
+
+The loop must not be able to free, allocate or rebind a buffer: a
 `buffer_free()`, an assignment to the buffer variable, output, a warning, a
 throw, or a call to anything that may do one of those inside it keeps the
 ordinary per-access resolution, because user code could free the buffer through

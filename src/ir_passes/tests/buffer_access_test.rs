@@ -2,7 +2,8 @@
 //! Tests for buffer resolution hoisting and packed record address sharing on hand-built loops:
 //! the preheader descriptor for an SSA or local-slot handle, loops with several back edges,
 //! handles that change between iterations, address sharing across a join, and the loops and
-//! modules the pass must leave alone.
+//! modules the pass must leave alone. Same-buffer induction proofs cover accepted and refused
+//! bounds-check elimination shapes.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -16,9 +17,9 @@
 
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{
-    validate_function, BlockId, Builder, Function, Immediate, InstId, IrHeapKind, IrType,
-    LocalKind, LocalSlotId, Module, Op, Ownership, PcntlRuntime, RuntimeCallTarget, Terminator,
-    ValueDef, ValueId,
+    validate_function, BlockId, Builder, CmpPredicate, Function, Immediate, InstId, IrHeapKind,
+    IrType, LocalKind, LocalSlotId, Module, Op, Ownership, PcntlRuntime, RuntimeCallTarget,
+    RuntimeFnId, Terminator, ValueDef, ValueId,
 };
 use crate::ir_passes::buffer_access::hoist_buffer_resolution;
 use crate::types::PhpType;
@@ -79,6 +80,169 @@ fn emit_set(builder: &mut Builder<'_>, handle: ValueId, index: ValueId, value: V
         PhpType::Void,
         Ownership::NonHeap,
     );
+}
+
+/// Emits the production typed `runtime.buffer_len handle` call as a scalar integer.
+fn emit_buffer_len(builder: &mut Builder<'_>, handle: ValueId) -> ValueId {
+    builder
+        .emit_with_effects(
+            Op::RuntimeCall,
+            vec![handle],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::BufferLen,
+            ))),
+            IrType::I64,
+            PhpType::Int,
+            Ownership::NonHeap,
+            RuntimeFnId::BufferLen.effects(),
+            None,
+        )
+        .expect("buffer_len produces a value")
+}
+
+/// Source used for a hand-built loop's upper bound.
+#[derive(Clone, Copy)]
+enum LoopBound {
+    /// Length of the buffer being accessed.
+    SameBufferLength,
+    /// Length of a distinct buffer.
+    OtherBufferLength,
+    /// Unrelated scalar local value.
+    UnrelatedValue,
+}
+
+/// Builds a canonical buffer loop with controllable induction, bound source, and access index.
+fn bounded_buffer_loop(
+    start: i64,
+    step: i64,
+    predicate: CmpPredicate,
+    index_offset: i64,
+    loop_bound: LoopBound,
+    cached_length: bool,
+    write: bool,
+) -> Function {
+    bounded_buffer_loop_with_slot_write(
+        start,
+        step,
+        predicate,
+        index_offset,
+        loop_bound,
+        cached_length,
+        write,
+        false,
+    )
+}
+
+/// Builds a canonical buffer loop and optionally writes its handle slot after caching the bound.
+fn bounded_buffer_loop_with_slot_write(
+    start: i64,
+    step: i64,
+    predicate: CmpPredicate,
+    index_offset: i64,
+    loop_bound: LoopBound,
+    cached_length: bool,
+    write: bool,
+    write_handle_slot: bool,
+) -> Function {
+    let mut function = Function::new("bounded".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut b = Builder::new(&mut function);
+        let entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+        let body = b.create_named_block("body", vec![]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+        let slot = add_buffer_local(&mut b, int_buffer_type());
+        let other_slot = b.add_local(
+            Some("other".to_string()),
+            IrType::Heap(IrHeapKind::Buffer),
+            int_buffer_type(),
+            LocalKind::PhpLocal,
+        );
+        let unrelated_slot = b.add_local(
+            Some("n".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+
+        b.position_at_end(entry);
+        let handle = load_buffer(&mut b, slot, int_buffer_type());
+        let bound_handle = match loop_bound {
+            LoopBound::SameBufferLength => Some(handle),
+            LoopBound::OtherBufferLength => {
+                Some(load_buffer(&mut b, other_slot, int_buffer_type()))
+            }
+            LoopBound::UnrelatedValue => None,
+        };
+        let length = if let Some(bound_handle) = bound_handle {
+            cached_length.then(|| emit_buffer_len(&mut b, bound_handle))
+        } else {
+            Some(b.emit_load_local(unrelated_slot, IrType::I64, PhpType::Int))
+        };
+        if write_handle_slot {
+            b.emit_store_local(slot, handle);
+        }
+        let initial = b.emit_const_i64(start);
+        b.terminate(Terminator::Br { target: header, args: vec![initial] });
+
+        b.position_at_end(header);
+        let index = b.block_param(header, 0);
+        let bound = length.unwrap_or_else(|| {
+            emit_buffer_len(&mut b, bound_handle.expect("buffer length bound has a handle"))
+        });
+        let condition = b
+            .emit(
+                Op::ICmp,
+                vec![index, bound],
+                Some(Immediate::CmpPredicate(predicate)),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            )
+            .expect("icmp produces a value");
+        b.terminate(Terminator::CondBr {
+            cond: condition,
+            then_target: body,
+            then_args: vec![],
+            else_target: exit,
+            else_args: vec![],
+        });
+
+        b.position_at_end(body);
+        let access_index = if index_offset == 0 {
+            index
+        } else {
+            let offset = b.emit_const_i64(index_offset);
+            b.emit_iadd(index, offset)
+        };
+        let access_handle = if cached_length {
+            load_buffer(&mut b, slot, int_buffer_type())
+        } else {
+            handle
+        };
+        let value = emit_int_get(&mut b, access_handle, access_index);
+        if write {
+            emit_set(&mut b, access_handle, access_index, value);
+        }
+        let delta = b.emit_const_i64(step);
+        let next = b.emit_iadd(index, delta);
+        b.terminate(Terminator::Br { target: header, args: vec![next] });
+
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: None });
+    }
+    function
+}
+
+/// Returns the proven-in-range flags attached to every resolved buffer access.
+fn resolved_in_bounds_flags(function: &Function) -> Vec<bool> {
+    function
+        .instructions
+        .iter()
+        .filter(|inst| matches!(inst.op, Op::BufferGetResolved | Op::BufferSetResolved))
+        .map(|inst| inst.immediate == Some(Immediate::Bool(true)))
+        .collect()
 }
 
 /// Terminates the current block with `cond_br true -> then_target(then_args) / else_target`.
@@ -201,6 +365,202 @@ fn hoists_an_invariant_handle_into_the_preheader() {
     assert_eq!(count_ops(function, Op::BufferGet) + count_ops(function, Op::BufferSet), 0);
     assert!(validate_function(function).is_ok(), "the rewritten loop is valid");
     assert!(!hoist_buffer_resolution(&mut module), "a second run finds nothing to rewrite");
+}
+
+/// Zero-based unit-step loops bounded by the same buffer length mark reads and writes in range,
+/// including when the length is computed once before the loop.
+#[test]
+fn proves_same_buffer_length_bounds_for_resolved_accesses() {
+    for (cached_length, write) in [(false, false), (true, true)] {
+        let function = bounded_buffer_loop(
+            0,
+            1,
+            CmpPredicate::Slt,
+            0,
+            LoopBound::SameBufferLength,
+            cached_length,
+            write,
+        );
+        assert!(validate_function(&function).is_ok(), "the input loop is valid");
+        let mut module = module_with(function);
+
+        assert!(hoist_buffer_resolution(&mut module));
+        let function = &module.functions[0];
+        let flags = resolved_in_bounds_flags(function);
+        assert!(!flags.is_empty(), "the loop accesses were rewritten");
+        assert!(flags.iter().all(|flag| *flag), "every exact induction access is proven");
+        assert!(validate_function(function).is_ok(), "the proven loop remains valid");
+    }
+}
+
+/// A self-loop compares its index only after the header access, so reflexive dominance must not
+/// mark that access in range even when the back edge is guarded by the same buffer's length.
+#[test]
+fn self_loop_header_access_is_not_proven_in_bounds() {
+    let mut function = Function::new("self_loop".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut b = Builder::new(&mut function);
+        let entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+        let slot = add_buffer_local(&mut b, int_buffer_type());
+
+        b.position_at_end(entry);
+        let handle = load_buffer(&mut b, slot, int_buffer_type());
+        let zero = b.emit_const_i64(0);
+        b.terminate(Terminator::Br { target: header, args: vec![zero] });
+
+        b.position_at_end(header);
+        let index = b.block_param(header, 0);
+        emit_int_get(&mut b, handle, index);
+        let length = emit_buffer_len(&mut b, handle);
+        let condition = b
+            .emit(
+                Op::ICmp,
+                vec![index, length],
+                Some(Immediate::CmpPredicate(CmpPredicate::Slt)),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            )
+            .expect("icmp produces a value");
+        let one = b.emit_const_i64(1);
+        let next = b.emit_iadd(index, one);
+        b.terminate(Terminator::CondBr {
+            cond: condition,
+            then_target: header,
+            then_args: vec![next],
+            else_target: exit,
+            else_args: vec![],
+        });
+
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: None });
+    }
+    assert!(validate_function(&function).is_ok(), "the input self-loop is valid");
+    let mut module = module_with(function);
+
+    assert!(hoist_buffer_resolution(&mut module), "resolution is still hoisted");
+    let function = &module.functions[0];
+    assert_eq!(resolved_in_bounds_flags(function), vec![false]);
+    assert!(validate_function(function).is_ok(), "the rewritten self-loop remains valid");
+}
+
+/// Inclusive, negative-start, non-unit, decreasing, offset, and other-buffer loops retain their
+/// resolved-access bounds checks.
+#[test]
+fn refuses_unsound_buffer_index_proofs() {
+    let cases = [
+        (
+            "unrelated bound",
+            bounded_buffer_loop(
+                0,
+                1,
+                CmpPredicate::Slt,
+                0,
+                LoopBound::UnrelatedValue,
+                false,
+                false,
+            ),
+        ),
+        (
+            "other buffer length",
+            bounded_buffer_loop(
+                0,
+                1,
+                CmpPredicate::Slt,
+                0,
+                LoopBound::OtherBufferLength,
+                false,
+                false,
+            ),
+        ),
+        (
+            "inclusive bound",
+            bounded_buffer_loop(
+                0,
+                1,
+                CmpPredicate::Sle,
+                0,
+                LoopBound::SameBufferLength,
+                false,
+                false,
+            ),
+        ),
+        (
+            "negative start",
+            bounded_buffer_loop(
+                -1,
+                1,
+                CmpPredicate::Slt,
+                0,
+                LoopBound::SameBufferLength,
+                false,
+                false,
+            ),
+        ),
+        (
+            "non-unit step",
+            bounded_buffer_loop(
+                0,
+                2,
+                CmpPredicate::Slt,
+                0,
+                LoopBound::SameBufferLength,
+                false,
+                false,
+            ),
+        ),
+        (
+            "decreasing step",
+            bounded_buffer_loop(
+                0,
+                -1,
+                CmpPredicate::Slt,
+                0,
+                LoopBound::SameBufferLength,
+                false,
+                false,
+            ),
+        ),
+        (
+            "offset index",
+            bounded_buffer_loop(
+                0,
+                1,
+                CmpPredicate::Slt,
+                1,
+                LoopBound::SameBufferLength,
+                false,
+                false,
+            ),
+        ),
+        (
+            "cached length from written slot",
+            bounded_buffer_loop_with_slot_write(
+                0,
+                1,
+                CmpPredicate::Slt,
+                0,
+                LoopBound::SameBufferLength,
+                true,
+                true,
+                true,
+            ),
+        ),
+    ];
+    for (name, function) in cases {
+        assert!(validate_function(&function).is_ok(), "{name}: the input loop is valid");
+        let mut module = module_with(function);
+
+        assert!(hoist_buffer_resolution(&mut module), "{name}: resolution is still hoisted");
+        let function = &module.functions[0];
+        let flags = resolved_in_bounds_flags(function);
+        assert!(!flags.is_empty(), "{name}: the loop access was rewritten");
+        assert!(flags.iter().all(|flag| !*flag), "{name}: the bounds check must remain");
+        assert!(validate_function(function).is_ok(), "{name}: the rewritten loop remains valid");
+    }
 }
 
 /// A handle reloaded from a slot inside the loop is loaded once in the preheader instead, and

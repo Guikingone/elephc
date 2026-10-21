@@ -11,6 +11,8 @@
 //!   optimizer on and off and must print the same result or die with the same fatal.
 //! - Hoisting fixtures cover the cases that must NOT be rewritten: a call that frees the
 //!   buffer, a reassigned handle, and modules that enable `pcntl_async_signals()`.
+//! - Same-buffer length proofs cover EIR flags, runtime parity, fatal preservation, and Linux
+//!   AArch64/x86_64 assembly without the proven descriptor-length comparison.
 //! - The non-faulting runtime resolver is checked on all five targets' runtime assembly.
 
 use super::*;
@@ -40,6 +42,83 @@ echo $b[0]->x, " ", $b[0]->vx, " ", $b[1]->x, " ", $b[1]->vx, " ", $b[2]->x, "\n
 /// The output both optimizer modes must print for `INTEGRATE_SOURCE`.
 const INTEGRATE_OUTPUT: &str = "3 1.5 4 2 1.5\n";
 
+/// Same-buffer length loops whose exact index is statically in range for every iteration.
+const PROVEN_BOUNDS_SOURCE: &str = r#"<?php
+function fill_all(buffer<float> $b): void {
+    $n = buffer_len($b);
+    for ($i = 0; $i < $n; $i++) {
+        $b[$i] = $i + 1.0;
+    }
+}
+function sum_all(buffer<float> $b): float {
+    $sum = 0.0;
+    for ($i = 0; $i < buffer_len($b); $i++) {
+        $sum = $sum + $b[$i];
+    }
+    return $sum;
+}
+$b = buffer_new<float>(4);
+fill_all($b);
+echo sum_all($b), " ", $b[3], "\n";
+"#;
+
+/// Similar loop shapes whose resolved accesses must retain their bounds checks.
+const REFUSED_BOUNDS_SOURCE: &str = r#"<?php
+function unrelated_bound(buffer<float> $b, int $n): float {
+    $sum = 0.0;
+    for ($i = 0; $i < $n; $i++) { $sum = $sum + $b[$i]; }
+    return $sum;
+}
+function inclusive_bound(buffer<float> $b): float {
+    $sum = 0.0;
+    for ($i = 0; $i <= buffer_len($b); $i++) { $sum = $sum + $b[$i]; }
+    return $sum;
+}
+function negative_start(buffer<float> $b): float {
+    $sum = 0.0;
+    for ($i = -1; $i < buffer_len($b); $i++) { $sum = $sum + $b[$i]; }
+    return $sum;
+}
+function step_two(buffer<float> $b): float {
+    $sum = 0.0;
+    for ($i = 0; $i < buffer_len($b); $i = $i + 2) { $sum = $sum + $b[$i]; }
+    return $sum;
+}
+function decreasing(buffer<float> $b): float {
+    $sum = 0.0;
+    for ($i = buffer_len($b) - 1; $i >= 0; $i--) { $sum = $sum + $b[$i]; }
+    return $sum;
+}
+function offset_index(buffer<float> $b): float {
+    $sum = 0.0;
+    for ($i = 0; $i < buffer_len($b); $i++) { $sum = $sum + $b[$i + 1]; }
+    return $sum;
+}
+function other_buffer_length(buffer<float> $a, buffer<float> $b): float {
+    $sum = 0.0;
+    for ($i = 0; $i < buffer_len($b); $i++) { $sum = $sum + $a[$i]; }
+    return $sum;
+}
+$a = buffer_new<float>(4);
+$b = buffer_new<float>(4);
+echo unrelated_bound($a, 2) + step_two($a) + decreasing($a) + other_buffer_length($a, $b), " ok\n";
+if ($argc < 0) {
+    echo inclusive_bound($a), negative_start($a), offset_index($a);
+}
+"#;
+
+/// A do-while whose access precedes its header-local continuation guard.
+const DO_WHILE_HEADER_ACCESS_SOURCE: &str = r#"<?php
+function past_end(buffer<float> $b): float {
+    $i = 0;
+    $sum = 0.0;
+    do {
+        $sum = $sum + $b[$i];
+    } while ($i++ < buffer_len($b));
+    return $sum;
+}
+"#;
+
 /// Emits one named function's textual EIR, optimized or not, without other function bodies.
 fn function_ir(source: &str, optimized: bool, name: &str) -> String {
     let dir = make_cli_test_dir("elephc_buffer_access_ir");
@@ -56,6 +135,34 @@ fn function_ir(source: &str, optimized: bool, name: &str) -> String {
     let header = format!("  function {name}(");
     let body = text.split_once(&header).expect("named function").1;
     let function = body.split("\n  function ").next().expect("function body").to_string();
+    fs::remove_dir_all(dir).expect("remove fixture directory");
+    function
+}
+
+/// Emits one named function's target assembly between its stable function markers.
+fn function_assembly(source: &str, target: &str, name: &str) -> String {
+    let dir = make_cli_test_dir("elephc_buffer_access_asm");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write PHP fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["--emit-asm", "--target", target])
+        .arg(&php_path)
+        .output()
+        .expect("emit target assembly");
+    assert!(
+        output.status.success(),
+        "{target}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let assembly = fs::read_to_string(php_path.with_extension("s")).expect("read target assembly");
+    let start = assembly
+        .find(&format!("@fn name={name} "))
+        .expect("function start marker");
+    let end = start
+        + assembly[start..]
+            .find(&format!("@endfn name={name}"))
+            .expect("function end marker");
+    let function = assembly[start..end].to_string();
     fs::remove_dir_all(dir).expect("remove fixture directory");
     function
 }
@@ -184,6 +291,95 @@ fn test_buffer_loop_resolves_handle_once_in_the_preheader() {
     assert!(!ir.contains("= buffer_get "), "{ir}");
 }
 
+/// Direct and cached same-buffer lengths mark exact induction reads and writes as in range, and
+/// both optimizer modes preserve the program result.
+#[test]
+fn test_same_buffer_length_loops_mark_resolved_accesses_in_range() {
+    let read_ir = function_ir(PROVEN_BOUNDS_SOURCE, true, "sum_all");
+    let write_ir = function_ir(PROVEN_BOUNDS_SOURCE, true, "fill_all");
+    assert!(
+        read_ir.lines().any(|line| {
+            line.contains("buffer_get_resolved") && line.contains(" true")
+        }),
+        "{read_ir}"
+    );
+    assert!(
+        write_ir.lines().any(|line| {
+            line.contains("buffer_set_resolved") && line.contains(" true")
+        }),
+        "{write_ir}"
+    );
+    assert_eq!(run_variant(PROVEN_BOUNDS_SOURCE, true), "10 4\n");
+    assert_eq!(run_variant(PROVEN_BOUNDS_SOURCE, false), "10 4\n");
+}
+
+/// Every deliberately unsupported loop shape retains a bounds-checked access, resolved or
+/// ordinary, and the safe calls remain optimizer-equivalent.
+#[test]
+fn test_buffer_index_proof_refuses_unsafe_loop_shapes() {
+    for name in [
+        "unrelated_bound",
+        "inclusive_bound",
+        "negative_start",
+        "step_two",
+        "decreasing",
+        "offset_index",
+        "other_buffer_length",
+    ] {
+        let ir = function_ir(REFUSED_BOUNDS_SOURCE, true, name);
+        let accesses: Vec<_> = ir
+            .lines()
+            .filter(|line| {
+                line.contains("buffer_get") || line.contains("buffer_set")
+            })
+            .collect();
+        assert!(!accesses.is_empty(), "{name}: {ir}");
+        assert!(
+            accesses.iter().all(|line| {
+                !(line.contains("_resolved") && line.contains(" true"))
+            }),
+            "{name}: {ir}"
+        );
+    }
+    assert_eq!(run_variant(REFUSED_BOUNDS_SOURCE, true), "0 ok\n");
+    assert_eq!(run_variant(REFUSED_BOUNDS_SOURCE, false), "0 ok\n");
+}
+
+/// A do-while header access executes before its continuation comparison, so it retains the
+/// bounds check and reports the same fatal with either optimizer mode for empty and full buffers.
+#[test]
+fn test_do_while_header_access_keeps_bounds_fatal() {
+    for length in [0, 1] {
+        let source = format!(
+            "{DO_WHILE_HEADER_ACCESS_SOURCE}\n$b = buffer_new<float>({length});\necho \"before\\n\";\necho past_end($b), \"\\n\";\n"
+        );
+        if length == 0 {
+            let ir = function_ir(&source, true, "past_end");
+            assert!(ir.contains("buffer_get_resolved"), "{ir}");
+            assert!(
+                !ir.lines()
+                    .any(|line| line.contains("_resolved") && line.contains(" true")),
+                "{ir}"
+            );
+        }
+        assert_both_modes_fail_after(&source, "before\n", "buffer index out of bounds");
+    }
+}
+
+/// Proven loop accesses on both Linux architectures retain the stale-descriptor test and emit no
+/// descriptor-length compare in the loop function.
+#[test]
+fn test_proven_buffer_loop_assembly_omits_length_compare() {
+    let arm = function_assembly(PROVEN_BOUNDS_SOURCE, "linux-aarch64", "sum_all");
+    assert!(arm.contains("cbnz x11"), "{arm}");
+    assert!(!arm.contains("ldr x9, [x11, #8]"), "{arm}");
+    assert!(!arm.contains("cmp x10, x9"), "{arm}");
+
+    let x86 = function_assembly(PROVEN_BOUNDS_SOURCE, "linux-x86_64", "sum_all");
+    assert!(x86.contains("test r11, r11"), "{x86}");
+    assert!(!x86.contains("cmp r10, QWORD PTR [r11 + 8]"), "{x86}");
+}
+
 /// Every packed access of one iteration, on both sides of the bounce branch, shares a single
 /// bounds-checked record address: the loop index reaching the code after the branch through a
 /// fresh join parameter still names the same element.
@@ -221,6 +417,68 @@ echo total($b, 3), "\n";
 "#;
     assert!(function_ir(source, true, "total").contains("= buffer_resolve "));
     assert_both_modes_fail_after(source, "4\n", "buffer index out of bounds");
+}
+
+/// An inclusive same-buffer length loop keeps the resolved bounds check and dies on index `len`.
+#[test]
+fn test_inclusive_same_buffer_bound_still_traps() {
+    let source = r#"<?php
+function total(buffer<float> $b): float {
+    $sum = 0.0;
+    for ($i = 0; $i <= buffer_len($b); $i++) { $sum = $sum + $b[$i]; }
+    return $sum;
+}
+$b = buffer_new<float>(2);
+$b[0] = 3.0;
+$b[1] = 4.0;
+echo "before\n";
+echo total($b), "\n";
+"#;
+    let ir = function_ir(source, true, "total");
+    assert!(ir.contains("buffer_get_resolved"), "{ir}");
+    assert!(
+        !ir.lines().any(|line| {
+            line.contains("buffer_get_resolved") && line.contains(" true")
+        }),
+        "{ir}"
+    );
+    assert_both_modes_fail_after(source, "before\n", "buffer index out of bounds");
+}
+
+/// Folding the signed-negative branch into the unsigned length compare preserves its fatal.
+#[test]
+fn test_negative_buffer_index_keeps_bounds_fatal() {
+    let source = r#"<?php
+$b = buffer_new<int>(1);
+echo "before\n";
+echo $b[-1];
+"#;
+    assert_both_modes_fail_after(source, "before\n", "buffer index out of bounds");
+}
+
+/// A cached length cannot prove accesses after the buffer slot is reassigned, and both optimizer
+/// modes report the ordinary out-of-range fatal against the replacement buffer.
+#[test]
+fn test_cached_length_reassigned_buffer_keeps_bounds_fatal() {
+    let source = r#"<?php
+function overwrite(buffer<int> $b): void {
+    $n = buffer_len($b);
+    $b = buffer_new<int>(1);
+    for ($i = 0; $i < $n; $i++) { $b[$i] = 1; }
+}
+$b = buffer_new<int>(4);
+echo "before\n";
+overwrite($b);
+"#;
+    let ir = function_ir(source, true, "overwrite");
+    assert!(ir.contains("buffer_set_resolved"), "{ir}");
+    assert!(
+        !ir.lines().any(|line| {
+            line.contains("buffer_set_resolved") && line.contains(" true")
+        }),
+        "{ir}"
+    );
+    assert_both_modes_fail_after(source, "before\n", "buffer index out of bounds");
 }
 
 /// A call that frees the buffer through its parameter copy keeps every access resolving the

@@ -1097,7 +1097,7 @@ eval-scope helpers, or retain interpreter fallback. See
 | `BufferLen` | buffer handle | `I64` | resolves generation/activity, then `reads_heap`; `may_fatal` on stale or invalid handles |
 | `BufferGet`, `BufferSet` | buffer handle, index, value | typed value or `Void` | resolve generation/activity before payload access; `reads_heap`/`writes_heap`, bounds `may_fatal` |
 | `BufferResolve` | buffer handle | `I64` descriptor | optimizer-only; resolves generation/activity WITHOUT faulting and answers 0 for a stale or invalid handle; `reads_heap` |
-| `BufferGetResolved`, `BufferSetResolved` | descriptor, index, value | typed value or `Void` | optimizer-only forms of `BufferGet`/`BufferSet` behind a hoisted `BufferResolve`; a zero descriptor raises the use-after-free fatal at the access, then the usual bounds check; `reads_heap` or `writes_heap`, `may_fatal` |
+| `BufferGetResolved`, `BufferSetResolved` | descriptor, index, value; optional `true` immediate | typed value or `Void` | optimizer-only forms of `BufferGet`/`BufferSet` behind a hoisted `BufferResolve`; a zero descriptor always raises the use-after-free fatal at the access; absent immediate performs the usual unsigned bounds check, while `true` records a same-buffer loop proof and omits that check; `reads_heap` or `writes_heap`, `may_fatal` |
 | `BufferFree` | local buffer handle | `Void` | invalidates the descriptor before releasing the payload and clears the local; `writes_heap`, `may_fatal` on stale aliases |
 | `PackedFieldGet`, `PackedFieldSet` | packed pointer, field metadata | typed value or `Void` | raw memory effects |
 | `ExternGlobalLoad`, `ExternGlobalStore` | global metadata | typed value or `Void` | external state effects |
@@ -1317,7 +1317,10 @@ Validation has two modes:
    storage type is `I64`.
 9. Pointer ops require `PhpType::Pointer(_)` metadata.
 10. Buffer ops require `Heap(Buffer(_))`, except `BufferGetResolved` and
-    `BufferSetResolved`, whose first operand is the `I64` descriptor of a `BufferResolve`.
+    `BufferSetResolved`, whose first operand is the `I64` descriptor of a
+    `BufferResolve`. Their optional immediate may only be `true`, meaning the
+    optimizer proved the exact index nonnegative and below that descriptor's
+    logical length.
 
 ### Ownership Rules
 

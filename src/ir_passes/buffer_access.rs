@@ -30,6 +30,9 @@
 //!   descriptor and index compute the same record address, so a dominated one is replaced by
 //!   its dominator. Scalar element reads are left alone: a `buffer_set_resolved` between two of
 //!   them can change the loaded value.
+//! - A zero-based unit-step induction guarded by strict `< buffer_len()` of the same handle marks
+//!   its exact dominated accesses with a true immediate, allowing codegen to omit their bounds
+//!   comparison without removing the zero-descriptor fatal check.
 //! - Skipped entirely for generators (a `yield` lets the caller run), functions with exception
 //!   handlers or dynamic `eval`, and modules that enable `pcntl_async_signals()`, whose backend
 //!   dispatches signal handlers after every instruction.
@@ -37,8 +40,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    BlockId, Effects, Function, Immediate, InstId, Instruction, IrType, LocalSlotId, Module, Op,
-    Ownership, PassOrigin, Value, ValueDef, ValueId,
+    BlockId, CmpPredicate, Effects, Function, Immediate, InstId, Instruction, IrType, LocalSlotId,
+    Module, Op, Ownership, PassOrigin, RuntimeCallTarget, RuntimeFnId, Terminator, Value, ValueDef,
+    ValueId,
 };
 use crate::types::PhpType;
 
@@ -96,6 +100,7 @@ fn optimize_function(function: &mut Function) -> bool {
         return false;
     }
     let escaping = super::by_ref_alias::address_escaping_slots(function);
+    let written_anywhere = slots_named_in_function(function);
     let mut order: Vec<usize> = (0..loops.loops().len()).collect();
     order.sort_by_key(|&index| loops.loops()[index].depth);
     let mut changed = false;
@@ -107,7 +112,14 @@ fn optimize_function(function: &mut Function) -> bool {
         if !loop_preserves_buffers(function, loop_ref) {
             continue;
         }
-        changed |= hoist_loop(function, loop_ref, preheader, &dominance, &escaping);
+        changed |= hoist_loop(
+            function,
+            loop_ref,
+            preheader,
+            &dominance,
+            &escaping,
+            &written_anywhere,
+        );
     }
     changed
 }
@@ -121,6 +133,15 @@ enum HandleSource {
     Slot(LocalSlotId),
 }
 
+/// A loop index proven nonnegative and strictly below one stable buffer's logical length.
+#[derive(Clone, Copy)]
+struct InBoundsProof {
+    /// Buffer handle whose immutable logical length supplied the loop bound.
+    source: HandleSource,
+    /// In-loop successor of the comparison, which must dominate each marked access.
+    guarded_entry: BlockId,
+}
+
 /// Rewrites one loop's invariant buffer accesses through preheader descriptors.
 fn hoist_loop(
     function: &mut Function,
@@ -128,8 +149,11 @@ fn hoist_loop(
     preheader: BlockId,
     dominance: &DominanceInfo,
     escaping: &HashSet<LocalSlotId>,
+    written_anywhere: &HashSet<LocalSlotId>,
 ) -> bool {
     let written = slots_named_in_loop(function, loop_ref);
+    let in_bounds = proven_in_bounds_indices(function, loop_ref, &written, escaping);
+    let incoming = incoming_arguments(function);
     let mut groups: Vec<(HandleSource, Vec<InstId>)> = Vec::new();
     let mut replaced_loads: Vec<ValueId> = Vec::new();
     for &block in &loop_ref.blocks {
@@ -175,6 +199,24 @@ fn hoist_loop(
             PhpType::Int,
         );
         for inst_id in accesses {
+            let access_block = function
+                .blocks
+                .iter()
+                .find(|block| block.instructions.contains(&inst_id))
+                .map(|block| block.id)
+                .expect("buffer access belongs to a block");
+            let index = function.instructions[inst_id.as_raw() as usize].operands[1];
+            let canonical_index = canonical_value(function, &incoming, index);
+            let proven_in_bounds = in_bounds.get(&canonical_index).is_some_and(|proof| {
+                sources_name_same_buffer(
+                    function,
+                    proof.source,
+                    source,
+                    escaping,
+                    written_anywhere,
+                ) && access_block != loop_ref.header
+                    && dominance.dominates(proof.guarded_entry, access_block)
+            });
             let inst = &mut function.instructions[inst_id.as_raw() as usize];
             inst.op = if inst.op == Op::BufferGet {
                 Op::BufferGetResolved
@@ -182,6 +224,7 @@ fn hoist_loop(
                 Op::BufferSetResolved
             };
             inst.operands[0] = descriptor;
+            inst.immediate = proven_in_bounds.then_some(Immediate::Bool(true));
             inst.effects = inst.op.default_effects();
             inst.origin = Some(PassOrigin::BufferAccess);
             rewritten.push(inst_id);
@@ -190,6 +233,139 @@ fn hoist_loop(
     neutralize_unused_loads(function, &replaced_loads);
     share_record_addresses(function, &rewritten, dominance);
     true
+}
+
+/// Returns whether a length-bound handle and an access handle identify the same stable buffer.
+///
+/// Exact SSA or slot sources match directly. A cached length may instead read a local slot
+/// before the loop while each access reloads that slot inside the loop. That pair is equivalent
+/// only when the slot cannot escape by reference and no instruction writes it anywhere in the
+/// function.
+fn sources_name_same_buffer(
+    function: &Function,
+    bound: HandleSource,
+    access: HandleSource,
+    escaping: &HashSet<LocalSlotId>,
+    written_anywhere: &HashSet<LocalSlotId>,
+) -> bool {
+    if bound == access {
+        return true;
+    }
+    let (HandleSource::Value(value), HandleSource::Slot(slot)) = (bound, access) else {
+        return false;
+    };
+    let Some(ValueDef::Instruction { inst, .. }) = function.value(value).map(|value| value.def)
+    else {
+        return false;
+    };
+    let Some(load) = function.instruction(inst) else {
+        return false;
+    };
+    load.op == Op::LoadLocal
+        && load.immediate == Some(Immediate::LocalSlot(slot))
+        && load.effects.difference(Effects::READS_LOCAL).is_empty()
+        && !escaping.contains(&slot)
+        && !written_anywhere.contains(&slot)
+}
+
+/// Finds unit-step zero-based loop indices guarded by `index < buffer_len(same_handle)`.
+fn proven_in_bounds_indices(
+    function: &Function,
+    loop_ref: &NaturalLoop,
+    written: &HashSet<LocalSlotId>,
+    escaping: &HashSet<LocalSlotId>,
+) -> HashMap<ValueId, InBoundsProof> {
+    let Some((condition, continue_when_true)) = super::integer_range::loop_condition(function, loop_ref) else {
+        return HashMap::new();
+    };
+    let Some(guarded_entry) = loop_continue_target(function, loop_ref) else {
+        return HashMap::new();
+    };
+    let inductions = super::induction::basic_inductions(function, loop_ref, |value| {
+        exact_i64_constant(function, value)
+    });
+    let incoming = incoming_arguments(function);
+    let mut proofs = HashMap::new();
+    for induction in inductions {
+        if induction.step != 1 || exact_i64_constant(function, induction.initial) != Some(0) {
+            continue;
+        }
+        let Some((CmpPredicate::Slt, bound)) = super::integer_range::induction_condition(
+            function,
+            condition,
+            continue_when_true,
+            induction.parameter,
+        ) else {
+            continue;
+        };
+        let bound = canonical_value(function, &incoming, bound);
+        let Some(source) = buffer_length_source(
+            function,
+            loop_ref,
+            &incoming,
+            bound,
+            written,
+            escaping,
+        ) else {
+            continue;
+        };
+        proofs.insert(induction.parameter, InBoundsProof { source, guarded_entry });
+    }
+    proofs
+}
+
+/// Returns the in-loop successor selected when the header condition permits another iteration.
+fn loop_continue_target(function: &Function, loop_ref: &NaturalLoop) -> Option<BlockId> {
+    let Terminator::CondBr { then_target, else_target, .. } =
+        function.block(loop_ref.header)?.terminator.as_ref()?
+    else {
+        return None;
+    };
+    match (loop_ref.contains(*then_target), loop_ref.contains(*else_target)) {
+        (true, false) => Some(*then_target),
+        (false, true) => Some(*else_target),
+        _ => None,
+    }
+}
+
+/// Returns the stable handle source read by a direct `buffer_len` bound.
+fn buffer_length_source(
+    function: &Function,
+    loop_ref: &NaturalLoop,
+    incoming: &HashMap<(BlockId, usize), Vec<ValueId>>,
+    length: ValueId,
+    written: &HashSet<LocalSlotId>,
+    escaping: &HashSet<LocalSlotId>,
+) -> Option<HandleSource> {
+    let length = canonical_value(function, incoming, length);
+    let ValueDef::Instruction { inst, .. } = function.value(length)?.def else {
+        return None;
+    };
+    let length_inst = function.instruction(inst)?;
+    let is_buffer_len = length_inst.op == Op::BufferLen
+        || matches!(
+            length_inst.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::BufferLen
+            )))
+        );
+    if !is_buffer_len || length_inst.operands.len() != 1 {
+        return None;
+    }
+    let handle = canonical_value(function, incoming, length_inst.operands[0]);
+    handle_source(function, loop_ref, handle, written, escaping)
+}
+
+/// Reads an exact scalar integer constant for induction initialization and step discovery.
+fn exact_i64_constant(function: &Function, value: ValueId) -> Option<i64> {
+    let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
+        return None;
+    };
+    let instruction = function.instruction(inst)?;
+    match (instruction.op, instruction.immediate.as_ref()) {
+        (Op::ConstI64, Some(Immediate::I64(value))) => Some(*value),
+        _ => None,
+    }
 }
 
 /// Returns whether no instruction in the loop body can free, allocate, or rebind a buffer.
@@ -242,21 +418,35 @@ fn store_targets_scalar_local(function: &Function, inst: &Instruction) -> bool {
 
 /// Collects every local slot an instruction in the loop names other than through a load.
 fn slots_named_in_loop(function: &Function, loop_ref: &NaturalLoop) -> HashSet<LocalSlotId> {
+    slots_named_as_storage(loop_ref.blocks.iter().flat_map(|&block| {
+        function.blocks[block.as_raw() as usize]
+            .instructions
+            .iter()
+            .map(|&inst_id| &function.instructions[inst_id.as_raw() as usize])
+    }))
+}
+
+/// Collects every local slot named as storage anywhere in the function.
+fn slots_named_in_function(function: &Function) -> HashSet<LocalSlotId> {
+    slots_named_as_storage(function.instructions.iter())
+}
+
+/// Collects local slots that an instruction stream may read or write as storage rather than load.
+fn slots_named_as_storage<'a>(
+    instructions: impl Iterator<Item = &'a Instruction>,
+) -> HashSet<LocalSlotId> {
     let mut written = HashSet::new();
-    for &block in &loop_ref.blocks {
-        for &inst_id in &function.blocks[block.as_raw() as usize].instructions {
-            let inst = &function.instructions[inst_id.as_raw() as usize];
-            match &inst.immediate {
-                Some(Immediate::LocalSlot(slot)) if inst.op != Op::LoadLocal => {
-                    written.insert(*slot);
-                }
-                Some(Immediate::LocalSlotPair { first, second }) => {
-                    written.insert(*first);
-                    written.insert(*second);
-                }
-                Some(Immediate::IterStart(metadata)) => written.extend(metadata.local_slots()),
-                _ => {}
+    for inst in instructions {
+        match &inst.immediate {
+            Some(Immediate::LocalSlot(slot)) if inst.op != Op::LoadLocal => {
+                written.insert(*slot);
             }
+            Some(Immediate::LocalSlotPair { first, second }) => {
+                written.insert(*first);
+                written.insert(*second);
+            }
+            Some(Immediate::IterStart(metadata)) => written.extend(metadata.local_slots()),
+            _ => {}
         }
     }
     written
