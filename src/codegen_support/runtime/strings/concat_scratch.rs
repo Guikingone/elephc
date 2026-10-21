@@ -233,8 +233,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the current concat scratch write offset
     emitter.instruction("mov r10, r9");                                         // copy the write offset before deriving the tail this request would reach
     emitter.instruction("add r10, rax");                                        // compute the scratch tail this request would reach
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r8", emitter.concat_capacity as i64); // load the shared scratch capacity
-    emitter.instruction("cmp r10, r8");                                         // does the reservation still fit inside the shared scratch buffer?
+    emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));      // does the reservation still fit inside the shared scratch buffer?
     emitter.instruction("ja __rt_concat_reserve_heap_x86");                     // use the owned heap fallback when the scratch buffer would overflow
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");
     emitter.instruction("lea rax, [r11 + r9]");                                 // return the scratch destination pointer at the current write offset
@@ -261,8 +260,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_concat_buf");
     emitter.instruction("mov r9, rax");                                         // copy the result pointer before deriving its candidate scratch offset
     emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset of the finished result
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r8", emitter.concat_capacity as i64); // load the shared scratch capacity
-    emitter.instruction("cmp r9, r8");                                          // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)?
+    emitter.instruction(&format!("cmp r9, {}", emitter.concat_capacity));       // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)?
     emitter.instruction("jae __rt_concat_publish_done_x86");                    // heap-backed results leave the shared scratch offset untouched
     emitter.instruction("add r9, rdx");                                         // advance the scratch offset past the bytes this result actually wrote
     abi::emit_symbol_address(emitter, "r8", "_concat_off");
@@ -379,7 +377,7 @@ fn emit_concat_headroom_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: concat_headroom (guard) ---");
     emitter.label_global("__rt_concat_headroom");
     abi::emit_symbol_address(emitter, "r8", "_concat_buf");
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", emitter.concat_capacity as i64); // load the scratch capacity
+    emitter.instruction(&format!("mov r9, {}", emitter.concat_capacity));       // load the scratch capacity
     emitter.instruction("add r9, r8");                                          // compute the one-past-end scratch address
     emitter.instruction("cmp rdi, r9");                                         // is the write pointer already outside the arena?
     emitter.instruction("jae __rt_concat_headroom_full_x86");                   // fail closed before any byte leaves the buffer

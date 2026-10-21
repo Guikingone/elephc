@@ -2009,8 +2009,7 @@ fn emit_append_literal_x86_64(emitter: &mut Emitter, bytes: &[u8], what: &str) {
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the current write offset
     emit_symbol_address(emitter, "r11", "_concat_buf");
     emitter.instruction("add r11, r10");                                        // compute the write target pointer
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", ceiling as i64); // last offset where this literal still fits
-    emitter.instruction("cmp r10, r9");                                         // does this literal still fit the arena?
+    emitter.instruction(&format!("cmp r10, {}", ceiling));                      // does this literal still fit the arena?
     emit_serialize_overflow_branch(emitter, "ja");
     for (i, b) in bytes.iter().enumerate() {
         emitter.instruction(&format!("mov BYTE PTR [r11 + {}], {}", i, b));     // literal byte for {what}

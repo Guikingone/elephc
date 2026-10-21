@@ -139,8 +139,7 @@ fn emit_concat_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_buf");
     emitter.instruction("mov r9, rax");                                         // copy the reservation before deriving its candidate scratch offset
     emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset of the reservation
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r10", cap as i64); // load the shared scratch capacity
-    emitter.instruction("cmp r9, r10");                                         // is the reservation outside the shared scratch window (unsigned)?
+    emitter.instruction(&format!("cmp r9, {}", cap));                           // is the reservation outside the shared scratch window (unsigned)?
     emitter.instruction("jb __rt_concat_dest_ready_x86");                       // scratch-backed reservations carry no heap header to stamp
     emitter.instruction(&format!("mov r8, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND)));// materialize the transient-concat heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r8");                         // stamp the heap reservation as a concat temporary
