@@ -31,6 +31,22 @@ pub(super) fn specialize(module: &mut Module) -> bool {
     }
     if templates.is_empty() { return false; }
     let mut variants = HashMap::new();
+    let mut first_names: HashSet<_> = module.functions.iter()
+        .map(|function| crate::names::php_symbol_key(function.name.trim_start_matches('\\'))).collect();
+    let mut existing = Vec::new();
+    for function in &module.closures {
+        if !first_names.insert(crate::names::php_symbol_key(function.name.trim_start_matches('\\'))) {
+            continue;
+        }
+        for (key, template) in &templates {
+            if let Some(tag) = template.reusable_tag(function) {
+                existing.push(((key.clone(), tag), function.name.clone()));
+            }
+        }
+    }
+    for (key, name) in existing {
+        variants.entry(key).or_insert_with(|| module.data.intern_function_name(&name));
+    }
     let mut generated = Vec::new();
     let mut changed = false;
     for function in module.functions.iter_mut()

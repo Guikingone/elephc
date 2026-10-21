@@ -249,3 +249,25 @@ echo NumericClosureCaller::total($argc * 1000);
     }
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// Scalar calls exposed before and after counter specialization share one private body.
+#[test]
+fn test_numeric_closure_calls_later_round_reuses_the_same_entry() {
+    let source = r#"<?php
+function late_numeric_entry(int $n): int {
+    $f = function($x) { return $x + 1; };
+    $prefix = $f($n); $sum = 0;
+    for ($i = 0; $i < $n; $i++) { $sum += $f($i); }
+    return (int)$sum + (int)$prefix;
+}
+echo late_numeric_entry($argc * 1000);
+"#;
+    for optimized in [false, true] { assert_eq!(run(source, optimized).0, "501501"); }
+    let dir = make_cli_test_dir("elephc_numeric_closure_later_entry");
+    let path = dir.join("main.php"); fs::write(&path, source).unwrap();
+    let output = elephc_cli_command(&dir).arg("--emit-ir").arg(&path).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let ir = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(ir.lines().filter(|line| line.trim_start().starts_with("function __eir_numeric_closure_")).count(), 1, "{ir}");
+    fs::remove_dir_all(dir).unwrap();
+}

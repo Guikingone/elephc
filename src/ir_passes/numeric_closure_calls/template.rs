@@ -130,6 +130,31 @@ impl Template {
             result: *values.get(&result)?, nodes, spans, reset })
     }
 
+    /// Recognizes this original closure's private entry after intervening optimizer rounds.
+    pub(super) fn reusable_tag(&self, function: &Function) -> Option<String> {
+        let mut flags = self.flags.clone();
+        flags.is_synthetic = true;
+        if function.source_name.as_deref() != Some(self.source_name.as_str())
+            || function.flags != flags || function.lexical_class != self.lexical_class
+            || function.signature.is_some() || function.params.len() != self.params.len()
+            || function.return_type != IrType::Heap(IrHeapKind::Mixed)
+            || function.return_php_type != PhpType::Mixed
+        { return None; }
+        let tag: String = function.params.iter().zip(&self.params).map(|(actual, original)| {
+            if actual.by_ref || actual.variadic
+                || (*original != PhpType::Mixed && *original != actual.php_type)
+            { return None; }
+            match (&actual.ir_type, &actual.php_type) {
+                (IrType::I64, PhpType::Int) => Some('i'),
+                (IrType::F64, PhpType::Float) => Some('f'),
+                _ => None,
+            }
+        }).collect::<Option<_>>()?;
+        let prefix = format!("__eir_numeric_closure_{}_{}_", self.index, tag);
+        function.name.strip_prefix(&prefix)?.parse::<usize>().ok()?;
+        Some(tag)
+    }
+
     /// Emits a scalar entry ABI and the same owned Mixed result expected by existing callers.
     pub(super) fn emit(&self, name: &str, types: &[PhpType]) -> Function {
         let mut function = Function::new(name.to_owned(), IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);

@@ -124,3 +124,37 @@ fn numeric_closure_calls_cover_every_caller_table() {
         assert!(module.closures.iter().any(|function| function.source_name.is_some()), "caller table {table}");
     }
 }
+
+/// A later optimizer round reuses an existing scalar entry instead of duplicating its body.
+#[test]
+fn numeric_closure_calls_reuse_variants_exposed_in_later_rounds() {
+    let mut module = fixture(PhpType::Int);
+    let mut later = module.functions[0].clone();
+    later.name = "later_caller".into();
+    assert!(specialize(&mut module));
+    let first = module.functions[0].instructions.iter().find(|inst| inst.op == Op::Call).unwrap().immediate.clone();
+    module.add_function(later);
+    crate::ir::validate_module(&module).unwrap();
+    assert!(specialize(&mut module));
+    crate::ir::validate_module(&module).unwrap();
+    assert_eq!(module.closures.len(), 2, "the same scalar tuple needs one implementation");
+    let later = module.functions[1].instructions.iter().find(|inst| inst.op == Op::Call).unwrap();
+    assert_eq!(later.immediate, first);
+}
+
+/// A same-named free function takes precedence over a cached implementation's physical name.
+#[test]
+fn numeric_closure_calls_do_not_reuse_shadowed_private_entries() {
+    let mut module = fixture(PhpType::Int);
+    let mut later = module.functions[0].clone(); later.name = "later_caller".into();
+    assert!(specialize(&mut module));
+    let first = module.functions[0].instructions.iter().find(|inst| inst.op == Op::Call).unwrap().immediate.clone();
+    let mut shadow = module.closures[1].clone();
+    shadow.flags.is_closure = false; shadow.source_name = None;
+    module.add_function(shadow); module.add_function(later);
+    assert!(specialize(&mut module));
+    crate::ir::validate_module(&module).unwrap();
+    assert_eq!(module.closures.len(), 3);
+    let later = module.functions[2].instructions.iter().find(|inst| inst.op == Op::Call).unwrap();
+    assert_ne!(later.immediate, first);
+}
