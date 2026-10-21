@@ -14,6 +14,8 @@
 //! - Same-buffer length proofs cover EIR flags, runtime parity, fatal preservation, and Linux
 //!   AArch64/x86_64 assembly without the proven descriptor-length comparison.
 //! - The non-faulting runtime resolver is checked on all five targets' runtime assembly.
+//! - Linux assembly keeps immutable float inputs and packed-field temporaries in registers, while
+//!   a whole-record copy from `ptr<T>` preserves a float that remains live across its null guard.
 
 use super::*;
 
@@ -165,6 +167,54 @@ fn function_assembly(source: &str, target: &str, name: &str) -> String {
     let function = assembly[start..end].to_string();
     fs::remove_dir_all(dir).expect("remove fixture directory");
     function
+}
+
+/// Returns one named EIR block regardless of the backend's physical block order.
+fn named_assembly_block<'a>(assembly: &'a str, name: &str) -> &'a str {
+    let marker = format!("@block name={name}");
+    let tail = assembly
+        .split_once(&marker)
+        .unwrap_or_else(|| panic!("missing block {name}: {assembly}"))
+        .1;
+    tail.split_once("@block name=")
+        .map_or(tail, |(block, _)| block)
+}
+
+/// Returns whether an AArch64 block loads or stores a float through the frame pointer.
+///
+/// Slots through byte 255 use `ldur` or `stur` directly from `x29`. Larger slots first derive
+/// `x9` from `x29`, possibly through several subtraction chunks, then access the float through
+/// `[x9]`. The second form is how the pre-change loop reloaded `$dt` on every iteration.
+fn aarch64_block_has_float_frame_traffic(block: &str) -> bool {
+    let mut x9_is_frame_address = false;
+    for line in block.lines().map(str::trim) {
+        let float_access = ["ldr d", "ldur d", "str d", "stur d"]
+            .iter()
+            .any(|opcode| line.starts_with(opcode));
+        if float_access
+            && (line.contains("[x29") || (x9_is_frame_address && line.contains("[x9]")))
+        {
+            return true;
+        }
+        if line.starts_with("sub x9, x29, #") || line == "mov x9, x29" {
+            x9_is_frame_address = true;
+        } else if !(x9_is_frame_address && line.starts_with("sub x9, x9, #"))
+            && !line.is_empty()
+            && !line.starts_with("//")
+        {
+            x9_is_frame_address = false;
+        }
+    }
+    false
+}
+
+/// Returns whether an x86_64 block stores a float through `rbp`.
+fn x86_64_block_has_float_frame_store(block: &str) -> bool {
+    block.lines().map(str::trim).any(|line| {
+        line.strip_prefix("movsd ")
+            .and_then(|operands| operands.split_once(','))
+            .is_some_and(|(destination, _)| destination.contains("[rbp"))
+    })
 }
 
 /// Compiles and runs one PHP program with the EIR optimizer on or off and returns stdout.
@@ -397,6 +447,23 @@ fn test_packed_accesses_of_one_iteration_share_one_record_address() {
     assert!(!x86.contains("setb al"), "{x86}");
     assert!(!x86.contains("setnp r10b"), "{x86}");
     assert_eq!(run_variant(INTEGRATE_SOURCE, true), INTEGRATE_OUTPUT);
+}
+
+/// Linux AArch64 keeps `$dt` and the integration loop's float temporaries out of frame slots.
+/// SysV x86_64 has no callee-saved XMM register, so `$dt` is reloaded once per iteration because
+/// its immutable load crosses the late preheader buffer-resolver call; its loop temporaries still
+/// remain in registers instead of spilling back to the frame.
+#[test]
+fn test_packed_float_loop_keeps_live_values_in_registers() {
+    let loop_blocks = ["for.cond", "for.body", "for.update", "if.then", "if.else"];
+    let arm = function_assembly(INTEGRATE_SOURCE, "linux-aarch64", "step");
+    let x86 = function_assembly(INTEGRATE_SOURCE, "linux-x86_64", "step");
+    for name in loop_blocks {
+        let arm_block = named_assembly_block(&arm, name);
+        assert!(!aarch64_block_has_float_frame_traffic(arm_block), "{name}: {arm_block}");
+        let x86_block = named_assembly_block(&x86, name);
+        assert!(!x86_64_block_has_float_frame_store(x86_block), "{name}: {x86_block}");
+    }
 }
 
 /// The hoisted resolution never faults: a stale handle still dies at the first access with the
@@ -656,6 +723,26 @@ shift($b, 2);
 echo $b[0]->prev->x, " ", $b[0]->prev->y, " ", $b[0]->pos->x, " ", $b[1]->prev->x, " ", $b[1]->pos->x, "\n";
 "#;
 
+/// A pointer-backed nested record copy with a float SSA value live across its null-check call.
+const PTR_RECORD_COPY_LIVE_FLOAT_SOURCE: &str = r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr;
+extern function free(ptr $p): void;
+packed class Vec2 { public float $x; public float $y; }
+packed class Body { public Vec2 $pos; }
+function copy_and_sum(buffer<Body> $b, ptr<Vec2> $source, float $live): float {
+    $held = $live * 3.0;
+    $b[0]->pos = $source;
+    return $held + $b[0]->pos->x + $b[0]->pos->y;
+}
+$raw = calloc(1, ptr_sizeof("Vec2"));
+$source = ptr_cast<Vec2>($raw);
+$source->x = 1.25;
+$source->y = 2.5;
+$b = buffer_new<Body>(1);
+echo copy_and_sum($b, $source, 4.0), " ", $b[0]->pos->x, " ", $b[0]->pos->y, "\n";
+free($raw);
+"#;
+
 /// A nested record copy reads its source record, so its `prop_set` advertises `reads_heap`
 /// alongside the write, and a loop of record copies still hoists buffer resolution and prints
 /// the same result with the optimizer on and off.
@@ -671,4 +758,13 @@ fn test_nested_record_copy_reads_its_source_in_a_hoisted_loop() {
     let expected = "1.5 2 2.5 -3 -2\n";
     assert_eq!(run_variant(RECORD_COPY_SOURCE, true), expected);
     assert_eq!(run_variant(RECORD_COPY_SOURCE, false), expected);
+}
+
+/// A float live across a pointer-backed whole-record copy survives the runtime null check in both
+/// optimizer modes, and the destination receives an independent byte copy.
+#[test]
+fn test_float_value_survives_packed_record_copy_from_pointer() {
+    let expected = "15.75 1.25 2.5\n";
+    assert_eq!(run_variant(PTR_RECORD_COPY_LIVE_FLOAT_SOURCE, true), expected);
+    assert_eq!(run_variant(PTR_RECORD_COPY_LIVE_FLOAT_SOURCE, false), expected);
 }
