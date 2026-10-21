@@ -48,7 +48,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source string pointer across the JSON escaping loop
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source string length across the JSON escaping loop
     abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base for the guard limit
-    emitter.instruction("mov r11, 65520");                                      // leave room for one multibyte escape
+    abi::emit_load_int_immediate(emitter, "r11", (cap - 16) as i64);            // leave room for one multibyte escape
     emitter.instruction("add r10, r11");                                        // compute the last write position that still leaves escape headroom
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the scratch guard limit for every write site
 
