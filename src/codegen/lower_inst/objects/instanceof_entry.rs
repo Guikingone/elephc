@@ -121,26 +121,26 @@ fn emit_incomplete_class_instanceof(
             let done = ctx.next_label("incomplete_instanceof_done");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction("cmp x0, #6");                       // runtime tag 6 = object payload
+                    ctx.emitter.instruction("cmp x0, #6");                      // runtime tag 6 = object payload
                     ctx.emitter.instruction(&format!("b.ne {}", false_label));  // non-objects are not instances
-                    ctx.emitter.instruction("ldr x1, [x1]");                     // object header class id
-                    ctx.emitter.instruction("cmn x1, #2");                       // class id -2 marks an incomplete object
-                    ctx.emitter.instruction("cset x0, eq");                      // return the synthetic-class identity
+                    ctx.emitter.instruction("ldr x1, [x1]");                    // object header class id
+                    ctx.emitter.instruction("cmn x1, #2");                      // class id -2 marks an incomplete object
+                    ctx.emitter.instruction("cset x0, eq");                     // return the synthetic-class identity
                     ctx.emitter.instruction(&format!("b {}", done));            // skip the false arm
                     ctx.emitter.label(&false_label);
-                    ctx.emitter.instruction("mov x0, #0");                       // scalar payloads are not instances
+                    ctx.emitter.instruction("mov x0, #0");                      // scalar payloads are not instances
                     ctx.emitter.label(&done);
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction("cmp rax, 6");                       // runtime tag 6 = object payload
+                    ctx.emitter.instruction("cmp rax, 6");                      // runtime tag 6 = object payload
                     ctx.emitter.instruction(&format!("jne {}", false_label));   // non-objects are not instances
-                    ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");         // object header class id
-                    ctx.emitter.instruction("cmp rdi, -2");                      // class id -2 marks an incomplete object
-                    ctx.emitter.instruction("sete al");                          // materialize the identity comparison
-                    ctx.emitter.instruction("movzx rax, al");                    // widen the boolean result to the integer ABI
-                    ctx.emitter.instruction(&format!("jmp {}", done));           // skip the false arm
+                    ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");        // object header class id
+                    ctx.emitter.instruction("cmp rdi, -2");                     // class id -2 marks an incomplete object
+                    ctx.emitter.instruction("sete al");                         // materialize the identity comparison
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the boolean result to the integer ABI
+                    ctx.emitter.instruction(&format!("jmp {}", done));          // skip the false arm
                     ctx.emitter.label(&false_label);
-                    ctx.emitter.instruction("xor eax, eax");                     // scalar payloads are not instances
+                    ctx.emitter.instruction("xor eax, eax");                    // scalar payloads are not instances
                     ctx.emitter.label(&done);
                 }
             }
