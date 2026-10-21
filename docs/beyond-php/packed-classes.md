@@ -45,6 +45,11 @@ $verts[0]->x = 10.0;
 echo $verts[0]->x;  // 10
 ```
 
+A packed class name is a type wherever a type is accepted: a `buffer<Vertex>`
+or `ptr<Vertex>` can be a class property, a method parameter or return type, a
+promoted constructor parameter, or a generic type argument. See
+[buffers in class members](buffers.md#buffers-in-class-members).
+
 ## Best practices
 - Use packed classes for structured hot-path data instead of associative arrays
 - Prefer SoA (parallel buffers) for large datasets where you iterate one field at a time

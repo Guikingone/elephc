@@ -141,11 +141,8 @@ pub(super) fn reflection_class_method_member(
         declaring_class_name.as_deref().unwrap_or(class_name),
         &method_key,
     );
-    let (prototype_class, prototype_info) = declaring_class_name.as_deref()
-        .and_then(|class| resolve_reflection_class(ctx, class))
-        .unwrap_or((class_name, info));
     let prototype_member = reflection_class_method_prototype_member(
-        ctx, prototype_class, prototype_info, &method_key, flags,
+        ctx, class_name, info, &method_key, flags,
     )?;
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: declared_name.clone(),

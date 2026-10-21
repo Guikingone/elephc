@@ -279,7 +279,7 @@ pub(super) fn emit_reflection_owner_object(
                 metadata.type_metadata.as_ref(),
             )
         };
-        emit_reflection_owner_string_property_by_name(ctx, class_name, "__string", &rendered)?;
+        emit_reflection_owner_dump_property(ctx, class_name, &rendered)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_internal", is_internal)?;
         emit_reflection_owner_bool_property(
             ctx,

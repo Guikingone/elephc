@@ -101,6 +101,7 @@ mod runtime_introspection;
 mod math;
 mod misc;
 mod pointers;
+mod pointer_strings;
 mod ffi;
 mod oop;
 mod static_class_features;

@@ -13,6 +13,8 @@
 //!   runs, and baking the build machine's path in would be worse than leaving it out. The eval
 //!   bridge omits the same line and shares scalar and union formatting with this renderer.
 //! - Union members use the shared PHP type-mask order, including the iterable expansion.
+//! - Dumps use the compiler's literal-byte representation until property emission, so raw
+//!   non-UTF-8 bytes in AST exports survive alongside real Unicode names without collisions.
 //! - Whether a callable is internal is decided by the caller (the builtin signature registry for a
 //!   function, the class catalog for a method), the same answer `isInternal()` gives. Only the
 //!   MODULE comes from here: the shared builtin contract for a function, the declaring class's
@@ -62,13 +64,13 @@ pub(super) fn reflection_method_to_string(
     let mut origin_parts = vec![reflection_origin_label(is_internal, module)];
     if is_deprecated { origin_parts.push("deprecated".into()); }
     if let Some(class_name) = overwritten_class_name {
-        origin_parts.push(format!("overwrites {class_name}"));
+        origin_parts.push(format!("overwrites {}", reflection_dump_text(class_name)));
     }
     if let Some(class_name) = inherited_class_name {
-        origin_parts.push(format!("inherits {class_name}"));
+        origin_parts.push(format!("inherits {}", reflection_dump_text(class_name)));
     }
     if let Some(class_name) = prototype_class_name {
-        origin_parts.push(format!("prototype {class_name}"));
+        origin_parts.push(format!("prototype {}", reflection_dump_text(class_name)));
     }
     // PHP marks constructors specially in ReflectionMethod dumps; destructors have no dtor tag.
     if name.eq_ignore_ascii_case("__construct") {
@@ -76,9 +78,9 @@ pub(super) fn reflection_method_to_string(
     }
     let origin = format!("<{}>", origin_parts.join(", "));
     let display_name = if returns_reference {
-        format!("&{name}")
+        format!("&{}", reflection_dump_text(name))
     } else {
-        name.to_string()
+        reflection_dump_text(name)
     };
     let header = format!("Method [ {} {} {} ]", origin, parts.join(" "), display_name);
     let tentative_return = is_internal && declaring_class_name.is_some_and(|class|
@@ -97,9 +99,9 @@ pub(super) fn reflection_function_to_string(
 ) -> String {
     let normalized_name = name.trim_start_matches(char::from(92));
     let display_name = if returns_reference {
-        format!("&{normalized_name}")
+        format!("&{}", reflection_dump_text(normalized_name))
     } else {
-        normalized_name.to_string()
+        reflection_dump_text(normalized_name)
     };
     let module = elephc_builtin_contract::lookup(name).map(|contract| contract.module);
     let header = format!(
@@ -161,7 +163,7 @@ fn reflection_callable_body(
     rendered.push_str("  }\n");
     if let Some(return_type) = return_type {
         rendered.push_str(if tentative_return { "  - Tentative return [ " } else { "  - Return [ " });
-        rendered.push_str(&reflection_type_metadata_to_string(return_type));
+        rendered.push_str(&reflection_dump_text(&reflection_type_metadata_to_string(return_type)));
         rendered.push_str(" ]\n");
     }
     rendered.push_str("}\n");
@@ -191,7 +193,7 @@ fn reflection_parameter_to_string_at_position(
         }
     );
     if let Some(type_metadata) = parameter.type_metadata.as_ref() {
-        rendered.push_str(&reflection_type_metadata_to_string(type_metadata));
+        rendered.push_str(&reflection_dump_text(&reflection_type_metadata_to_string(type_metadata)));
         rendered.push(' ');
     }
     if parameter.is_passed_by_reference {
@@ -201,7 +203,7 @@ fn reflection_parameter_to_string_at_position(
         rendered.push_str("...");
     }
     rendered.push('$');
-    rendered.push_str(&parameter.name);
+    rendered.push_str(&reflection_dump_text(&parameter.name));
     if !parameter.is_variadic {
         if let Some(default) = reflection_parameter_default_to_string(parameter) {
             rendered.push_str(" = ");
@@ -224,7 +226,7 @@ fn reflection_parameter_default_to_string(parameter: &ReflectionParameterMember)
         return Some(exported.clone());
     }
     if let Some(constant_name) = parameter.default_value_constant_name.as_ref() {
-        return Some(constant_name.clone());
+        return Some(reflection_dump_text(constant_name));
     }
     parameter.default_value.as_ref().and_then(|value| match value {
         ReflectionParameterDefaultValue::DeferredError(_)
@@ -247,7 +249,7 @@ pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefault
         ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::EirHelper(_) => String::new(),
         // PHP exports the written AST here, so the argument list stays and the class name is
-        // fully qualified: `new \\Foo(1, 'a')`, and `new \\Foo()` when nothing was written —
+        // fully qualified: `new \\Foo(1, 'a')`, and `new \\Foo()` when nothing was written;
         // the constructor defaults `args` carries for `getDefaultValue()` are not part of the
         // source, so only the written ones are printed.
         ReflectionParameterDefaultValue::Object {
@@ -262,7 +264,7 @@ pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefault
                 .collect::<Vec<_>>();
             format!(
                 "new \\{}({})",
-                class_name.trim_start_matches('\\'),
+                reflection_dump_text(class_name.trim_start_matches('\\')),
                 rendered.join(", ")
             )
         }
@@ -296,6 +298,15 @@ pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefault
 /// Renders a float default using PHP's 14 significant digits and exponent spelling.
 pub(super) fn reflection_dump_float(value: f64) -> String {
     elephc_builtin_contract::reflection_format::float(value)
+}
+
+/// Encodes real UTF-8 text without confusing private-use names with escaped PHP bytes.
+pub(super) fn reflection_dump_text(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for ch in value.chars() {
+        elephc_builtin_contract::string_literal::push_literal_char(ch, &mut encoded);
+    }
+    encoded
 }
 
 /// Renders the `ReflectionMethod::__toString()` answer for one listed member.

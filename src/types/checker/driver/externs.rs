@@ -55,12 +55,21 @@ impl Checker {
     }
 
     /// Checks whether a class name is already registered in `classes`, `extern_classes`, or
-    /// `packed_classes`, using PHP-symbol key comparison for case-insensitive matching.
+    /// `packed_classes`, or pre-declared in `declared_classes`, using PHP-symbol key comparison
+    /// for case-insensitive matching.
+    ///
+    /// The extern prescan runs before the class schema pass fills `classes`, so the pre-declared
+    /// names (every class in the class map, builtin injections included, plus every enum) are what
+    /// catches an extern or packed class that reuses an ordinary class name.
     pub(super) fn has_class_decl_folded(&self, name: &str) -> bool {
         let key = php_symbol_key(name);
         self.classes
             .keys()
             .any(|existing| php_symbol_key(existing) == key)
+            || self
+                .declared_classes
+                .iter()
+                .any(|existing| php_symbol_key(existing) == key)
             || self
                 .extern_classes
                 .keys()

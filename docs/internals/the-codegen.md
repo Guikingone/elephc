@@ -300,12 +300,16 @@ by `src/codegen/lower_inst/objects/reflection/callable_to_string.rs`, so a compi
 walks metadata to print it. Eval materialization also fills the slot so casts work both inside
 and after the eval fragment:
 
-- The text follows PHP 8.5. The one exception is the `@@ <file> <line> - <line>` header: a compiled
-  binary cannot honestly name a source that need not exist where it runs.
+- The dumps omit the `@@ <file> <line> - <line>` header: a compiled binary cannot honestly name
+  a source that need not exist where it runs. Supported default forms and remaining source
+  spelling limits are listed in [the Reflection API documentation](../php/classes.md).
 - `elephc_builtin_contract::reflection_format` shares float, string and union formatting with
-  eval. Float defaults use 14 significant digits. Strings escape control and non-ASCII bytes,
+  eval. Float defaults use 14 significant digits. Value strings escape control and non-ASCII bytes,
   and `iterable` renders as `Traversable|array`.
 - Method headers distinguish the overwritten parent declaration from the root prototype.
+  `ClassInfo::declared_interfaces` retains the direct clauses separately from flattened interfaces:
+  the last newly implemented contract supplies the interface prototype, while an inherited method
+  keeps its parent's prototype when no new contract applies.
   Deprecated declarations carry the `deprecated` marker, and internal method dumps label
   tentative return types using the shared `reflection_methods` catalog.
 - A function or method is marked internal by the same answer `isInternal()` gives, and its module
@@ -318,6 +322,9 @@ A parameter default whose dump PHP prints from its written AST, rather than from
 (`new Foo(...)`, `Foo::BAR`), goes through
 `src/codegen/lower_inst/objects/reflection/default_export.rs`. It exports only the subset PHP
 8.5.10 was measured on; anything else falls back to the evaluated value.
+AST string exports preserve raw PHP bytes through the compiler's literal-byte representation.
+The dedicated dump property emitter decodes it at the final storage boundary; genuine private-use
+Unicode names are encoded first so they cannot be mistaken for escaped bytes.
 
 ## Eval Lowering Boundary
 

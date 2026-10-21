@@ -139,7 +139,7 @@ struct ReflectionOwnerMetadata {
     is_iterable: bool,
     modifiers: i64,
     member_flags: ReflectionMemberFlags,
-    /// A `__toString()` dump to use instead of rendering one from the fields above.
+    /// A literal-byte-encoded `__toString()` dump instead of rendering from the fields above.
     ///
     /// `getDeclaringFunction()` builds its reflector from metadata that deliberately carries NO
     /// parameters: emitting them would emit a `ReflectionParameter` for each, and each of those
@@ -203,7 +203,7 @@ struct ReflectionParameterMember {
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
     default_value_constant_name: Option<String>,
-    /// The default as PHP's dump prints its written AST, for the shapes the value cannot rebuild.
+    /// The written AST dump, using literal-byte encoding for shapes the value cannot rebuild.
     default_value_export: Option<String>,
 }
 

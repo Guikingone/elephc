@@ -115,10 +115,9 @@ pub(super) fn emit_reflection_parameter_properties(
     );
     emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
     let parameter_string = reflection_parameter_to_string(parameter);
-    emit_reflection_owner_string_property_by_name(
+    emit_reflection_owner_dump_property(
         ctx,
         "ReflectionParameter",
-        "__string",
         &parameter_string,
     )?;
     emit_reflection_attrs_property(

@@ -481,6 +481,10 @@ pub(super) fn lower_release_local_slot(
     // occur only after this instruction, including after a loop exit.
     let ty = ctx.local_php_type(slot)?.codegen_repr();
     let offset = ctx.local_offset(slot)?;
+    if ctx.numeric_local_slots.contains(&slot) {
+        super::super::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+        return Ok(());
+    }
     if ctx.release_local_slot_may_observe_ref_cell(inst_id) {
         // A loop back-edge can promote the slot after this store was lowered.
         // Retire the replaced payload on both runtime representations without

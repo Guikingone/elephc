@@ -36,6 +36,49 @@ foreach ($r->getMethods() as $m) { if ($m->getName() === 'run') echo $m; }
         Method [ <user, overwrites B, prototype A> public method run ] {\n}\n");
 }
 
+/// Interface prototypes follow direct clause order and retain the parent's linked contracts.
+#[test]
+fn test_reflection_dump_interface_link_order() {
+    let out = compile_and_run(r#"<?php
+interface I1 { public function run(); }
+interface I2 { public function run(); }
+interface I3 { public function run(); }
+interface IP extends I1 { public function run(); }
+interface IK extends I1 {}
+class A implements I1, I2 { public function run() {} }
+class H implements I1, IP { public function run() {} }
+class P12 implements I1, I2 { public function run() {} }
+class C extends P12 { public function run() {} }
+class Cadd extends P12 implements I3 { public function run() {} }
+class Cinherits extends P12 implements I3 {}
+class Cdeep extends Cinherits {}
+class Crev extends P12 implements I2, I1 { public function run() {} }
+class Jsingle implements IP { public function run() {} }
+class Ksingle implements IK { public function run() {} }
+class LastDirect implements IP, I1 { public function run() {} }
+echo new ReflectionMethod('A', 'run');
+echo new ReflectionMethod('H', 'run');
+echo new ReflectionMethod('C', 'run');
+echo new ReflectionMethod('Cadd', 'run');
+echo new ReflectionMethod('Cinherits', 'run');
+echo new ReflectionMethod('Cdeep', 'run');
+echo new ReflectionMethod('Crev', 'run');
+echo new ReflectionMethod('Jsingle', 'run');
+echo new ReflectionMethod('Ksingle', 'run');
+echo new ReflectionMethod('LastDirect', 'run');
+"#);
+    assert_eq!(out, "Method [ <user, prototype I2> public method run ] {\n}\n\
+        Method [ <user, prototype IP> public method run ] {\n}\n\
+        Method [ <user, overwrites P12, prototype I2> public method run ] {\n}\n\
+        Method [ <user, overwrites P12, prototype I3> public method run ] {\n}\n\
+        Method [ <user, inherits P12, prototype I3> public method run ] {\n}\n\
+        Method [ <user, inherits P12, prototype I3> public method run ] {\n}\n\
+        Method [ <user, overwrites P12, prototype I2> public method run ] {\n}\n\
+        Method [ <user, prototype IP> public method run ] {\n}\n\
+        Method [ <user, prototype I1> public method run ] {\n}\n\
+        Method [ <user, prototype I1> public method run ] {\n}\n");
+}
+
 /// Float defaults round to 14 digits before choosing the decimal or exponential form.
 #[test]
 fn test_reflection_dump_float_precision() {
@@ -133,11 +176,17 @@ class A { public function __construct() {} }
 class B extends A { public function __construct() {} }
 abstract class P { abstract public function __construct(); }
 class Q extends P { public function __construct() {} }
+class D extends B {}
+class E extends Q {}
 echo new ReflectionMethod('B', '__construct');
 echo new ReflectionMethod('Q', '__construct');
+echo new ReflectionMethod('D', '__construct');
+echo new ReflectionMethod('E', '__construct');
 "#);
     assert_eq!(out, "Method [ <user, overwrites A, ctor> public method __construct ] {\n}\n\
-        Method [ <user, overwrites P, prototype P, ctor> public method __construct ] {\n}\n");
+        Method [ <user, overwrites P, prototype P, ctor> public method __construct ] {\n}\n\
+        Method [ <user, inherits B, ctor> public method __construct ] {\n}\n\
+        Method [ <user, inherits Q, prototype P, ctor> public method __construct ] {\n}\n");
 }
 
 /// AST-exported object arguments use double-quoted escapes for control characters.
@@ -151,6 +200,36 @@ echo new ReflectionParameter('f', 0);
     assert_eq!(out, "Parameter #0 [ <optional> Box $b = new \\Box(\"\\n\\t\\\\'é\") ]");
 }
 
+/// AST-exported bytes survive snapshots without corrupting genuine private-use parameter names.
+#[test]
+fn test_reflection_dump_object_binary_strings() {
+    let source = r#"<?php
+class Box { public function __construct(public string $s) {} }
+function f(Box $c = new Box("\xFF"), Box $d = new Box("\n\xFF"),
+    Box $PRIVATE_PARAMETER = new Box("é")) {}
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo bin2hex((string)$p), "\n";
+echo strpos((string)new ReflectionFunction('f'), "\xFF") !== false ? "function-bytes\n" : "bad";
+class Holder { public function accept(Box $v = new Box("\xFF")) {} }
+echo strpos((string)new ReflectionMethod('Holder', 'accept'), "\xFF") !== false ? "method-bytes\n" : "bad";
+foreach ((new ReflectionClass('Holder'))->getMethods() as $m) {
+    if ($m->getName() === 'accept') echo strpos((string)$m, "\xFF") !== false ? "listed-bytes\n" : "bad";
+}
+"#.replace("PRIVATE_PARAMETER", "\u{e000}");
+    let out = compile_and_run(&source);
+    let parameters: [&[u8]; 3] = [
+        b"Parameter #0 [ <optional> Box $c = new \\Box('\xff') ]",
+        b"Parameter #1 [ <optional> Box $d = new \\Box(\"\\n\xff\") ]",
+        b"Parameter #2 [ <optional> Box $\xee\x80\x80 = new \\Box('\xc3\xa9') ]",
+    ];
+    let mut expected = String::new();
+    for parameter in parameters {
+        expected.extend(parameter.iter().map(|byte| format!("{byte:02x}")));
+        expected.push('\n');
+    }
+    expected.push_str("function-bytes\nmethod-bytes\nlisted-bytes\n");
+    assert_eq!(out, expected);
+}
+
 /// Lazy defaults keep their written dump without running constructors.
 #[test]
 fn test_reflection_dump_deferred_array_defaults() {
@@ -161,4 +240,3 @@ echo new ReflectionParameter('f', 0);
 "#);
     assert_eq!(out, "Parameter #0 [ <optional> array $items = [new \\Box()] ]");
 }
-

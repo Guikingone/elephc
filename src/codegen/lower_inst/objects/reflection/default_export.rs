@@ -15,6 +15,8 @@
 //!   of literals prints every key (`[0 => 1]`). The rules below are measured on PHP 8.5.10.
 //! - Anything outside the supported subset answers `None`, and the dump then falls back to the
 //!   evaluated value it printed before.
+//! - Exported strings retain the compiler's private byte markers until dump property emission.
+//!   Non-literal names are encoded separately to preserve genuine private-use Unicode text.
 
 use super::*;
 
@@ -74,7 +76,7 @@ impl DefaultExporter<'_, '_> {
                     // separator is the only trace left; a global class WRITTEN as `\Foo::VALUE`,
                     // which PHP prints with its backslash, prints without it here.
                     StaticReceiver::Named(class) => {
-                        let text = class.as_str().trim_start_matches('\\');
+                        let text = reflection_dump_text(class.as_str().trim_start_matches('\\'));
                         if text.contains('\\') {
                             format!("\\{text}")
                         } else {
@@ -85,13 +87,13 @@ impl DefaultExporter<'_, '_> {
                     StaticReceiver::Parent => "parent".to_string(),
                     StaticReceiver::Static | StaticReceiver::Generic(_) => return None,
                 };
-                Some(format!("{receiver}::{name}"))
+                Some(format!("{receiver}::{}", reflection_dump_text(name)))
             }
             ExprKind::NewObject { class_name, args } => {
                 let args = args.iter().map(|arg| self.export(arg)).collect::<Option<Vec<_>>>()?;
                 Some(format!(
                     "new \\{}({})",
-                    class_name.as_str().trim_start_matches('\\'),
+                    reflection_dump_text(class_name.as_str().trim_start_matches('\\')),
                     args.join(", ")
                 ))
             }
@@ -104,7 +106,7 @@ impl DefaultExporter<'_, '_> {
                 let args = args.iter().map(|arg| self.export(arg)).collect::<Option<Vec<_>>>()?;
                 Some(format!("new {class}({})", args.join(", ")))
             }
-            ExprKind::NamedArg { name, value } => Some(format!("{name}: {}", self.export(value)?)),
+            ExprKind::NamedArg { name, value } => Some(format!("{}: {}", reflection_dump_text(name), self.export(value)?)),
             ExprKind::ArrayLiteral(items) => {
                 let items = items.iter().map(|item| self.export(item)).collect::<Option<Vec<_>>>()?;
                 Some(format!("[{}]", items.join(", ")))
@@ -161,7 +163,7 @@ impl DefaultExporter<'_, '_> {
                 _ => None,
             },
             ExprKind::ClassConstant { receiver } => {
-                Some(export_php_string(&self.class_name_of(receiver)?))
+                Some(export_php_string(&reflection_dump_text(&self.class_name_of(receiver)?)))
             }
             ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
                 let entries = self.literal_array_entries(expr)?;
@@ -224,7 +226,7 @@ impl DefaultExporter<'_, '_> {
                 None => LiteralKey::Str(value.clone()),
             }),
             ExprKind::ClassConstant { receiver } => {
-                Some(LiteralKey::Str(self.class_name_of(receiver)?))
+                Some(LiteralKey::Str(reflection_dump_text(&self.class_name_of(receiver)?)))
             }
             _ => None,
         }
@@ -254,22 +256,23 @@ impl DefaultExporter<'_, '_> {
         {
             return None;
         }
-        Some(key.to_string())
+        Some(reflection_dump_text(key))
     }
 }
 
 /// Quotes a string as PHP's AST exporter does, switching to double quotes for control bytes.
 fn export_php_string(value: &str) -> String {
-    if value.bytes().any(|byte| byte < 0x20) {
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if bytes.iter().any(|byte| *byte < 0x20) {
         let mut quoted = String::from("\"");
-        for ch in value.chars() {
-            match ch {
-                '\n' => quoted.push_str("\\n"), '\r' => quoted.push_str("\\r"),
-                '\t' => quoted.push_str("\\t"), '\u{b}' => quoted.push_str("\\v"),
-                '\u{c}' => quoted.push_str("\\f"), '\u{1b}' => quoted.push_str("\\e"),
-                '\\' | '"' | '$' => { quoted.push('\\'); quoted.push(ch); }
-                ch if ch < ' ' => quoted.push_str(&format!("\\{:03o}", ch as u32)),
-                ch => quoted.push(ch),
+        for byte in bytes {
+            match byte {
+                b'\n' => quoted.push_str("\\n"), b'\r' => quoted.push_str("\\r"),
+                b'\t' => quoted.push_str("\\t"), 0x0b => quoted.push_str("\\v"),
+                0x0c => quoted.push_str("\\f"), 0x1b => quoted.push_str("\\e"),
+                b'\\' | b'"' | b'$' => { quoted.push('\\'); quoted.push(byte as char); }
+                byte if byte < 0x20 => quoted.push_str(&format!("\\{byte:03o}")),
+                byte => elephc_builtin_contract::string_literal::push_escaped_byte(byte, &mut quoted),
             }
         }
         quoted.push('"');
@@ -277,11 +280,11 @@ fn export_php_string(value: &str) -> String {
     }
     let mut quoted = String::with_capacity(value.len() + 2);
     quoted.push('\'');
-    for ch in value.chars() {
-        if ch == '\'' || ch == '\\' {
+    for byte in bytes {
+        if byte == b'\'' || byte == b'\\' {
             quoted.push('\\');
         }
-        quoted.push(ch);
+        elephc_builtin_contract::string_literal::push_escaped_byte(byte, &mut quoted);
     }
     quoted.push('\'');
     quoted

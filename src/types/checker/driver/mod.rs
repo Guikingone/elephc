@@ -299,6 +299,12 @@ pub(super) fn check_types_impl(
             checker.declared_classes.insert(name.clone());
         }
     }
+    // Packed and extern classes are types that class members name too: `public buffer<Vec2> $data`,
+    // `public ptr<Point> $p`, a method parameter, or a generic argument (`Store<Vec2>` substitutes
+    // `buffer<T>` into a member). Their layouts must therefore exist before the interface and
+    // class schema passes below resolve member signatures. Duplicate detection against ordinary
+    // classes reads `declared_classes`, which is already complete here.
+    checker.prescan_extern_decls(program, &mut errors);
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
@@ -442,8 +448,6 @@ pub(super) fn check_types_impl(
     patch_builtin_spl_storage_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
 
-    checker.prescan_extern_decls(program, &mut errors);
-
     // Every class, interface and enum is registered, and no body has been checked: a violated
     // bound is reported now, alone, instead of as whatever the instantiated body trips over.
     if let Err(error) =
@@ -520,6 +524,45 @@ fn report_class_id_inventory(checker: &Checker) {
 
 #[cfg(test)]
 mod tests {
+    /// Every enum `inject_builtin_enums` registers for a target is a builtin pointer target for
+    /// that target and no other name is, so the list the packed and extern prescan consults
+    /// (`is_builtin_enum_name`) cannot drift from the injection, including the macOS-only
+    /// `Pcntl\QosClass`.
+    #[test]
+    fn builtin_enum_pointer_targets_match_the_injected_enums() {
+        use std::collections::HashSet;
+
+        use crate::codegen_support::platform::{AppleVariant, Arch, Platform, Target};
+        use crate::types::checker::builtin_enums::{inject_builtin_enums, is_builtin_enum_name};
+
+        let targets = [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new(Platform::Linux, Arch::X86_64),
+            Target::new(Platform::Linux, Arch::AArch64),
+        ];
+        for target in targets {
+            let mut checker = super::Checker::new(target);
+            let before: HashSet<String> = checker.enums.keys().cloned().collect();
+            let mut next_class_id = 1;
+            inject_builtin_enums(&Vec::new(), &mut checker, &mut next_class_id)
+                .expect("builtin enums inject into an empty program");
+            let injected: HashSet<String> = checker
+                .enums
+                .keys()
+                .filter(|name| !before.contains(*name))
+                .cloned()
+                .collect();
+            for name in ["SortDirection", "PropertyHookType", "Pcntl\\QosClass", "Unrelated"] {
+                assert_eq!(
+                    is_builtin_enum_name(&checker, name),
+                    injected.contains(name),
+                    "{name} on {target:?}",
+                );
+            }
+        }
+    }
+
     /// Imported abstract factory requirements never replace synthesized concrete metadata.
     #[test]
     fn enum_metadata_keeps_synthesized_factories_concrete() {

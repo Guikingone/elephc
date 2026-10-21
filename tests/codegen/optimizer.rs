@@ -34,6 +34,8 @@ mod constant_propagation;
 mod control_flow_normalization;
 #[path = "optimizer/checked_int_sink.rs"]
 mod checked_int_sink;
+#[path = "optimizer/bounded_mixed_counter.rs"]
+mod bounded_mixed_counter;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
 #[path = "optimizer/concat_reset.rs"]
@@ -88,3 +90,6 @@ mod machine_peepholes;
 
 #[path = "optimizer/tail_call.rs"]
 mod tail_call;
+
+#[path = "optimizer/stack_numeric.rs"]
+mod stack_numeric;

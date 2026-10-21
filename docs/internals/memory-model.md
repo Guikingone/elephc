@@ -113,7 +113,7 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Array` | 8 bytes | Pointer to heap-allocated header |
 | `AssocArray` | 8 bytes | Pointer to heap-allocated hash table |
 | `Iterable` | 8 bytes | Type-erased heap pointer for arrays or Traversable objects |
-| `Mixed` | 8 bytes | Pointer to heap-allocated boxed mixed cell |
+| `Mixed` | 8 bytes | Pointer to a boxed Mixed cell, normally heap-allocated |
 | `Void` (null) | 8 bytes | Sentinel value `0x7FFFFFFFFFFFFFFE` |
 | `Object` | 8 bytes | Pointer to heap-allocated object |
 | `Callable` | 8 bytes | Function pointer |
@@ -123,6 +123,29 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Packed` | 8 bytes | Metadata-only nominal type, accessed via pointer |
 | `Union` | 8 bytes | Boxed runtime-tagged payload (same storage as Mixed) |
 | `TaggedScalar` | 16 bytes | 8-byte payload + 8-byte runtime tag (tagged null representation) |
+
+### Nonescaping checked numeric results
+
+Checked integer add, subtract and multiply can use a 24-byte cell reserved in the
+current function's frame. The cell retains the ordinary Mixed tag and two payload
+words. Overflow converts both original integers to double and writes a float tag;
+the optimization does not narrow the arithmetic domain or replace promotion with
+a fatal error. Frame sizing and instruction emission support all five targets.
+
+`src/codegen/stack_numeric.rs` proves the complete use graph before frame layout.
+Only same-block numeric casts, ownership scaffolding and one ordinary local may
+consume a selected pointer. Every access to that local must preserve the numeric
+storage contract. A borrowed pointer must be converted before another checked
+producer executes. Returns of the cell, pointer-valued block arguments, a second
+local, container stores and unknown consumers retain heap storage. Parameters,
+globals, statics, references, eval storage and suspended activations do not receive
+this local storage optimization. The executable main frame is also excluded.
+
+These frame cells have no heap header and cannot own children. Proven retains and
+releases of their SSA pointers emit no refcount calls. A selected local may still
+hold a numeric heap seed; its direct Mixed cleanup releases that seed and ignores
+frame addresses through the runtime's existing heap-range check. This avoids a
+protected destructor callback for values that cannot execute PHP cleanup code.
 
 ### Eval subclass property storage
 

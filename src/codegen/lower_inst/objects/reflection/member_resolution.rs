@@ -62,13 +62,19 @@ pub(super) fn reflection_class_method_prototype_member(
     method_key: &str,
     flags: ReflectionMemberFlags,
 ) -> Result<Option<Box<ReflectionListedMember>>> {
-    if !reflection_method_is_declared_on_class(info, class_name, method_key, flags.is_static) {
-        return Ok(None);
-    }
     if let Some(member) =
         reflection_interface_method_prototype_member(ctx, info, method_key, flags.is_static)?
     {
         return Ok(Some(Box::new(member)));
+    }
+    if !reflection_method_is_declared_on_class(info, class_name, method_key, flags.is_static) {
+        // An inherited implementation keeps the parent's prototype, including interfaces
+        // introduced after the method's original declaring class.
+        let Some((parent, parent_info)) = reflection_parent_class_name(ctx, info)
+            .as_deref().and_then(|parent| resolve_reflection_class(ctx, parent))
+        else { return Ok(None); };
+        return reflection_class_method_member(ctx, parent, parent_info, method_key)
+            .map(|member| member.and_then(|member| member.prototype_member));
     }
     reflection_parent_method_prototype_member(ctx, info, method_key, flags.is_static)
         .map(|member| member.map(Box::new))
@@ -140,14 +146,20 @@ pub(super) fn reflection_class_has_method_kind(
     }
 }
 
-/// Finds the first implemented interface method that is a valid PHP prototype.
+/// Finds the last newly implemented interface method in PHP's direct-clause order.
 pub(super) fn reflection_interface_method_prototype_member(
     ctx: &FunctionContext<'_>,
     info: &crate::types::ClassInfo,
     method_key: &str,
     is_static: bool,
 ) -> Result<Option<ReflectionListedMember>> {
-    for interface_name in &info.interfaces {
+    let parent_interfaces = reflection_parent_class_name(ctx, info)
+        .as_deref().and_then(|parent| resolve_reflection_class(ctx, parent))
+        .map(|(_, parent)| parent.interfaces.as_slice()).unwrap_or(&[]);
+    for interface_name in info.declared_interfaces.iter().rev() {
+        if parent_interfaces.iter().any(|parent| php_symbol_key(parent) == php_symbol_key(interface_name)) {
+            continue;
+        }
         let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
             continue;
         };

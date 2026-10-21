@@ -210,9 +210,12 @@ pub(super) fn lower_cast_to_string(
             store_if_result(ctx, inst)
         }
         PhpType::Float => strings::lower_float_to_string(ctx, inst),
-        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar => {
-            strings::lower_int_like_to_string(ctx, inst)
-        }
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Void
+        | PhpType::Never
+        | PhpType::TaggedScalar
+        | PhpType::Pointer(_) => strings::lower_int_like_to_string(ctx, inst),
         PhpType::Mixed | PhpType::Union(_) => {
             emit_mixed_string_context_result(ctx, value)?;
             if let Some(result) = inst.result {

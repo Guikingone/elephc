@@ -16,7 +16,14 @@ pub(super) fn emit_reflection_string_property(
     low_offset: usize,
     high_offset: usize,
 ) {
-    let (label, len) = ctx.data.add_string(value.as_bytes());
+    emit_reflection_bytes_property(ctx, value.as_bytes(), low_offset, high_offset);
+}
+
+/// Writes exact PHP bytes into the current Reflection object's string property.
+fn emit_reflection_bytes_property(
+    ctx: &mut FunctionContext<'_>, value: &[u8], low_offset: usize, high_offset: usize,
+) {
+    let (label, len) = ctx.data.add_string(value);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
@@ -56,6 +63,18 @@ pub(super) fn emit_reflection_owner_string_property_by_name(
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     emit_reflection_string_property(ctx, value, low_offset, low_offset + 8);
+    Ok(())
+}
+
+/// Decodes a callable dump's literal-byte representation when storing its cast snapshot.
+pub(super) fn emit_reflection_owner_dump_property(
+    ctx: &mut FunctionContext<'_>, class_name: &str, value: &str,
+) -> Result<()> {
+    let class_info = ctx.module.class_infos.get(class_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, "__string")?;
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    emit_reflection_bytes_property(ctx, &bytes, low_offset, low_offset + 8);
     Ok(())
 }
 

@@ -101,6 +101,9 @@ pub(super) fn ensure_property_value_supported(
     if property_values::can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_store_pointer_in_pointer_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),
@@ -109,6 +112,18 @@ pub(super) fn ensure_property_value_supported(
         slot.property,
         slot.php_type
     )))
+}
+
+/// Returns true when a pointer value fills a pointer-typed property.
+///
+/// Every pointer is one raw machine word whatever its target tag, and the checker already applied
+/// the pointer assignability rule (any pointer fits any pointer slot), so an untyped `ptr` or
+/// `ptr_null()` value can fill a `ptr<T>` property without a conversion.
+pub(super) fn can_store_pointer_in_pointer_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(
+        (value_ty.codegen_repr(), slot_ty.codegen_repr()),
+        (PhpType::Pointer(_), PhpType::Pointer(_))
+    )
 }
 
 /// Returns true when a concrete object value is assignable to an object-typed property.

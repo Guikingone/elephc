@@ -57,7 +57,7 @@ pub(super) fn reflection_parameter_default_value(
         // is fallible, and `ReflectionConstantValue` carries no array, so `const ITEMS = [1, 2];
         // function f($items = ITEMS) {}` failed the whole compile once global constants reached
         // it. Every other unsupported default here answers `Ok(None)` and keeps the program
-        // building; this one now does too. That is still short of PHP, which reports the array —
+        // building; this one now does too. That is still short of PHP, which reports the array;
         // folding it needs an array variant and is filed, but a program that compiled before
         // this branch compiles after it.
         ExprKind::ConstRef(_) => Ok(
