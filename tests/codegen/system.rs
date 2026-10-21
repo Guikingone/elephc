@@ -2195,6 +2195,24 @@ echo preg_replace_callback('/x/', function ($m) { return 'y'; }, ''), '|';
     assert_eq!(out, "AB||");
 }
 
+/// Verifies discarded callback replacements release their owned output block.
+#[test]
+fn test_preg_replace_callback_discarded_results_are_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 8; $i++) {
+    preg_replace_callback('/a/', function ($m) { return 'b'; }, 'a');
+}
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies `preg_replace` substitutes the first matching occurrence of a literal pattern.
 #[test]
 fn test_preg_replace_simple() {
