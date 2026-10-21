@@ -28,7 +28,7 @@ sidebar:
 | `int|string`     | Yes              | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime.                                    |
 | `?int`           | Yes              | Nullable shorthand — sugar for `int|null`. The explicit `T|null` form (e.g. `A|null`) is also accepted.                |
 | `string|null`    | Yes              | Union with the `null` literal type. Folds to the nullable shorthand `?string`, so `string|null` and `?string` are identical. |
-| `int|false`      | Yes              | Union with the `false` literal type (PHP's `strpos`-style return). `false`/`true` widen to `bool`; the runtime value is a real boolean. |
+| `int|false`      | Yes              | Union with the `false` literal subtype (PHP's `strpos`-style return). The checker keeps `false` distinct from `bool`; both use the same boolean runtime representation. |
 | `void`           | Return only      | Valid as a function, method, closure, arrow, or extern return type. Internally, `null` is represented as `Void`.        |
 | `never`          | Return only      | Marks a function, method, closure, or interface method that **never returns** — it must always `throw`, call `exit()`/`die()`, or loop forever. Returning is rejected at type-check time. |
 | `ptr` / `ptr<T>` | elephc extension | Raw 64-bit pointer, optionally carrying a checked compile-time pointee tag. See [Pointers](../beyond-php/pointers.md). |
@@ -59,7 +59,7 @@ class Setting {
 Rules:
 
 - `T|null` is exactly equivalent to the nullable shorthand `?T` — both compile to the same type, so `string|null` and `?string` are interchangeable.
-- `false` and `true` widen to `bool`. elephc does not track literal-bool precision, so `int|false` is accepted wherever `int|bool` is; the stored value is still a genuine boolean at runtime.
+- `false` remains a distinct subtype in declarations such as `int|false`, and `bool` accepts it. A union that also contains `bool` absorbs the redundant `false` member. Literal `true` types use `bool`; the runtime representation of `false` is the ordinary boolean representation.
 - A multi-member union may mix these with other members (`int|string|null`); the `null` member keeps the whole union nullable.
 - The nullable shorthand still may not be combined with a pipe union: write `T|null`, not `?T|U`.
 
