@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches = []): int|false
+function preg_match(string $pattern, string $subject, array $matches = null): int|false
 ```
 
 ## What the type checker enforces

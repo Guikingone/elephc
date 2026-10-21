@@ -27202,7 +27202,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             ParamSpec {
                 name: "matches",
                 ty: TypeSpec::Mixed,
-                default: Some(DefaultSpec::EmptyArray),
+                default: Some(DefaultSpec::Null),
                 by_ref: true,
             },
         ],
@@ -27245,7 +27245,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             ParamSpec {
                 name: "matches",
                 ty: TypeSpec::Mixed,
-                default: Some(DefaultSpec::EmptyArray),
+                default: Some(DefaultSpec::Null),
                 by_ref: true,
             },
             ParamSpec {
@@ -27262,7 +27262,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Union(&[TypeSpec::Int, TypeSpec::False]),
         by_ref_return: false,
-        summary: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes return 0 and clear a supplied capture destination on both backends.",
+        summary: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.",
         examples: &[
         ],
         php_manual: None,

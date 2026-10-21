@@ -69,6 +69,7 @@ pub(crate) fn lower_preg_match_all(
         Arch::AArch64 => load_flags_arg(ctx, flags, "x5")?,
         Arch::X86_64 => load_flags_arg(ctx, flags, "r8")?,
     }
+    emit_preg_match_all_flag_guard(ctx);
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_all_capture");
         store_matches_array(ctx, slot)?;
@@ -77,6 +78,44 @@ pub(crate) fn lower_preg_match_all(
     }
     box_count_or_false(ctx)?;
     super::store_if_result(ctx, inst)
+}
+
+/// Raises PHP's `ValueError` when `preg_match_all()` receives a non-`PREG_*` flag set.
+///
+/// php-src rejects unknown bits and the conflicting `PREG_PATTERN_ORDER | PREG_SET_ORDER`
+/// pair before running the regex. The lowering checks the materialized flags register
+/// in place so both the count-only and capture paths share one rule.
+fn emit_preg_match_all_flag_guard(ctx: &mut FunctionContext<'_>) {
+    let invalid = ctx.next_label("preg_match_all_flags_invalid");
+    let done = ctx.next_label("preg_match_all_flags_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x10", PREG_MATCH_ALL_SUPPORTED_FLAGS);
+            ctx.emitter.instruction("bic x9, x5, x10");                         // isolate bits outside the PREG_* set
+            ctx.emitter.instruction(&format!("cbnz x9, {}", invalid));          // unknown bits are a ValueError
+            ctx.emitter.instruction("and x9, x5, #3");                          // isolate the two order-mode bits
+            ctx.emitter.instruction("cmp x9, #3");                              // both order modes together are invalid
+            ctx.emitter.instruction(&format!("b.eq {}", invalid));              // raise the same ValueError
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r10", PREG_MATCH_ALL_SUPPORTED_FLAGS);
+            ctx.emitter.instruction("not r10");                                 // invert the allowed mask
+            ctx.emitter.instruction("mov r9, r8");                              // copy the flags before masking
+            ctx.emitter.instruction("and r9, r10");                             // isolate bits outside the PREG_* set
+            ctx.emitter.instruction(&format!("jnz {}", invalid));               // unknown bits are a ValueError
+            ctx.emitter.instruction("mov r9, r8");                              // copy the flags before inspecting the order bits
+            ctx.emitter.instruction("and r9, 3");                               // isolate the two order-mode bits
+            ctx.emitter.instruction("cmp r9, 3");                               // both order modes together are invalid
+            ctx.emitter.instruction(&format!("je {}", invalid));                // raise the same ValueError
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    crate::codegen::lower_inst::exceptions::emit_value_error(
+        ctx,
+        "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant",
+    );
+    ctx.emitter.label(&done);
 }
 
 /// Validates count-only flags without changing the count helper's existing ABI.
@@ -512,7 +551,10 @@ fn optional_matches_local_slot(
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
-        if inst_ref.op == Op::ArrayNew && inst_ref.immediate == Some(Immediate::Capacity(0)) {
+        if inst_ref.op == Op::ConstNull
+            || (inst_ref.op == Op::ArrayNew
+                && inst_ref.immediate == Some(Immediate::Capacity(0)))
+        {
             return Ok(None);
         }
         return Err(CodegenIrError::unsupported(

@@ -110236,7 +110236,7 @@
         },
         {
           "by_ref": true,
-          "default": [],
+          "default": null,
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -110394,7 +110394,7 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "array"
@@ -110427,7 +110427,7 @@
         },
         {
           "by_ref": true,
-          "default": [],
+          "default": null,
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -110447,7 +110447,7 @@
     },
     "area": "Regex",
     "canonical_name": "preg_match_all",
-    "description": "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes return 0 and clear a supplied capture destination on both backends.",
+    "description": "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "regex",
@@ -110475,7 +110475,7 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -110592,7 +110592,7 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "mixed"
