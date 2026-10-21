@@ -407,7 +407,8 @@ fn narrow_mixed_value_for_packed_int_field(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    let PhpType::Packed(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some(class_name) = crate::ir_lower::expr::packed_receiver_class(ctx, &object_ty) else {
         return value;
     };
     if !matches!(

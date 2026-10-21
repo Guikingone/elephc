@@ -165,8 +165,13 @@ impl Scanner<'_> {
             ExprKind::BinaryOp { left, right, .. } => { self.scan_expr(left); self.scan_expr(right); }
             ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
             | ExprKind::Clone(e) | ExprKind::ErrorSuppress(e) | ExprKind::Print(e)
-            | ExprKind::Spread(e) | ExprKind::PtrCast { expr: e, .. }
-            | ExprKind::YieldFrom(e) => self.scan_expr(e),
+            | ExprKind::Spread(e) | ExprKind::YieldFrom(e) => self.scan_expr(e),
+            // `ptr_cast<T>` may be the only mention of a packed or extern class `T`, and field
+            // access through the resulting `ptr<T>` needs that class's layout at lowering time.
+            ExprKind::PtrCast { target_type, expr: e } => {
+                self.record_class(target_type.as_str());
+                self.scan_expr(e);
+            }
             ExprKind::IncludeValue { path, .. } => {
                 // The resolver inlines every include it can read, so one still here resolves at
                 // runtime; inside a literal fragment the loaded file can name anything.

@@ -450,7 +450,7 @@ fn property_result_type(
         if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             return PhpType::Mixed;
         }
-        if let PhpType::Packed(class_name) = object_ty.codegen_repr() {
+        if let Some(class_name) = packed_receiver_class(ctx, &object_ty) {
             let normalized = class_name.trim_start_matches('\\');
             let Some(class_info) = ctx.packed_classes.get(normalized) else {
                 return fallback_expr_type(expr);
@@ -520,6 +520,29 @@ fn property_result_type(
         nullable_result_type(property_ty)
     } else {
         property_ty
+    }
+}
+
+/// Returns the packed class a property receiver addresses, or `None` for any other receiver.
+///
+/// A packed record is reached either as a `packed` value (a buffer element or a nested record
+/// field, both of which are the record's address) or through a `ptr<T>` typed pointer whose
+/// target is a packed class. Both carry the same raw address, so field reads and writes use the
+/// packed layout for either.
+pub(crate) fn packed_receiver_class(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+) -> Option<String> {
+    match object_ty.codegen_repr() {
+        PhpType::Packed(class_name) => Some(class_name),
+        PhpType::Pointer(Some(class_name))
+            if ctx
+                .packed_classes
+                .contains_key(class_name.trim_start_matches('\\')) =>
+        {
+            Some(class_name)
+        }
+        _ => None,
     }
 }
 
