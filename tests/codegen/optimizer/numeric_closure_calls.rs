@@ -271,3 +271,26 @@ echo late_numeric_entry($argc * 1000);
     assert_eq!(ir.lines().filter(|line| line.trim_start().starts_with("function __eir_numeric_closure_")).count(), 1, "{ir}");
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// Distinct physical closure symbols cannot inherit a case-folded owner's numeric body.
+#[test]
+fn test_numeric_closure_calls_preserve_case_distinct_owners() {
+    let source = r#"<?php
+namespace Foo {
+    function bar(int $n): int {
+        $f = function($x) { return $x + 100; }; $sum = 0;
+        for ($i = 0; $i < $n; $i++) { $sum += $f($i); }
+        return (int)$sum;
+    }
+}
+namespace {
+    function foo_bar(int $n): int {
+        $f = function($x) { return $x + 1; }; $sum = 0;
+        for ($i = 0; $i < $n; $i++) { $sum += $f($i); }
+        return (int)$sum;
+    }
+    echo foo_bar($argc + 2), '|', \Foo\bar($argc + 2);
+}
+"#;
+    for optimized in [false, true] { assert_eq!(run(source, optimized).0, "6|303"); }
+}

@@ -24,8 +24,9 @@ pub(super) fn specialize(module: &mut Module) -> bool {
     let mut resolved: HashSet<_> = module.functions.iter()
         .map(|function| crate::names::php_symbol_key(function.name.trim_start_matches('\\'))).collect();
     for closure in &module.closures {
-        let key = crate::names::php_symbol_key(closure.name.trim_start_matches('\\'));
-        if resolved.insert(key.clone()) {
+        let key = closure.name.trim_start_matches('\\').to_owned();
+        // Physical closure labels retain case even when PHP name reservation does not.
+        if resolved.insert(crate::names::php_symbol_key(&key)) {
             if let Some(template) = Template::analyze(closure) { templates.insert(key, template); }
         }
     }
@@ -66,7 +67,7 @@ pub(super) fn specialize(module: &mut Module) -> bool {
             }
             let Some(Immediate::Data(target)) = call.immediate else { continue; };
             let Some(name) = module.data.function_names.get(target.as_raw() as usize) else { continue; };
-            let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+            let key = name.trim_start_matches('\\').to_owned();
             let Some(template) = templates.get(&key) else { continue; };
             let Some(types) = argument_types(function, index, template) else { continue; };
             let tag: String = types.iter().map(|ty| if *ty == PhpType::Int { 'i' } else { 'f' }).collect();

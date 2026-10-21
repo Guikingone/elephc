@@ -158,3 +158,34 @@ fn numeric_closure_calls_do_not_reuse_shadowed_private_entries() {
     let later = module.functions[2].instructions.iter().find(|inst| inst.op == Op::Call).unwrap();
     assert_ne!(later.immediate, first);
 }
+
+
+/// A folded reservation must never redirect another exact physical closure name's call.
+#[test]
+fn numeric_closure_calls_keep_case_distinct_physical_targets() {
+    let mut module = fixture(PhpType::Int);
+    module.closures[0].name = "Closure_Numeric".into();
+    let first_target = module.data.intern_function_name("Closure_Numeric");
+    module.functions[0].instructions.iter_mut().find(|inst| inst.op == Op::Call).unwrap()
+        .immediate = Some(Immediate::Data(first_target));
+    let mut other = module.closures[0].clone();
+    other.name = "closure_numeric".into();
+    let one = other.instructions.iter_mut().find(|inst| inst.op == Op::ConstI64).unwrap();
+    one.immediate = Some(Immediate::I64(100));
+    module.add_closure(other);
+    let mut other_caller = module.functions[0].clone(); other_caller.name = "other_caller".into();
+    let second_target = module.data.intern_function_name("closure_numeric");
+    other_caller.instructions.iter_mut().find(|inst| inst.op == Op::Call).unwrap()
+        .immediate = Some(Immediate::Data(second_target));
+    module.add_function(other_caller.clone());
+    crate::ir::validate_module(&module).unwrap();
+    assert!(specialize(&mut module));
+    crate::ir::validate_module(&module).unwrap();
+    assert_eq!(module.closures.len(), 3, "the folded duplicate remains on its original entry");
+    assert_ne!(module.functions[0].instructions.iter().find(|inst| inst.op == Op::Call).unwrap()
+        .immediate, Some(Immediate::Data(first_target)));
+    assert_eq!(module.functions[1].instructions.iter().find(|inst| inst.op == Op::Call).unwrap()
+        .immediate, Some(Immediate::Data(second_target)));
+    other_caller.name = "later_other_caller".into(); module.add_function(other_caller);
+    assert!(!specialize(&mut module), "a later round must not reuse another exact name's variant");
+}
