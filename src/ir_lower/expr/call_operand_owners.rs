@@ -446,6 +446,7 @@ pub(super) fn root_user_call_operands(
         || !Ownership::php_type_needs_lifetime_tracking(result_type)
         || return_alias == &ReturnArgAlias::None;
     let mut roots = Vec::new();
+    let original_operands = operands.to_vec();
     for (index, operand) in operands.iter_mut().enumerate().rev() {
         if signature.is_some_and(|sig| sig.ref_params.get(index).copied().unwrap_or(false))
             && !matches!(ctx.builder.value_defining_op(*operand), Some(Op::ArrayNew | Op::HashNew))
@@ -458,7 +459,24 @@ pub(super) fn root_user_call_operands(
         if !independent_result
             && !signature.is_some_and(|sig| sig.returned_parameter_has_independent_owner(index))
         {
-            *operand = claim_transient_string_operand(ctx, *operand, span);
+            // One SSA value in two operand positions would be claimed, pinned and released
+            // twice; it keeps the unclaimed path instead.
+            let repeated = original_operands.iter().filter(|other| **other == *operand).count() > 1;
+            let claimed = if repeated {
+                *operand
+            } else {
+                claim_transient_string_operand(ctx, *operand, span)
+            };
+            if claimed != *operand {
+                *operand = claimed;
+                // A callee that persists the claimed argument now keeps a copy, so a throw out of
+                // the call must still free the original: pin it in the unwind chain for the call.
+                // The post-call release retires the pin without releasing and then decides the
+                // release against the result.
+                for pin in pin_in_flight_owners(ctx, &[claimed], span) {
+                    roots.push((index, pin.slot));
+                }
+            }
             continue;
         }
         let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
@@ -470,6 +488,9 @@ pub(super) fn root_user_call_operands(
 }
 
 /// Gives a transient string argument one releasing owner before a call that may hand it back.
+///
+/// The caller pins the claimed value across the call (see `root_user_call_operands`), so a throw
+/// out of the callee releases it through the unwind chain.
 ///
 /// A transient string (concat scratch, or a heap block stamped `CONCAT_TEMP_HEAP_KIND`) has no
 /// owner that frees it: the first consumer that persists it adopts the block in place. Passed to

@@ -148,3 +148,68 @@ echo substr($t1, -2), $t2, substr($t3, -2), $t4, "\n";
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "T1T2T3T4\n");
 }
+
+/// A callee that keeps a copy of a claimed argument and then throws still frees the original.
+#[test]
+fn transient_string_claimed_argument_survives_a_throwing_callee() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Keeper {
+    public string $v = "";
+    public bool $fail = true;
+    public function keep(string $s): string {
+        $this->v = $s;
+        if ($this->fail) { throw new Exception("k"); }
+        return $s;
+    }
+    public function copy(string $s): string {
+        $t = $s;
+        if ($this->fail) { throw new Exception("c" . strlen($t)); }
+        return $s;
+    }
+}
+$width = 69999 + $argc;
+$big = str_repeat("a", $width);
+$keeper = new Keeper();
+for ($i = 0; $i < 3; $i++) {
+    try { $keeper->keep($big . "k"); } catch (Exception $e) { echo $e->getMessage(); }
+    try { $keeper->copy($big . "c"); } catch (Exception $e) { echo $e->getMessage(); }
+}
+echo "|", substr($keeper->v, -2), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "kc70001kc70001kc70001|ak\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A claimed argument handed back through a boxed result (`mixed`, `?string`, a union) is freed.
+#[test]
+fn transient_string_claimed_argument_returned_through_a_boxed_result() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function asMixed(string $s): mixed { return $s; }
+function asNullable(string $s): ?string { return $s; }
+function asUnion(string $s): string|int { return $s; }
+$width = 69999 + $argc;
+$big = str_repeat("a", $width);
+$kept = [];
+for ($i = 0; $i < 3; $i++) {
+    $m = asMixed($big . "m");
+    $n = asNullable($big . "n");
+    $u = asUnion($big . "u");
+    echo substr($m, -1), substr($n, -1), substr($u, -1);
+    $kept[] = asMixed($big . "k");
+}
+$pad = [];
+for ($i = 0; $i < 6; $i++) { $pad[] = str_repeat("z", $width + 3); }
+echo "|", substr($kept[2], -2), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "mnumnumnu|ak\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Throwing and boxed-result callees stay balanced with IR optimization disabled too.
+#[test]
+fn transient_string_claimed_argument_edge_cases_no_ir_opt() {
+    without_ir_opt(transient_string_claimed_argument_survives_a_throwing_callee);
+    without_ir_opt(transient_string_claimed_argument_returned_through_a_boxed_result);
+}
