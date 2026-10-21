@@ -142,11 +142,14 @@ accumulation with immediate masks, scaling, increments, and a fixed loop bound.
 
 ## Frame-local checked numeric cells
 
-`src/codegen/stack_numeric.rs::plan()` runs before frame sizing and selects only
-owned checked integer add/subtract/multiply results whose complete pointer
-lifetime remains in the current activation. Numeric observations and one
-ordinary local are permitted; delayed reads, escaping consumers, aliases,
-references, executable main, `eval` and suspension fail the proof.
+`src/codegen/stack_numeric.rs::plan()` runs before frame sizing and selects owned
+add/subtract/multiply results from checked integer or proven numeric Mixed
+operations, plus numeric increments or decrements, whose complete pointer lifetime
+remains in the current activation. Numeric observations and one ordinary local
+are permitted.
+Private slots in the executable main frame use the same lifetime proof; globals
+retain heap storage. Delayed reads, escaping consumers, aliases, references,
+`eval` and suspension fail the proof.
 
 Each selected producer reserves a 24-byte `mixed` cell in the frame, without a
 heap header. `src/codegen/lower_inst/arithmetic/stack_cell.rs` writes its runtime

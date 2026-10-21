@@ -517,14 +517,16 @@ Later releases extend this driver with further EIR passes.
 
 ## Frame-local checked numeric cells
 
-During frame layout, the backend can place a checked integer addition,
-subtraction or multiplication result in a reusable stack cell instead of a
-heap allocation. The cell retains the normal `mixed` integer/float tag and
-payload, including the operation's overflow-to-float result.
+During frame layout, the backend can place addition, subtraction or multiplication
+results from checked integer or proven numeric Mixed operations, plus numeric
+increments or decrements, in a reusable stack cell instead of a heap allocation.
+The cell retains the normal `mixed` integer/float tag and payload, including the
+operation's overflow-to-float result.
 
 This requires a proof that all observations are numeric and the cell cannot
-escape or be read after its producer runs again. Parameters, executable main,
-references, `eval`, suspension and unknown consumers keep ordinary storage.
+escape or be read after its producer runs again. Private slots in the executable
+main frame use the same lifetime proof. Parameters, globals, statics, references,
+`eval`, suspension and unknown consumers keep ordinary storage.
 This backend storage choice applies with EIR optimization both on and off and
 uses the same layout on every supported target. See
 `examples/numeric-local/main.php` and
