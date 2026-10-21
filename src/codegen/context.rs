@@ -7,7 +7,7 @@
 //!   `crate::codegen::lower_term`.
 //!
 //! Key details:
-//! - Phase 04 stores every SSA value in a stack slot and reloads result registers at use sites.
+//! - SSA values load from allocated registers, scalar recipes, or backing stack slots.
 //! - The context delegates target-specific movement to `crate::codegen::abi`.
 //! - Local labels carry a module-unique trailing id from `SharedCodegenState::next_label_id()`.
 //!   The readable part is `crate::names::label_fragment()`, which is intentionally lossy, so the
@@ -35,8 +35,11 @@ use super::shared_state::SharedCodegenState;
 use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
+mod machine_layout;
 mod operand_owners;
 mod ref_cell_state;
+
+pub(crate) use machine_layout::MachineLayoutState;
 
 /// Runtime representation known for one local slot at the current EIR instruction.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -84,6 +87,8 @@ pub(crate) struct FunctionContext<'a> {
     pcntl_signal_handlers: bool,
     pub(super) epilogue_label: Option<String>,
     block_labels: Vec<String>,
+    /// Block order, compare fusion, and cold-path state for late machine layout.
+    pub(super) machine_layout: MachineLayoutState,
 }
 
 impl<'a> FunctionContext<'a> {
@@ -100,6 +105,22 @@ impl<'a> FunctionContext<'a> {
             .class_infos
             .get(class_name)
             .map_or(-1, |class| class.class_id as i64)
+    }
+
+    /// Packs source strictness into the existing framed invocation-scope word.
+    /// Weak calls keep legacy class ids and global -1; strict calls use -scope-3.
+    pub(super) fn callable_invocation_profile(&self) -> i64 {
+        let strict = self.current_inst.and_then(|id| self.function.instruction(id))
+            .filter(|inst| inst.op == Op::CallableDescriptorInvoke)
+            .and_then(|inst| inst.operands.get(2))
+            .and_then(|value| self.function.value(*value))
+            .and_then(|value| match value.def {
+                ValueDef::Instruction { inst, .. } => self.function.instruction(inst),
+                _ => None,
+            })
+            .is_some_and(|inst| inst.immediate == Some(Immediate::Bool(true)));
+        let scope = self.lexical_class_id();
+        if strict { -scope - 3 } else { scope }
     }
 
     /// Creates a lowering context with finalized frame and value-placement metadata.
@@ -171,6 +192,7 @@ impl<'a> FunctionContext<'a> {
             pcntl_signal_handlers,
             epilogue_label,
             block_labels,
+            machine_layout: MachineLayoutState::default(),
         }
     }
 
@@ -708,7 +730,14 @@ impl<'a> FunctionContext<'a> {
     /// into the result register instead of loaded from a stack slot.
     pub(super) fn load_value_to_result(&mut self, value: ValueId) -> Result<PhpType> {
         let ty = self.value_php_type(value)?;
-        if let Some(reg) = self.allocation.register_of(value) {
+        if let Some(constant) = self.allocation.rematerialized(value) {
+            let dst = if ty.codegen_repr() == PhpType::Float {
+                abi::float_result_reg(self.emitter)
+            } else {
+                abi::int_result_reg(self.emitter)
+            };
+            super::constant_materialization::emit_constant(self.emitter, self.data, constant, dst);
+        } else if let Some(reg) = self.allocation.register_of(value) {
             let dst = if ty.codegen_repr() == PhpType::Float {
                 abi::float_result_reg(self.emitter)
             } else {
@@ -728,7 +757,9 @@ impl<'a> FunctionContext<'a> {
     /// register (a no-op when the source already is the requested register).
     pub(super) fn load_value_to_reg(&mut self, value: ValueId, reg: &str) -> Result<PhpType> {
         let ty = self.value_php_type(value)?;
-        if let Some(home) = self.allocation.register_of(value) {
+        if let Some(constant) = self.allocation.rematerialized(value) {
+            super::constant_materialization::emit_constant(self.emitter, self.data, constant, reg);
+        } else if let Some(home) = self.allocation.register_of(value) {
             abi::emit_reg_move(self.emitter, reg, home);
         } else {
             let offset = self.value_offset(value)?;
@@ -1251,7 +1282,13 @@ impl<'a> FunctionContext<'a> {
     /// and hash set/append lowerings already perform; without it a global array
     /// that grows past its initial capacity leaves the global symbol pointing at
     /// freed storage (corruption / crash). No-op unless `value` came from
-    /// `Op::LoadGlobal`.
+    /// `Op::LoadGlobal` or `Op::LoadStaticLocal`.
+    ///
+    /// A function static is the same hazard behind a different symbol:
+    /// `static $a = [0]; $a[] = 1;` grew the array through `__rt_array_grow`, which
+    /// frees the old block, and the static kept pointing at it — `count($a)` answered
+    /// 2 after twenty appends, and the next allocation to reuse that block was
+    /// corrupted.
     pub(super) fn writeback_global_array_source(&mut self, value: ValueId) -> Result<()> {
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
@@ -1262,6 +1299,12 @@ impl<'a> FunctionContext<'a> {
         let Some(inst_ref) = self.function.instruction(inst) else {
             return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
         };
+        if inst_ref.op == Op::LoadStaticLocal {
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+                return Ok(());
+            };
+            return self.writeback_static_local_array_source(value, slot);
+        }
         if inst_ref.op != Op::LoadGlobal {
             return Ok(());
         }
@@ -1274,6 +1317,35 @@ impl<'a> FunctionContext<'a> {
         self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
         self.load_value_to_result(value)?;
         abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+        Ok(())
+    }
+
+    /// Writes a mutated container back to the static-local symbol it was loaded from.
+    ///
+    /// Only when the slot stores the container itself. A `mixed` static holds a box, and
+    /// the load unwrapped it, so the pointer in hand is not what the slot stores.
+    fn writeback_static_local_array_source(&mut self, value: ValueId, slot: LocalSlotId) -> Result<()> {
+        let local = self
+            .function
+            .locals
+            .get(slot.as_raw() as usize)
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
+        let Some(name) = local.name.clone() else {
+            return Ok(());
+        };
+        let slot_ty = local.php_type.codegen_repr();
+        let ty = self.value_php_type(value)?.codegen_repr();
+        let same_storage = matches!(
+            (&slot_ty, &ty),
+            (PhpType::Array(_), PhpType::Array(_))
+                | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+        );
+        if !same_storage {
+            return Ok(());
+        }
+        let symbol = crate::names::static_local_symbol(&self.function.name, &name);
+        self.load_value_to_result(value)?;
+        abi::emit_store_result_to_symbol(self.emitter, &symbol, &slot_ty, false);
         Ok(())
     }
 

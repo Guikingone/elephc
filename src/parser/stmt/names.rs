@@ -20,7 +20,7 @@ pub(crate) fn name_part_from_token(
     match token {
         Token::Identifier(name) => Some(name.clone()),
         Token::Enum => crate::parser::keyword_name::bareword_name_from_token(token, metadata),
-        _ => None,
+        _ => super::token_as_import_name(token, metadata),
     }
 }
 

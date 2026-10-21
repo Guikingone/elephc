@@ -18,7 +18,7 @@ mod control;
 pub mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
-mod stmt;
+pub(crate) mod stmt;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
 
@@ -31,6 +31,14 @@ use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::Stmt;
 use crate::span::Span;
+
+/// Shares class-like name token grammar with source attribution tools.
+///
+/// The compiler binary uses this library API, not its parallel private parser module.
+#[allow(dead_code)]
+pub fn name_part_from_token(token: &Token, metadata: &crate::lexer::TokenMetadata) -> Option<String> {
+    stmt::name_part_from_token(token, metadata)
+}
 
 /// Caps syntactic delimiter nesting before recursive expression parsing can
 /// consume the compiler process stack.
@@ -159,7 +167,7 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
             }
         } else {
             match stmt::parse_stmt(tokens, &mut pos) {
-                Ok(stmt) => stmts.push(stmt),
+                Ok(stmt) => stmt::push_parsed_stmt(&mut stmts, stmt),
                 Err(error) => {
                     errors.extend(error.flatten());
                     stmt::recover_to_statement_boundary(tokens, &mut pos);

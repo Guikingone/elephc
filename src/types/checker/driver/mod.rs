@@ -41,7 +41,9 @@ use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
     drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
-    validate_deferred_declaration_defaults,
+    validate_deferred_declaration_defaults, validate_enum_trait_requirements,
+    expand_enum_interfaces, validate_enum_interface_contracts,
+    validate_trait_property_defaults,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::{CheckOptions, Checker};
@@ -82,9 +84,15 @@ pub(super) fn check_types_impl(
     program: &Program,
     target: Target,
     options: CheckOptions,
+    generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target);
     checker.strict_locals = options.strict_locals;
+    // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
+    // Empty on every path that does not run `generics::monomorphize`, which is what makes those
+    // paths behave exactly as they did before this feature.
+    checker.class_templates = generics.class_templates.clone();
+    checker.method_templates = generics.method_templates.clone();
     // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
     // consult it can sit textually above the `function w() { global $a; }` that makes the name
     // program-global. Shared with EIR lowering's `all_global_var_names` so the two sides cannot
@@ -94,11 +102,24 @@ pub(super) fn check_types_impl(
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));
+    errors.extend(validate_trait_property_defaults(program));
 
     checker.collect_function_decls(program, &mut errors);
 
     let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
+    (checker.trait_imported_properties, checker.trait_imported_constructors) =
+        super::schema::collect_trait_default_origins(program, &flattened_classes);
+    // A prelude parsed from PHP text gives its classes real spans, so the statement's source
+    // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
+    checker.internal_class_decls = program
+        .iter()
+        .filter(|stmt| stmt.source_mode == crate::source::SourceMode::Internal)
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::ClassDecl { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
     // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
     // now that inheritance and trait flattening have settled the concrete enclosing class. This
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
@@ -125,6 +146,7 @@ pub(super) fn check_types_impl(
     checker.declared_classes = class_map.keys().cloned().collect();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
+            generics: _,
             name,
             extends,
             properties,
@@ -185,6 +207,7 @@ pub(super) fn check_types_impl(
         inject_builtin_throwables(&mut interface_map, &mut class_map, &wanted_throwables)
     {
         errors.extend(error.flatten());
+        return Err(CompileError::from_many(errors));
     }
     // The tz_prelude (injected upstream only when the program uses timezone
     // introspection) declares `timezone_location_get`. Its presence gates the
@@ -337,6 +360,10 @@ pub(super) fn check_types_impl(
                 .get(name)
                 .map(|flattened| flattened.methods.as_slice())
                 .unwrap_or(methods.as_slice());
+            let enum_constants = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.constants.as_slice())
+                .unwrap_or(constants.as_slice());
             let enum_used_traits = flattened_enums
                 .get(name)
                 .map(|flattened| flattened.used_traits.as_slice())
@@ -351,13 +378,38 @@ pub(super) fn check_types_impl(
                 cases,
                 implements,
                 enum_methods,
+                methods,
+                enum_constants,
                 constants,
                 enum_used_traits,
                 enum_trait_aliases,
+                &stmt.attributes,
                 stmt.span,
+                stmt.source_mode == crate::source::SourceMode::Internal,
                 &mut checker,
                 &mut next_class_id,
             ) {
+                errors.extend(error.flatten());
+            }
+        }
+    }
+    // Publish all transitive interfaces before validating hints that mention another enum.
+    let mut enum_units: Vec<_> = flattened_enums.values()
+        .filter(|unit| checker.enums.contains_key(&unit.name)).collect();
+    enum_units.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut expanded = HashSet::new();
+    for enum_unit in &enum_units {
+        match expand_enum_interfaces(&mut checker, enum_unit) {
+            Ok(()) => { expanded.insert(enum_unit.name.clone()); }
+            Err(error) => errors.extend(error.flatten()),
+        }
+    }
+    for enum_unit in enum_units {
+        if expanded.contains(&enum_unit.name) {
+            if let Err(error) = validate_enum_interface_contracts(&mut checker, enum_unit) {
+                errors.extend(error.flatten());
+            }
+            if let Err(error) = validate_enum_trait_requirements(&checker, program, enum_unit) {
                 errors.extend(error.flatten());
             }
         }
@@ -391,6 +443,15 @@ pub(super) fn check_types_impl(
     patch_magic_method_signatures(&mut checker);
 
     checker.prescan_extern_decls(program, &mut errors);
+
+    // Every class, interface and enum is registered, and no body has been checked: a violated
+    // bound is reported now, alone, instead of as whatever the instantiated body trips over.
+    if let Err(error) =
+        checker.verify_class_type_argument_bounds_before_bodies(&generics.class_type_argument_bounds)
+    {
+        errors.extend(error.flatten());
+        return Err(CompileError::from_many(errors));
+    }
 
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
@@ -427,6 +488,7 @@ pub(super) fn check_types_impl(
         }
     }
 
+    checker.deduplicate_variant_signature_errors(&mut errors);
     if !errors.is_empty() {
         return Err(CompileError::from_many(errors));
     }
@@ -458,9 +520,9 @@ fn report_class_id_inventory(checker: &Checker) {
 
 #[cfg(test)]
 mod tests {
-    /// Abstract enum method declarations retain their status in parallel class metadata.
+    /// Imported abstract factory requirements never replace synthesized concrete metadata.
     #[test]
-    fn enum_metadata_records_abstract_instance_and_static_methods() {
+    fn enum_metadata_keeps_synthesized_factories_concrete() {
         use crate::codegen_support::platform::{Arch, Platform, Target};
         use crate::parser::ast::{ClassMethod, Visibility};
         use crate::span::Span;
@@ -473,6 +535,7 @@ mod tests {
             is_abstract: true,
             is_final: false,
             has_body: false,
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -487,25 +550,28 @@ mod tests {
         let mut next_class_id = 1;
         crate::types::checker::schema::insert_enum_metadata(
             "State",
-            None,
+            Some(crate::types::PhpType::Int),
             Vec::new(),
             &[],
-            &[method("instance", false), method("statik", true)],
+            &[method("from", true), method("tryFrom", true)],
             &[],
             &[],
             &[],
             Span::dummy(),
+            false,
             &mut checker,
             &mut next_class_id,
         )
         .expect("record enum metadata");
         let class = checker.classes.get("State").expect("enum class metadata");
-        assert!(class.abstract_methods.contains("instance"));
-        assert!(class.abstract_static_methods.contains("statik"));
-        assert!(!class.method_impl_classes.contains_key("instance"));
-        assert!(!class.static_method_impl_classes.contains_key("statik"));
-        assert_eq!(class.method_declaring_classes.get("instance").map(String::as_str), Some("State"));
-        assert_eq!(class.static_method_declaring_classes.get("statik").map(String::as_str), Some("State"));
+        assert!(class.abstract_methods.is_empty());
+        assert!(class.abstract_static_methods.is_empty());
+        for name in ["from", "tryfrom"] {
+            assert_eq!(class.static_method_impl_classes.get(name).map(String::as_str), Some("State"));
+            assert_eq!(class.static_method_declaring_classes.get(name).map(String::as_str), Some("State"));
+            assert_eq!(class.static_methods[name].params[0].1, crate::types::PhpType::Int);
+            assert!(!class.method_decls.iter().any(|decl| decl.name.eq_ignore_ascii_case(name)));
+        }
     }
 
     /// Class ids must not depend on HashMap iteration order.

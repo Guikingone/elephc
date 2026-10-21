@@ -57,6 +57,9 @@ pub(super) fn lower_str_to_float(ctx: &mut FunctionContext<'_>, inst: &Instructi
 
 /// Lowers explicit scalar casts based on the target storage immediate and result PHP type.
 pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.immediate == Some(Immediate::ImplicitIntCast) {
+        return super::implicit_int_cast::lower(ctx, inst);
+    }
     match expect_cast_target(inst)? {
         IrType::I64 if inst.result_php_type == PhpType::Bool => predicates::lower_is_truthy(ctx, inst),
         IrType::I64 => lower_cast_to_int(ctx, inst),
@@ -65,7 +68,7 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         IrType::Heap(IrHeapKind::Hash) => {
             super::builtins::types::lower_object_array_cast(ctx, inst)
         }
-        IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type == PhpType::Mixed => {
+        IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type.codegen_repr() == PhpType::Mixed => {
             lower_mixed_array_cast(ctx, inst)
         }
         target => Err(CodegenIrError::unsupported(format!(

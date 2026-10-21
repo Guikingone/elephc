@@ -71,6 +71,8 @@ pub(super) struct PropertySlot {
     is_declared: bool,
     is_packed: bool,
     is_reference: bool,
+    /// Argument diagnostic prefix when this temporary slot models an inherited setter.
+    abstract_setter_type_error_prefix: Option<String>,
 }
 
 /// Declared-property candidate reachable from a `Mixed` object receiver.
@@ -115,6 +117,21 @@ struct PropertyDefault {
     is_reference: bool,
 }
 
+/// Strategy used to initialize a newly allocated object's physical property slots.
+enum PropertyInitialization {
+    /// Copy backend-supported literal defaults directly into their slots.
+    Inline(Vec<PropertyDefault>),
+    /// Run the EIR initializer so constant expressions retain their runtime branch semantics.
+    Thunk { class_id: u64 },
+}
+
+impl PropertyInitialization {
+    /// Returns whether initialization requires calling the class's EIR thunk.
+    fn uses_thunk(&self) -> bool {
+        matches!(self, Self::Thunk { .. })
+    }
+}
+
 /// Concrete class that a dynamic factory can instantiate in this EIR module.
 struct DynamicNewCandidate {
     class_name: String,
@@ -123,7 +140,7 @@ struct DynamicNewCandidate {
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: Vec<usize>,
     owned_reference_property_offsets: Vec<(usize, PhpType, bool)>,
-    property_defaults: Vec<PropertyDefault>,
+    property_initialization: PropertyInitialization,
     constructor_impl: Option<ConstructorCallTarget>,
 }
 
@@ -149,6 +166,9 @@ pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
+// The one stderr-and-exit sequence for the whole lowering tree. Every caller names it rather than
+// open-coding the platform split, so `Emitter::syscall`'s macOS-to-Linux mapping has a single site.
+pub(super) use dynamic_factory::emit_fatal_message;
 mod dynamic_pdo;
 mod property_defaults;
 mod known_property_reads;
@@ -165,10 +185,12 @@ mod property_compatibility;
 mod property_loads;
 mod property_fetch_for_write;
 mod property_stores;
+mod property_hook_writes;
 mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
 mod mixed_property_type_guard;
+pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
 
 #[allow(unused_imports)]
 use fixed_new::*;
@@ -204,6 +226,7 @@ use named_property_writes::*;
 use instanceof_entry::*;
 #[allow(unused_imports)]
 use allocation_clone::*;
+pub(super) use allocation_clone::emit_object_allocation;
 #[allow(unused_imports)]
 use interface_layout::*;
 #[allow(unused_imports)]
@@ -214,6 +237,7 @@ use property_compatibility::*;
 use property_loads::*;
 #[allow(unused_imports)]
 use property_stores::*;
+use property_hook_writes::*;
 #[allow(unused_imports)]
 use property_store_values::*;
 #[allow(unused_imports)]
@@ -235,6 +259,7 @@ pub(super) use known_property_reads::{
     lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
 pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,

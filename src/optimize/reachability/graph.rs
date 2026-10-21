@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::names::php_symbol_key;
+use super::inventory::PreludeGroup;
 use crate::parser::ast::Stmt;
 use crate::types::CheckResult;
 
@@ -91,6 +92,7 @@ pub fn compute(
         index,
         executable_usage.hazards,
         options.inventory.internal_callable_methods(),
+        options.inventory.groups.values().cloned().collect(),
         check_result,
     );
     state.apply_usage(executable_usage, true);
@@ -142,6 +144,13 @@ struct GraphState {
     checker_interface_methods: HashMap<String, HashSet<(String, bool)>>,
     checker_method_implementations: HashMap<(String, String, bool), String>,
     vtable_slots: HashSet<(String, String, bool)>,
+    /// Every injected prelude group, rooted whole whenever a literal eval fragment runs. The
+    /// interpreter conjures core classes without the fragment naming them, and the builtin
+    /// method bodies the eval-only lowering surfaces materialize (`DateTimeZone::getLocation`
+    /// calling the `elephc_tz_location` extern, `listIdentifiers` calling the list-id prelude
+    /// function) reference prelude declarations no AST walk can see. The groups are only the
+    /// preludes the program's text already caused to be injected, so this stays proportional.
+    literal_eval_baseline: Vec<PreludeGroup>,
 }
 
 impl GraphState {
@@ -150,6 +159,7 @@ impl GraphState {
         index: DeclarationIndex,
         hazards: Hazards,
         internal_callable_methods: HashSet<(String, String, bool)>,
+        literal_eval_baseline: Vec<PreludeGroup>,
         check_result: &CheckResult,
     ) -> Self {
         let checker_interface_methods = check_result
@@ -237,6 +247,7 @@ impl GraphState {
             checker_interface_methods,
             checker_method_implementations,
             vtable_slots,
+            literal_eval_baseline,
         }
     }
 
@@ -264,6 +275,18 @@ impl GraphState {
 
     /// Applies dynamic hazard widening accumulated from executable and reachable bodies.
     fn apply_global_hazards(&mut self) {
+        if self.reach.hazards.literal_eval {
+            for group in &self.literal_eval_baseline {
+                self.reach.functions.extend(group.functions.iter().cloned());
+                self.reach.classes.extend(group.classes.iter().cloned());
+                self.reach.methods.extend(group.methods.iter().cloned());
+                self.reach.externs.extend(group.externs.iter().cloned());
+                self.behavioral.functions.extend(group.functions.iter().cloned());
+                self.behavioral.classes.extend(group.classes.iter().cloned());
+                self.behavioral.methods.extend(group.methods.iter().cloned());
+            }
+            self.reach.externs.extend(self.index.externs.iter().cloned());
+        }
         if self.reach.hazards.enumerates_functions {
             self.reach.functions.extend(self.index.functions.keys().cloned());
         }
@@ -394,6 +417,8 @@ impl GraphState {
             let Some(node) = self.index.classes.get(&class) else {
                 continue;
             };
+            let operators = elephc_builtin_contract::lookup_class(&class)
+                .and_then(|contract| contract.operators);
             let has_runtime_owned_parent = node
                 .parent
                 .as_ref()
@@ -403,6 +428,12 @@ impl GraphState {
                 let reference = (method.clone(), *is_static);
                 if self.reach.hazards.dynamic_method
                     || has_runtime_owned_parent
+                    || operators.is_some_and(|operators| {
+                        if *is_static {
+                            operators.arithmetic.iter().any(|(_, adapter)| *adapter == method)
+                                || operators.compare == Some(method.as_str())
+                        } else { operators.boolean == Some(method.as_str()) }
+                    })
                     || matches!(method.as_str(), "__call" | "__callstatic")
                     || self.behavioral.referenced_methods.contains(&reference)
                 {
@@ -650,11 +681,15 @@ impl GraphState {
         for root in &usage.instantiated_subclass_roots {
             self.keep_instantiable_subclasses(root, behavioral);
         }
+        for class in &usage.fragment_classes {
+            self.keep_class_whole(class);
+        }
         if behavioral {
             self.reach.hazards.enumerates_functions |= usage.hazards.enumerates_functions;
             self.reach.hazards.dynamic_function |= usage.hazards.dynamic_function;
             self.reach.hazards.dynamic_method |= usage.hazards.dynamic_method;
             self.reach.hazards.dynamic_class |= usage.hazards.dynamic_class;
+            self.reach.hazards.literal_eval |= usage.hazards.literal_eval;
             self.behavioral
                 .functions
                 .extend(usage.functions.iter().cloned());
@@ -715,6 +750,39 @@ impl GraphState {
                 .extend(usage.wildcard_methods);
         }
         self.apply_global_hazards();
+    }
+
+    /// Retains a class a literal eval fragment names, with its ancestors and every method of
+    /// each, as live and instantiated. The interpreter reads such a class from runtime
+    /// metadata: it inherits constructors, destructors and clone hooks from it, checks its
+    /// abstract and final methods when a fragment subclasses it, reads and writes its static
+    /// properties, and refuses to redeclare it, none of which an AST member reference records.
+    fn keep_class_whole(&mut self, class: &str) {
+        let mut current = Some(php_symbol_key(class));
+        let mut seen = HashSet::new();
+        while let Some(name) = current {
+            if !seen.insert(name.clone()) {
+                break;
+            }
+            let Some(node) = self.index.classes.get(&name) else {
+                break;
+            };
+            self.reach.classes.insert(name.clone());
+            self.behavioral.classes.insert(name.clone());
+            self.instantiated_classes.insert(name.clone());
+            self.behavioral.instantiated_classes.insert(name.clone());
+            for (method, is_static) in node.methods.keys() {
+                let key = (name.clone(), method.clone(), *is_static);
+                self.reach.methods.insert(key.clone());
+                self.behavioral.methods.insert(key);
+            }
+            for interface in node.interfaces.iter().chain(node.traits.iter()) {
+                let key = php_symbol_key(interface);
+                self.reach.classes.insert(key.clone());
+                self.behavioral.classes.insert(key);
+            }
+            current = node.parent.as_deref().map(php_symbol_key);
+        }
     }
 
     /// Retains every indexed class that is equal to or descends from one runtime-selected base.
@@ -830,6 +898,7 @@ impl GraphState {
             + usize::from(self.reach.hazards.enumerates_functions)
             + usize::from(self.reach.hazards.dynamic_method)
             + usize::from(self.reach.hazards.dynamic_class)
+            + usize::from(self.reach.hazards.literal_eval)
     }
 }
 
@@ -858,6 +927,8 @@ fn is_magic_method(method: &str) -> bool {
             | "__invoke"
             | "__serialize"
             | "__unserialize"
+            | "serialize"
+            | "unserialize"
             | "__sleep"
             | "__wakeup"
             | "__debuginfo"

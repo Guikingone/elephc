@@ -8,6 +8,9 @@
 //! - Indexed and associative name arrays share the logical runtime iterator.
 //! - The enclosing magic-result boundary owns names and converted strings across nested throws.
 //! - Invalid return shapes warn and replace the provisional object prefix with PHP null.
+//! - The body is written before its `<count>:{` header, which `__rt_concat_hoist_tail` then moves
+//!   in front of it: like PHP, the count covers only the named properties that exist and are
+//!   initialized, which is only known once each name was looked up.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::data::{SLEEP_WARNING_PREFIX, SLEEP_WARNING_SUFFIX};
@@ -21,6 +24,8 @@ const CONCAT: usize = 40;
 const VALUE_HI: usize = 48;
 const VALUE_LO: usize = 56;
 const VALUE_TAG: usize = 64;
+const BODY_START: usize = 72;
+const WRITTEN: usize = 80;
 
 /// Selects the target encoding for one shared serializer operation.
 fn ins(emitter: &mut Emitter, arm: &str, x86: &str) {
@@ -75,10 +80,9 @@ pub(super) fn emit_sleep_result(emitter: &mut Emitter) {
     emitter.label("__rt_sleep_unboxed_names");
     abi::store_at_offset(emitter, low, NAMES);
     emitter.label("__rt_sleep_names_ready");
-    abi::load_at_offset(emitter, result, NAMES);
-    abi::emit_load_from_address(emitter, result, result, 0);
-    abi::emit_call_label(emitter, "__rt_serialize_uint");
-    append(emitter, b":{");
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
+    abi::store_at_offset(emitter, scratch, BODY_START);
+    abi::emit_store_zero_to_local_slot(emitter, WRITTEN);
     abi::emit_store_zero_to_local_slot(emitter, CURSOR);
 
     emitter.label("__rt_sleep_name_loop");
@@ -117,12 +121,23 @@ pub(super) fn emit_sleep_result(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), VALUE_LO);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), VALUE_HI);
     abi::emit_call_label(emitter, "__rt_serialize_named_prop");
+    abi::load_at_offset(emitter, scratch, WRITTEN);
+    ins(emitter, &format!("add {scratch}, {scratch}, {result}"), &format!("add {scratch}, {result}"));
+    abi::store_at_offset(emitter, scratch, WRITTEN);
     abi::load_at_offset(emitter, scratch, CONTEXT);
     abi::emit_load_from_address(emitter, result, scratch, 8);
     abi::emit_store_zero_to_address(emitter, scratch, 8);
     abi::emit_call_label(emitter, "__rt_decref_any");
     abi::emit_jump(emitter, "__rt_sleep_name_loop");
     emitter.label("__rt_sleep_names_done");
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
+    abi::store_at_offset(emitter, scratch, CONCAT);
+    abi::load_at_offset(emitter, result, WRITTEN);
+    abi::emit_call_label(emitter, "__rt_serialize_uint");
+    append(emitter, b":{");
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), BODY_START);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), CONCAT);
+    abi::emit_call_label(emitter, "__rt_concat_hoist_tail");
     append(emitter, b"}");
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
@@ -209,6 +224,8 @@ mod tests {
             assert!(body.find("__rt_heap_kind").unwrap() < body.find("__rt_mixed_unbox").unwrap(), "{name}");
             assert!(body.contains("__rt_array_iter_next"), "{name}");
             assert!(body.contains("__rt_serialize_named_prop"), "{name}");
+            let hoist = body.find("__rt_concat_hoist_tail").expect("the header is hoisted");
+            assert!(body.find("__rt_serialize_uint").unwrap() < hoist, "{name}");
             assert!(body.contains("__rt_sleep_invalid_return:"), "{name}");
         }
     }

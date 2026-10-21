@@ -113,8 +113,14 @@ pub(super) fn register_eval_native_function(
         &name_label,
         name_len,
         &eval_native_signature_shape(&registration.signature),
+        registration.is_internal,
     );
     let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
+    let source_constant_names = ctx.module.functions.iter()
+        .find(|function| function.name == registration.name)
+        .map(|function| function.source_defaults.iter().map(|default|
+            default.as_ref().and_then(crate::types::deferred_defaults::source_constant_name))
+            .collect::<Vec<_>>()).unwrap_or_default();
     let default_context = EvalNativeDefaultContext::global(ctx.module);
     for (registered_index, physical_index) in visible_indexes.into_iter().enumerate() {
         // `source_declared_param_indexes` only yields in-range indexes, so this loop registers exactly
@@ -164,6 +170,16 @@ pub(super) fn register_eval_native_function(
         if is_variadic {
             continue;
         }
+        if register_eval_native_param_default_error(ctx, context_offset,
+            (&name_label, name_len), registered_index,
+            registration.signature.defaults.get(physical_index).and_then(Option::as_ref),
+            &default_context, "__elephc_eval_register_native_function_param_default_error")
+        {
+            register_eval_native_function_param_default_constant_name(ctx, context_offset,
+                (&name_label, name_len), registered_index,
+                source_constant_names.get(physical_index).and_then(Option::as_deref));
+            continue;
+        }
         let Some(default) = registration
             .signature
             .defaults
@@ -181,6 +197,9 @@ pub(super) fn register_eval_native_function(
             registered_index,
             &default,
         );
+        register_eval_native_function_param_default_constant_name(ctx, context_offset,
+            (&name_label, name_len), registered_index,
+            source_constant_names.get(physical_index).and_then(Option::as_deref));
     }
     if let Some(type_spec) = eval_native_callable_return_type_spec(&registration.signature) {
         register_eval_native_function_return_type(
@@ -190,6 +209,9 @@ pub(super) fn register_eval_native_function(
             name_len,
             &type_spec,
         );
+    }
+    if registration.signature.by_ref_return {
+        register_eval_native_function_returns_reference(ctx, context_offset, &name_label, name_len);
     }
     Ok(())
 }
@@ -242,7 +264,6 @@ pub(super) fn emit_eval_native_function_invoker_inline(
     ctx.shared.callable_argument_normalizer |=
         crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let label = ctx.next_global_label("eval_callable_invoker");
-    let done_label = ctx.next_label("eval_callable_invoker_done");
     let captures: [(String, PhpType, bool); 0] = [];
     // A registered native FREE function has no class scope, so its defaults resolve globally.
     let defaults =
@@ -258,14 +279,13 @@ pub(super) fn emit_eval_native_function_invoker_inline(
         php_return_status: true,
         defaults: &defaults,
     };
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
+    // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
     crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(
         ctx.emitter,
         ctx.data,
         &invoker,
     );
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     label
 }

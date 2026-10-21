@@ -40,6 +40,13 @@ pub(super) fn parse_prefix(
 
     let span = tokens[*pos].1.span;
 
+    // Predefined tokens remain name segments before namespace or class access.
+    if crate::parser::stmt::token_as_import_name(&tokens[*pos].0, &tokens[*pos].1).is_some()
+        && matches!(tokens.get(*pos + 1), Some((Token::Backslash | Token::DoubleColon, _)))
+    {
+        return parse_named_expr(tokens, pos, span);
+    }
+
     // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\true`...: the lexer turns these predefined
     // constants into dedicated tokens, so the name parser never sees an identifier after the `\`
     // (#1307). The fully qualified spelling names the same global constant, so it parses as the
@@ -48,7 +55,14 @@ pub(super) fn parse_prefix(
     if tokens[*pos].0 == Token::Backslash {
         if let Some((next, metadata)) = tokens.get(*pos + 1) {
             let literal_constant = matches!(next, Token::True | Token::False | Token::Null);
-            if literal_constant || crate::parser::stmt::token_as_import_name(next, metadata).is_some() {
+            let continues_name = matches!(
+                tokens.get(*pos + 2),
+                Some((Token::Backslash | Token::DoubleColon | Token::LParen, _))
+            );
+            if literal_constant
+                || (crate::parser::stmt::token_as_import_name(next, metadata).is_some()
+                    && !continues_name)
+            {
                 *pos += 1;
                 let mut expr = parse_prefix(tokens, pos)?;
                 if let ExprKind::ConstRef(name) = &expr.kind {
@@ -67,6 +81,13 @@ pub(super) fn parse_prefix(
     }
 
     match &tokens[*pos].0 {
+        Token::Plus => parse_unary(tokens, pos, span, |inner| {
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::IntLiteral(0), inner.span)),
+                op: crate::parser::ast::BinOp::Add,
+                right: inner,
+            }
+        }, 35),
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),
@@ -266,6 +287,22 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
+        // `$this(...)` invokes the current object exactly like `($this)(...)`: through
+        // `__invoke` only. A plain `__invoke` method call would fall back to `__call`, which PHP
+        // never does for an object invocation.
+        Token::This if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) => {
+            let this = Expr::new(ExprKind::This, span);
+            *pos += 2;
+            let args = parse_args(tokens, pos, span)?;
+            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+            Ok(Expr::new(
+                ExprKind::ExprCall {
+                    callee: Box::new(this),
+                    args,
+                },
+                span,
+            ))
+        }
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
         other => Err(CompileError::new(
@@ -426,7 +463,26 @@ fn parse_prefix_inc_dec(
     // original error stands for anything the desugaring declines (a call, for instance,
     // which cannot be read twice).
     let rewind = *pos;
-    if let Ok(target) = parse_expr_bp(tokens, pos, 35) {
+    let operand = super::pratt::parse_prefix_increment_operand(tokens, pos);
+    if let Err(error) = &operand {
+        if !increment && error.message == "Cannot use [] for reading" {
+            return Err(CompileError::new(span,
+                "Pre-decrement on an append dimension is not supported"));
+        }
+    }
+    if let Ok((target, append_kind)) = operand {
+        if matches!(append_kind, super::pratt::PrefixIncrementTarget::Append) {
+            if !increment {
+                return Err(CompileError::new(span,
+                    "Pre-decrement on an append dimension is not supported"));
+            }
+            return Ok(target);
+        }
+        if matches!(append_kind, super::pratt::PrefixIncrementTarget::AppendProperty) {
+            if let Some(error) = super::append_writes::lower_null_property_write(&target, None, span) {
+                return Ok(error);
+            }
+        }
         if let Some(desugared) =
             super::assignment_targets::desugar_lvalue_incdec(target, increment, true, span)
         {

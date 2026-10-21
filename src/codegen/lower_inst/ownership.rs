@@ -143,6 +143,14 @@ pub(super) fn lower_release_unless_aliases(
 /// Lowers a release only for values that own or may own runtime-managed storage.
 pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    release_value_if_owned(ctx, value)
+}
+
+/// Emits the release of one SSA value when it owns or may own runtime-managed storage.
+///
+/// Shared by `release` and by instructions that consume their operand on one path only,
+/// such as a static-local initializer that is dropped once the slot is already initialized.
+pub(super) fn release_value_if_owned(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ownership = ctx.value_ownership(value)?;
     if !ownership.may_require_release() {
         return Ok(());
@@ -197,7 +205,10 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
     if inst.op == Op::RuntimeCall {
         let result_is_releasable = match inst.immediate {
             Some(crate::ir::Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
+                crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+                    | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+                    | crate::ir::RuntimeCallTarget::PendingAppendFetchForWrite
+                    | crate::ir::RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,
             )) => false,
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Function(target),
@@ -207,9 +218,13 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             )) => matches!(
                 target.result_ownership(),
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                    | crate::builtins::semantics::BuiltinResultOwnership::Independent
             ) || matches!(target, crate::ir::RuntimeFnId::GetClass | crate::ir::RuntimeFnId::GetParentClass),
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::UnaryString(_),
+            )) => true,
+            Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ExecutablePath,
             )) => true,
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Pcntl(target),
@@ -221,6 +236,10 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
         };
         // Class-name lookups return static metadata or an owned eval string, never
         // concat scratch. Validated release ignores metadata and retires detached copies.
+        // An Independent string lives in concat scratch while it fits and in an owned
+        // heap block past 64 KiB (`__rt_concat_reserve`); `acquire` duplicates both, so
+        // the original must still be released or every large result leaks. The heap
+        // block is never the `.` operator's takeover kind, and scratch is skipped.
         return Ok(!result_is_releasable);
     }
     // MixedCastString detaches an owned buffer for string-tagged inputs. Its

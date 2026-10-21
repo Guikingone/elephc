@@ -66,7 +66,9 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOrigin {
     ConstFold,
+    IntegerRange,
     Licm,
+    LoopOptimize,
 }
 
 impl PassOrigin {
@@ -74,7 +76,9 @@ impl PassOrigin {
     pub fn name(self) -> &'static str {
         match self {
             PassOrigin::ConstFold => "const_fold",
+            PassOrigin::IntegerRange => "integer_range",
             PassOrigin::Licm => "licm",
+            PassOrigin::LoopOptimize => "loop_optimize",
         }
     }
 }
@@ -122,6 +126,8 @@ pub enum Immediate {
     FloatKeyDiagnostic,
     /// Converts a string offset with runtime cast diagnostics for boxed values.
     StringOffsetCast,
+    /// Binds an already validated float-shaped runtime argument to int with precision diagnostics.
+    ImplicitIntCast,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
@@ -278,6 +284,7 @@ impl IterStartMetadata {
 }
 
 impl fmt::Debug for IterStartMetadata {
+    /// Formats iterator-start metadata with its unpacked state and reference mode.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("IterStartMetadata")
@@ -297,6 +304,7 @@ impl PackedIteratorState {
     const BY_REF: u32 = 1 << 31;
     const SLOT_MASK: u32 = !Self::BY_REF;
 
+    /// Packs an iterator-state slot with its by-reference flag, rejecting reserved high bits.
     fn new(state: LocalSlotId, by_ref: bool) -> Self {
         let raw = state.as_raw();
         assert_eq!(
@@ -307,10 +315,12 @@ impl PackedIteratorState {
         Self(raw | if by_ref { Self::BY_REF } else { 0 })
     }
 
+    /// Extracts the iterator-state local slot without the packed reference flag.
     fn state(self) -> LocalSlotId {
         LocalSlotId::from_raw(self.0 & Self::SLOT_MASK)
     }
 
+    /// Reports the reference-iteration flag stored in compact iterator metadata.
     fn is_by_ref(self) -> bool {
         self.0 & Self::BY_REF != 0
     }
@@ -323,6 +333,7 @@ struct PackedOptionalLocalSlot(u32);
 impl PackedOptionalLocalSlot {
     const NONE: u32 = u32::MAX;
 
+    /// Encodes an optional local slot while reserving the absent-slot sentinel.
     fn new(slot: Option<LocalSlotId>) -> Self {
         match slot {
             Some(slot) => {
@@ -334,6 +345,7 @@ impl PackedOptionalLocalSlot {
         }
     }
 
+    /// Decodes an optional local slot, treating the reserved sentinel as absent.
     fn get(self) -> Option<LocalSlotId> {
         (self.0 != Self::NONE).then(|| LocalSlotId::from_raw(self.0))
     }
@@ -403,6 +415,8 @@ impl PropertyFetchMode {
 pub enum PhpTypePredicate {
     Array,
     Bool,
+    /// `is_countable()`: an array, or an object whose class implements `Countable`.
+    Countable,
     Float,
     Int,
     Iterable,
@@ -418,6 +432,7 @@ impl PhpTypePredicate {
         match self {
             Self::Array => "array",
             Self::Bool => "bool",
+            Self::Countable => "countable",
             Self::Float => "float",
             Self::Int => "int",
             Self::Iterable => "iterable",
@@ -732,6 +747,10 @@ pub enum Op {
     LoadStaticLocal,
     StoreStaticLocal,
     InitStaticLocal,
+    /// Answers whether a static local's one-time initializer has not run yet: `I64` 1 before
+    /// the first `init_static_local` of the slot, 0 after. Lowering branches on it so the
+    /// initializer expression is evaluated only while the static is still unset.
+    StaticLocalUninitialized,
     LoadStaticProperty,
     /// Returns the address of a native static-property storage slot.
     ///
@@ -820,6 +839,8 @@ pub enum Op {
     MixedCastFloat,
     MixedCastString,
     StrConcat,
+    /// Consumes a local string owner and returns its replacement for an adjacent store.
+    StrAppend,
     StrLen,
     StrPersist,
     /// Reads a string offset; an optional Bool immediate controls missing-offset warnings.
@@ -1059,6 +1080,7 @@ pub enum Op {
     ExprCall,
     FirstClassCallableNew,
     CallableArrayNew,
+    /// Invokes a descriptor with callback, argument container, and optional source-strict Bool.
     CallableDescriptorInvoke,
     PipeCall,
     PtrCast,
@@ -1200,6 +1222,7 @@ impl Op {
             LoadGlobal
             | LoadStaticProperty
             | StaticPropInitialized
+            | StaticLocalUninitialized
             | LoadReflectionStaticProperty
             | ReflectionStaticPropertyInitialized
             | ScopedConstantGet
@@ -1224,6 +1247,8 @@ impl Op {
             IToStr | FToStr | ResourceToStr | StrConcat | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             StrCharAt => E::ALLOC_CONCAT | E::MAY_WARN,
+            StrAppend => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
@@ -1519,6 +1544,7 @@ impl Op {
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
+            StaticLocalUninitialized => "static_local_uninitialized",
             LoadStaticProperty => "load_static_property",
             LoadStaticPropertyRefCell => "load_static_property_ref_cell",
             StoreStaticProperty => "store_static_property",
@@ -1594,6 +1620,7 @@ impl Op {
             MixedCastFloat => "mixed_cast_float",
             MixedCastString => "mixed_cast_string",
             StrConcat => "str_concat",
+            StrAppend => "str_append",
             StrLen => "str_len",
             StrPersist => "str_persist",
             StrCharAt => "str_char_at",

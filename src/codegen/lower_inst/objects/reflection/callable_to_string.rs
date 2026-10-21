@@ -11,10 +11,8 @@
 //! - The rendering follows PHP 8.5 except for the `@@ <file> <line> - <line>` header line, which a
 //!   compiled binary cannot honestly answer: the source it was built from need not exist where it
 //!   runs, and baking the build machine's path in would be worse than leaving it out. The eval
-//!   bridge omits the same line, but still differs in three places this renderer gets right: the
-//!   prototype marker, the empty body, and the union order (#1117).
-//! - Union members print in PHP's order, not the declared one — see `reflection_union_member_rank`,
-//!   which the property dump shares.
+//!   bridge omits the same line and shares scalar and union formatting with this renderer.
+//! - Union members use the shared PHP type-mask order, including the iterable expansion.
 //! - Whether a callable is internal is decided by the caller (the builtin signature registry for a
 //!   function, the class catalog for a method), the same answer `isInternal()` gives. Only the
 //!   MODULE comes from here: the shared builtin contract for a function, the declaring class's
@@ -37,7 +35,9 @@ pub(super) fn reflection_method_to_string(
     flags: ReflectionMemberFlags,
     prototype_class_name: Option<&str>,
     inherited_class_name: Option<&str>,
+    overwritten_class_name: Option<&str>,
     is_internal: bool,
+    is_deprecated: bool,
     returns_reference: bool,
     parameters: &[ReflectionParameterMember],
     return_type: Option<&ReflectionParameterTypeMetadata>,
@@ -55,10 +55,15 @@ pub(super) fn reflection_method_to_string(
     parts.push(reflection_property_visibility_label(flags));
     parts.push("method");
 
-    let module = declaring_class_name
+    let module = inherited_class_name
         .and_then(elephc_builtin_contract::lookup_class)
+        .or_else(|| declaring_class_name.and_then(elephc_builtin_contract::lookup_class))
         .map(|class| class.module);
     let mut origin_parts = vec![reflection_origin_label(is_internal, module)];
+    if is_deprecated { origin_parts.push("deprecated".into()); }
+    if let Some(class_name) = overwritten_class_name {
+        origin_parts.push(format!("overwrites {class_name}"));
+    }
     if let Some(class_name) = inherited_class_name {
         origin_parts.push(format!("inherits {class_name}"));
     }
@@ -76,13 +81,16 @@ pub(super) fn reflection_method_to_string(
         name.to_string()
     };
     let header = format!("Method [ {} {} {} ]", origin, parts.join(" "), display_name);
-    reflection_callable_body(&header, parameters, return_type)
+    let tentative_return = is_internal && declaring_class_name.is_some_and(|class|
+        elephc_builtin_contract::reflection_methods::has_tentative_return(class, name));
+    reflection_callable_body(&header, parameters, return_type, tentative_return)
 }
 
 /// Renders ReflectionFunction::__toString() for one reflected function.
 pub(super) fn reflection_function_to_string(
     name: &str,
     is_internal: bool,
+    is_deprecated: bool,
     returns_reference: bool,
     parameters: &[ReflectionParameterMember],
     return_type: Option<&ReflectionParameterTypeMetadata>,
@@ -95,11 +103,12 @@ pub(super) fn reflection_function_to_string(
     };
     let module = elephc_builtin_contract::lookup(name).map(|contract| contract.module);
     let header = format!(
-        "Function [ <{}> function {} ]",
+        "Function [ <{}{}> function {} ]",
         reflection_origin_label(is_internal, module),
+        if is_deprecated { ", deprecated" } else { "" },
         display_name
     );
-    reflection_callable_body(&header, parameters, return_type)
+    reflection_callable_body(&header, parameters, return_type, false)
 }
 
 /// Returns PHP's callable origin label, including the owning module when it is known.
@@ -115,7 +124,7 @@ fn reflection_origin_label(is_internal: bool, module: Option<PhpModule>) -> Stri
 
 /// Appends PHP's parameter/return block to a rendered function or method header.
 ///
-/// A callable with no parameters AND no declared return type prints an EMPTY body — PHP omits the
+/// A callable with no parameters AND no declared return type prints an EMPTY body: PHP omits the
 /// `- Parameters [0]` block entirely there, and prints it as soon as either half has something to
 /// say. Measured on 8.5.10 with `function f() {}` against `function f(): void {}`.
 ///
@@ -125,6 +134,7 @@ fn reflection_callable_body(
     header: &str,
     parameters: &[ReflectionParameterMember],
     return_type: Option<&ReflectionParameterTypeMetadata>,
+    tentative_return: bool,
 ) -> String {
     // A scope that calls `func_get_args()` carries a synthesized `mixed ...$__elephc_func_args`
     // so it can read surplus positional arguments. It is an ABI slot, not a PHP parameter, and
@@ -150,7 +160,7 @@ fn reflection_callable_body(
     }
     rendered.push_str("  }\n");
     if let Some(return_type) = return_type {
-        rendered.push_str("  - Return [ ");
+        rendered.push_str(if tentative_return { "  - Tentative return [ " } else { "  - Return [ " });
         rendered.push_str(&reflection_type_metadata_to_string(return_type));
         rendered.push_str(" ]\n");
     }
@@ -204,8 +214,8 @@ fn reflection_parameter_to_string_at_position(
 
 /// Renders one parameter's default the way PHP's dump does.
 ///
-/// A default written as a constant prints the CONSTANT's name, not its value — `= LIMIT` and
-/// `= self::CEIL`, measured on 8.5.10 — which is why the constant name is consulted first.
+/// A default written as a constant prints the CONSTANT's name, not its value, `= LIMIT` and
+/// `= self::CEIL`, measured on 8.5.10, which is why the constant name is consulted first.
 /// The exported AST comes before both: an object default keeps its written arguments
 /// (`new \Foo(Foo::VALUE)`), and a named class constant prints fully qualified
 /// (`= \N\Foo::VALUE`) although `getDefaultValueConstantName()` answers `N\Foo::VALUE`.
@@ -216,21 +226,26 @@ fn reflection_parameter_default_to_string(parameter: &ReflectionParameterMember)
     if let Some(constant_name) = parameter.default_value_constant_name.as_ref() {
         return Some(constant_name.clone());
     }
-    parameter
-        .default_value
-        .as_ref()
-        .map(reflection_dump_default_value)
+    parameter.default_value.as_ref().and_then(|value| match value {
+        ReflectionParameterDefaultValue::DeferredError(_)
+        | ReflectionParameterDefaultValue::EirHelper(_) => None,
+        _ => Some(reflection_dump_default_value(value)),
+    })
 }
 
 /// Renders one default value, including the array and object forms PHP prints in a dump.
-fn reflection_dump_default_value(default: &ReflectionParameterDefaultValue) -> String {
+pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefaultValue) -> String {
     match default {
         ReflectionParameterDefaultValue::Int(value) => value.to_string(),
         ReflectionParameterDefaultValue::Bool(value) => value.to_string(),
         ReflectionParameterDefaultValue::Float(value) => reflection_dump_float(*value),
-        // PHP does not escape the quote it wraps the value in, so `it's` prints as `'it's'`.
-        ReflectionParameterDefaultValue::Str(value) => format!("'{value}'"),
+        // Quote marks remain literal; control and non-ASCII bytes use PHP's printable escapes.
+        ReflectionParameterDefaultValue::Str(value) => elephc_builtin_contract::reflection_format::string(
+            &elephc_builtin_contract::string_literal::literal_bytes(value),
+        ),
         ReflectionParameterDefaultValue::Null => String::from("NULL"),
+        ReflectionParameterDefaultValue::DeferredError(_)
+        | ReflectionParameterDefaultValue::EirHelper(_) => String::new(),
         // PHP exports the written AST here, so the argument list stays and the class name is
         // fully qualified: `new \\Foo(1, 'a')`, and `new \\Foo()` when nothing was written —
         // the constructor defaults `args` carries for `getDefaultValue()` are not part of the
@@ -264,7 +279,11 @@ fn reflection_dump_default_value(default: &ReflectionParameterDefaultValue) -> S
                 .map(|entry| {
                     let key = match &entry.key {
                         ReflectionDefaultArrayKey::Int(value) => value.to_string(),
-                        ReflectionDefaultArrayKey::Str(value) => format!("'{value}'"),
+                        ReflectionDefaultArrayKey::Str(value) => {
+                            elephc_builtin_contract::reflection_format::string(
+                                &elephc_builtin_contract::string_literal::literal_bytes(value),
+                            )
+                        }
                     };
                     format!("{key} => {}", reflection_dump_default_value(&entry.value))
                 })
@@ -274,70 +293,50 @@ fn reflection_dump_default_value(default: &ReflectionParameterDefaultValue) -> S
     }
 }
 
-/// Renders a float default the way PHP's dump does.
-///
-/// Three things Rust's own `to_string` does not do. PHP spells the non-finite values `INF`,
-/// `-INF` and `NAN` where Rust writes `inf`, `-inf` and `NaN`; it keeps the decimal point on an
-/// integral value — `1.0` stays `1.0` — and it switches to an exponent form outside a narrow
-/// decimal range, where Rust expands every digit. Measured on 8.5.10: `1e100` prints `1.0E+100`,
-/// `1e-5` prints `1.0E-5` and `1e15` prints `1.0E+15`, while `1.5` and `0.1` stay decimal, and
-/// `function f(float $x = INF, float $y = -INF, float $z = NAN) {}` dumps those three names.
+/// Renders a float default using PHP's 14 significant digits and exponent spelling.
 pub(super) fn reflection_dump_float(value: f64) -> String {
-    if value.is_nan() {
-        return "NAN".to_string();
-    }
-    if value.is_infinite() {
-        return if value.is_sign_negative() { "-INF" } else { "INF" }.to_string();
-    }
-    let magnitude = value.abs();
-    let exponential = magnitude != 0.0 && !(1e-4..1e15).contains(&magnitude);
-    if !exponential {
-        let rendered = value.to_string();
-        return if rendered.contains('.') {
-            rendered
-        } else {
-            format!("{rendered}.0")
-        };
-    }
-    // `{:E}` gives `1E100`; PHP writes the mantissa with a decimal point and the exponent with a
-    // sign, so `1E100` becomes `1.0E+100` and `1E-5` becomes `1.0E-5`.
-    let rendered = format!("{:E}", value);
-    let (mantissa, exponent) = match rendered.split_once('E') {
-        Some(parts) => parts,
-        None => return rendered,
-    };
-    let mantissa = if mantissa.contains('.') {
-        mantissa.to_string()
-    } else {
-        format!("{mantissa}.0")
-    };
-    if exponent.starts_with('-') {
-        format!("{mantissa}E{exponent}")
-    } else {
-        format!("{mantissa}E+{exponent}")
-    }
+    elephc_builtin_contract::reflection_format::float(value)
 }
 
 /// Renders the `ReflectionMethod::__toString()` answer for one listed member.
-pub(super) fn reflection_listed_method_to_string(member: &ReflectionListedMember) -> String {
-    let inherited_class_name = if member.flags.is_inherited {
+pub(super) fn reflection_listed_method_to_string(
+    ctx: &super::FunctionContext<'_>, member: &ReflectionListedMember,
+) -> String {
+    let inherited_class_name = member.declaring_class_name.as_deref().and_then(|class| {
+        let php_owner = reflection_class_like_is_internal(class).then(||
+            elephc_builtin_contract::reflection_inheritance::inherited_declaring_class(
+                class, &member.name,
+            )).flatten();
+        php_owner.or_else(|| member.flags.is_inherited.then_some(class))
+    });
+    let overwritten_class_name = if inherited_class_name.is_none() {
         member.declaring_class_name.as_deref()
-    } else {
-        None
-    };
+            .and_then(|class| ctx.module.class_infos.get(class))
+            .and_then(|info| super::reflection_parent_class_name(ctx, info))
+            .and_then(|parent| super::resolve_reflection_class(ctx, &parent))
+            .and_then(|(parent, info)| {
+                let key = super::php_symbol_key(&member.name);
+                let flags = super::reflection_method_member_flags(info, &key)?;
+                (!flags.is_private).then(||
+                    super::reflection_method_declaring_class_name(info, parent, &key)).flatten()
+            })
+    } else { None };
+    let mut prototype = member.prototype_member.as_deref();
+    while let Some(parent) = prototype.and_then(|member| member.prototype_member.as_deref()) {
+        prototype = Some(parent);
+    }
     reflection_method_to_string(
         &member.name,
         member.declaring_class_name.as_deref(),
         member.flags,
-        member
-            .prototype_member
-            .as_deref()
-            .and_then(|prototype| prototype.declaring_class_name.as_deref()),
+        prototype.and_then(|prototype| prototype.declaring_class_name.as_deref()),
         inherited_class_name,
+        overwritten_class_name.as_deref(),
         member
             .declaring_class_name
             .as_deref()
             .is_some_and(reflection_class_like_is_internal),
+        member.is_deprecated,
         member.returns_reference,
         &member.parameters,
         member.type_metadata.as_ref(),

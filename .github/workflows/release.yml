@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
+
 jobs:
   verify-ci:
     name: Verify CI for tagged commit
@@ -167,7 +172,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14  # Apple Silicon runner
+            runner: macos-15  # Apple Silicon runner
           # Linux release builds run on ubuntu-22.04 (glibc 2.35) rather than
           # the ubuntu-24.04 generation CI tests on, so the published binaries
           # also run on older distros (Ubuntu 22.04, Debian 12, RHEL 9, ...).
@@ -182,6 +187,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Build release binary
         run: cargo build --release
@@ -212,6 +219,19 @@ jobs:
 
       - name: Strip binary
         run: strip target/release/elephc
+
+      - name: Sign and notarize macOS binary
+        if: runner.os == 'macOS'
+        timeout-minutes: 40
+        uses: ./.github/actions/notarize-macos
+        with:
+          binary: target/release/elephc
+          certificate-p12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          signing-identity: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          apple-id: ${{ secrets.APPLE_ID }}
+          team-id: ${{ secrets.APPLE_TEAM_ID }}
+          app-password: ${{ secrets.APPLE_APP_PASSWORD }}
 
       - name: Copy mbstring data notices
         run: |
@@ -249,6 +269,17 @@ jobs:
           else
             shasum -a 256 "$TARBALL" > "$TARBALL.sha256"
           fi
+
+      - name: Verify packaged macOS signature
+        if: runner.os == 'macOS'
+        env:
+          TARBALL: target/release/elephc-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+        run: |
+          VERIFY_DIR="$(mktemp -d "$RUNNER_TEMP/elephc-signature.XXXXXX")"
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          tar xzf "$TARBALL" -C "$VERIFY_DIR" elephc
+          cmp target/release/elephc "$VERIFY_DIR/elephc"
+          codesign --verify --strict --verbose=2 "$VERIFY_DIR/elephc"
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
@@ -291,7 +322,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu

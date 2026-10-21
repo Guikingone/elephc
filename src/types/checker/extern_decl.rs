@@ -116,7 +116,8 @@ impl Checker {
 
     /// Validates an extern class field declaration's C type.
     ///
-    /// Rejects `void` and `callable` C types on extern fields; all other C types are permitted.
+    /// Rejects `void`, `callable`, and explicit C widths (`i8`..`u64`, `f32`) on extern fields
+    /// (fields are still laid out as 8-byte slots); all other C types are permitted.
     ///
     /// Inputs:
     /// - `class_name`: class name for error messages.
@@ -128,6 +129,15 @@ impl Checker {
         field: &crate::parser::ast::ExternField,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
+        if matches!(field.c_type, CType::IntWidth(_) | CType::F32) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern class '{}' field ${} uses an explicit C width; extern class fields support int, float, bool, string, ptr, and ptr<T> only",
+                    class_name, field.name
+                ),
+            ));
+        }
         if matches!(field.c_type, CType::Void | CType::Callable) {
             return Err(CompileError::new(
                 span,
@@ -145,7 +155,7 @@ impl Checker {
     /// Checks:
     /// - Name is not `argc` or `argv` (reserved superglobals).
     /// - No duplicate extern global with the same name already registered.
-    /// - C type is not `void` or `callable`.
+    /// - C type is not `void`, `callable`, or an explicit C width (`i8`..`u64`, `f32`).
     ///
     /// Inputs:
     /// - `name`: variable name (without `$` prefix) for error messages.
@@ -170,6 +180,15 @@ impl Checker {
             return Err(CompileError::new(
                 span,
                 &format!("Duplicate extern global declaration: ${}", name),
+            ));
+        }
+        if matches!(c_type, CType::IntWidth(_) | CType::F32) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern global ${} uses an explicit C width; extern globals support int, float, bool, string, ptr, and ptr<T> only",
+                    name
+                ),
             ));
         }
         if matches!(c_type, CType::Void | CType::Callable) {

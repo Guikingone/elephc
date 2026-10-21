@@ -13,6 +13,9 @@
 
 use crate::support::*;
 
+mod json_enums;
+mod literal_catalog;
+
 /// Asserts an eval failure stayed inside the C ABI/error-status contract.
 fn assert_no_rust_panic_leaked(stderr: &str) {
     assert!(
@@ -5493,6 +5496,31 @@ echo defined("COUNT_RECURSIVE") ? "C" : "bad";');
     assert_eq!(out, "4:2:3:6:2:3:C");
 }
 
+/// Verifies the eval float pointer builtins store the exact double: a value with 17 significant
+/// digits survives `ptr_write_f64()`/`ptr_read_f64()` inside `eval()` bit for bit (the eval runtime
+/// must read the float payload, not its 14-digit string form), `ptr_write_f32()` rounds to the
+/// same single compiled code produces, and an int value is converted. Identity comparisons keep
+/// the check independent of how `var_dump()` formats floats.
+#[test]
+fn test_eval_float_pointer_builtins_keep_full_precision() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('$buf = buffer_new(4);
+$payload = ptr_offset($buf, 16);
+ptr_write_f64($payload, 1.2345678901234567);
+var_dump(ptr_read_f64($payload) === 1.2345678901234567);
+ptr_write_f32($payload, 1.2345678901234567);
+var_dump(ptr_read_f32($payload) === 1.2345678806304932);
+$three = 3;
+ptr_write_f64($payload, $three);
+var_dump(ptr_read_f64($payload) === 3.0);
+buffer_free($buf);
+return "";');
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\n");
+}
+
 /// Verifies eval can dispatch raw pointer and buffer extension builtins through the bridge.
 #[test]
 fn test_eval_dispatches_raw_memory_builtins() {
@@ -7135,6 +7163,22 @@ echo ":"; echo function_exists("html_entity_decode");');
         out,
         "&lt;b&gt;&quot;Hi&quot; &amp; &#039;bye&#039;&lt;/b&gt;:&lt;a&gt;:<b>hi</b>:&lt;x&gt;:\"q\":1:1:1"
     );
+}
+
+/// Verifies eval `strip_tags()` strips tags, honors allow-lists, and dispatches as a callable.
+#[test]
+fn test_eval_dispatches_strip_tags_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strip_tags("<p>Hello <b>World</b></p>"); echo ":";
+echo strip_tags("<p>Hello <b>World</b></p>", "<p>"); echo ":";
+echo strip_tags("<p>Hello <b>World</b></p>", ["p"]); echo ":";
+echo strip_tags("1 < 2"); echo ":";
+echo call_user_func("strip_tags", "<x>y</x>"); echo ":";
+echo function_exists("strip_tags");');
+"#,
+    );
+    assert_eq!(out, "Hello World:<p>Hello World</p>:<p>Hello World</p>:1 < 2:y:1");
 }
 
 /// Verifies eval URL codec builtins encode, decode, and dispatch as callables.
@@ -22774,7 +22818,7 @@ EvalPromotedAsymBase::$privateValue from global scope"
     );
 }
 
-/// Verifies eval-declared inherited properties preserve PHP redeclaration invariants.
+/// Compatible eval redeclarations retain inherited setter access and the readonly modifier.
 #[test]
 fn test_eval_declared_inherited_property_redeclaration_contracts() {
     let out = compile_and_run(
@@ -22790,18 +22834,18 @@ class EvalPropertyRelativeBase {
     public EvalPropertyRelativeBase $parentValue;
 }
 class EvalPropertyRelativeChild extends EvalPropertyRelativeBase {
-    public self $selfValue;
+    public EvalPropertyRelativeBase $selfValue;
     public parent $parentValue;
 }
-class EvalPropertyReadonlyAddBase {
-    public int $count = 0;
+class EvalPropertyReadonlyPreserveBase {
+    public public(set) readonly int $count;
 }
-class EvalPropertyReadonlyAddChild extends EvalPropertyReadonlyAddBase {
-    public readonly int $count;
+class EvalPropertyReadonlyPreserveChild extends EvalPropertyReadonlyPreserveBase {
+    public public(set) readonly int $count;
     public function __construct() { $this->count = 7; }
 }
 class EvalPropertyReadonlyWidenBase {
-    protected int $count = 0;
+    protected readonly int $count;
     public function count() { return $this->count; }
 }
 class EvalPropertyReadonlyWidenChild extends EvalPropertyReadonlyWidenBase {
@@ -22810,13 +22854,17 @@ class EvalPropertyReadonlyWidenChild extends EvalPropertyReadonlyWidenBase {
 }
 $box = new EvalPropertyRedeclareChild();
 $box->value = "ok";
-$readonly = new EvalPropertyReadonlyAddChild();
+$readonly = new EvalPropertyReadonlyPreserveChild();
 $widened = new EvalPropertyReadonlyWidenChild();
 echo $box->value . ":" . $readonly->count . ":" . $widened->count . ":" . $widened->count();');
 "#,
     );
     assert_eq!(out, "ok:7:9:9");
+}
 
+/// A changed inherited property type fails in its own bounded eval compilation.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_type() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyTypeBase {
@@ -22831,7 +22879,11 @@ class EvalPropertyStringChild extends EvalPropertyTypeBase {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Narrowing read visibility retains its declaration-time eval rejection.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_read_visibility() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyPublicBase {
@@ -22846,7 +22898,11 @@ class EvalPropertyProtectedChild extends EvalPropertyPublicBase {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Introducing a declared type on an inherited untyped slot remains incompatible.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_declared_type() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyUntypedBase {
@@ -22861,7 +22917,11 @@ class EvalPropertyTypedChild extends EvalPropertyUntypedBase {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Static storage cannot be redeclared as instance storage by an eval child.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_storage() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyStaticBase {
@@ -22876,7 +22936,11 @@ class EvalPropertyInstanceChild extends EvalPropertyStaticBase {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Removing readonly remains forbidden independently of the property's setter metadata.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_readonly_removal() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyReadonlyBase {
@@ -26290,6 +26354,85 @@ echo ($static->isStatic() ? "S" : "s");');
         out.stdout,
         "sample:EvalReflectNameNs:Y:iU:a:c:d:s:r:t:N:g:V:h:Q:0:T:S:L:x|run::N:iU:c:d:s:r:t:N:g:V:h:Q:0:T:S:L:S"
     );
+}
+
+/// Verifies eval ReflectionFunction/Method `returnsReference()` reads the reflected declaration
+/// instead of a baked `false` (#1260).
+///
+/// Eval cannot declare `function &f()` itself, so its functions, closures, and methods report
+/// `false`; the by-reference declarations it can see are a compiled `function &f()` or
+/// `function &m()`, and an eval-declared `&get` property hook. Expected output measured on
+/// PHP 8.5.10.
+#[test]
+fn test_eval_reflection_returns_reference_reads_declarations() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AotStore {
+    public $items = [];
+    public function &items() { return $this->items; }
+    public function count() { return count($this->items); }
+}
+class AotBox { public $v = 1; }
+function &aot_ref(AotBox $box) { return $box->v; }
+function aot_value(AotBox $box) { return $box->v; }
+eval('class EvalHooked {
+    public array $items = [] { &get { return $this->items; } }
+    public int $n { get => 1; }
+    public function plain() { return 1; }
+}
+function eval_value() { return 1; }
+echo (new ReflectionFunction("aot_ref"))->returnsReference() ? "R" : "r";
+echo (new ReflectionFunction("aot_value"))->returnsReference() ? "R" : "r";
+echo (new ReflectionFunction("eval_value"))->returnsReference() ? "R" : "r";
+echo (new ReflectionFunction(function () { return 1; }))->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionMethod("AotStore", "items"))->returnsReference() ? "R" : "r";
+echo (new ReflectionMethod("AotStore", "count"))->returnsReference() ? "R" : "r";
+echo (new ReflectionMethod("EvalHooked", "plain"))->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionProperty("EvalHooked", "items"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Rrrr:Rrr:Rr");
+}
+
+/// Verifies eval `returnsReference()` reads an abstract or interface `&get` hook contract, which
+/// has no accessor method to carry the flag: eval-declared abstract class and interface contracts
+/// keep it from their declaration, and a compiled interface contract from its registration. Plain
+/// `get` and `set` contracts stay `false`. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_eval_reflection_returns_reference_reads_get_hook_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface AotRefContract { public string $y { &get; } }
+interface AotPlainContract { public int $w { get; } }
+eval('abstract class EvalAbstract {
+    abstract public string $x { &get; }
+    abstract public int $plain { get; }
+}
+interface EvalContract { public string $y { &get; } public int $z { get; set; } }
+echo (new ReflectionProperty("EvalAbstract", "x"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalAbstract", "plain"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "y"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "z"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "z"))->getHook(PropertyHookType::Set)->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionProperty("AotRefContract", "y"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("AotPlainContract", "w"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "RrRrr:Rr");
 }
 
 /// Verifies eval ReflectionFunction/Method derive deprecation predicates from `#[Deprecated]`.
@@ -29924,6 +30067,7 @@ echo get_resource_type($evaluated["STDOUT"]);
 /// second collector, while validating visible arity would reject the physical argument array.
 #[test]
 fn test_eval_method_bridge_enters_physical_collector_methods_through_raw_symbols() {
+    /// Detects an exact AArch64 or x86_64 call to the requested symbol in generated assembly.
     fn calls_symbol(assembly: &str, symbol: &str) -> bool {
         assembly.lines().any(|line| {
             let line = line.trim();

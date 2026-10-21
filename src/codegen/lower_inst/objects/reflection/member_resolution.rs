@@ -66,11 +66,11 @@ pub(super) fn reflection_class_method_prototype_member(
         return Ok(None);
     }
     if let Some(member) =
-        reflection_parent_method_prototype_member(ctx, info, method_key, flags.is_static)?
+        reflection_interface_method_prototype_member(ctx, info, method_key, flags.is_static)?
     {
         return Ok(Some(Box::new(member)));
     }
-    reflection_interface_method_prototype_member(ctx, info, method_key, flags.is_static)
+    reflection_parent_method_prototype_member(ctx, info, method_key, flags.is_static)
         .map(|member| member.map(Box::new))
 }
 
@@ -115,7 +115,9 @@ pub(super) fn reflection_parent_method_prototype_member(
             if let Some(member) =
                 reflection_class_method_member(ctx, resolved_parent_name, parent_info, method_key)?
             {
-                if !member.flags.is_private && member.flags.is_static == is_static {
+                if !member.flags.is_private && member.flags.is_static == is_static
+                    && (!method_key.eq_ignore_ascii_case("__construct") || member.flags.is_abstract)
+                {
                     return Ok(Some(member));
                 }
             }

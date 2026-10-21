@@ -11,12 +11,12 @@
 //!   (`__toString` read `__name`).
 //! - Every expected string here is real `LC_ALL=C php` 8.5.10 output with one line removed: PHP
 //!   prints `  @@ <file> <line> - <line>` after the header, which a compiled binary cannot
-//!   honestly answer — the source it was built from need not exist where it runs. The blank line
+//!   honestly answer, the source it was built from need not exist where it runs. The blank line
 //!   after it stays: it opens the parameter block, and PHP prints it for internal callables too.
-//!   The eval bridge omits the same line, but still differs in three places the compiled path
-//!   gets right: the prototype marker, the empty body, and the union order (#1117).
+//!   The eval bridge omits the same line and shares scalar, empty-body and union formatting.
+//!   Its prototype and internal-origin metadata remain incomplete (#1117).
 //! - A union prints in PHP's type-mask order, not the declared one: `int|string` comes back as
-//!   `string|int`. See `reflection_union_member_rank`.
+//!   `string|int`. See `elephc_builtin_contract::reflection_format::union`.
 //! - Internal callable origins include their owning PHP module under the name PHP registers it
 //!   with: `<internal:Core>`, `<internal:SPL>`, `<internal:standard>`.
 
@@ -44,7 +44,7 @@ echo (new ReflectionMethod('Demo', 'plain'))->__toString();
     );
 }
 
-/// Modifiers print in PHP's order — abstract, final, static, then visibility — and an override
+/// Modifiers print in PHP's order, abstract, final, static, then visibility, and an override
 /// carries the class it came from in the `<user, prototype C>` marker.
 #[test]
 fn test_reflection_method_to_string_renders_modifiers_and_prototype() {
@@ -206,7 +206,7 @@ foreach ((new ReflectionMethod('Demo', 'plain'))->getParameters() as $p) {
 }
 
 /// The entries `ReflectionClass::getMethods()` hands back carry the same rendering as the ones
-/// built by `new ReflectionMethod(...)` — they are populated by a different emitter.
+/// built by `new ReflectionMethod(...)`, they are populated by a different emitter.
 #[test]
 fn test_listed_method_to_string_matches_the_constructed_one() {
     let out = compile_and_run(
@@ -247,7 +247,7 @@ echo $compiled === $fromEval ? "same" : "differs", "\n";
 
 /// A default written as a GLOBAL constant has to carry its VALUE as well as its name: the name
 /// alone left `isDefaultValueConstant()` true while `isDefaultValueAvailable()` was false and
-/// `getDefaultValue()` threw — a combination PHP never produces.
+/// `getDefaultValue()` threw, a combination PHP never produces.
 #[test]
 fn test_global_constant_default_is_available_and_named() {
     let out = compile_and_run(
@@ -269,7 +269,7 @@ foreach ((new ReflectionFunction('f'))->getParameters() as $p) {
     assert_eq!(out, "n:y:y:LIMIT:7\nm:y:y:E::CEIL:9\n");
 }
 
-/// A namespaced constant answers with the RESOLVED name, which is what PHP answers too — measured
+/// A namespaced constant answers with the RESOLVED name, which is what PHP answers too, measured
 /// on 8.5.10, where `namespace N; const LIMIT = 7;` gives `'N\LIMIT'`.
 #[test]
 fn test_namespaced_constant_default_keeps_its_resolved_name() {
@@ -395,7 +395,7 @@ echo (new ReflectionFunction('f'))->__toString();
 }
 
 /// `getDeclaringFunction()` builds its reflector from metadata that deliberately carries no
-/// parameters — emitting them would emit a `ReflectionParameter` for each, and each of those emits
+/// parameters: emitting them would emit a `ReflectionParameter` for each, and each of those emits
 /// its own declaring function, which does not terminate. The DUMP is a string, so it is rendered
 /// from the real member instead of from that metadata; without that it claimed `Parameters [0]`
 /// for a method that has two.
@@ -475,7 +475,7 @@ echo (new ReflectionFunction('pi'))->__toString();
 /// claimed `Parameters [0]` for a function PHP reports one parameter for.
 ///
 /// The two leading reads are not decoration. Stringifying this object in a program that does
-/// nothing else SEGFAULTS, on this branch and at the merge-base alike (#1229) — a pre-existing
+/// nothing else SEGFAULTS, on this branch and at the merge-base alike (#1229), a pre-existing
 /// crash this fixture must not trip over while covering the parameters, so it is written in the
 /// shape that runs.
 #[test]
@@ -522,7 +522,7 @@ echo (string) new ReflectionFunction('nonFinite');
 ///
 /// `ReflectionConstantValue` has no array variant, so routing global constants through the
 /// fallible evaluator made `const ITEMS = [1, 2]; function f($items = ITEMS) {}` a compile error
-/// for the whole program. The metadata is still missing — PHP reports the array — but the program
+/// for the whole program. The metadata is still missing, PHP reports the array, but the program
 /// builds, and the predicates then behave exactly as they do for a parameter with no default,
 /// which is what PHP does in that state too.
 #[test]

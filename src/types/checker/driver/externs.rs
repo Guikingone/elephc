@@ -12,7 +12,7 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{
-    ctype_stack_size, ctype_to_php_type, packed_type_size, ExternClassInfo, ExternFieldInfo,
+    ctype_stack_size, ctype_to_abi_type, ctype_to_php_type, packed_type_size, ExternClassInfo, ExternFieldInfo,
     ExternFunctionSig, FunctionSig, PackedClassInfo, PackedFieldInfo,
 };
 
@@ -99,6 +99,8 @@ impl Checker {
             .map(|p| (p.name.clone(), ctype_to_php_type(&p.c_type)))
             .collect();
         let php_ret = ctype_to_php_type(return_type);
+        let abi_params: Vec<_> = params.iter().map(|p| ctype_to_abi_type(&p.c_type)).collect();
+        let abi_return = ctype_to_abi_type(return_type);
         if let Err(error) = self.validate_extern_function_decl(
             name,
             params,
@@ -130,7 +132,9 @@ impl Checker {
             ExternFunctionSig {
                 name: name.to_string(),
                 params: php_params,
+                abi_params,
                 return_type: php_ret,
+                abi_return,
                 library: library.clone(),
             },
         );

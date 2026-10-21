@@ -16,6 +16,20 @@ pub(super) fn reflection_parameter_default_value(
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
 ) -> Result<Option<ReflectionParameterDefaultValue>> {
+    if let Some(value) = reflection_deferred_default_value(default) {
+        return Ok(Some(value));
+    }
+    if let Some(helper) = ctx.module.functions.iter().chain(ctx.module.closures.iter())
+        .find(|function| (function.lexical_class.is_none() && current_class.is_empty()
+            || function.lexical_class.as_deref().is_some_and(|scope|
+            scope == current_class || current_info.is_some_and(|info|
+                info.method_impl_classes.values().chain(info.static_method_impl_classes.values())
+                    .any(|owner| owner == scope))))
+            && function.callable_default.as_ref()
+                .is_some_and(|value| value == default && value.span == default.span))
+    {
+        return Ok(Some(ReflectionParameterDefaultValue::EirHelper(helper.name.clone())));
+    }
     if let Some(value) =
         reflection_object_parameter_default_value(ctx, current_class, current_info, default)?
     {
@@ -24,10 +38,19 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_literal_parameter_default_value(default) {
         return Ok(Some(value));
     }
+    let context = crate::codegen::const_default_values::ConstDefaultContext {
+        module: ctx.module,
+        current_class: (!current_class.is_empty()).then_some(current_class),
+    };
+    if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
+        .and_then(crate::codegen::const_default_values::resolved_scalar_literal)
+    {
+        return Ok(reflection_literal_parameter_default_value(&Expr::new(kind, default.span)));
+    }
     match &default.kind {
         // `ConstRef` is a GLOBAL constant. It folds the same way the scoped forms do, and it
         // has to: the constant NAME alone left `isDefaultValueConstant()` true while
-        // `isDefaultValueAvailable()` stayed false and `getDefaultValue()` threw — a state PHP
+        // `isDefaultValueAvailable()` stayed false and `getDefaultValue()` threw, a state PHP
         // never produces (#1080).
         //
         // Unlike the scoped forms it does NOT propagate a fold failure. `reflection_constant_value`
@@ -35,7 +58,7 @@ pub(super) fn reflection_parameter_default_value(
         // function f($items = ITEMS) {}` failed the whole compile once global constants reached
         // it. Every other unsupported default here answers `Ok(None)` and keeps the program
         // building; this one now does too. That is still short of PHP, which reports the array —
-        // folding it needs an array variant and is filed — but a program that compiled before
+        // folding it needs an array variant and is filed, but a program that compiled before
         // this branch compiles after it.
         ExprKind::ConstRef(_) => Ok(
             reflection_constant_value(ctx, current_class, current_info, default, 0)
@@ -48,6 +71,17 @@ pub(super) fn reflection_parameter_default_value(
         }
         _ => Ok(None),
     }
+}
+
+/// Retains the message from a compiler-generated lazy default Error without evaluating it.
+pub(super) fn reflection_deferred_default_value(default: &Expr) -> Option<ReflectionParameterDefaultValue> {
+    let ExprKind::Throw(exception) = &default.kind else { return None; };
+    let ExprKind::NewObject { class_name, args } = &exception.kind else { return None; };
+    let [Expr { kind: ExprKind::StringLiteral(message), .. }] = args.as_slice() else {
+        return None;
+    };
+    (class_name.as_str() == "Error")
+        .then(|| ReflectionParameterDefaultValue::DeferredError(message.clone()))
 }
 
 /// Converts a top-level object parameter default into Reflection metadata.
@@ -190,6 +224,8 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
         | ReflectionParameterDefaultValue::Bool(_)
         | ReflectionParameterDefaultValue::Float(_)
         | ReflectionParameterDefaultValue::Str(_)
+        | ReflectionParameterDefaultValue::DeferredError(_)
+        | ReflectionParameterDefaultValue::EirHelper(_)
         | ReflectionParameterDefaultValue::Null => false,
     }
 }
@@ -198,6 +234,11 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
 pub(super) fn reflection_literal_parameter_default_value(
     default: &Expr,
 ) -> Option<ReflectionParameterDefaultValue> {
+    if let Some(ExprKind::StringLiteral(value)) =
+        crate::codegen::literal_defaults::fold_named_class_constant(&default.kind)
+    {
+        return Some(ReflectionParameterDefaultValue::Str(value));
+    }
     match &default.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionParameterDefaultValue::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionParameterDefaultValue::Bool(*value)),
@@ -238,6 +279,11 @@ pub(super) fn reflection_assoc_array_default_value(
 
 /// Converts one supported associative-array key expression into PHP-normalized metadata.
 pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefaultArrayKey> {
+    if let Some(ExprKind::StringLiteral(value)) =
+        crate::codegen::literal_defaults::fold_named_class_constant(&key.kind)
+    {
+        return reflection_default_string_array_key(&value);
+    }
     match &key.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
@@ -284,30 +330,8 @@ pub(super) fn reflection_parameter_default_from_constant_value(
 /// Returns PHP's constant-name metadata for parameter defaults that name a class constant.
 pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Option<String> {
     match &default.kind {
-        ExprKind::ScopedConstantAccess { receiver, name } => Some(format!(
-            "{}::{}",
-            reflection_static_receiver_label(receiver),
-            name
-        )),
-        // A GLOBAL constant is a name too, and PHP reports it the same way: a parameter declared
-        // `int $n = LIMIT` answers `LIMIT` from `getDefaultValueConstantName()` and prints
-        // `= LIMIT` in a dump, exactly as a class constant does. Only the scoped form was
-        // recognized here, so the global one had neither a name nor a folded value and dropped out
-        // of both (#1080).
-        ExprKind::ConstRef(name) => {
-            Some(name.as_str().trim_start_matches('\\').to_string())
-        }
-        _ => None,
-    }
-}
-
-/// Returns the PHP source-visible receiver label for ReflectionParameter constant defaults.
-pub(super) fn reflection_static_receiver_label(receiver: &StaticReceiver) -> String {
-    match receiver {
-        StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
-        StaticReceiver::Self_ => "self".to_string(),
-        StaticReceiver::Static => "static".to_string(),
-        StaticReceiver::Parent => "parent".to_string(),
+        ExprKind::ConstRef(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
+        _ => crate::types::deferred_defaults::source_constant_name(default),
     }
 }
 
@@ -316,6 +340,13 @@ pub(super) fn reflection_parameter_type_metadata(
     type_expr: Option<&TypeExpr>,
     ty: &PhpType,
 ) -> Option<ReflectionParameterTypeMetadata> {
+    if *ty == PhpType::Mixed {
+        if let Some(TypeExpr::Named(name)) = type_expr {
+            if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("object") {
+                return reflection_declared_type_metadata(type_expr.expect("declared object type"));
+            }
+        }
+    }
     if let Some(TypeExpr::Intersection(members)) = type_expr {
         return reflection_intersection_type_metadata(members);
     }

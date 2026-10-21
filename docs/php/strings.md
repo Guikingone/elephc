@@ -161,11 +161,13 @@ array, including nested keys and repeated `[]` entries. AOT and `eval()` use the
 same encoding detection, substitution settings, and Core INI query limits.
 The example in `examples/mbstring/main.php` parses a product search and tags.
 
-The current AOT output adapter accepts local variables and managed aliases.
-By-reference function parameters, property-backed references, dynamic output
-unpacking, and generic callable wrappers still require additional adapters.
-PHP error-handler routing and shared indexed-array root promotion also remain
-incomplete; the complete mbstring extension is still in development.
+The current AOT output adapter accepts local variables and managed aliases, while
+opaque eval also supports a by-reference function parameter. Raw AOT by-reference
+function parameters, property-backed references, and generic callable wrappers
+still require additional output adapters. PHP error-handler routing and shared
+indexed-array root promotion also remain incomplete. These are documented
+call-shape limitations, not missing symbols: all 65 PHP 8.5.10 mbstring functions
+and all 9 constants are registered for native compilation and `eval()`.
 
 Programs using mbstring retain response MIME metadata when `header()` accepts a
 header, including in CLI builds. Output buffering and `print_r(..., true)` keep
@@ -175,14 +177,14 @@ headers mutable until nonempty bytes reach the final output destination. Startup
 internal/output encodings, MIME selection, and substitution settings. Direct,
 named, unpacked, and callable calls work in AOT and `eval()`. Use
 `ob_start("mb_output_handler")` to convert buffered output automatically, as in
-`examples/mbstring/main.php`. Programs using mbstring or opaque eval require the
-managed `pcre2` package for MIME selection, including with default INI settings.
+`examples/mbstring/main.php`. The contract-owned default MIME expression needs no
+native package. A custom `mbstring.http_output_conv_mimetypes` expression inside
+opaque eval requires the complete `--with-mbstring` capability and managed PCRE2.
 
 Runtime mutation of the Core response settings remains incomplete. Eval handler
-registrations currently retain their callback until the owning eval context is
-destroyed; releasing that registration when its individual buffer closes remains
-part of the output-buffer lifecycle work. PHP error-handler routing and web
-transport verification also remain open.
+registrations release their retained callback when the individual buffer closes,
+with context teardown handling registrations that remain active. PHP error-handler
+routing and web transport verification remain open.
 
 | Function | Signature | Description |
 |---|---|---|
@@ -251,7 +253,7 @@ transport verification also remain open.
 | `ord()` | `ord($char): int` | ASCII value of first character |
 | `chr()` | `chr($code): string` | Character from ASCII code |
 | `explode()` | `explode($separator, $str [, $limit]): array` | Split string into array. An empty `$separator` throws `\ValueError`. |
-| `implode()` | `implode($separator, $array): string`<br>`implode($array): string` | Join array into string; the one-argument form joins with an empty separator |
+| `implode()` | `implode($separator, $array): string`<br>`implode($array): string` | Join array into string; the one-argument form joins with an empty separator. Takes an indexed or associative array (keys are ignored) of any element type, including one reached through a `?array`, `mixed` or union slot whose shape is only known at run time. A value that is not an array throws `\TypeError`. |
 | `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number. A negative `$dec` is not an error: it rounds to that power of ten and formats with no decimals. |
 | `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) |
 | `printf()` | `printf($fmt, ...): int` | Format and print |
@@ -292,6 +294,7 @@ transport verification also remain open.
 | `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` always, `"` under `ENT_COMPAT`, `'` under `ENT_QUOTES`; `ENT_NOQUOTES` leaves both quotes literal. The single quote is `&#039;` under `ENT_HTML401` and `&apos;` under `ENT_HTML5`, `ENT_XHTML` or `ENT_XML1`. The `ENT_*` flag constants are defined with PHP's values; `$encoding` is accepted but not applied |
 | `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
+| `strip_tags()` | `strip_tags(string $string, array\|string\|null $allowed_tags = null): string` | Strip HTML and PHP tags. Comments and PHP tags are always removed. `$allowed_tags` is a string like `"<p><a>"` or an array of tag names (`["p", "a"]`). `<` followed by whitespace is left as literal text (`"1 < 2"`). |
 | `parse_url()` | `parse_url(string $url, int $component = -1): array\|string\|int\|null\|false` | Parse present URL components without decoding them; `PHP_URL_*` selects one component |
 | `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
 | `urldecode()` | `urldecode($str): string` | URL-decode |

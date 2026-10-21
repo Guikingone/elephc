@@ -9,6 +9,8 @@
 //! - The validator is conservative: uncertain or malformed IR fails early so
 //!   later passes can assume table IDs, branch args, and value types are sound.
 
+mod string_append;
+
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::block::{BlockId, SwitchCase, Terminator};
@@ -58,6 +60,7 @@ pub enum ValidationError {
         expected: &'static str,
     },
     UnexpectedImmediate(InstId),
+    InvalidStringAppendTransfer(InstId),
     UnknownRuntimeCallSignature(InstId),
     EffectMismatch {
         inst: InstId,
@@ -119,6 +122,7 @@ pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
     let dominators = compute_dominators(function);
     validate_instructions(function, &dominators)?;
     validate_terminators(function, &dominators)?;
+    string_append::validate_transfers(function)?;
     Ok(())
 }
 
@@ -508,10 +512,11 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
+        StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
         | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
-        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
+        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
+        | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
         BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
@@ -540,7 +545,7 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
-            matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast)
+            matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast | Imm::ImplicitIntCast)
         }),
         TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
             matches!(imm, Imm::TypePredicate(_))
@@ -714,7 +719,7 @@ fn validate_opcode_rules(
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrConcat | StrEq | StrCmp | StrLooseEq => {
+        StrAppend | StrConcat | StrEq | StrCmp | StrLooseEq => {
             check_binary(function, inst_id, inst, IrType::Str, "Str")
         }
         StrCharAt => {
@@ -727,6 +732,7 @@ fn validate_opcode_rules(
         | LoadRefCell
         | LoadGlobal
         | LoadStaticLocal
+        | StaticLocalUninitialized
         | LoadStaticProperty
         | LoadStaticPropertyRefCell
         | LoadReflectionStaticProperty
@@ -785,15 +791,27 @@ fn validate_opcode_rules(
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
-        // The fetch-for-write element read is emitted from exactly one site (a by-reference
-        // `foreach` source, issue #580) and writes the copy-on-write split back into the
-        // receiver's element slot, so its operand shape is pinned tighter than the shared read
-        // arm above: an indexed receiver and an already int-coerced key, never a runtime-tagged
-        // one.
+        // Typed fetch-for-write reads require an already integer-coerced key. Mixed-result
+        // nested parents instead use the storage-aware runtime reader, which accepts string
+        // and boxed keys on an indexed or runtime-promoted receiver.
         ArrayGetForWrite => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
-            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
+            if inst.result_php_type.codegen_repr() == crate::types::PhpType::Mixed {
+                let operand = inst.operands[1];
+                let actual = function.value(operand)
+                    .ok_or(ValidationError::UnknownValue(operand))?.ir_type;
+                if matches!(actual, IrType::I64 | IrType::Str
+                    | IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)) {
+                    Ok(())
+                } else {
+                    Err(ValidationError::OperandTypeMismatch {
+                        inst: inst_id, operand, expected: "I64, Str, or boxed key", actual,
+                    })
+                }
+            } else {
+                check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
+            }
         }
         // The hash counterpart of the fetch-for-write read. A nested write can also emit it
         // after ArrayFetchForWrite, with a true immediate to suppress a repeated float-key
@@ -1576,9 +1594,9 @@ fn validate_use(
         return Err(ValidationError::VoidValueUsed(value));
     }
     // A structured lowering can leave a fully formed continuation unreachable after its only
-    // prospective predecessor terminates. Values from entry-reachable setup blocks remain valid
-    // there, but same-block ordering and values from unrelated dead blocks must still satisfy the
-    // ordinary SSA rules.
+    // prospective predecessor terminates. Cross-block dominance has no executable meaning there,
+    // including when the definition also belongs to a dead continuation. Keep checking IDs, types,
+    // and same-block ordering so malformed instructions still fail validation.
     let use_is_unreachable = use_block != function.entry
         && dominators
             .get(&use_block)
@@ -1586,11 +1604,7 @@ fn validate_use(
     let definition_block = match value_ref.def {
         ValueDef::BlockParam { block, .. } | ValueDef::Instruction { block, .. } => block,
     };
-    let definition_is_reachable = definition_block == function.entry
-        || dominators
-            .get(&definition_block)
-            .is_some_and(|set| set.contains(&function.entry));
-    if use_is_unreachable && definition_block != use_block && definition_is_reachable {
+    if use_is_unreachable && definition_block != use_block {
         return Ok(());
     }
     if definition_dominates_use(value_ref.def, use_block, use_inst_index, dominators) {
@@ -1638,8 +1652,8 @@ fn definition_dominates_use(
 /// would otherwise strip the entry block out of the header's dominators and
 /// produce spurious `UseNotDominated` errors for any value the entry defines and
 /// a later pass forwards into the loop. Unreachable blocks themselves resolve
-/// to `{self}`. Validation accepts values produced by entry-reachable setup,
-/// while still rejecting local use-before-definition and sibling dead-block uses.
+/// to `{self}`. Validation skips cross-block dominance for their uses while
+/// still rejecting same-block use-before-definition.
 fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
     let predecessors = compute_predecessors(function);
     let reachable = reachable_from_entry(function, &predecessors);

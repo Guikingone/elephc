@@ -26,7 +26,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::names::{method_symbol, php_symbol_key};
 use crate::parser::ast::{ExprKind, Visibility};
 use crate::types::{ClassInfo, FunctionSig, PhpType};
@@ -40,6 +40,10 @@ use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 use super::eval_argument_helpers::emit_borrowed_string_arg;
 
 const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
+    "ClosedGeneratorException",
+    "CompileError",
+    "ParseError",
+    "RequestParseBodyException",
     "Error",
     "TypeError",
     "ArgumentCountError",
@@ -134,32 +138,25 @@ pub(super) fn module_emits_eval_constructor_bridge(module: &Module) -> bool {
     module_uses_eval(module)
 }
 
-/// Returns true when the EIR module contains a function that can call eval.
+/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
+///
+/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
+/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
+/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
+/// like it. This used to scan for functions carrying an eval local instead, which is a
+/// different question that happened to give the same answer while the ONLY reason to link
+/// the archive was an `eval()` in the program.
+///
+/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
+/// cache, which lives in the archive, so a program calling it needs the archive whether or
+/// not it ever evaluates a string. Keeping the narrower scan here made that combination
+/// unlinkable, which is what kept the fold in place and left the function answering `false`
+/// where reference answers `true`.
+///
+/// The call sites are all inside a block already gated on the same flag, so for a program
+/// that does use `eval()` nothing changes.
 fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
+    module.required_runtime_features.eval_bridge
 }
 
 /// Collects AOT and runtime-backed constructors in stable class-id order.
@@ -2065,6 +2062,43 @@ mod argument_ownership_tests {
                 true,
             );
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+        }
+    }
+
+    /// Callable constructor arguments reach the array and invokable-object lookups through
+    /// unconditional AArch64 branches.
+    ///
+    /// The string-name descriptor lookup emitted between the tag ladder and those lookups grows
+    /// with the program's callable names, so a `b.eq` across it can leave the ±1 MiB
+    /// conditional-branch range (#1444). x86_64 keeps its rel32 `je`.
+    #[test]
+    fn callable_constructor_argument_ladder_widens_aarch64_branches() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = constructor_argument_asm(target, PhpType::Callable, false);
+            let lines = asm.lines().map(str::trim).collect::<Vec<_>>();
+            for (suffix, sites) in [("_callable_array", 2), ("_callable_object", 1)] {
+                let reaches = |line: &str, mnemonic: &str| {
+                    line.strip_prefix(mnemonic).is_some_and(|label| label.ends_with(suffix))
+                };
+                match target.arch {
+                    Arch::AArch64 => {
+                        assert!(
+                            !lines.iter().any(|line| reaches(line, "b.eq ")),
+                            "{name}: near branch to {suffix}:\n{asm}"
+                        );
+                        let wide = lines
+                            .windows(2)
+                            .filter(|pair| pair[0] == "b.ne 1f" && reaches(pair[1], "b "))
+                            .count();
+                        assert_eq!(wide, sites, "{name}: wide branches to {suffix}:\n{asm}");
+                    }
+                    Arch::X86_64 => {
+                        let near = lines.iter().filter(|line| reaches(line, "je ")).count();
+                        assert_eq!(near, sites, "{name}: je branches to {suffix}:\n{asm}");
+                    }
+                }
+            }
         }
     }
 

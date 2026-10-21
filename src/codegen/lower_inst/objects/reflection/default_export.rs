@@ -6,9 +6,10 @@
 //! - `default_members::reflection_parameter_members_with_declaring_function()`.
 //!
 //! Key details:
-//! - Only an object default (`new Foo(...)`) and a named class constant are exported. Every
-//!   other top-level default already prints correctly from its evaluated value, and PHP prints
-//!   a top-level string without escaping it, which this exporter would get wrong.
+//! - Object defaults and named class constants preserve their written expressions. Defaults
+//!   stored as lazy helpers or without compact values also use the retained source expression.
+//! - Top-level strings use the bytewise Reflection formatter; nested AST strings follow PHP's
+//!   source export rules instead.
 //! - PHP folds what it can at compile time and exports the rest as written, and the dump shows
 //!   the difference: `new \N\Foo(N\LIMIT)` keeps a user constant's name, while an array made only
 //!   of literals prints every key (`[0 => 1]`). The rules below are measured on PHP 8.5.10.
@@ -23,10 +24,17 @@ pub(super) fn reflection_parameter_default_export(
     current_class: &str,
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
+    needs_source_export: bool,
 ) -> Option<String> {
     let exporter = DefaultExporter { ctx, current_class, current_info };
+    if needs_source_export {
+        if let Some(value) = reflection_literal_parameter_default_value(default) {
+            return Some(reflection_dump_default_value(&value));
+        }
+        return exporter.export(default);
+    }
     match &default.kind {
-        ExprKind::NewObject { .. } => exporter.export(default),
+        ExprKind::NewObject { .. } | ExprKind::NewScopedObject { .. } => exporter.export(default),
         ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named(_), .. } => {
             exporter.export(default)
         }
@@ -75,7 +83,7 @@ impl DefaultExporter<'_, '_> {
                     }
                     StaticReceiver::Self_ => "self".to_string(),
                     StaticReceiver::Parent => "parent".to_string(),
-                    StaticReceiver::Static => return None,
+                    StaticReceiver::Static | StaticReceiver::Generic(_) => return None,
                 };
                 Some(format!("{receiver}::{name}"))
             }
@@ -86,6 +94,15 @@ impl DefaultExporter<'_, '_> {
                     class_name.as_str().trim_start_matches('\\'),
                     args.join(", ")
                 ))
+            }
+            ExprKind::NewScopedObject { receiver, args } => {
+                let class = match receiver.written_class_receiver() {
+                    StaticReceiver::Self_ => "self",
+                    StaticReceiver::Parent => "parent",
+                    _ => return None,
+                };
+                let args = args.iter().map(|arg| self.export(arg)).collect::<Option<Vec<_>>>()?;
+                Some(format!("new {class}({})", args.join(", ")))
             }
             ExprKind::NamedArg { name, value } => Some(format!("{name}: {}", self.export(value)?)),
             ExprKind::ArrayLiteral(items) => {
@@ -241,8 +258,23 @@ impl DefaultExporter<'_, '_> {
     }
 }
 
-/// Quotes a string the way PHP's AST export does, escaping the quote and the backslash.
+/// Quotes a string as PHP's AST exporter does, switching to double quotes for control bytes.
 fn export_php_string(value: &str) -> String {
+    if value.bytes().any(|byte| byte < 0x20) {
+        let mut quoted = String::from("\"");
+        for ch in value.chars() {
+            match ch {
+                '\n' => quoted.push_str("\\n"), '\r' => quoted.push_str("\\r"),
+                '\t' => quoted.push_str("\\t"), '\u{b}' => quoted.push_str("\\v"),
+                '\u{c}' => quoted.push_str("\\f"), '\u{1b}' => quoted.push_str("\\e"),
+                '\\' | '"' | '$' => { quoted.push('\\'); quoted.push(ch); }
+                ch if ch < ' ' => quoted.push_str(&format!("\\{:03o}", ch as u32)),
+                ch => quoted.push(ch),
+            }
+        }
+        quoted.push('"');
+        return quoted;
+    }
     let mut quoted = String::with_capacity(value.len() + 2);
     quoted.push('\'');
     for ch in value.chars() {

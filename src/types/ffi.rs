@@ -8,6 +8,9 @@
 //!
 //! Key details:
 //! - FFI metadata must preserve target-independent type contracts while leaving register/stack layout to ABI helpers.
+//! - Every C integer width maps to the PHP type `int` and C `float` to the PHP type `float`;
+//!   `ExternAbiType` keeps the declared width so the call boundary can normalize registers
+//!   without widening the PHP type system.
 
 use std::collections::HashMap;
 
@@ -15,14 +18,60 @@ use crate::parser::ast::CType;
 
 use super::{PackedClassInfo, PhpType};
 
+/// Register-level shape of one extern parameter or return slot, derived from the declared C type.
+///
+/// The PHP-visible type of every integer slot is `int`; the width only tells the call boundary
+/// how to normalize the register, because both supported ABIs leave the bits above a narrow
+/// return value unspecified and expect the caller to extend narrow arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternAbiType {
+    /// Integer of `bits` width; `signed` selects sign or zero extension at the boundary.
+    Int { bits: u8, signed: bool },
+    /// C `double` in a floating-point register.
+    Float64,
+    /// C `float`: a single in the low half of the floating-point register, widened to the PHP double.
+    Float32,
+    /// C `bool`: only the low byte is defined.
+    Bool,
+    /// `char*` converted to and from a PHP string at the boundary.
+    CStr,
+    /// Any pointer, typed or opaque.
+    Ptr,
+    /// C function pointer bound from a PHP callable.
+    Callable,
+    /// No value (return only).
+    Void,
+}
+
+impl ExternAbiType {
+    /// The 64-bit signed integer shape of a plain `int`.
+    pub const INT64: Self = Self::Int { bits: 64, signed: true };
+}
+
+/// Maps a parser CType to the ABI shape the call boundary normalizes.
+pub fn ctype_to_abi_type(ct: &CType) -> ExternAbiType {
+    match ct {
+        CType::Int => ExternAbiType::INT64,
+        CType::IntWidth(width) => ExternAbiType::Int { bits: width.bits(), signed: width.signed() },
+        CType::Float => ExternAbiType::Float64,
+        CType::F32 => ExternAbiType::Float32,
+        CType::Str => ExternAbiType::CStr,
+        CType::Bool => ExternAbiType::Bool,
+        CType::Void => ExternAbiType::Void,
+        CType::Ptr | CType::TypedPtr(_) => ExternAbiType::Ptr,
+        CType::Callable => ExternAbiType::Callable,
+    }
+}
+
 /// Maps a parser CType to its corresponding PhpType for FFI and extern declaration lowering.
 ///
-/// Used when lowering `extern` declarations to connect the parser's C types (Int, Float,
-/// Str, Bool, Void, Ptr, TypedPtr, Callable) to the compiler's internal PhpType representation.
+/// Used when lowering `extern` declarations to connect the parser's C types (Int, IntWidth,
+/// Float, F32, Str, Bool, Void, Ptr, TypedPtr, Callable) to the compiler's internal PhpType
+/// representation. Every C integer width is a PHP `int` and both float widths are a PHP `float`.
 pub fn ctype_to_php_type(ct: &CType) -> PhpType {
     match ct {
-        CType::Int => PhpType::Int,
-        CType::Float => PhpType::Float,
+        CType::Int | CType::IntWidth(_) => PhpType::Int,
+        CType::Float | CType::F32 => PhpType::Float,
         CType::Str => PhpType::Str,
         CType::Bool => PhpType::Bool,
         CType::Void => PhpType::Void,
@@ -39,8 +88,11 @@ pub fn ctype_to_php_type(ct: &CType) -> PhpType {
 /// to determine how callee-saved registers and local variables are sized.
 pub fn ctype_stack_size(ct: &CType) -> usize {
     match ct {
+        // Explicit widths are rejected on extern class fields for now, so a slot stays one word.
         CType::Int
+        | CType::IntWidth(_)
         | CType::Float
+        | CType::F32
         | CType::Bool
         | CType::Ptr
         | CType::TypedPtr(_)

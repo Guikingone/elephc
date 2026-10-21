@@ -138,6 +138,11 @@ pub(super) fn reflection_source_method_defaults(
     is_static: bool,
 ) -> Option<Vec<Option<Expr>>> {
     let declaring_class_name = declaring_class_name.trim_start_matches('\\');
+    if let Some(method) = ctx.module.declared_trait_methods.get(declaring_class_name)
+        .and_then(|methods| methods.get(method_key))
+    {
+        return Some(method.source_defaults.clone());
+    }
     let declarations = ctx
         .module
         .class_infos
@@ -238,7 +243,10 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
             .or(default_expr)
             .and_then(reflection_parameter_default_constant_name);
         let default_value_export = source_default_expr.or(default_expr).and_then(|default| {
-            reflection_parameter_default_export(ctx, current_class, current_info, default)
+            reflection_parameter_default_export(
+                ctx, current_class, current_info, default,
+                matches!(default_value, None | Some(ReflectionParameterDefaultValue::EirHelper(_))),
+            )
         });
         let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
         let is_callable_type =

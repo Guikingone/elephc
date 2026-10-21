@@ -46,6 +46,7 @@ const TEST_NATIVE_DEFAULT_FLOAT: u64 = 3;
 const TEST_NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
 const TEST_NATIVE_PROPERTY_REQUIRES_GET: u64 = 1;
 const TEST_NATIVE_PROPERTY_REQUIRES_SET: u64 = 2;
+const TEST_NATIVE_PROPERTY_GET_BY_REF: u64 = 4;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
@@ -193,6 +194,11 @@ fn native_object_default_push_arg(record: &mut Vec<u8>, arg: &NativeCallableObje
 /// Appends one object-default constructor argument value to a native parameter default record.
 fn native_object_default_push_arg_value(record: &mut Vec<u8>, value: &NativeCallableDefault) {
     match value {
+        NativeCallableDefault::DeferredError(_) | NativeCallableDefault::Expression { .. } =>
+            panic!("deferred defaults use dedicated registration"),
+        NativeCallableDefault::ExecutablePath => {
+            native_object_default_push_scalar(record, elephc_builtin_contract::EXECUTABLE_PATH_DEFAULT_KIND, 0)
+        }
         NativeCallableDefault::Null => {
             native_object_default_push_scalar(record, TEST_NATIVE_DEFAULT_NULL, 0)
         }

@@ -14,7 +14,7 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{TypeExpr, UseItem, UseKind};
+use crate::parser::ast::{TypeExpr, TypeParam, UseItem, UseKind};
 
 use super::{resolved_name, Imports, Symbols};
 
@@ -27,6 +27,18 @@ pub(super) fn resolve_type_expr(
     imports: &Imports,
     symbols: &Symbols,
 ) -> TypeExpr {
+    resolve_type_expr_with_type_params(type_expr, current_namespace, imports, symbols, &[])
+}
+
+/// Resolves class names while retaining case-sensitive, unqualified template references.
+/// Qualified class names are never mistaken for a same-named declaration parameter.
+pub(super) fn resolve_type_expr_with_type_params(
+    type_expr: &TypeExpr,
+    current_namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+    type_params: &[TypeParam],
+) -> TypeExpr {
     match type_expr {
         TypeExpr::Int => TypeExpr::Int,
         TypeExpr::Float => TypeExpr::Float,
@@ -36,38 +48,70 @@ pub(super) fn resolve_type_expr(
         TypeExpr::Void => TypeExpr::Void,
         TypeExpr::Never => TypeExpr::Never,
         TypeExpr::Iterable => TypeExpr::Iterable,
-        TypeExpr::Array(inner) => TypeExpr::Array(Box::new(resolve_type_expr(
+        // A signature NAMES classes, and they resolve through the same namespace and imports as
+        // any other mention: `callable(User): Order` inside a namespace means that namespace's
+        // `User`, not the global one.
+        TypeExpr::CallableSig { params, ret } => TypeExpr::CallableSig {
+            params: params
+                .iter()
+                .map(|param| resolve_type_expr_with_type_params(param, current_namespace, imports, symbols, type_params))
+                .collect(),
+            ret: Box::new(resolve_type_expr_with_type_params(ret, current_namespace, imports, symbols, type_params)),
+        },
+        TypeExpr::Array(inner) => TypeExpr::Array(Box::new(resolve_type_expr_with_type_params(
             inner,
             current_namespace,
             imports,
             symbols,
+            type_params,
         ))),
+        // Both halves are resolved: `array<string, Foo>` names a class in its VALUE, and a
+        // key may name an enum or a class constant's type, so resolving only one would leave
+        // an unqualified name for a later pass to mistake for a global.
+        TypeExpr::AssocArray { key, value } => TypeExpr::AssocArray {
+            key: Box::new(resolve_type_expr_with_type_params(
+                key,
+                current_namespace,
+                imports,
+                symbols,
+                type_params,
+            )),
+            value: Box::new(resolve_type_expr_with_type_params(
+                value,
+                current_namespace,
+                imports,
+                symbols,
+                type_params,
+            )),
+        },
         TypeExpr::Buffer(inner) => {
-            TypeExpr::Buffer(Box::new(resolve_type_expr(
+            TypeExpr::Buffer(Box::new(resolve_type_expr_with_type_params(
                 inner,
                 current_namespace,
                 imports,
                 symbols,
+                type_params,
             )))
         }
         TypeExpr::Nullable(inner) => {
-            TypeExpr::Nullable(Box::new(resolve_type_expr(
+            TypeExpr::Nullable(Box::new(resolve_type_expr_with_type_params(
                 inner,
                 current_namespace,
                 imports,
                 symbols,
+                type_params,
             )))
         }
         TypeExpr::Union(members) => TypeExpr::Union(
             members
                 .iter()
-                .map(|member| resolve_type_expr(member, current_namespace, imports, symbols))
+                .map(|member| resolve_type_expr_with_type_params(member, current_namespace, imports, symbols, type_params))
                 .collect(),
         ),
         TypeExpr::Intersection(members) => TypeExpr::Intersection(
             members
                 .iter()
-                .map(|member| resolve_type_expr(member, current_namespace, imports, symbols))
+                .map(|member| resolve_type_expr_with_type_params(member, current_namespace, imports, symbols, type_params))
                 .collect(),
         ),
         TypeExpr::Ptr(None) => TypeExpr::Ptr(None),
@@ -84,9 +128,28 @@ pub(super) fn resolve_type_expr(
                 ))))
             }
         }
+        // The HEAD is a class name and the ARGUMENTS are types: `Repository<User>` in a
+        // namespace names that namespace's `Repository` holding that namespace's `User`, and
+        // resolving only one of the two would instantiate a template under a name no
+        // declaration matches.
+        TypeExpr::GenericClass { name, args } => TypeExpr::GenericClass {
+            name: resolved_name(resolve_special_or_class_name(
+                name,
+                current_namespace,
+                imports,
+                symbols,
+            )),
+            args: args
+                .iter()
+                .map(|arg| resolve_type_expr_with_type_params(arg, current_namespace, imports, symbols, type_params))
+                .collect(),
+        },
         TypeExpr::Named(name) => {
+            if name.is_unqualified() && type_params.iter().any(|param| param.name == name.as_str()) {
+                return type_expr.clone();
+            }
             let raw = name.as_str();
-            if matches!(raw, "array" | "mixed" | "callable" | "void")
+            if matches!(raw, "array" | "mixed" | "callable" | "void" | "null")
                 || raw.eq_ignore_ascii_case("object")
             {
                 TypeExpr::Named(name.clone())

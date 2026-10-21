@@ -62,10 +62,14 @@ pub struct Function {
     pub entry: BlockId,
     pub source_signature: Option<String>,
     pub signature: Option<FunctionSig>,
+    /// Source spelling of free-function defaults, separate from normalized executable defaults.
+    pub source_defaults: Vec<Option<crate::parser::ast::Expr>>,
     pub attribute_names: Vec<String>,
     pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
     /// PHP lexical class scope inherited by methods and closures declared inside them.
     pub lexical_class: Option<String>,
+    /// Normalized expression evaluated by this native callable-default helper, if any.
+    pub callable_default: Option<crate::parser::ast::Expr>,
     pub flags: FunctionFlags,
     /// Slots the epilogue must never release: values this frame borrows or already moved.
     ///
@@ -80,6 +84,24 @@ pub struct Function {
 }
 
 impl Function {
+    /// Counts instruction and terminator value uses without counting definitions.
+    pub(crate) fn value_use_counts(&self) -> std::collections::HashMap<ValueId, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for inst in &self.instructions {
+            for &operand in &inst.operands {
+                *counts.entry(operand).or_insert(0) += 1;
+            }
+        }
+        for block in &self.blocks {
+            if let Some(terminator) = &block.terminator {
+                for operand in terminator.used_values() {
+                    *counts.entry(operand).or_insert(0) += 1;
+                }
+            }
+        }
+        counts
+    }
+
     /// Creates an empty function with no blocks or locals.
     pub fn new(name: String, return_type: IrType, return_php_type: PhpType) -> Self {
         Self {
@@ -98,6 +120,8 @@ impl Function {
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             lexical_class: None,
+            callable_default: None,
+            source_defaults: Vec::new(),
             flags: FunctionFlags::default(),
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
         }
@@ -199,6 +223,8 @@ pub enum LocalKind {
 /// Function-level shape flags used by lowering and later codegen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FunctionFlags {
+    /// Whether compiler-internal source declared this function rather than the user's program.
+    pub is_internal: bool,
     pub is_main: bool,
     pub is_method: bool,
     pub is_closure: bool,

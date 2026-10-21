@@ -47,6 +47,7 @@ mod class_members;
 mod member_resolution;
 mod method_members;
 mod property_members;
+mod property_defaults_fold;
 mod default_members;
 mod parameter_defaults;
 mod default_export;
@@ -72,6 +73,7 @@ use class_members::*;
 use member_resolution::*;
 use method_members::*;
 use property_members::*;
+use property_defaults_fold::*;
 use default_members::*;
 use parameter_defaults::*;
 use default_export::*;
@@ -142,7 +144,7 @@ struct ReflectionOwnerMetadata {
     /// `getDeclaringFunction()` builds its reflector from metadata that deliberately carries NO
     /// parameters: emitting them would emit a `ReflectionParameter` for each, and each of those
     /// emits its own declaring function, which does not terminate. The dump is a string, so it
-    /// does not recurse — it is rendered from the real member and carried across (#1080).
+    /// does not recurse: it is rendered from the real member and carried across (#1080).
     rendered_to_string: Option<String>,
 }
 
@@ -269,10 +271,12 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    DeferredError(String),
+    EirHelper(String),
     Object {
         class_name: String,
         /// Every constructor argument the object ends up with, the written ones followed by the
-        /// constructor defaults that fill the rest — what `getDefaultValue()` has to construct.
+        /// constructor defaults that fill the rest, what `getDefaultValue()` has to construct.
         args: Vec<ReflectionParameterDefaultValue>,
         /// How many of those were WRITTEN. PHP's dump exports the source, so `new Foo()` prints
         /// `new \Foo()` however many defaults the constructor would supply.

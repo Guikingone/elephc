@@ -139,6 +139,7 @@ pub(crate) fn build_interface_info_recursive(
                                 || declaration_is_source(checker, parent_name),
                                 |owner| declaration_is_source(checker, owner),
                             ),
+                    false,
                 )?;
                 if let Some(return_type) = parent_info.late_static_method_returns.get(method_name) {
                     methods.insert(method_name.clone(), parent_sig.clone());
@@ -197,6 +198,7 @@ pub(crate) fn build_interface_info_recursive(
                                 || declaration_is_source(checker, parent_name),
                                 |owner| declaration_is_source(checker, owner),
                             ),
+                    false,
                 )?;
                 if let Some(return_type) = parent_info
                     .late_static_static_method_returns
@@ -353,6 +355,7 @@ pub(crate) fn build_interface_info_recursive(
                     static_method_declaring_interfaces
                         .get(&method_key)
                         .is_none_or(|owner| declaration_is_source(checker, owner)),
+                    false,
                 )?;
                 if late_static_return_compatible(
                     checker,
@@ -409,6 +412,7 @@ pub(crate) fn build_interface_info_recursive(
                 method_declaring_interfaces
                     .get(&method_key)
                     .is_none_or(|owner| declaration_is_source(checker, owner)),
+                false,
             )?;
             if late_static_return_compatible(
                 checker,
@@ -499,6 +503,17 @@ pub(crate) fn build_interface_info_recursive(
             final_constants.remove(&c.name);
         }
     }
+    let mut constant_order: Vec<String> =
+        interface.constants.iter().map(|c| c.name.clone()).collect();
+    for parent_name in &interface.extends {
+        if let Some(parent_info) = checker.interfaces.get(parent_name) {
+            for name in &parent_info.constant_order {
+                if !constant_order.contains(name) {
+                    constant_order.push(name.clone());
+                }
+            }
+        }
+    }
     checker.interfaces.insert(
         interface.name.clone(),
         InterfaceInfo {
@@ -518,6 +533,7 @@ pub(crate) fn build_interface_info_recursive(
             static_method_declaring_interfaces,
             static_method_order,
             constants: iface_constants,
+            constant_order,
             constant_types,
             constant_declaring_interfaces,
             final_constants,

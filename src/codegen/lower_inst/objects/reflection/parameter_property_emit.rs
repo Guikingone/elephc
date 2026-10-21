@@ -8,12 +8,15 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
+use crate::codegen::lower_inst::emit_runtime_callable_invoker_with_string_owner;
+use crate::codegen_support::callable_descriptor;
+use crate::names::function_symbol;
 
 /// Renders the `__toString()` dump for a `getDeclaringFunction()` reflector.
 ///
 /// That reflector is built from metadata with NO parameters on purpose: emitting them would emit a
 /// `ReflectionParameter` for each, and each of those emits its own declaring function, which does
-/// not terminate. So the dump cannot be rendered from the metadata — it would claim
+/// not terminate. So the dump cannot be rendered from the metadata: it would claim
 /// `Parameters [0]` for a method that has some. The member is rebuilt from its names here and
 /// rendered to a STRING, which carries no such cycle.
 fn reflection_declaring_function_dump(
@@ -33,6 +36,7 @@ fn reflection_declaring_function_dump(
             return Some(reflection_function_to_string(
                 name,
                 false,
+                signature.deprecation.is_some(),
                 signature.by_ref_return,
                 &parameters,
                 reflection_return_type_metadata(signature).as_ref(),
@@ -47,6 +51,7 @@ fn reflection_declaring_function_dump(
         return Some(reflection_function_to_string(
             name,
             true,
+            signature.deprecation.is_some(),
             signature.by_ref_return,
             &parameters,
             reflection_return_type_metadata(&signature).as_ref(),
@@ -58,7 +63,7 @@ fn reflection_declaring_function_dump(
             .ok()
             .flatten()
         {
-            return Some(reflection_listed_method_to_string(&member));
+            return Some(reflection_listed_method_to_string(ctx, &member));
         }
     }
     if let Some(interface_name) = resolve_reflection_interface(ctx, class_name) {
@@ -68,7 +73,7 @@ fn reflection_declaring_function_dump(
                     .ok()
                     .flatten()
             {
-                return Some(reflection_listed_method_to_string(&member));
+                return Some(reflection_listed_method_to_string(ctx, &member));
             }
         }
     }
@@ -79,7 +84,7 @@ fn reflection_declaring_function_dump(
                     .ok()
                     .flatten()
             {
-                return Some(reflection_listed_method_to_string(&member));
+                return Some(reflection_listed_method_to_string(ctx, &member));
             }
         }
     }
@@ -497,6 +502,52 @@ pub(super) fn emit_reflection_owner_default_value_property(
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, default_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, default_offset + 8);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    if matches!(class_name, "ReflectionProperty" | "ReflectionParameter") {
+        let message = match default_value {
+            Some(ReflectionParameterDefaultValue::DeferredError(message)) => message.as_str(),
+            _ => "",
+        };
+        emit_reflection_owner_string_property_by_name(ctx, class_name, "__default_error", message)?;
+    }
+    if class_name == "ReflectionParameter" {
+        emit_reflection_default_factory(ctx, default_value)?;
+    }
     Ok(())
 }
 
+/// Stores a persistent internal factory without evaluating the tree or minting a PHP Closure id.
+fn emit_reflection_default_factory(
+    ctx: &mut FunctionContext<'_>, default: Option<&ReflectionParameterDefaultValue>,
+) -> Result<()> {
+    let info = ctx.module.class_infos.get("ReflectionParameter")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let offset = reflection_property_offset(info, "__default_factory")?;
+    let result = abi::int_result_reg(ctx.emitter);
+    let object = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    if let Some(ReflectionParameterDefaultValue::EirHelper(name)) = default {
+        let helper = ctx.module.functions.iter().chain(ctx.module.closures.iter())
+            .find(|function| function.name == *name)
+            .ok_or_else(|| CodegenIrError::missing_entry("default factory", 0))?;
+        let signature = helper.signature.clone()
+            .ok_or_else(|| CodegenIrError::missing_entry("default factory signature", 0))?;
+        let invoker = emit_runtime_callable_invoker_with_string_owner(ctx, &signature, &[], false, true);
+        let entry = function_symbol(name);
+        let descriptor = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+            ctx.data, &entry, Some(name), callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+            Some(&signature), &[], &[],
+            callable_descriptor::CallableDescriptorInvocation::new(
+                callable_descriptor::CallableDescriptorShape::Function,
+            ), Some(&invoker),
+        );
+        abi::emit_symbol_address(ctx.emitter, result, &descriptor);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Callable);
+    } else {
+        emit_boxed_null_literal_to_result(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, object);
+    abi::emit_store_to_address(ctx.emitter, result, object, offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object, offset + 8);
+    abi::emit_reg_move(ctx.emitter, result, object);
+    Ok(())
+}
