@@ -105,6 +105,12 @@ You can write PHP using the constructs documented in the [docs](docs/). Classes 
 
 Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/), [`examples/eval-globals/`](examples/eval-globals/), [`examples/eval-throw/`](examples/eval-throw/) for throwing a class declared by `eval()`, and the opt-in regex example [`examples/eval_regex/`](examples/eval_regex/).
 
+The standard-library surface also includes immutable [`BcMath\Number`](docs/php/bcmath.md)
+decimal arithmetic and operators, [`WeakReference` and `WeakMap`](docs/php/core-symbols.md)
+for caches that do not retain their keys, and a small
+[DOM HTML fragment walker](docs/php/dom-html.md) for Termwind-style rendering.
+The DOM surface is an HTML-only subset with explicit limits.
+
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
 Then compile and run:
