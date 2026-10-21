@@ -340,6 +340,78 @@ echo $environ->first == ptr_get($environ) ? "same" : "diff", "\n";
     assert_eq!(out, "same\n");
 }
 
+/// Verifies `ptr_cast<T>` and an extern global's `ptr<T>` inside a namespace name that
+/// namespace's packed class, not a same-named global one with other fields: `App\Pair` and
+/// `App\Slot` fields resolve, and the global classes keep their own sizes.
+#[test]
+fn test_namespaced_pointer_targets_do_not_bind_a_same_named_global_packed_class() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr;
+packed class Pair { public int $left; public int $right; public int $extra; }
+packed class Slot { public int $wrong; }
+require "pair.php";
+echo App\demo(calloc(1, 16)), " ", App\slot_matches(), " ", ptr_sizeof("Pair"), "\n";
+"#,
+            ),
+            (
+                "pair.php",
+                r#"<?php
+namespace App;
+packed class Pair { public int $only; public int $other; }
+packed class Slot { public int $first; }
+extern global ptr<Slot> $environ;
+function demo(ptr $raw): string {
+    $p = ptr_cast<Pair>($raw);
+    $p->other = 5;
+    return $p->only . ":" . $p->other . ":" . ptr_get(ptr_offset($raw, 8)) . ":"
+        . ptr_sizeof("App\\Pair");
+}
+function slot_matches(): string {
+    global $environ;
+    return $environ->first == ptr_get($environ) ? "same" : "diff";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "0:5:5:16 same 24\n");
+}
+
+/// Verifies a `ptr<T>` return type of a global extern function resolves a `use` alias to the
+/// namespaced packed class it imports, so field access through the returned pointer compiles.
+#[test]
+fn test_extern_pointer_target_resolves_a_use_alias() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+use App\Pair as NsPair;
+require "pair.php";
+extern function calloc(u64 $count, u64 $size): ptr<NsPair>;
+$pair = calloc(1, 16);
+$pair->other = 9;
+echo $pair->only, ":", $pair->other, "\n";
+"#,
+            ),
+            (
+                "pair.php",
+                r#"<?php
+namespace App;
+packed class Pair { public int $only; public int $other; }
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "0:9\n");
+}
+
 /// Verifies a field read through a null `ptr<T>` spelled with a literal dynamic name
 /// (`$p->{'x'}`) aborts with the same fatal as `$p->x` instead of faulting.
 #[test]

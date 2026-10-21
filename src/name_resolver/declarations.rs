@@ -9,18 +9,22 @@
 //! - Declaration names become canonical before type checking and codegen symbol collection.
 //! - Generic parameter names remain bare in their declaration and method scopes.
 //! - Generic bounds and defaults still use ordinary namespace/import resolution.
+//! - Extern function signatures and extern globals resolve the class each C `ptr<T>` type names
+//!   (`resolve_ctype`); extern global names stay C symbols.
 
 mod type_params;
 
 use crate::errors::CompileError;
 use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{
-    Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, GenericDecl, Stmt, StmtKind,
-    TraitAdaptation, TraitUse, TypeParam,
+    Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, ExternParam, GenericDecl,
+    Stmt, StmtKind, TraitAdaptation, TraitUse, TypeParam,
 };
 
 use super::expressions::resolve_expr;
-use super::names::{resolve_type_expr, resolve_type_expr_with_type_params, resolved_class_name};
+use super::names::{
+    resolve_ctype, resolve_type_expr, resolve_type_expr_with_type_params, resolved_class_name,
+};
 use super::statements::{resolve_params, resolve_stmt_list};
 use super::{resolved_name, Imports, Symbols};
 
@@ -356,8 +360,14 @@ pub(super) fn resolve_decl_stmt(
         } => Ok(Some(Stmt::with_attributes(
             StmtKind::ExternFunctionDecl {
                 name: canonical_name_for_decl(namespace, name),
-                params: params.clone(),
-                return_type: return_type.clone(),
+                params: params
+                    .iter()
+                    .map(|param| ExternParam {
+                        name: param.name.clone(),
+                        c_type: resolve_ctype(&param.c_type, namespace, imports, symbols),
+                    })
+                    .collect(),
+                return_type: resolve_ctype(return_type, namespace, imports, symbols),
                 library: library.clone(),
             },
             stmt.span,
@@ -375,6 +385,15 @@ pub(super) fn resolve_decl_stmt(
             StmtKind::ExternClassDecl {
                 name: canonical_name_for_decl(namespace, name),
                 fields: fields.clone(),
+            },
+            stmt.span,
+            stmt_attributes,
+        ))),
+        // An extern global keeps its C symbol name; only a `ptr<T>` type in it names a class.
+        StmtKind::ExternGlobalDecl { name, c_type } => Ok(Some(Stmt::with_attributes(
+            StmtKind::ExternGlobalDecl {
+                name: name.clone(),
+                c_type: resolve_ctype(c_type, namespace, imports, symbols),
             },
             stmt.span,
             stmt_attributes,
