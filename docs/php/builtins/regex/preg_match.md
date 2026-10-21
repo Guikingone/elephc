@@ -8,7 +8,7 @@ sidebar:
 ## preg_match()
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches = []): int
+function preg_match(string $pattern, string $subject, array $matches = []): int|false
 ```
 
 Performs a regular expression match.
@@ -18,7 +18,7 @@ Performs a regular expression match.
 - `$subject` (`string`)
 - `$matches` (`array`), passed by reference, default `[]`, optional
 
-**Returns**: `int`
+**Returns**: `int|false`
 
 ## Availability
 

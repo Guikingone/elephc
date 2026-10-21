@@ -110352,7 +110352,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -110400,7 +110400,7 @@
           "type": "array"
         }
       ],
-      "return_type": "int",
+      "return_type": "int|false",
       "variadic": null
     },
     "since": null,
@@ -110550,7 +110550,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -110605,7 +110605,7 @@
           "type": "int"
         }
       ],
-      "return_type": "int",
+      "return_type": "int|false",
       "variadic": null
     },
     "since": null,
@@ -110741,7 +110741,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -111177,7 +111177,7 @@
           "type": "int"
         }
       ],
-      "return_type": "array",
+      "return_type": "array|false",
       "variadic": null
     },
     "since": null,

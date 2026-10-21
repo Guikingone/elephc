@@ -2580,6 +2580,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::OpensslEncrypt
                 | RuntimeFnId::OpensslGetCipherMethods
                 | RuntimeFnId::ParseUrl
+                | RuntimeFnId::PregMatch
+                | RuntimeFnId::PregMatchAll
+                | RuntimeFnId::PregReplace
                 | RuntimeFnId::PregSplit
                 // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns

@@ -2148,7 +2148,7 @@ echo $count . ":" . $all[1][0] . ":" . $all[1][2];
     assert_eq!(out, "2:b2:2");
 }
 
-/// Verifies an invalid pattern with `$matches` present returns 0 and an empty array.
+/// Verifies an invalid pattern returns PHP false and leaves an empty matches array.
 #[test]
 fn test_preg_match_all_invalid_pattern_clears_matches() {
     let out = compile_and_run(
@@ -2157,7 +2157,7 @@ $matches = ["stale"];
 echo preg_match_all("/(/", "subject", $matches) . ":" . count($matches);
 "#,
     );
-    assert_eq!(out, "0:0");
+    assert_eq!(out, ":0");
 }
 
 /// Verifies every shim-backed regex family handles an invalid pattern without exposing a
@@ -2176,10 +2176,10 @@ echo preg_replace_callback("/(/", function($m) use (&$callbackCalls): string {
     $callbackCalls = $callbackCalls + 1;
     return "called";
 }, "subject") . ":" . $callbackCalls . "|";
-echo count(preg_split("/(/", "subject"));
+var_dump(preg_split("/(/", "subject"));
 "#,
     );
-    assert_eq!(out, "0|0:0|0|subject|subject:0|0");
+    assert_eq!(out, "0|:0|||subject:0|bool(false)\n");
 }
 
 /// Verifies `preg_replace` substitutes the first matching occurrence of a literal pattern.
@@ -2224,6 +2224,27 @@ var_dump($eval, $eval === null);
 "#,
     );
     assert_eq!(out, "NULL\nbool(true)\nbool(false)\nNULL\nbool(true)\n");
+}
+
+/// Verifies `preg_match`, `preg_match_all`, and `preg_split` return PHP false for an
+/// invalid pattern and for the removed `/e` modifier, while a valid pattern with no
+/// match still returns integer zero or a real empty result array.
+#[test]
+fn test_regex_failure_paths_return_false() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(preg_match("/[/", "a"));
+var_dump(preg_match("/a/e", "a"));
+var_dump(preg_match("/z/", "a"));
+var_dump(preg_match_all("/[/", "a"));
+var_dump(preg_split("/a/e", "a"));
+var_dump(preg_split("/a/", "a") === false);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nint(0)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
 }
 
 /// Verifies `preg_replace` returns the subject unchanged when the pattern has no matches.

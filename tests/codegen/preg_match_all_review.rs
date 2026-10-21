@@ -242,7 +242,7 @@ echo preg_match_all('/x/', 'b', $alias), ':', count($matches[0]), '|';
 echo preg_match_all('/(/', 'b', $alias), ':', count($matches);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{}0:0|0:0", "1:n:b|".repeat(8)));
+    assert_eq!(out.stdout, format!("{}0:0|:0", "1:n:b|".repeat(8)));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

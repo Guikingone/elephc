@@ -8,7 +8,7 @@ sidebar:
 ## preg_match_all()
 
 ```php
-function preg_match_all(string $pattern, string $subject, mixed $matches = [], int $flags = 0): int
+function preg_match_all(string $pattern, string $subject, mixed $matches = [], int $flags = 0): int|false
 ```
 
 Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes return 0 and clear a supplied capture destination on both backends.
@@ -19,7 +19,7 @@ Performs a global regular expression match, including terminal empty matches, op
 - `$matches` (`mixed`), passed by reference, default `[]`, optional
 - `$flags` (`int`), default `0`, optional
 
-**Returns**: `int`
+**Returns**: `int|false`
 
 ## Availability
 
