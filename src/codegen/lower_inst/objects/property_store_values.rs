@@ -299,6 +299,7 @@ fn emit_packed_record_copy(
         .ok_or_else(|| {
             CodegenIrError::unsupported(format!("unknown packed record type {}", record))
         })?;
+    // -- load the source record address and null-check a ptr<T> source --
     let source_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, base_reg);
     ctx.load_value_to_reg(value, source_reg)?;
@@ -314,6 +315,7 @@ fn emit_packed_record_copy(
     let count_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let loop_label = ctx.next_label("packed_record_copy");
     if field_offset != 0 {
+        // -- point the destination at the nested record field --
         abi::emit_load_int_immediate(ctx.emitter, count_reg, field_offset as i64);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -324,6 +326,7 @@ fn emit_packed_record_copy(
             }
         }
     }
+    // -- copy the record one 8-byte word at a time --
     abi::emit_load_int_immediate(ctx.emitter, count_reg, words as i64);
     ctx.emitter.label(&loop_label);
     match ctx.emitter.target.arch {

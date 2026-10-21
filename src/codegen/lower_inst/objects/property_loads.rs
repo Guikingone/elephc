@@ -151,6 +151,7 @@ pub(super) fn emit_packed_field_load(
                         } else {
                             abi::tertiary_scratch_reg(ctx.emitter)
                         };
+                        // -- compute a nested field address past the add immediate range --
                         abi::emit_load_int_immediate(ctx.emitter, offset_reg, slot.offset as i64);
                         ctx.emitter.instruction(&format!(
                             "add {}, {}, {}",

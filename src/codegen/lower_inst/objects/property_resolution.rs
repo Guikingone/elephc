@@ -1338,6 +1338,7 @@ pub(super) fn emit_typed_pointer_receiver_null_check(
     if !matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Pointer(_)) {
         return Ok(());
     }
+    // -- null-check the typed pointer receiver --
     let int_reg = abi::int_result_reg(ctx.emitter);
     ctx.emitter.instruction(&format!("mov {}, {}", int_reg, base_reg));         // hand the typed pointer receiver to the null-dereference guard
     abi::emit_call_label(ctx.emitter, "__rt_ptr_check_nonnull");
