@@ -9,6 +9,7 @@
 //! - Rules here define accepted programs, so PHP covariance, inheritance, and extension-specific constraints must stay explicit.
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::types::{packed_type_size, PhpType};
 
 use super::object_types::canonical_builtin_iterable_interface_name;
@@ -55,7 +56,13 @@ impl Checker {
             class_name if self.extern_classes.contains_key(class_name) => {
                 Some(class_name.to_string())
             }
-            _ => None,
+            class_name => {
+                let key = php_symbol_key(class_name);
+                self.declared_native_records
+                    .iter()
+                    .find(|declared| php_symbol_key(declared) == key)
+                    .cloned()
+            }
         }
     }
 

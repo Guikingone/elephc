@@ -204,6 +204,15 @@ fn test_error_packed_classes_embedding_each_other_are_rejected() {
     );
 }
 
+/// Verifies predeclared native record names do not make an actually missing pointer target valid.
+#[test]
+fn test_error_packed_pointer_field_rejects_unknown_target() {
+    expect_error(
+        "<?php packed class Holder { public ptr<Missing> $value; }",
+        "Unknown pointer target type: Missing",
+    );
+}
+
 /// Verifies reading an undefined field of a nested record names the inner packed class.
 #[test]
 fn test_error_nested_packed_field_read_of_undefined_inner_field() {
@@ -880,7 +889,6 @@ fn test_one_position_resolves_per_enclosing_instantiation() {
     );
 }
 
-
 /// A generic CLASS checks its bounds the same way a generic function does, and for the same
 /// reason: only the checker's class table can decide whether an argument satisfies one.
 #[test]
@@ -1000,7 +1008,6 @@ fn test_generic_function_over_a_generic_class_parameter() {
          echo open(new Box<string>(\"x\"));",
     );
 }
-
 
 /// `new Box(5)` determines `T` from the constructor's declared parameters and the argument
 /// types, the same way a generic function call determines its own.

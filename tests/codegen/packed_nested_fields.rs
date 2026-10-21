@@ -268,6 +268,29 @@ echo $w[1]->player->id, " ", $w[1]->tick, " ", $w[0]->player->pos->y, "\n";
     assert_eq!(out, "32 24 2.5 7 3 0\n");
 }
 
+/// Verifies packed pointer fields may name their own class or a later packed declaration without
+/// introducing a by-value layout dependency.
+#[test]
+fn test_packed_pointer_fields_accept_self_and_forward_targets() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Node { public int $value; public ptr<Node> $next; }
+packed class Holder { public ptr<Target> $target; }
+packed class Target { public int $value; }
+$nodes = buffer_new<Node>(2);
+$nodes[1]->value = 9;
+$nodes[0]->next = $nodes[1];
+$holders = buffer_new<Holder>(1);
+$targets = buffer_new<Target>(1);
+$targets[0]->value = 7;
+$holders[0]->target = $targets[0];
+echo ptr_sizeof("Node"), " ", ptr_sizeof("Holder"), " ";
+echo $nodes[0]->next->value, " ", $holders[0]->target->value, "\n";
+"#,
+    );
+    assert_eq!(out, "16 8 9 7\n");
+}
+
 /// Verifies a nested record placed beyond the AArch64 `add` immediate range (byte offset 4104)
 /// is addressed correctly for reads, writes and compound assignments.
 #[test]
