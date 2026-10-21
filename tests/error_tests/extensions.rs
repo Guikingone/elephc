@@ -399,6 +399,26 @@ fn test_error_extern_block_empty() {
     expect_error("<?php extern \"lib\" { }", "Empty extern block");
 }
 
+/// Verifies a malformed extern inside a braced namespace keeps the extern-specific diagnostic
+/// and recovers far enough to collect the following malformed statement too.
+#[test]
+fn test_error_braced_namespace_extern_uses_extern_recovery() {
+    let tokens = tokenize("<?php namespace App { extern badkw; echo ; }").unwrap();
+    let errors = parse_with_recovery(&tokens).unwrap_err();
+    assert!(
+        errors.iter().any(|error| error.message.contains(
+            "Expected 'function', string literal, 'class', or 'global' after 'extern'"
+        )),
+        "expected extern-specific error, got {:?}",
+        errors,
+    );
+    assert!(
+        errors.len() >= 2,
+        "expected namespace recovery to collect both errors, got {:?}",
+        errors,
+    );
+}
+
 /// Verifies that calling an extern function with too few arguments is rejected.
 #[test]
 fn test_error_extern_wrong_arg_count() {
@@ -889,6 +909,7 @@ fn test_one_position_resolves_per_enclosing_instantiation() {
     );
 }
 
+
 /// A generic CLASS checks its bounds the same way a generic function does, and for the same
 /// reason: only the checker's class table can decide whether an argument satisfies one.
 #[test]
@@ -1008,6 +1029,7 @@ fn test_generic_function_over_a_generic_class_parameter() {
          echo open(new Box<string>(\"x\"));",
     );
 }
+
 
 /// `new Box(5)` determines `T` from the constructor's declared parameters and the argument
 /// types, the same way a generic function call determines its own.

@@ -154,24 +154,11 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
         if tokens[pos].0 == Token::Eof {
             break;
         }
-        // Extern blocks can produce multiple stmts. Attributes on declarations
-        // flow through parse_stmt below — extern is an elephc-specific block
-        // that does not interact with PHP attributes.
-        if tokens[pos].0 == Token::Extern {
-            match stmt::parse_extern_stmts(tokens, &mut pos) {
-                Ok(mut extern_stmts) => stmts.append(&mut extern_stmts),
-                Err(error) => {
-                    errors.extend(error.flatten());
-                    stmt::recover_to_statement_boundary(tokens, &mut pos);
-                }
-            }
-        } else {
-            match stmt::parse_stmt(tokens, &mut pos) {
-                Ok(stmt) => stmt::push_parsed_stmt(&mut stmts, stmt),
-                Err(error) => {
-                    errors.extend(error.flatten());
-                    stmt::recover_to_statement_boundary(tokens, &mut pos);
-                }
+        match stmt::parse_file_or_namespace_scope_item(tokens, &mut pos, &mut stmts) {
+            Ok(()) => {}
+            Err(error) => {
+                errors.extend(error.flatten());
+                stmt::recover_to_statement_boundary(tokens, &mut pos);
             }
         }
     }

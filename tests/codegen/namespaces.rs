@@ -82,6 +82,39 @@ echo $probe->ok();
     assert_eq!(out, "1");
 }
 
+/// Verifies braced and unbraced namespace extern declarations keep their PHP-visible qualified
+/// names while both link to the unqualified libc symbol.
+#[test]
+fn test_namespaced_extern_functions_use_unqualified_c_symbols() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require "braced.php";
+require "unbraced.php";
+echo Braced\abs(-3), " ", Unbraced\abs(-4), "\n";
+"#,
+            ),
+            (
+                "braced.php",
+                r#"<?php
+namespace Braced { extern function abs(i32 $value): i32; }
+"#,
+            ),
+            (
+                "unbraced.php",
+                r#"<?php
+namespace Unbraced;
+extern function abs(i32 $value): i32;
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "3 4\n");
+}
+
 /// Verifies that pointer builtins (`ptr_null`, `ptr_is_null`) are accessible inside a
 /// namespaced class method without a global prefix. Regression test for builtin resolution
 /// within namespace scope.
