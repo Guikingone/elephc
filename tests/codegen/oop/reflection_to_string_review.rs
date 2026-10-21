@@ -433,3 +433,29 @@ foreach ((new ReflectionFunction('f'))->getParameters() as $p) echo $p, "\n";
         Parameter #3 [ <optional> $d = [1, 9223372036854775807 => 2, 3] ]\n\
         Parameter #4 [ <optional> $e = [9223372036854775806 => 1, 9223372036854775807 => 2] ]\n");
 }
+
+/// Standalone, union and nullable false types survive parameter and return metadata conversion.
+#[test]
+fn test_reflection_dump_false_type_metadata() {
+    let out = compile_and_run(r#"<?php
+function bare(): false { return false; }
+function flagged(int|false $value = false): int|false { return $value; }
+function wide(string|false|null $value = null): string|false|null { return $value; }
+class Methods { public function run(?false $value = null): ?false { return $value; } }
+echo new ReflectionFunction('bare');
+echo new ReflectionFunction('flagged');
+echo new ReflectionFunction('wide');
+echo new ReflectionMethod('Methods', 'run');
+"#);
+    assert_eq!(out, "Function [ <user> function bare ] {\n\n  - Parameters [0] {\n  }\n\
+        \x20 - Return [ false ]\n}\n\
+        Function [ <user> function flagged ] {\n\n  - Parameters [1] {\n\
+        \x20   Parameter #0 [ <optional> int|false $value = false ]\n  }\n\
+        \x20 - Return [ int|false ]\n}\n\
+        Function [ <user> function wide ] {\n\n  - Parameters [1] {\n\
+        \x20   Parameter #0 [ <optional> string|false|null $value = NULL ]\n  }\n\
+        \x20 - Return [ string|false|null ]\n}\n\
+        Method [ <user> public method run ] {\n\n  - Parameters [1] {\n\
+        \x20   Parameter #0 [ <optional> ?false $value = NULL ]\n  }\n\
+        \x20 - Return [ ?false ]\n}\n");
+}

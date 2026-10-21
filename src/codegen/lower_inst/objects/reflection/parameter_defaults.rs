@@ -426,6 +426,7 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
         PhpType::Float => Some(reflection_builtin_named_type("float", false)),
         PhpType::Str => Some(reflection_builtin_named_type("string", false)),
         PhpType::Bool => Some(reflection_builtin_named_type("bool", false)),
+        PhpType::False => Some(reflection_builtin_named_type("false", false)),
         PhpType::Iterable => Some(reflection_builtin_named_type("iterable", false)),
         PhpType::Mixed => Some(reflection_builtin_named_type("mixed", true)),
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
