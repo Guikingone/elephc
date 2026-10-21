@@ -85,6 +85,201 @@ buffer_free($things);
     );
 }
 
+/// Verifies declared buffer properties accept both literal and runtime integer index writes.
+#[test]
+fn test_buffer_property_declared_literal_and_runtime_index_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class BufferStore {
+    public buffer<int> $values;
+
+    public function __construct() {
+        $this->values = buffer_new<int>(2);
+    }
+}
+
+$store = new BufferStore();
+$store->values[0] = 11;
+$store->values[$argc] = 22;
+echo $store->values[0], "|", $store->values[1];
+"#,
+    );
+    assert_eq!(out, "11|22");
+}
+
+/// Regression test for issue #625: an untyped property refined to a buffer accepts element writes.
+#[test]
+fn test_buffer_property_untyped_issue_reproduction_writes_element() {
+    let out = compile_and_run(
+        r#"<?php
+class UntypedBufferStore {
+    public $values;
+}
+
+$store = new UntypedBufferStore();
+$store->values = buffer_new<int>(2);
+$store->values[0] = 42;
+$store->values[1] = 7;
+echo $store->values[0], "|", $store->values[1];
+"#,
+    );
+    assert_eq!(out, "42|7");
+}
+
+/// Verifies a method loop can write whole buffer elements through `$this` with a runtime index.
+#[test]
+fn test_buffer_property_method_loop_writes_elements() {
+    let out = compile_and_run(
+        r#"<?php
+class LoopBufferStore {
+    public buffer<int> $values;
+
+    public function __construct(int $length) {
+        $this->values = buffer_new<int>($length);
+    }
+
+    public function fill(int $length): void {
+        for ($i = 0; $i < $length; $i++) {
+            $this->values[$i] = $i * 3;
+        }
+    }
+}
+
+$store = new LoopBufferStore(4);
+$store->fill(4);
+echo $store->values[0], "|", $store->values[1], "|", $store->values[2], "|", $store->values[3];
+"#,
+    );
+    assert_eq!(out, "0|3|6|9");
+}
+
+/// Verifies property buffer writes coerce direct and runtime integers into float storage and preserve booleans.
+#[test]
+fn test_buffer_property_float_and_bool_element_writes() {
+    let out = compile_and_run(
+        r#"<?php
+function runtime_scalar(mixed $value): mixed {
+    return $value;
+}
+
+class ScalarBufferStore {
+    public buffer<float> $floats;
+    public buffer<bool> $flags;
+
+    public function __construct() {
+        $this->floats = buffer_new<float>(2);
+        $this->flags = buffer_new<bool>(2);
+    }
+}
+
+$store = new ScalarBufferStore();
+$store->floats[0] = runtime_scalar(7);
+$store->floats[1] = 2.5;
+$store->flags[0] = true;
+$store->flags[1] = false;
+echo $store->floats[0], "|", $store->floats[1], "|", $store->flags[0], "|", $store->flags[1];
+"#,
+    );
+    assert_eq!(out, "7|2.5|1|");
+}
+
+/// Verifies compound and postfix updates write their result back into a buffer property element.
+#[test]
+fn test_buffer_property_compound_and_increment_updates() {
+    let out = compile_and_run(
+        r#"<?php
+class UpdatedBufferStore {
+    public buffer<int> $values;
+
+    public function __construct() {
+        $this->values = buffer_new<int>(2);
+    }
+}
+
+$store = new UpdatedBufferStore();
+$store->values[0] = 10;
+$store->values[1] = 20;
+$store->values[0] += 5;
+$store->values[1]++;
+echo $store->values[0], "|", $store->values[1];
+"#,
+    );
+    assert_eq!(out, "15|21");
+}
+
+/// Verifies property buffer writes retain local-write bounds and stale-handle fatal errors.
+#[test]
+fn test_buffer_property_write_bounds_and_use_after_free_are_fatal() {
+    let bounds = compile_and_run_expect_failure(
+        r#"<?php
+class BoundsBufferStore {
+    public buffer<int> $values;
+
+    public function __construct() {
+        $this->values = buffer_new<int>(1);
+    }
+}
+
+$store = new BoundsBufferStore();
+$store->values[1] = 9;
+"#,
+    );
+    assert!(bounds.contains("buffer index out of bounds"), "{}", bounds);
+
+    let freed = compile_and_run_expect_failure(
+        r#"<?php
+class FreedBufferStore {
+    public buffer<int> $values;
+
+    public function __construct(buffer<int> $values) {
+        $this->values = $values;
+    }
+}
+
+buffer<int> $values = buffer_new<int>(1);
+$store = new FreedBufferStore($values);
+buffer_free($values);
+$store->values[0] = 9;
+"#,
+    );
+    assert!(
+        freed.contains("use of buffer after buffer_free()"),
+        "{}",
+        freed
+    );
+}
+
+/// Verifies repeated property buffer writes and reads leave no heap-debug allocations behind.
+#[test]
+fn test_buffer_property_write_loop_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class HeapCleanBufferStore {
+    public function __construct(public buffer<int> $values) {}
+}
+
+buffer<int> $values = buffer_new<int>(2000);
+$store = new HeapCleanBufferStore($values);
+for ($i = 0; $i < 2000; $i++) {
+    $store->values[$i] = $i;
+}
+$sum = 0;
+for ($i = 0; $i < 2000; $i++) {
+    $sum += $store->values[$i];
+}
+echo $sum;
+buffer_free($values);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1999000");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected property buffer writes to leave a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies buffer\<float\> stores and retrieves two floating-point values,
 /// then casts their sum to int.
 #[test]
