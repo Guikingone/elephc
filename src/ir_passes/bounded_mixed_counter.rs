@@ -28,35 +28,29 @@ pub struct BoundedMixedCounter {
 impl BoundedMixedCounter {
     /// Captures physical Mixed by-value argument positions before function passes run.
     pub(super) fn new(module: &Module) -> Self {
-        let mixed_parameters = module
-            .functions
-            .iter()
-            .chain(&module.class_methods)
-            .chain(&module.closures)
-            .chain(&module.fiber_wrappers)
-            .chain(&module.callback_wrappers)
-            .chain(&module.extern_callback_trampolines)
-            .chain(&module.runtime_callable_invokers)
-            .filter(|f| {
-                !f.flags.by_ref_return && !f.flags.is_generator && !f.flags.is_fiber_wrapper
-            })
-            .filter_map(|function| {
-                let parameters: Vec<_> = function
+        let mut mixed_parameters = HashMap::new();
+        // Match FunctionContext::function_by_name: PHP canonical names, free functions
+        // before closures, and the first match even when that target is ineligible.
+        // Other function tables and variant-dispatch fallbacks stay outside this proof.
+        for function in module.functions.iter().chain(&module.closures) {
+            let key = crate::names::php_symbol_key(function.name.trim_start_matches('\\'));
+            mixed_parameters.entry(key).or_insert_with(|| {
+                let eligible = !function.flags.by_ref_return
+                    && !function.flags.is_generator
+                    && !function.flags.is_fiber_wrapper;
+                function
                     .params
                     .iter()
                     .map(|param| {
-                        !param.by_ref
+                        eligible
+                            && !param.by_ref
                             && !param.variadic
                             && param.php_type == PhpType::Mixed
                             && param.ir_type == IrType::Heap(IrHeapKind::Mixed)
                     })
-                    .collect();
-                parameters
-                    .iter()
-                    .any(|safe| *safe)
-                    .then(|| (function.name.clone(), parameters))
-            })
-            .collect();
+                    .collect()
+            });
+        }
         Self { mixed_parameters }
     }
 
@@ -68,7 +62,10 @@ impl BoundedMixedCounter {
         let Some(parameters) = data
             .function_names
             .get(name.as_raw() as usize)
-            .and_then(|name| self.mixed_parameters.get(name))
+            .and_then(|name| {
+                let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+                self.mixed_parameters.get(&key)
+            })
         else {
             return false;
         };

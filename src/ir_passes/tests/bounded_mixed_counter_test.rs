@@ -179,38 +179,45 @@ fn bounded_mixed_counter_rejects_escapes_and_implicit_storage() {
     assert!(!BoundedMixedCounter::default().run(&mut f, &mut DataPool::default()));
 }
 
+/// Adds a call of data[0] to the boxed-counter fixture after its update.
+fn counter_with_call() -> Function {
+    use crate::ir::LocalSlotId;
+    let mut f = counter(CmpPredicate::Slt, 1, 0, false);
+    let body = f.blocks[2].id;
+    let term = f.blocks[2].terminator.take().unwrap();
+    {
+        let mut b = Builder::new(&mut f);
+        b.position_at_end(body);
+        let value = b.emit_load_local(
+            LocalSlotId::from_raw(1),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        b.emit(
+            Op::Call,
+            vec![value],
+            Some(Immediate::Data(crate::ir::DataId::from_raw(0))),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        b.terminate(term);
+    }
+    f
+}
+
 /// A call consumer needs authoritative physical Mixed parameter metadata, not a guessed type.
 #[test]
 fn bounded_mixed_counter_preserves_typed_parameter_guards() {
     use crate::codegen::platform::{Arch, Platform, Target};
-    use crate::ir::{LocalSlotId, Module};
+    use crate::ir::Module;
     for (parameter, by_ref, accepted) in [
         (PhpType::Mixed, false, true),
         (PhpType::False, false, false),
         (PhpType::Int, false, false),
         (PhpType::Mixed, true, false),
     ] {
-        let mut f = counter(CmpPredicate::Slt, 1, 0, false);
-        let body = f.blocks[2].id;
-        let term = f.blocks[2].terminator.take().unwrap();
-        {
-            let mut b = Builder::new(&mut f);
-            b.position_at_end(body);
-            let value = b.emit_load_local(
-                LocalSlotId::from_raw(1),
-                IrType::Heap(IrHeapKind::Mixed),
-                PhpType::Mixed,
-            );
-            b.emit(
-                Op::Call,
-                vec![value],
-                Some(Immediate::Data(crate::ir::DataId::from_raw(0))),
-                IrType::Void,
-                PhpType::Void,
-                Ownership::NonHeap,
-            );
-            b.terminate(term);
-        }
+        let mut f = counter_with_call();
         let mut module = Module::new(Target::new(Platform::Linux, Arch::X86_64));
         let mut callee = Function::new("callee".into(), IrType::Void, PhpType::Void);
         callee.params.push(FunctionParam {
@@ -248,4 +255,51 @@ fn bounded_mixed_counter_requires_definite_ssa_initialization() {
     let before = format!("{f:?}");
     assert!(!BoundedMixedCounter::default().run(&mut f, &mut DataPool::default()));
     assert_eq!(format!("{f:?}"), before);
+}
+
+/// Canonical callee lookup must preserve the backend's first target, including unsafe targets.
+#[test]
+fn bounded_mixed_counter_uses_canonical_first_callee_metadata() {
+    use crate::codegen::platform::{Arch, Platform, Target};
+    use crate::ir::Module;
+    for (parameter, by_ref, later_by_ref, accepted) in [
+        (PhpType::Mixed, true, Some(false), false),
+        (PhpType::False, false, Some(false), false),
+        (PhpType::Mixed, false, None, true),
+        (PhpType::Mixed, false, Some(true), true),
+    ] {
+        let mut f = counter_with_call();
+        let mut module = Module::new(Target::new(Platform::Linux, Arch::X86_64));
+        let mut first = Function::new("\\CaLlEe".into(), IrType::Void, PhpType::Void);
+        first.params.push(FunctionParam {
+            name: "x".into(),
+            ir_type: if parameter == PhpType::Mixed {
+                IrType::Heap(IrHeapKind::Mixed)
+            } else {
+                IrType::I64
+            },
+            php_type: parameter,
+            by_ref,
+            variadic: false,
+        });
+        module.functions.push(first);
+        if let Some(by_ref) = later_by_ref {
+            let mut later = Function::new("callee".into(), IrType::Void, PhpType::Void);
+            later.flags.is_closure = true;
+            later.params.push(FunctionParam {
+                name: "x".into(),
+                ir_type: IrType::Heap(IrHeapKind::Mixed),
+                php_type: PhpType::Mixed,
+                by_ref,
+                variadic: false,
+            });
+            module.closures.push(later);
+        }
+        module.data.function_names.push("callee".into());
+        assert_eq!(
+            BoundedMixedCounter::new(&module).run(&mut f, &mut module.data),
+            accepted
+        );
+        assert!(validate_function(&f).is_ok(), "{:?}", validate_function(&f));
+    }
 }

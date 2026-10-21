@@ -3,7 +3,7 @@
 - [x] Prove every source, consumer and update of a boxed local before changing representation.
 - [x] Commit a scalar trial only after SSA promotion and range analysis remove every overflow check.
 - [x] Cover inclusive bounds, late type changes, aliases, call-site separation and both IR modes.
-- [ ] Validate heap ownership, supported target emission and matched native/PHP benchmarks.
+- [x] Validate heap ownership, supported target emission and matched native/PHP benchmarks.
 - [ ] Complete independent review and publish the focused change.
 
 The optimization consumes existing direct calls and does not change closure call eligibility.

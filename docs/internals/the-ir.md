@@ -1515,7 +1515,10 @@ only by increment/decrement and seeded with concrete PHP integers. A complete
 storage/use scan excludes aliases, other types, pointer escapes, parameters,
 static/global storage, eval, suspension and exceptional CFGs. Direct-call
 consumers are accepted only at physical, by-value `mixed` parameter positions
-recorded from the module before function optimization. Call targets, signatures,
+recorded from the module before function optimization. The snapshot uses the
+backend's PHP canonical name keys and first-match priority (free functions before
+closures), retaining an ineligible first target instead of selecting a later one.
+Call targets, signatures,
 closure eligibility and return representations remain unchanged.
 
 The pass scalarizes a private trial function, removes transparent numeric owner
