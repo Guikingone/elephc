@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_replace(string $pattern, string $replacement, string $subject): string
+function preg_replace(string $pattern, string $replacement, string $subject): mixed
 ```
 
 ## What the type checker enforces

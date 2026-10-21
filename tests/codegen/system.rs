@@ -2210,6 +2210,22 @@ fn test_preg_replace_unicode_property_number() {
     assert_eq!(out, "abcXdefX");
 }
 
+/// Verifies an invalid pattern and the removed `/e` modifier produce PHP null,
+/// including null identity and string predicates, instead of leaking the input or
+/// replacement string through the failure path.
+#[test]
+fn test_preg_replace_invalid_pattern_and_e_modifier_return_null() {
+    let out = compile_and_run(
+        r#"<?php
+$bad = @preg_replace("/[/", "x", "abc");
+var_dump($bad, $bad === null, is_string($bad));
+$eval = @preg_replace("/a/e", "phpversion()", "a");
+var_dump($eval, $eval === null);
+"#,
+    );
+    assert_eq!(out, "NULL\nbool(true)\nbool(false)\nNULL\nbool(true)\n");
+}
+
 /// Verifies `preg_replace` returns the subject unchanged when the pattern has no matches.
 #[test]
 fn test_preg_replace_no_match() {

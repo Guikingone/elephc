@@ -64,6 +64,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
 
     // -- strip delimiters from pattern --
     emitter.instruction("bl __rt_preg_strip");                                  // → x1, x2, x3=flags
+    emitter.instruction("tbnz x3, #30, __rt_preg_replace_bad_pattern");         // the removed /e modifier is invalid in PHP 8
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save flags
 
     // -- materialize the PCRE pattern as a C string --
@@ -257,12 +258,26 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_overflow");
     emitter.instruction("b __rt_concat_overflow");                              // report the oversized result and terminate
 
-    // -- failure: return original subject --
+    // -- failure: PHP returns null for an invalid pattern --
+    emitter.label("__rt_preg_replace_bad_pattern");
+    emitter.instruction("b __rt_preg_replace_fail");                            // the /e modifier is rejected like a failed compile
     emitter.label("__rt_preg_replace_fail");
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // original subject ptr
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // original subject len
+    abi::emit_load_int_immediate(emitter, "x1", crate::codegen_support::sentinels::NULL_SENTINEL);
+    emitter.instruction("mov x2, #0");                                          // null has no payload bytes
 
     emitter.label("__rt_preg_replace_ret");
+    abi::emit_load_int_immediate(emitter, "x9", crate::codegen_support::sentinels::NULL_SENTINEL);
+    emitter.instruction("cmp x1, x9");                                          // did the replacement fail and produce PHP null?
+    emitter.instruction("b.eq __rt_preg_replace_box_null");                     // box a null Mixed cell on the failure path
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the replacement string for the Mixed result contract
+    emitter.instruction("b __rt_preg_replace_boxed");                           // return the boxed result
+    emitter.label("__rt_preg_replace_box_null");
+    emitter.instruction("mov x0, #8");                                          // runtime tag 8 = null
+    emitter.instruction("mov x1, #0");                                          // null has no low payload word
+    emitter.instruction("mov x2, #0");                                          // null has no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the null result
+    emitter.label("__rt_preg_replace_boxed");
     emitter.instruction(&format!("add x9, sp, #{}", save_off));                 // compute save-slot address beyond ARM64 pair-load range
     emitter.instruction("ldp x29, x30, [x9]");                                  // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // deallocate stack frame
@@ -315,6 +330,8 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the delimiter-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the delimiter-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags from the pattern literal
+    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
+    emitter.instruction("jc __rt_preg_replace_bad_pattern_linux_x86_64");       // PHP 8 rejects /e as an unknown modifier
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve the delimiter-strip helper flags for the later regcomp() call
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a null-terminated C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off));// preserve the null-terminated PCRE pattern C string across compilation and replacement
@@ -489,11 +506,27 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_overflow_linux_x86_64");
     emitter.instruction("jmp __rt_concat_overflow");                            // report the oversized result and terminate
 
+    emitter.label("__rt_preg_replace_bad_pattern_linux_x86_64");
+    emitter.instruction("jmp __rt_preg_replace_fail_linux_x86_64");             // the /e modifier is rejected like a failed compile
     emitter.label("__rt_preg_replace_fail_linux_x86_64");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off));// return the original elephc subject pointer when regex compilation fails
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off));// return the original elephc subject length when regex compilation fails
+    abi::emit_load_int_immediate(emitter, "rax", crate::codegen_support::sentinels::NULL_SENTINEL);
+    emitter.instruction("xor edx, edx");                                        // null has no payload bytes
 
     emitter.label("__rt_preg_replace_ret_linux_x86_64");
+    abi::emit_load_int_immediate(emitter, "r8", crate::codegen_support::sentinels::NULL_SENTINEL);
+    emitter.instruction("cmp rax, r8");                                         // did the replacement fail and produce PHP null?
+    emitter.instruction("je __rt_preg_replace_box_null_linux_x86_64");          // box a null Mixed cell on the failure path
+    emitter.instruction("mov rdi, rax");                                        // low payload = string pointer
+    emitter.instruction("mov rsi, rdx");                                        // high payload = string length
+    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // box the replacement string for the Mixed result contract
+    emitter.instruction("jmp __rt_preg_replace_boxed_linux_x86_64");            // return the boxed result
+    emitter.label("__rt_preg_replace_box_null_linux_x86_64");
+    emitter.instruction("xor edi, edi");                                        // null has no low payload word
+    emitter.instruction("xor esi, esi");                                        // null has no high payload word
+    emitter.instruction("mov rax, 8");                                          // runtime tag 8 = null
+    emitter.instruction("call __rt_mixed_from_value");                          // box the null result
+    emitter.label("__rt_preg_replace_boxed_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the opaque-handle, fixed-pair, and replacement spill storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the regex-replace helper completes
     emitter.instruction("ret");                                                 // return the preg_replace() string result in rax/rdx
