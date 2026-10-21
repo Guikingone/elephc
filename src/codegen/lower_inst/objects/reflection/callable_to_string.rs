@@ -246,19 +246,22 @@ pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefault
         ReflectionParameterDefaultValue::Null => String::from("NULL"),
         ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::EirHelper(_) => String::new(),
-        // PHP exports the written AST here, so the argument list stays and the class name is
-        // fully qualified: `new \\Foo(1, 'a')`, and `new \\Foo()` when nothing was written;
-        // the constructor defaults `args` carries for `getDefaultValue()` are not part of the
-        // source, so only the written ones are printed.
+        // Written arguments retain their source order and names independently of the
+        // constructor slots used by getDefaultValue, including omitted defaults.
         ReflectionParameterDefaultValue::Object {
             class_name,
-            args,
             written_args,
+            ..
         } => {
-            let rendered = args
+            let rendered = written_args
                 .iter()
-                .take(*written_args)
-                .map(reflection_dump_default_value)
+                .map(|arg| {
+                    let value = reflection_dump_default_value(&arg.value);
+                    match &arg.name {
+                        Some(name) => format!("{}: {value}", reflection_dump_text(name)),
+                        None => value,
+                    }
+                })
                 .collect::<Vec<_>>();
             format!(
                 "new \\{}({})",

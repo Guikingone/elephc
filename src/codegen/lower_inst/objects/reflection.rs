@@ -50,6 +50,7 @@ mod property_members;
 mod property_defaults_fold;
 mod default_members;
 mod parameter_defaults;
+mod object_defaults;
 mod default_export;
 mod names_constants;
 mod operand_extract;
@@ -76,6 +77,7 @@ use property_members::*;
 use property_defaults_fold::*;
 use default_members::*;
 use parameter_defaults::*;
+use object_defaults::*;
 use default_export::*;
 use names_constants::*;
 use operand_extract::*;
@@ -275,15 +277,20 @@ enum ReflectionParameterDefaultValue {
     EirHelper(String),
     Object {
         class_name: String,
-        /// Every constructor argument the object ends up with, the written ones followed by the
-        /// constructor defaults that fill the rest, what `getDefaultValue()` has to construct.
+        /// Every constructor argument in parameter order, including omitted defaults.
         args: Vec<ReflectionParameterDefaultValue>,
-        /// How many of those were WRITTEN. PHP's dump exports the source, so `new Foo()` prints
-        /// `new \Foo()` however many defaults the constructor would supply.
-        written_args: usize,
+        /// Arguments in written order, preserving names and excluding omitted defaults.
+        written_args: Vec<ReflectionDefaultObjectArg>,
     },
     Array(Vec<ReflectionParameterDefaultValue>),
     AssocArray(Vec<ReflectionDefaultAssocEntry>),
+}
+
+/// One written constructor argument kept separately from normalized value-materialization slots.
+#[derive(Clone)]
+struct ReflectionDefaultObjectArg {
+    name: Option<String>,
+    value: ReflectionParameterDefaultValue,
 }
 
 /// Metadata for one key/value pair in an associative Reflection default array.
