@@ -438,11 +438,38 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 // pointer than the container itself, so comparing them would read "not aliased"
                 // for a value the result does own, and release it twice. Same restriction the
                 // ABI-side cleanup slots already apply via `call_result_can_alias_mixed_temp`.
+                // A string argument the caller owns outright (claimed with `EnsureOwned`, or an
+                // acquired copy) compares the same way when a USER function produced the
+                // result: its payload pointer is the whole identity, and a PHP function persists
+                // every builtin result it returns, so an equal result means the callee handed
+                // the block back and a different one means the caller still owns it. A builtin
+                // result is excluded: `ltrim`, `substr` and friends answer with a view INTO the
+                // argument, a different pointer that still borrows the argument's bytes.
                 if let Some(result) = result {
                     let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
                     let result_repr = ctx.builder.value_php_type(result).codegen_repr();
-                    let comparable = matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
-                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_));
+                    let owned_string = arg_repr == PhpType::Str
+                        && result_repr == PhpType::Str
+                        && matches!(
+                            ctx.builder.value_defining_op(lowered.value),
+                            Some(Op::EnsureOwned | Op::Acquire)
+                        )
+                        && matches!(
+                            ctx.builder.value_defining_op(result),
+                            Some(
+                                Op::Call
+                                    | Op::FunctionVariantCall
+                                    | Op::MethodCall
+                                    | Op::NullsafeMethodCall
+                                    | Op::StaticMethodCall
+                                    | Op::ClosureCall
+                                    | Op::ExprCall
+                                    | Op::CallableDescriptorInvoke
+                            )
+                        );
+                    let comparable = (matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
+                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_)))
+                        || owned_string;
                     if comparable {
                         ctx.emit_void(
                             Op::ReleaseUnlessAliases,

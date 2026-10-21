@@ -458,6 +458,7 @@ pub(super) fn root_user_call_operands(
         if !independent_result
             && !signature.is_some_and(|sig| sig.returned_parameter_has_independent_owner(index))
         {
+            *operand = claim_transient_string_operand(ctx, *operand, span);
             continue;
         }
         let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
@@ -466,6 +467,43 @@ pub(super) fn root_user_call_operands(
         if let Some(slot) = root { roots.push((index, slot)); }
     }
     roots
+}
+
+/// Gives a transient string argument one releasing owner before a call that may hand it back.
+///
+/// A transient string (concat scratch, or a heap block stamped `CONCAT_TEMP_HEAP_KIND`) has no
+/// owner that frees it: the first consumer that persists it adopts the block in place. Passed to
+/// a callee that may return it, the same block came back as the call result, an owning temporary
+/// the caller releases, while a store of that result (or the callee itself) had already adopted
+/// it, so the release freed a string a variable, element or property still held. `EnsureOwned`
+/// retags the block as owned without copying it, so every later persist duplicates it, and the
+/// argument becomes an owning temporary whose release after the call is decided against the
+/// result (`ReleaseUnlessAliases`). Scratch and literal payloads pass through unchanged and their
+/// release stays a validated no-op.
+fn claim_transient_string_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    operand: crate::ir::ValueId,
+    span: Span,
+) -> crate::ir::ValueId {
+    if ctx.builder.value_php_type(operand).codegen_repr() != PhpType::Str {
+        return operand;
+    }
+    if !ctx
+        .builder
+        .value_defining_instruction(operand)
+        .is_some_and(crate::ir::Instruction::string_release_is_noop)
+    {
+        return operand;
+    }
+    ctx.emit_owned_value(
+        Op::EnsureOwned,
+        vec![operand],
+        None,
+        PhpType::Str,
+        Op::EnsureOwned.default_effects(),
+        Some(span),
+    )
+    .value
 }
 
 /// A frame slot published BEFORE a call's operand roots so the call's own owned result stays

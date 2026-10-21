@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the `__rt_str_persist`, `__rt_str_persist_done` runtime helper assembly for heap-backed string persistence.
+//! Emits the `__rt_str_persist`, `__rt_str_persist_done` and `__rt_str_claim` runtime helper assembly for heap-backed string persistence.
 //! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -10,11 +10,96 @@
 //! - A source already carrying `CONCAT_TEMP_HEAP_KIND` is a heap-backed `.` operator temporary:
 //!   it is taken over in place (retagged as an owned string) instead of being duplicated, so a
 //!   `$s .= ...` accumulation loop does not leave one oversized block behind per append.
+//! - `__rt_str_claim` retags such a temporary as owned without copying it, so a value that a
+//!   user call may hand back has exactly one releasing owner before any persist can adopt it.
 //! - Optional INI metadata records fresh lazy origins and preserves complete copies without native heap references.
 
 use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+
+/// str_claim: give a possibly transient string one owner without copying it.
+/// Input:  x1=ptr, x2=len (AArch64) or rax=ptr, rdx=len (x86_64)
+/// Output: the same pointer and length
+///
+/// A payload stamped `CONCAT_TEMP_HEAP_KIND` is retagged as an owned string (heap kind 1) in
+/// place; every other payload (concat scratch, literals, owned strings, the null sentinel) is
+/// returned untouched. Codegen emits it for `EnsureOwned`, before a transient string reaches a
+/// user call that may hand it back: from then on `__rt_str_persist` duplicates the block instead
+/// of adopting it, so the caller's eventual release is the only one that frees it.
+pub fn emit_str_claim(emitter: &mut Emitter, mbstring: bool) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_str_claim_linux_x86_64(emitter, mbstring);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: str_claim ---");
+    emitter.label_global("__rt_str_claim");
+
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x1, x9");                                          // a missing string has no storage to claim
+    emitter.instruction("b.eq __rt_str_claim_done");                            // leave the dedicated null-string sentinel untouched
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the frame pointer and return address across the heap-kind probe
+    emitter.instruction("mov x29, sp");                                         // establish the claim-helper probe frame pointer
+    emitter.instruction("mov x0, x1");                                          // pass the payload pointer to the uniform heap-kind probe
+    emitter.instruction("bl __rt_heap_kind");                                   // classify the storage without disturbing the x1/x2 string pair
+    emitter.instruction(&format!("cmp x0, #{}", CONCAT_TEMP_HEAP_KIND));        // is the payload an unclaimed transient heap block?
+    emitter.instruction("b.ne __rt_str_claim_keep");                            // scratch, literals and owned strings are already safe to share
+    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned elephc string
+    emitter.instruction("str x9, [x1, #-8]");                                   // retag the transient block as owned so later persists duplicate it
+    if mbstring {
+        emitter.instruction("bl __rt_mbstring_ini_fresh");                      // assign a fresh logical origin to the newly owned block
+    }
+    emitter.label("__rt_str_claim_keep");
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the frame pointer and return address after the probe
+    emitter.label("__rt_str_claim_done");
+    emitter.instruction("ret");                                                 // return the same pointer and length in x1/x2
+}
+
+/// Emits the x86_64 Linux implementation of the `__rt_str_claim` runtime helper.
+///
+/// Mirrors the AArch64 helper with the `rax`/`rdx` string pair: the heap-kind probe clobbers the
+/// caller-saved registers, so the pair is spilled and reloaded around it.
+fn emit_str_claim_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
+    emitter.blank();
+    emitter.comment("--- runtime: str_claim ---");
+    emitter.label_global("__rt_str_claim");
+
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r10",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rax, r10");                                        // a missing string has no storage to claim
+    emitter.instruction("je __rt_str_claim_done_x86");                          // leave the dedicated null-string sentinel untouched
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the saved string pair
+    emitter.instruction("sub rsp, 16");                                         // reserve aligned slots for the payload pointer and length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the payload pointer across the heap-kind probe
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // keep the payload length across the heap-kind probe
+    emitter.instruction("call __rt_heap_kind");                                 // classify the storage (rax already holds the payload pointer)
+    emitter.instruction(&format!("cmp eax, {}", CONCAT_TEMP_HEAP_KIND));        // is the payload an unclaimed transient heap block?
+    emitter.instruction("jne __rt_str_claim_keep_x86");                         // scratch, literals and owned strings are already safe to share
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the transient block pointer for the in-place retag
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap marker
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // retag the transient block as owned so later persists duplicate it
+    if mbstring {
+        emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                   // restore the length the metadata hook expects in the result pair
+        emitter.instruction("call __rt_mbstring_ini_fresh");                    // assign a fresh logical origin to the newly owned block
+    }
+    emitter.label("__rt_str_claim_keep_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged payload pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the unchanged payload length
+    emitter.instruction("add rsp, 16");                                         // release the spill slots used by the claim helper
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
+    emitter.label("__rt_str_claim_done_x86");
+    emitter.instruction("ret");                                                 // return the same pointer and length in rax/rdx
+}
 
 /// str_persist: copy a string to heap for permanent storage.
 /// Used to persist strings that would otherwise outlive their current owner.
@@ -26,6 +111,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// instead of allocating and copying a second one. Every other source (rodata literals, concat
 /// scratch slices, already-owned strings) still gets a fresh owned duplicate.
 pub fn emit_str_persist(emitter: &mut Emitter, mbstring: bool) {
+    emit_str_claim(emitter, mbstring);
     if emitter.target.arch == Arch::X86_64 {
         emit_str_persist_linux_x86_64(emitter, mbstring);
         return;
@@ -218,6 +304,30 @@ mod tests {
                 emitter.output().contains(".p2align 6\n__rt_str_persist_copy:"),
                 "{name}"
             );
+        }
+    }
+
+    /// Every target emits the non-copying claim helper next to persist: it probes the heap kind,
+    /// retags only a transient concat block as an owned string, and never allocates.
+    #[test]
+    fn str_claim_retags_only_transient_blocks_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_str_persist(&mut emitter, false);
+            let asm = emitter.output();
+            let start = asm.find("__rt_str_claim:\n").unwrap_or_else(|| panic!("{name}: no claim helper"));
+            let end = asm[start..].find("__rt_str_persist:\n").map(|end| start + end).unwrap_or(asm.len());
+            let claim = &asm[start..end];
+            assert!(claim.contains("__rt_heap_kind"), "{name}: {claim}");
+            assert!(!claim.contains("__rt_heap_alloc"), "{name}: {claim}");
+            if target.arch == Arch::X86_64 {
+                assert!(claim.contains(&format!("cmp eax, {}", CONCAT_TEMP_HEAP_KIND)), "{name}: {claim}");
+                assert!(claim.contains("mov QWORD PTR [rax - 8], r10"), "{name}: {claim}");
+            } else {
+                assert!(claim.contains(&format!("cmp x0, #{}", CONCAT_TEMP_HEAP_KIND)), "{name}: {claim}");
+                assert!(claim.contains("str x9, [x1, #-8]"), "{name}: {claim}");
+            }
         }
     }
 

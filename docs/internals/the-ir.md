@@ -399,7 +399,8 @@ Ownership operations:
 | `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, destruction may throw and debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
 | `Move` | any value | same type | pure validator operation | no machine instruction |
 | `Borrow` | value with live owner | same type | pure validator operation | no machine instruction |
-| `EnsureOwned` | maybe-owned value | same type | may branch, refcount effect | emits conditional retain/ownership normalization |
+| `EnsureOwned` | transient `Str` argument | `Str`, same payload, owned | `REFCOUNT_OP`, `WRITES_HEAP` | `__rt_str_claim`: retags a `CONCAT_TEMP_HEAP_KIND` block as an owned string in place, leaves scratch and literals untouched; emitted before a user call that may return the argument |
+| `ReleaseUnlessAliases` | owned argument, call result | `Void` | `REFCOUNT_OP`, `WRITES_HEAP`, `READS_HEAP` | releases the argument unless its payload pointer equals the result's: boxed `Mixed` pairs, and owned `Str` arguments (claimed or acquired) of a user call |
 
 Strings are not modeled as generic heap pointers because their ABI is `(ptr,
 len)`, but string ownership still participates in validator checks.
