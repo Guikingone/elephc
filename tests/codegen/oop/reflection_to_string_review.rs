@@ -5,7 +5,7 @@
 //! - `codegen_tests` through the `oop` module.
 //!
 //! Key details:
-//! - Expected strings were checked with PHP 8.5.11, excluding the source location line.
+//! - Fixtures use PHP 8.5.11/8.5.12 oracles, excluding the source location line.
 //! - Direct objects and member listings must share the same formatting.
 
 use super::*;
@@ -458,4 +458,22 @@ echo new ReflectionMethod('Methods', 'run');
         Method [ <user> public method run ] {\n\n  - Parameters [1] {\n\
         \x20   Parameter #0 [ <optional> ?false $value = NULL ]\n  }\n\
         \x20 - Return [ ?false ]\n}\n");
+}
+
+/// Generic object names remain builtin through direct, nullable and union metadata.
+#[test]
+fn test_reflection_dump_generic_object_type_metadata() {
+    let out = compile_and_run(r#"<?php
+function f(object $a, ?object $b, object|int $c): object|int { return $c; }
+echo new ReflectionFunction('f');
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) {
+    $type = $p->getType();
+    if ($type instanceof ReflectionNamedType) echo $type->getName(), ':', $type->isBuiltin(), "\n";
+}
+"#);
+    assert_eq!(out, "Function [ <user> function f ] {\n\n  - Parameters [3] {\n\
+        \x20   Parameter #0 [ <required> object $a ]\n\
+        \x20   Parameter #1 [ <required> ?object $b ]\n\
+        \x20   Parameter #2 [ <required> object|int $c ]\n  }\n\
+        \x20 - Return [ object|int ]\n}\nobject:1\nobject:1\n");
 }

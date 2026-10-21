@@ -433,6 +433,9 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
             Some(reflection_builtin_named_type("array", false))
         }
         PhpType::Callable => Some(reflection_builtin_named_type("callable", false)),
+        PhpType::Object(name) if name.is_empty() => {
+            Some(reflection_builtin_named_type("object", false))
+        }
         PhpType::Object(name) => Some(ReflectionNamedTypeMetadata {
             name: name.clone(),
             allows_null: false,
