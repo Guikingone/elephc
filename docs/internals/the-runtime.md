@@ -1221,6 +1221,8 @@ temporary inputs correctly.
 
 The unserializer keeps the fixed runtime-emission order in `unserialize/mod.rs`. Shared diagnostics and per-call context lifecycle are separated from target-specific allowed-class policy parsing, allocation-free validation, recursive decoding, and object-storage/key helpers. The two decoder files are cohesive architecture leaves; every surrounding orchestration or support module remains below the repository's 500-line warning threshold.
 
+Every parsed hash entry is inserted through `__rt_unser_store_entry` instead of calling `__rt_hash_set` directly. When a duplicate key replaces an entry, the helper reuses that entry's existing Mixed box, retains the replaced payload through the parser context, and moves the replacement into the same box. Both the earlier `R:`/`r:` slot and the duplicate value's own slot therefore keep addressing live storage, and the replaced value's destructor runs only after decoding completes. Scalar replacements discard their temporary box; array, hash, and object replacements keep it as a nested wrapper at their own reference slot.
+
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_serialize_call_value` | Guard a public call and preserve shared or isolated reference state across hooks | value tag + payload | string slice |
@@ -1233,6 +1235,8 @@ The unserializer keeps the fixed runtime-emission order in `unserialize/mod.rs`.
 | `__rt_unserialize_begin` / `__rt_unserialize_mixed` / `__rt_unserialize_object` | Parse a serialized string back into boxed Mixed cells, including nested arrays/hashes and objects | `x1`/`x2` = serialized string | `x0` = Mixed* (0 on malformed input) |
 | `__rt_unserialize_inherit_policy` | Inherit the enclosing allowed-class policy for a nested legacy decode without explicit options | current parser context | inherited policy |
 | `__rt_unserialize_promote_legacy_data` | Move temporary reference owners from a shared nested decode into the enclosing context before cleanup | nested parser context | enclosing ownership list |
+| `__rt_unser_store_entry` | Insert a parsed box and reuse an existing box on a duplicate key, deferring the replaced payload | `x0` hash, `x1`/`x2` key, `x3` box | `x0` = possibly reallocated hash |
+| `__rt_unser_release_payload` | Release only the payload a replaced box owned, leaving the box itself for reuse | `x0` boxed tag, `x1` payload | none |
 | `__rt_concat_hoist_tail` | Move the bytes appended since a tail offset (at most 32, such as a `<count>:{` header) in front of the body written before them | `x0` = body start, `x1` = tail start (buffer offsets) | concat buffer rearranged, write offset unchanged |
 | `__rt_unser_refuse_class` | Refuse a class PHP never unserializes, from the preflight: ask the `allowed_classes` policy, then scan `_unser_refused_classes` | `x1`/`x2` = wire class name | returns when allowed; otherwise throws |
 
