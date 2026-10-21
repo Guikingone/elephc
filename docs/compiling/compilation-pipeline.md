@@ -86,19 +86,20 @@ Physical source (.php or .lfc)
   when referenced. The web runtime
   prelude is injected
   with `--web`, and namespace/`use` rules rewrite references to fully-qualified
-  names. Autoloading is wired in around these steps. Because the autoload pass
-  runs after name resolution, a prelude needed only by an autoloaded file would
-  be missed; when autoload rules exist, a probe (`src/autoload/prelude_probe.rs`)
-  first runs name resolution and the autoload pass on a copy of the program,
-  asks each prelude's detector about the result, and rewinds every counter it
-  advanced, so the real pass injects those preludes and numbers its files,
-  classes and temporaries exactly as it would without the probe. Every included
-  and autoloaded file gets its own source identity, which is how diagnostics
-  name the file they come from.
+  names. Autoloading is wired in around these steps.
 - **func-args** — rewrites `func_num_args()`, `func_get_args()`, and
   `func_get_arg()` into a hidden variadic parameter plus ordinary PHP operations.
   This happens after autoloading but before manifest baking, optimization, and
   checking, so those later passes see the desugared callable shape.
+- **autoload prelude probe** — the autoload pass runs after name resolution, so
+  a prelude needed only by an autoloaded file would be missed. When autoload
+  rules exist, a probe (`src/autoload/prelude_probe.rs`) first runs name
+  resolution and the autoload pass on a copy of the program, asks each
+  prelude's detector about the result, and rewinds every counter it advanced,
+  so the real pass injects those preludes and numbers its files, classes and
+  temporaries exactly as it would without the probe. Every included and
+  autoloaded file gets its own source identity, which is how diagnostics name
+  the file they come from.
 - **opcache-manifest-bake** — after autoload insertion and argument-introspection
   desugaring, replaces the placeholder OPcache manifest with the complete
   entry/include/autoload file set before constant folding and emits any preload
