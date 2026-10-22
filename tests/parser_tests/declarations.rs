@@ -499,3 +499,32 @@ fn test_declare_related_empty_statements_parse_as_noops() {
     assert!(matches!(&stmts[1].kind, StmtKind::If { then_body, .. }
         if matches!(&then_body[0].kind, StmtKind::Synthetic(body) if body.is_empty())));
 }
+
+/// Returns the single statement a bare leading `declare` body produced.
+fn declare_body_stmt(stmt: &Stmt) -> &Stmt {
+    match &stmt.kind {
+        StmtKind::Synthetic(body) if body.len() == 1 => &body[0],
+        _ => stmt,
+    }
+}
+
+/// Assignment preludes in the main-script prefix take the final strict flag; closures keep theirs.
+#[test]
+fn test_declare_strict_types_marks_prefix_assignment_preludes() {
+    let stmts = parse_source(
+        "<?php declare(ticks=1) echo ($a[f()] += 1); \
+         declare(ticks=1) $g = function () { return f(); }; declare(strict_types=1);",
+    );
+    let echo = declare_body_stmt(&stmts[0]);
+    let StmtKind::Echo(Expr { kind: ExprKind::Assignment { prelude, .. }, .. }) = &echo.kind else {
+        panic!("expected an echoed compound assignment, got {:?}", echo.kind);
+    };
+    assert!(!prelude.is_empty(), "the computed index is captured in a prelude");
+    assert!(prelude.iter().all(|stmt| stmt.strict_types), "{prelude:?}");
+    let assign = declare_body_stmt(&stmts[1]);
+    let StmtKind::Assign { value: Expr { kind: ExprKind::Closure { body, .. }, .. }, .. } = &assign.kind else {
+        panic!("expected a closure assignment, got {:?}", assign.kind);
+    };
+    assert!(assign.strict_types);
+    assert!(body.iter().all(|stmt| !stmt.strict_types), "closure bodies stay lexical");
+}
