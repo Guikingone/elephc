@@ -288,7 +288,7 @@ fn test_ref_local_append_rhs_parent_guards_without_ir_opt() {
     crate::support::without_ir_opt(test_ref_local_append_rhs_parent_guards);
 }
 
-/// Eval-boxed locals preserve native string layouts for sorting without leaking append owners.
+/// Opaque eval widens locals to Mixed while native string sorting balances append owners.
 #[test]
 fn test_ref_local_append_native_layout_heap_balance() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -296,9 +296,35 @@ $items = [];
 foreach (["THREE", "ONE", "TWO"] as $name) { $items[] = strtolower($name); }
 sort($items);
 echo implode(",", $items), "\n";
-eval('echo "done\n";');
+$code = $argc > 0 ? 'echo "done\n";' : '';
+eval($code);
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "one,three,two\ndone\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Untaken reference calls preserve native append owners across joining and returning branches.
+#[test]
+fn test_ref_local_append_untaken_reference_native_views() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function touchNativeAppendItems(&$items): void { echo "t"; }
+function joinNativeAppend(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchNativeAppendItems($items); }
+    $items[] = "c";
+    echo "join:", count($items), "\n";
+}
+function earlyNativeAppend(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchNativeAppendItems($items); return; }
+    $items[] = "c";
+    echo "early:", count($items), "\n";
+}
+joinNativeAppend(1); joinNativeAppend(-1);
+earlyNativeAppend(1); earlyNativeAppend(-1);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "join:3\ntjoin:3\nearly:3\nt", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

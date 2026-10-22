@@ -1395,15 +1395,15 @@ pub(super) fn lower_array_push_value(
     } else {
         elem_ty.codegen_repr()
     };
-    // A native view of final Mixed storage owns an unbox lease. Retire the old box
-    // before append so that lease becomes the mutator's owner instead of forcing COW.
-    if let Some(slot) = source_local {
-        ctx.release_mutated_source_local_owner(slot, array)?;
-    }
+    // Native local loads own their unbox; an unpromoted ref-cell read still borrows it.
+    // Retake that borrowed lease before dropping the box, then transfer it only on this append.
+    let retaken = if let Some(slot) = source_local {
+        ctx.prepare_array_append_to_local(slot, array)?
+    } else { false };
     lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type)?;
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, array)?;
+        ctx.store_array_append_writeback_to_local(slot, array, retaken)?;
     }
     ctx.writeback_global_array_source(array)?;
     Ok(())

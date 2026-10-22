@@ -932,6 +932,42 @@ impl<'a> FunctionContext<'a> {
         self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep)
     }
 
+    /// Gives a native append a lease before retiring an unpromoted borrowed ref-cell box.
+    /// Returns whether writeback must transfer the newly acquired lease into its replacement box.
+    pub(super) fn prepare_array_append_to_local(
+        &mut self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<bool> {
+        let ref_load = self.function.value(value).and_then(|value| match value.def {
+            ValueDef::Instruction { inst, .. } => self.function.instruction(inst),
+            _ => None,
+        }).is_some_and(|inst| inst.op == Op::LoadRefCell);
+        let retake = ref_load
+            && self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
+            && matches!(self.value_php_type(value)?.codegen_repr(), PhpType::Array(_));
+        if retake { self.retake_mutated_source_local_owner(slot, value)?; }
+        else { self.release_mutated_source_local_owner(slot, value)?; }
+        Ok(retake)
+    }
+
+    /// Publishes a native append's replacement, transferring only its explicitly retaken lease.
+    pub(super) fn store_array_append_writeback_to_local(
+        &mut self, slot: LocalSlotId, value: ValueId, retaken: bool,
+    ) -> Result<()> {
+        if self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && self.value_is_released_later(value)
+        {
+            return self.store_receiver_value_to_local(slot, value);
+        }
+        if !retaken { return self.store_container_writeback_to_local(slot, value); }
+        let ty = self.load_value_to_result(value)?;
+        emit_box_current_owned_value_as_mixed(self.emitter, &ty);
+        let target_ty = self.local_php_type(slot)?;
+        let offset = self.local_offset(slot)?;
+        self.store_current_result_at_offset(&target_ty, offset);
+        Ok(())
+    }
+
     /// Shared body of the two local stores, parameterized by the previous-occupant rule.
     fn store_value_to_local_as(
         &mut self,

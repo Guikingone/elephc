@@ -45,6 +45,16 @@ function buildClosure(int $n): void {
     };
     $run();
 }
+function joinNativeAppend(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchUnknown($items); }
+    $items[] = "c"; echo count($items);
+}
+function earlyNativeAppend(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchUnknown($items); return; }
+    $items[] = "c"; echo count($items);
+}
 function replaceAppendScalar(&$items, string $pending): string { $items = 7; return $pending; }
 function appendReplaced(): void {
     $items = [1];
