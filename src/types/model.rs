@@ -374,6 +374,16 @@ pub(crate) fn is_nullable_pointer_type(php_type: &PhpType) -> bool {
     matches!(php_type, PhpType::Union(members) if nullable_pointer_union_member(members).is_some())
 }
 
+/// Returns the type a value of a declared type is boxed into `mixed` as: its codegen type, except
+/// that a `?ptr<T>` keeps its union, so address 0 boxes as PHP null instead of the integer 0.
+pub(crate) fn mixed_box_php_type(php_type: &PhpType) -> PhpType {
+    if is_nullable_pointer_type(php_type) {
+        php_type.clone()
+    } else {
+        php_type.codegen_repr()
+    }
+}
+
 /// Spells a pointer parameter type for a diagnostic: `?ptr<T>` for the nullable union, which
 /// otherwise prints as `ptr<T>|null`.
 pub(crate) fn pointer_param_display(php_type: &PhpType) -> String {

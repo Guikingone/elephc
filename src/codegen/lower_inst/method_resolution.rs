@@ -234,11 +234,7 @@ pub(super) fn store_call_result(
     if let Some(result) = inst.result {
         let result_ty = ctx.value_php_type(result)?;
         // A `?ptr<T>` result boxes by its declared type, so address 0 is PHP null.
-        let box_ty = if crate::types::is_nullable_pointer_type(return_ty) {
-            return_ty.clone()
-        } else {
-            return_ty.codegen_repr()
-        };
+        let box_ty = crate::types::mixed_box_php_type(return_ty);
         let return_ty = return_ty.codegen_repr();
         if return_ty == PhpType::Void || result_ty == PhpType::Void {
             abi::emit_load_int_immediate(

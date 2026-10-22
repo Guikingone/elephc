@@ -182,7 +182,11 @@ prints in decimal (a null `ptr` is the integer `0` there, not PHP `null`; a null
 `?ptr<T>` is PHP `null`). `settype($p, "string")` needs that same mixed storage, so it
 does not compile yet for a pointer variable; assign `(string)$p` to another
 variable instead. Code running inside `eval()` also sees pointers as plain
-integers, so `echo ptr_null()` there prints `0`.
+integers, so `echo ptr_null()` there prints `0`. A `?ptr<T>` that `eval()` reaches through
+a compiled class (a method result or parameter, an instance or static property, a
+constructor parameter) keeps its nullable meaning: address 0 is PHP `null` there, and a
+`null` passed from `eval()` becomes address 0. A method with a `?ptr<T> &$p` by-reference
+parameter cannot be called from `eval()` yet.
 
 ## Function reference
 

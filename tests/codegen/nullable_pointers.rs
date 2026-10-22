@@ -11,6 +11,8 @@
 //!   property defaults (literal copy and initializer thunk), method, static method and closure
 //!   returns, ternary and match merges with `null`, extern calls behind a null guard, and the
 //!   null-pointer dereference fatal (task 6da89f60).
+//! - Also covers boxing into `mixed` (globals, yields, arrays, hashes, dynamic properties,
+//!   iterators, interface wrappers and the eval bridges), where address 0 must be PHP null.
 
 use crate::support::*;
 
@@ -684,4 +686,69 @@ echo json_encode(["p" => $p, "s" => "x"]), json_encode([$p, "x"]), "\n";
         out,
         "nullN|null|[null,\"x\",null]|{\"k\":\"x\",\"p\":null,\"0\":null,\"l\":\"integer\"}|nullinteger|{\"p\":null,\"s\":\"x\"}[null,\"x\"]\n"
     );
+}
+
+/// Verifies a `?ptr<T>` returned by an `Iterator::current()` implementation is PHP null for
+/// address 0 and an integer when live, through a `foreach` over the concrete class, a `foreach`
+/// and a direct `current()` call on an `Iterator`-typed parameter (the interface wrapper), and a
+/// nullsafe call.
+#[test]
+fn test_nullable_pointer_iterator_values_box_as_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ?ptr<Vec2> { return $v[0]; }
+class It implements Iterator {
+    private int $i = 0;
+    public function __construct(private ?ptr $p) {}
+    public function current(): ?ptr { return $this->i === 0 ? null : $this->p; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i++; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+}
+function walk(Iterator $it): void {
+    foreach ($it as $v) { echo json_encode($v === null), gettype($v), "|"; }
+    $it->rewind();
+    echo json_encode($it->current()), "|";
+}
+function opt(?It $it): string { return json_encode($it?->current()); }
+$v = buffer_new<Vec2>(1);
+$it = new It(first($v));
+foreach ($it as $k => $p) { echo $k, gettype($p), "|"; }
+walk($it);
+echo opt($it), opt(null), "\n";
+"#,
+    );
+    assert_eq!(out, "0NULL|1integer|trueNULL|falseinteger|null|nullnull\n");
+}
+
+/// Verifies `eval` reaches `?ptr<T>` members through the native bridges: a method return and
+/// parameter, an instance and a static property read and write, and a constructor parameter all
+/// map address 0 to PHP null, and a live pointer reads as an integer.
+#[test]
+fn test_nullable_pointer_members_cross_the_eval_bridges() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ?ptr<Vec2> { return $v[0]; }
+class C {
+    public static ?ptr $sp = null;
+    public ?ptr $ip = null;
+    public function __construct(public ?ptr $cp = null) {}
+    public function m(?ptr $p): string { return $p === null ? "N" : "S"; }
+    public function r(): ?ptr { return null; }
+}
+function reads(C $o): void { eval('echo json_encode($o->r()), $o->m(null), json_encode($o->ip), json_encode(C::$sp), "|";'); }
+function writes(C $o): void { eval('C::$sp = null; $o->ip = null; $n = new C(null); echo json_encode(C::$sp), json_encode($o->ip), json_encode($n->cp), "|";'); }
+function live(): void { eval('echo gettype(C::$sp), "\n";'); }
+$o = new C();
+reads($o);
+writes($o);
+$v = buffer_new<Vec2>(1);
+C::$sp = first($v);
+live();
+"#,
+    );
+    assert_eq!(out, "nullNnullnull|nullnullnull|integer\n");
 }
