@@ -1116,6 +1116,7 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
         | PhpType::AssocArray { .. }
         | PhpType::Union(_)
         | PhpType::Iterable
+        | PhpType::Pointer(_)
         | PhpType::Void => Ok(8),
         other => Err(CodegenIrError::unsupported(format!(
             "array default element PHP type {:?}",

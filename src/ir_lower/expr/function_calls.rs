@@ -158,6 +158,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     };
     if !is_extern && !is_user_function {
         box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);
+        retype_array_push_values_for_pointer_storage(ctx, canonical, &mut operands, expr.span);
     }
     // A packed record address or a `null` passed where the signature (extern, builtin or user)
     // declares a pointer parameter becomes that pointer word; for `?ptr<T>` a null is the word
@@ -291,6 +292,39 @@ fn unbox_nullable_pointer_builtin_result(
     ctx.emit_value(Op::Move, vec![word.value], None, checked, Op::Move.default_effects(), Some(span))
 }
 
+
+/// Retypes the values of an `array_push()` call into pointer storage, as `$a[] = ...` does.
+///
+/// The builtin is recognized by its runtime target, never its name. A packed record address
+/// becomes the `ptr<T>` word, and `null` the word 0 when the receiver already stores pointers;
+/// the receiver's own type decides, so a record address pushed into an `int` array is not
+/// turned into a pointer slot.
+fn retype_array_push_values_for_pointer_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    operands: &mut [crate::ir::ValueId],
+    span: Span,
+) {
+    let is_array_push = crate::builtins::registry::lookup(canonical.trim_start_matches('\\'))
+        .is_some_and(|def| {
+            matches!(
+                def.spec.semantics.lowering,
+                crate::builtins::semantics::BuiltinLowering::Runtime(
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayPush)
+                )
+            )
+        });
+    let Some((receiver, values)) = operands.split_first_mut().filter(|_| is_array_push) else {
+        return;
+    };
+    let container_ty = ctx.builder.value_php_type(*receiver);
+    for value in values {
+        let lowered = lowered_value_from_id(ctx, *value);
+        *value = ctx
+            .retype_value_for_container_element(&container_ty, lowered, Some(span))
+            .value;
+    }
+}
 
 /// Boxes each `?ptr<T>` operand a builtin binds to a by-value `mixed` parameter.
 ///

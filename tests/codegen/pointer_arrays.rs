@@ -250,3 +250,23 @@ echo $h["a"]->x, "|", count($h), "\n";
     ));
     assert_eq!(out, "21|12|null|3|10|2\n");
 }
+
+/// Verifies `array_push()` into a typed `array<ptr<T> >` property (the generic builtin path, not
+/// the local fast path) stores a packed record address and `null` as pointer words, and that
+/// the property's empty-array default has pointer storage.
+#[test]
+fn test_pointer_array_push_into_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+class Bag { public array<ptr<Vec2> > $items = []; }
+$v = buffer_new<Vec2>(2);
+$v[0]->x = 5;
+$b = new Bag();
+array_push($b->items, $v[0]);
+array_push($b->items, null);
+echo count($b->items), "|", $b->items[0]->x, "|", $b->items[1] === null ? "null" : "set", "\n";
+"#,
+    );
+    assert_eq!(out, "2|5|null\n");
+}
