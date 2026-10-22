@@ -22,7 +22,10 @@
 //! - Branch edges with lifetime-tracked parameters are excluded because retaining
 //!   a borrowed argument can call the runtime after other parameters are stored.
 
-use crate::ir::{BlockId, Function, Op, Ownership, Terminator};
+use crate::ir::{
+    BlockId, Function, Immediate, Instruction, IrType, LocalKind, Op, Ownership, Terminator,
+};
+use crate::types::PhpType;
 
 /// Returns true when `op`'s lowering neither emits a call nor touches a
 /// caller-saved register outside the fixed result/scratch set.
@@ -61,6 +64,86 @@ pub(super) fn op_is_volatile_safe(op: Op) -> bool {
         // runtime fatals that never return, so no call can observe a caller-saved home.
         | BufferGetResolved | BufferSetResolved
     )
+}
+
+/// Returns true when this instruction's lowering preserves every unrelated caller-saved home.
+///
+/// Most instructions are classified by opcode alone. Named packed-record accesses additionally
+/// need receiver and value metadata: reads and concrete scalar writes stay inline, while a nested
+/// record write may copy through a `ptr<T>` null-check call and is therefore default-denied. A
+/// pure concrete numeric local load also needs its slot and result types to prove that lowering is
+/// one inline frame load with no ref-cell branch or Mixed conversion call.
+pub(super) fn instruction_is_volatile_safe(
+    function: &Function,
+    instruction: &Instruction,
+) -> bool {
+    if op_is_volatile_safe(instruction.op) {
+        return true;
+    }
+    if immutable_numeric_load_is_volatile_safe(function, instruction) {
+        return true;
+    }
+    if !function.is_packed_field_access(instruction) {
+        return false;
+    }
+    match instruction.op {
+        // Packed reads use the fixed result register and, for a large nested-record offset,
+        // secondary or tertiary scratch. The Packed receiver proves there is no pointer null
+        // guard before the load.
+        Op::PropGet => true,
+        // Concrete scalar stores push the packed base, materialize into the fixed result
+        // register, restore the base and store one word. A `false` field's payload guard branches
+        // to a TypeError path that never returns to this instruction. Packed and pointer sources
+        // stay unsafe because either may select the whole-record copy lowering, whose ptr<T>
+        // source check calls the runtime and whose copy loop consumes two scratch registers.
+        Op::PropSet => instruction
+            .operands
+            .get(1)
+            .and_then(|value| function.value(*value))
+            .is_some_and(|value| {
+                matches!(
+                    value.php_type.codegen_repr(),
+                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+                )
+            }),
+        _ => false,
+    }
+}
+
+/// Returns true for a pass-proven immutable integer or float local load with exact storage.
+///
+/// `ImmutableLocalLoads` sets `PURE` only after excluding dynamic eval, address escapes, unknown
+/// slot operations, and non-concrete storage. Matching the PHP local and SSA result types here
+/// rules out ref-cell dispatch and Mixed coercion helpers, leaving one frame load into the fixed
+/// result register before the value is moved to its allocated home.
+fn immutable_numeric_load_is_volatile_safe(
+    function: &Function,
+    instruction: &Instruction,
+) -> bool {
+    if instruction.op != Op::LoadLocal || !instruction.effects.is_pure() {
+        return false;
+    }
+    let Some(Immediate::LocalSlot(slot)) = instruction.immediate else {
+        return false;
+    };
+    let Some(local) = function.locals.get(slot.as_raw() as usize) else {
+        return false;
+    };
+    let Some(result) = instruction.result.and_then(|value| function.value(value)) else {
+        return false;
+    };
+    local.id == slot
+        && local.kind == LocalKind::PhpLocal
+        && matches!(
+            (
+                local.ir_type,
+                local.php_type.codegen_repr(),
+                result.ir_type,
+                result.php_type.codegen_repr(),
+            ),
+            (IrType::I64, PhpType::Int, IrType::I64, PhpType::Int)
+                | (IrType::F64, PhpType::Float, IrType::F64, PhpType::Float)
+        )
 }
 
 /// Returns true when `term`'s lowering neither emits a call nor clobbers a

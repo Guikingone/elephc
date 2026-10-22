@@ -148,6 +148,7 @@ pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
     class_method_body_exists, emit_runtime_descriptor_with_receiver_capture,
 };
+pub(super) use floats::{emit_fused_float_compare, float_branch_condition_suffix};
 pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
 };
