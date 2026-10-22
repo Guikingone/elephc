@@ -514,6 +514,8 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into preg-strip input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into preg-strip input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags
+    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
+    emitter.instruction("jc __rt_preg_split_fail_linux_x86_64");                // PHP 8 rejects /e as an unknown modifier
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", regex_flags_off));// preserve delimiter-strip regex flags
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off));// preserve null-terminated PCRE pattern

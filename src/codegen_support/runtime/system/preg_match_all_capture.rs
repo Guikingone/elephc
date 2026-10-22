@@ -586,6 +586,8 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emit_preg_match_all_capture_validate_flags_linux_x86_64(emitter, preg_flags_off);
 
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect regex flags
+    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
+    emitter.instruction("jc __rt_pma_cap_empty_linux_x86_64");                  // PHP 8 rejects /e as an unknown modifier
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", regex_flags_off));// save stripped regex flags
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off));// save null-terminated PCRE pattern
