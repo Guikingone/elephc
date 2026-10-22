@@ -53,6 +53,7 @@ mod parameter_defaults;
 mod object_defaults;
 mod default_export;
 mod names_constants;
+mod constant_arithmetic;
 mod operand_extract;
 mod string_attrs_emit;
 mod member_properties_emit;

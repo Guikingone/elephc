@@ -1,5 +1,5 @@
 //! Purpose:
-//! Regression coverage for resolved Reflection defaults when written AST export is unavailable.
+//! Regression coverage for Reflection constant arithmetic and resolved default fallbacks.
 //!
 //! Called from:
 //! - `codegen_tests` through the `oop` module.
@@ -7,8 +7,65 @@
 //! Key details:
 //! - Supported constant expressions retain their values without executing constructors on dump.
 //! - Operator spelling uses the documented evaluated-value fallback, unlike PHP's AST export.
+//! - Numeric constant metadata preserves PHP types, overflow promotion, and power rounding.
 
 use super::*;
+
+/// Reflected constant arithmetic preserves exact integers and promotes overflow like PHP.
+#[test]
+fn test_reflection_constant_arithmetic_preserves_php_numeric_results() {
+    let out = compile_and_run(r#"<?php
+const LIMIT = PHP_INT_MAX;
+const LOWER = PHP_INT_MIN;
+const EXPONENT = 63;
+const HUGE = 4294967296;
+const BASE = 3;
+class Values {
+    const MAXIMUM = LIMIT;
+    const TWO = 2;
+    const THREE = 3;
+    const ADD = LIMIT + 1;
+    const SCOPED_ADD = self::MAXIMUM + 1;
+    const SUB = LOWER - 1;
+    const MUL = LIMIT * 2;
+    const MOD = LOWER % -1;
+    const POW = 2 ** EXPONENT;
+    const PRECISE_POW = BASE ** 41;
+    const HUGE_POW = 2 ** HUGE;
+    const NEGATIVE_POW = (-2) ** LIMIT;
+    const IDENTITY_POW = 1 ** HUGE;
+    const NEGATIVE_IDENTITY = (-1) ** LIMIT;
+    const SAFE_POW = self::TWO ** self::THREE;
+    const EXACT_DIV = 6 / self::THREE;
+    const FRACTIONAL_DIV = 7 / self::TWO;
+    const MIN_DIV = LOWER / -1;
+    const SAFE_ADD = self::THREE + self::TWO;
+    const SAFE_SUB = self::TWO - self::THREE;
+    const SAFE_MUL = self::TWO * self::THREE;
+}
+$class = new ReflectionClass('Values');
+foreach ([
+    'ADD' => 9223372036854775808.0, 'SCOPED_ADD' => 9223372036854775808.0,
+    'SUB' => -9223372036854775808.0, 'MUL' => 18446744073709551616.0,
+    'POW' => 9223372036854775808.0, 'PRECISE_POW' => 3.647299637717079e19,
+    'HUGE_POW' => INF, 'NEGATIVE_POW' => -INF, 'FRACTIONAL_DIV' => 3.5,
+    'MIN_DIV' => 9223372036854775808.0,
+] as $name => $expected) {
+    $value = $class->getConstant($name);
+    echo $name, is_float($value) && $value === $expected ? ":F\n" : ":bad\n";
+}
+foreach ([
+    'MOD' => 0, 'IDENTITY_POW' => 1, 'NEGATIVE_IDENTITY' => -1, 'SAFE_POW' => 8,
+    'EXACT_DIV' => 2, 'SAFE_ADD' => 5, 'SAFE_SUB' => -1, 'SAFE_MUL' => 6,
+] as $name => $expected) {
+    $value = $class->getConstant($name);
+    echo $name, is_int($value) && $value === $expected ? ":I\n" : ":bad\n";
+}
+"#);
+    assert_eq!(out, "ADD:F\nSCOPED_ADD:F\nSUB:F\nMUL:F\nPOW:F\nPRECISE_POW:F\n\
+        HUGE_POW:F\nNEGATIVE_POW:F\nFRACTIONAL_DIV:F\nMIN_DIV:F\nMOD:I\nIDENTITY_POW:I\n\
+        NEGATIVE_IDENTITY:I\nSAFE_POW:I\nEXACT_DIV:I\nSAFE_ADD:I\nSAFE_SUB:I\nSAFE_MUL:I\n");
+}
 
 /// Negating the minimum integer through a constant promotes to float without compiler overflow.
 #[test]
