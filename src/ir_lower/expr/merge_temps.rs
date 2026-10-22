@@ -333,7 +333,9 @@ pub(super) fn coerce_value_for_temp(
     }
     match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
-        PhpType::Pointer(_) if matches!(source_ty, PhpType::Packed(_)) => {
+        PhpType::Pointer(_)
+            if matches!(source_ty, PhpType::Packed(_) | PhpType::Void | PhpType::Never) =>
+        {
             ctx.retype_packed_address_for_pointer_sink(value, &target_ty, Some(span))
         }
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {

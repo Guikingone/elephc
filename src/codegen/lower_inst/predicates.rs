@@ -141,6 +141,12 @@ pub(super) fn lower_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Emits an `is_null` boolean result for static nulls and boxed Mixed payloads.
 pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    // A `?ptr<T>` is one pointer word where 0 is null.
+    if crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(value)?) {
+        ctx.load_value_to_result(value)?;
+        super::builtins::emit_int_result_zero_bool(ctx);
+        return Ok(());
+    }
     match ctx.value_php_type(value)? {
         PhpType::Mixed | PhpType::Union(_) => emit_mixed_tag_eq(ctx, value, 8),
         PhpType::Void | PhpType::Never => {

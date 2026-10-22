@@ -70,6 +70,10 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         emit_tagged_scalar_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
     }
+    if crate::types::is_nullable_pointer_type(&ty) {
+        emit_nullable_pointer_gettype(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         emit_mixed_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
@@ -82,6 +86,20 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     };
     emit_type_name_result(ctx, type_name);
     store_if_result(ctx, inst)
+}
+
+/// Emits `gettype()` for a `?ptr<T>` word: `NULL` for 0, `pointer` otherwise.
+fn emit_nullable_pointer_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let null_case = ctx.next_label("gettype_nullable_pointer_null");
+    let done = ctx.next_label("gettype_nullable_pointer_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &null_case);
+    emit_type_name_result(ctx, b"pointer");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    emit_type_name_result(ctx, b"NULL");
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Emits `gettype()` for an inline tagged scalar by dispatching on its tag word.

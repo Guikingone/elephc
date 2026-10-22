@@ -76,6 +76,20 @@ pub(super) fn lower_strict_eq(
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?.codegen_repr();
     let rhs_ty = ctx.value_php_type(rhs)?.codegen_repr();
+    // A `?ptr<T>` against `null` tests its pointer word for 0.
+    for (pointer, other_ty) in [(lhs, &rhs_ty), (rhs, &lhs_ty)] {
+        if matches!(other_ty, PhpType::Void | PhpType::Never)
+            && crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(pointer)?)
+        {
+            ctx.load_value_to_result(pointer)?;
+            if is_equal {
+                super::builtins::emit_int_result_zero_bool(ctx);
+            } else {
+                super::predicates::emit_int_result_nonzero_bool(ctx);
+            }
+            return store_if_result(ctx, inst);
+        }
+    }
     if needs_mixed_strict_compare(&lhs_ty) || needs_mixed_strict_compare(&rhs_ty) {
         emit_mixed_strict_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
         return store_if_result(ctx, inst);

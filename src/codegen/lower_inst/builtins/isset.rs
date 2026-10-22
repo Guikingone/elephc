@@ -86,6 +86,12 @@ fn emit_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> R
 
 /// Emits 1 when a loaded scalar, boxed Mixed, or null-like value is absent for `isset`.
 fn emit_loaded_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    // A `?ptr<T>` is one pointer word where 0 is null.
+    if crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(value)?) {
+        ctx.load_value_to_result(value)?;
+        super::emit_int_result_zero_bool(ctx);
+        return Ok(());
+    }
     match ctx.value_php_type(value)? {
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);

@@ -85,6 +85,37 @@ pair keeps the value exactly. Both accept an `int` value and convert it.
 
 Pointer dereference helpers abort on null pointer dereference. Use `ptr_is_null($p)` to check.
 
+A nullable pointer type (`?ptr`, `?ptr<T>` or `ptr<T>|null`) is stored as the bare address,
+and PHP `null` is address 0. Returning `null`, assigning it, or a `= null` property default
+writes a null pointer, and `=== null`, `!== null`, `is_null()`, `isset()` and `??` test the
+address against 0:
+
+```php
+<?php
+packed class Vec2 { public int $x; public int $y; }
+
+function find(buffer<Vec2> $items, int $x): ?ptr<Vec2> {
+    for ($i = 0; $i < buffer_len($items); $i++) {
+        if ($items[$i]->x === $x) {
+            return $items[$i];
+        }
+    }
+    return null;
+}
+
+$items = buffer_new<Vec2>(4);
+$hit = find($items, 0);
+if ($hit !== null) {
+    echo $hit->y;             // field access through the found record
+}
+echo gettype(find($items, 9)); // "NULL"
+```
+
+Because the two are the same value, a `ptr_null()` stored in a `?ptr<T>` reads as `null`,
+`echo` prints nothing for it and `gettype()` answers `NULL`; a non-nullable `ptr` keeps
+printing `0x0`. Narrow a `?ptr<T>` with `!== null` before passing it to an `extern` function
+that takes `ptr<T>`.
+
 ## Raw string copies
 
 ```php

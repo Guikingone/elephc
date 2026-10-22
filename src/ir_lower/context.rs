@@ -4629,18 +4629,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// preserving the raw address payload. The sink's pointer type wins even when it names
     /// another class: the checker accepts any pointer for any pointer, and the payload is the
     /// same address either way.
+    ///
+    /// A PHP `null` reaching a pointer sink (including a `?ptr<T>` slot, stored as one pointer
+    /// word) becomes the word 0: null and a null pointer are the same value there, and the
+    /// ordinary null sentinel word would read as a live address.
     pub(crate) fn retype_packed_address_for_pointer_sink(
         &mut self,
         value: LoweredValue,
         expected: &PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        if !matches!(self.builder.value_php_type(value.value).codegen_repr(), PhpType::Packed(_)) {
-            return value;
-        }
+        let source = self.builder.value_php_type(value.value).codegen_repr();
         let PhpType::Pointer(target) = expected.codegen_repr() else {
             return value;
         };
+        if matches!(source, PhpType::Void | PhpType::Never) {
+            return self.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(0)),
+                PhpType::Pointer(target),
+                Op::ConstI64.default_effects(),
+                span,
+            );
+        }
+        if !matches!(source, PhpType::Packed(_)) {
+            return value;
+        }
         self.emit_value(
             Op::Move,
             vec![value.value],

@@ -182,7 +182,7 @@ pub(super) fn lower_static_callable_call(
             // A capture without a stable cell already refused this binding above, so the direct
             // call below can be lowered without abandoning any emitted instruction.
             let reference_staging = begin_reference_return_call(ctx, Some(&signature), expr.span);
-            let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
+            let php_type = normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type));
             let result_staging = prepublish_user_call_result(
                 ctx,
                 Some(&signature),
@@ -469,7 +469,7 @@ pub(super) fn prepublish_static_callable_call_result(
     let result_type = match target {
         StaticCallableBinding::UserFunction(name) => call_return_type(ctx, name, &[]),
         StaticCallableBinding::Closure { signature, .. } => {
-            normalize_value_php_type(signature.return_type.codegen_repr())
+            normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type))
         }
         _ => return None,
     };

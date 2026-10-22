@@ -802,6 +802,14 @@ fn ensure_static_property_value_supported(
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return Ok(());
     }
+    // A `?ptr<T>` slot is one raw pointer word (null is address 0), and any pointer fits any
+    // pointer slot once the checker has accepted the assignment.
+    if matches!(
+        (value_ty.codegen_repr(), slot.php_type.codegen_repr()),
+        (PhpType::Pointer(_), PhpType::Pointer(_))
+    ) {
+        return Ok(());
+    }
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
         && matches!(value_ty.codegen_repr(), PhpType::Mixed)
     {
