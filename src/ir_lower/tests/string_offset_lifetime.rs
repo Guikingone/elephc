@@ -386,3 +386,32 @@ function pendingdirect(string $a, string $b, Exception $error, bool $flag): void
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+
+/// Warning-only byte reads publish earlier owners before calling a throwing user handler.
+#[test]
+fn string_offset_pending_warning_owners_on_all_targets() {
+    use crate::ir::Op;
+    let source = r#"<?php
+function warning_concat(string $s, int $i): void { echo $s[0] . $s[$i]; }
+function warning_key(string $s, int $i): void { $items = ["seed" => 0]; $items[$s . $s] = $s[$i]; }
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["warning_concat", "warning_key"] {
+            let function = module.functions.iter().find(|f| f.name.eq_ignore_ascii_case(name)).unwrap();
+            let (block, position) = function.blocks.iter().find_map(|block| {
+                block.instructions.iter().enumerate().rev().find_map(|(position, id)| {
+                    (function.instruction(*id).unwrap().op == Op::StrCharAt).then_some((block, position))
+                })
+            }).expect("the fixture retains its warning-capable RHS byte read");
+            assert!(block.instructions[..position].iter().any(|id| {
+                function.instruction(*id).unwrap().op == Op::PushCallOperandOwner
+            }), "{target}: {name} must protect its pending operand before the warning");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

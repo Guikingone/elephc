@@ -565,3 +565,37 @@ pendingWholeOperands($argc > 0); echo "done\n";
 fn test_string_offset_lifetime_non_byte_pending_operands_without_ir_opt() {
     crate::support::without_ir_opt(test_string_offset_lifetime_non_byte_pending_operands);
 }
+
+
+/// Warning handlers can unwind while a byte, whole string or computed key is pending.
+#[test]
+fn test_string_offset_lifetime_throwing_warning_pending_operands() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function pendingWarningByte(string $s, int $i): void { echo $s[0] . $s[$i]; }
+function pendingWarningWhole(string $s, int $i): void { echo ($s . $s) . $s[$i]; }
+function pendingWarningKey(string $s, int $i): void {
+    $items = ["seed" => 0]; $items[$s . $s] = $s[$i];
+}
+function rejectPendingWarning(int $level, string $message): bool {
+    throw new Exception("warning");
+}
+$s = str_repeat("s", 70000);
+set_error_handler("rejectPendingWarning");
+for ($n = 0; $n < 8; $n++) {
+    try { pendingWarningByte($s, $argc + 70000); } catch (Exception $e) {}
+    try { pendingWarningWhole($s, $argc + 70000); } catch (Exception $e) {}
+    try { pendingWarningKey($s, $argc + 70000); } catch (Exception $e) {}
+}
+restore_error_handler();
+echo "done\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "done\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Throwing warning-handler cleanup also works without optional EIR optimization.
+#[test]
+fn test_string_offset_lifetime_throwing_warning_pending_operands_without_ir_opt() {
+    crate::support::without_ir_opt(test_string_offset_lifetime_throwing_warning_pending_operands);
+}
