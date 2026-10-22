@@ -270,7 +270,7 @@ impl<'f> Builder<'f> {
             let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
                 continue;
             };
-            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
                 continue;
             }
             let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {
@@ -334,7 +334,7 @@ impl<'f> Builder<'f> {
             let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
                 continue;
             };
-            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
                 continue;
             }
             let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {

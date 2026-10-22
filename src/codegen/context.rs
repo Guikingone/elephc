@@ -1476,6 +1476,11 @@ impl<'a> FunctionContext<'a> {
         }
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
+            if self.function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+            }) {
+                return Ok(false);
+            }
             return self.value_is_heap_owned_string_for_mixed_box(value);
         }
         if self.value_can_transfer_ownership_to_consumer(value)? {

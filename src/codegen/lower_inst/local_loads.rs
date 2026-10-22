@@ -49,6 +49,11 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
 /// Lowers an explicit local ref-cell load into the result register and SSA slot.
 pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
+    if !ctx.function.params.get(slot.as_raw() as usize).is_some_and(|param| param.by_ref) {
+        // Promoted locals use their final storage type on both raw and reference paths.
+        // Coercing that storage to the requested value preserves any owned unbox lease.
+        return lower_load_local(ctx, inst);
+    }
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;

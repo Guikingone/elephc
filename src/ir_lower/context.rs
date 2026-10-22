@@ -1864,10 +1864,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
         };
-        // A normal ref-cell read borrows a lifetime-tracked pointee. Scalar payloads remain
-        // `NonHeap`. Only `load_local_storage`, used when retiring the slot's stored owner, may
-        // claim ownership of the same refcounted payload.
+        // A reference parameter borrows its pointee. A promoted local can instead unbox
+        // an owned payload from final Mixed storage, just like an ordinary local load.
+        let borrowed_ref_parameter = self.builder.function().params.get(slot.as_raw() as usize)
+            .is_some_and(|param| param.by_ref);
         let ownership = if op == Op::LoadRefCell
+            && borrowed_ref_parameter
             && Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
             Ownership::Borrowed
@@ -3532,7 +3534,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     return None;
                 }
                 let op = self.builder.value_defining_op(value);
-                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal))
+                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell))
                     && !self.value_is_owned_temp_load(value)
                 {
                     return None;
@@ -3723,12 +3725,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
-        if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+        if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
             return false;
         }
         let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
             return false;
         };
+        if inst.op == Op::LoadRefCell && self.builder.function().params.get(slot.as_raw() as usize)
+            .is_some_and(|param| param.by_ref) {
+            return false;
+        }
         if !matches!(
             self.builder.local_kind(slot),
             LocalKind::PhpLocal | LocalKind::StaticLocal

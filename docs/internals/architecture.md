@@ -207,6 +207,16 @@ dynamic fragments enable the optional `elephc-magician` interpreter staticlib
 at final linking. This is a lowering/linking decision, not a separate timed
 compiler phase. See [Eval Runtime Architecture](eval-runtime.md).
 
+Before EIR validation, `src/ir_lower/boxed_array_appends.rs` reconciles single-use append
+receivers with their final local storage. A later reference call can widen a local from a
+native array to boxed `Mixed`; earlier appends then use `MixedArrayAppend` and a borrowed
+boxed read. Append lowering evaluates the RHS before loading the current local, so a reference
+write on the RHS also selects the ordinary scalar/string parent guards. The final storage read
+stays after RHS evaluation, while the shared runtime keeps copy-on-write and reference aliases intact.
+Rejected append branches release an owned string RHS before raising the catchable parent error.
+Reads through a promoted local also use its final storage contract: a concrete value unboxed
+from `Mixed` owns a lease that the consumer releases, including on paths that never promote.
+
 ### Generated-artifact write policy
 
 **Source:** `src/pipeline/artifact_io.rs`
