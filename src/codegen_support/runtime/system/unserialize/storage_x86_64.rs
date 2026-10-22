@@ -102,9 +102,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value box
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // preserve the property tag across the previous-value release
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // preserve the slot address across the previous-value release
+    emitter.instruction("sub rsp, 16");                                        // reserve an aligned spill for the property offset
+    emitter.instruction("mov QWORD PTR [rsp], r8");                            // preserve the property byte offset across the release
     emitter.instruction("mov rdi, r10");                                       // pass the property slot to the previous-value release
     emitter.instruction("mov rsi, r9");                                        // pass the compile-time property tag
     emitter.instruction("call __rt_unser_release_prev_prop");                  // release the default value this hydration overwrites
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                            // recover the property byte offset after the release
+    emitter.instruction("add rsp, 16");                                         // release the offset spill
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // recover the property tag
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // recover the slot address
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // recover the parsed value box
@@ -196,7 +200,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // persist the row index
     emitter.instruction("jmp __rt_obj_store_prop_loop");                        // continue scanning
     emitter.label("__rt_obj_store_prop_done");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // hand the ignored value box to the context owner
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the ignored value box to the context owner
     emitter.instruction("call __rt_unserialize_defer_data");                    // keep the unclaimed value alive until the decode completes
     emitter.label("__rt_obj_store_prop_ret");
     emitter.instruction("add rsp, 96");                                         // deallocate the store frame
@@ -352,5 +356,9 @@ mod tests {
         );
         // An accepted int into a float slot is widened, not reinterpreted.
         assert!(asm.contains("cvtsi2sd xmm0, r8"), "{asm}");
+        // The previous-value release can clobber r8, so the array-store path must
+        // preserve the property byte offset across that call.
+        assert!(asm.contains("mov QWORD PTR [rsp], r8"), "{asm}");
+        assert!(asm.contains("mov r8, QWORD PTR [rsp]"), "{asm}");
     }
 }

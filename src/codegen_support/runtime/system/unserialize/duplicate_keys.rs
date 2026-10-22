@@ -255,7 +255,7 @@ fn emit_store_entry_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9 + 16], 0");                        // nested wrappers carry no high payload word
     abi::load_at_offset(emitter, "rax", 40);
     abi::emit_call_label(emitter, "__rt_incref");
-    abi::load_at_offset(emitter, "rdi", 32);
+    abi::load_at_offset(emitter, "rax", 32);
     abi::emit_call_label(emitter, "__rt_unserialize_defer_data");
     emitter.instruction("jmp __rt_unser_store_duplicate_return_x");           // keep the duplicate object's reference slot valid
 
@@ -340,6 +340,9 @@ mod tests {
             assert!(duplicate.contains("__rt_unser_release_payload"), "{name}");
             assert!(duplicate.contains("__rt_incref"), "{name}");
             assert!(duplicate.contains("__rt_decref_mixed"), "{name}");
+            if name == "linux-x86_64" {
+                assert!(duplicate.contains("mov rax, QWORD PTR [rbp - 32]"), "{name}: defer consumes the wrapper in rax");
+            }
         }
     }
 

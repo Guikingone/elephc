@@ -74,8 +74,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ja __rt_unser_finish_stored_prop_scalar_x");          // other wire values transfer no container owner
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                       // container payload stored in the property slot
     emitter.instruction("push rax");                                           // preserve the parsed box across the payload retain
+    emitter.instruction("mov rax, rdi");                                       // __rt_incref consumes its argument in rax
     emitter.instruction("call __rt_incref");                                   // give the property slot its own container owner
-    emitter.instruction("pop rdi");                                            // restore the parsed box for the context deferral
+    emitter.instruction("pop rax");                                            // restore the parsed box for the context deferral
     abi::emit_jump(emitter, "__rt_unserialize_defer_data");                     // keep the registry box alive until the context completes
     emitter.label("__rt_unser_finish_stored_prop_string_x");
     abi::emit_jump(emitter, "__rt_heap_free");                                  // free the shell; the property slot owns the string payload
@@ -105,7 +106,7 @@ fn emit_release_previous_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x1, #6");                                         // does the previous value stay inside the container range?
     emitter.instruction("b.ls __rt_unser_release_prev_prop_any");              // arrays, hashes, and objects release uniformly
     emitter.instruction("cmp x1, #7");                                         // is the previous value a boxed Mixed cell?
-    emitter.instruction("b.eq __rt_unser_release_prev_prop_mixed");            // Mixed cells need their counted box release
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_mixed");            // Mixed cells stay alive for their reference slot
     emitter.instruction("cmp x1, #10");                                        // is the previous value a callable descriptor?
     emitter.instruction("b.eq __rt_unser_release_prev_prop_callable");         // callable descriptors own capture state
     emitter.instruction("cmp x1, #11");                                        // is the previous value an owned reference cell?
@@ -115,8 +116,8 @@ fn emit_release_previous_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x9");                                          // pass the previous payload to the uniform release helper
     abi::emit_jump(emitter, "__rt_decref_any");
     emitter.label("__rt_unser_release_prev_prop_mixed");
-    emitter.instruction("mov x0, x9");                                          // pass the previous Mixed box to its counted release
-    abi::emit_jump(emitter, "__rt_decref_mixed");
+    emitter.instruction("mov x0, x9");                                          // keep the previous box alive for its reference slot
+    abi::emit_jump(emitter, "__rt_unserialize_defer_data");
     emitter.label("__rt_unser_release_prev_prop_callable");
     emitter.instruction("mov x0, x9");                                          // pass the previous callable descriptor to its release helper
     abi::emit_jump(emitter, "__rt_callable_descriptor_release");
@@ -145,7 +146,7 @@ fn emit_release_previous_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rsi, 6");                                         // does the previous value stay inside the container range?
     emitter.instruction("jbe __rt_unser_release_prev_prop_any_x");             // arrays, hashes, and objects release uniformly
     emitter.instruction("cmp rsi, 7");                                         // is the previous value a boxed Mixed cell?
-    emitter.instruction("je __rt_unser_release_prev_prop_mixed_x");            // Mixed cells need their counted box release
+    emitter.instruction("je __rt_unser_release_prev_prop_mixed_x");            // Mixed cells stay alive for their reference slot
     emitter.instruction("cmp rsi, 10");                                        // is the previous value a callable descriptor?
     emitter.instruction("je __rt_unser_release_prev_prop_callable_x");         // callable descriptors own capture state
     emitter.instruction("cmp rsi, 11");                                        // is the previous value an owned reference cell?
@@ -155,8 +156,8 @@ fn emit_release_previous_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r10");                                       // pass the previous payload to the uniform release helper
     abi::emit_jump(emitter, "__rt_decref_any");
     emitter.label("__rt_unser_release_prev_prop_mixed_x");
-    emitter.instruction("mov rax, r10");                                       // pass the previous Mixed box to its counted release
-    abi::emit_jump(emitter, "__rt_decref_mixed");
+    emitter.instruction("mov rax, r10");                                       // keep the previous box alive for its reference slot
+    abi::emit_jump(emitter, "__rt_unserialize_defer_data");
     emitter.label("__rt_unser_release_prev_prop_callable_x");
     emitter.instruction("mov rax, r10");                                       // pass the previous callable descriptor to its release helper
     abi::emit_jump(emitter, "__rt_callable_descriptor_release");
@@ -179,8 +180,8 @@ mod tests {
             let asm = emitter.output();
             let block = asm.split_once("__rt_unser_release_prev_prop").unwrap().1;
             assert!(block.contains("__rt_decref_any"), "{name}");
-            assert!(block.contains("__rt_decref_mixed"), "{name}");
             assert!(block.contains("__rt_callable_descriptor_release"), "{name}");
+            assert!(block.contains("__rt_unserialize_defer_data"), "{name}: Mixed boxes are deferred");
             assert!(block.contains("UNINITIALIZED") || block.contains("cmp") || block.contains("0x7fff"), "{name}");
         }
     }

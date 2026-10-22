@@ -119,6 +119,24 @@ unset($dup);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Overwriting a hydrated Mixed property must not free a box that an earlier
+/// serialized value slot can still reach through `R:`.
+#[test]
+fn test_unserialize_overwritten_mixed_property_keeps_reference_slots_alive() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RefA { }
+class RefHolder { public mixed $m = null; public mixed $n = null; }
+$value = unserialize('O:9:"RefHolder":3:{s:1:"m";O:4:"RefA":0:{}s:1:"m";i:5;s:1:"n";R:2;}');
+echo $value->m, "|";
+$keep = $value->n;
+echo "done";
+unset($value, $keep);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "5|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// The `__unserialize` data hash is built with the same duplicate-key rule, so a later
 /// back-reference inside the property list follows the replacement value.
 #[test]
