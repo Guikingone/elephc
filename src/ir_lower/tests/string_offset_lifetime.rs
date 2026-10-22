@@ -415,3 +415,51 @@ function warning_key(string $s, int $i): void { $items = ["seed" => 0]; $items[$
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// A nested index call sees the persisted byte receiver published until the outer read completes.
+#[test]
+fn string_offset_nested_index_owner_on_all_targets() {
+    use crate::ir::Op;
+    let source = r#"<?php
+function throwing_nested_offset_index(): int { throw new Exception("index"); }
+function nested_offset_read(string $s): void { echo $s[0][throwing_nested_offset_index()]; }
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("nested_offset_read"))
+            .unwrap();
+        let (block, call_position) = function.blocks.iter().find_map(|block| {
+            block.instructions.iter().enumerate().find_map(|(position, id)| {
+                let call = function.instruction(*id).unwrap();
+                let Some(crate::ir::Immediate::Data(callee)) = call.immediate else { return None; };
+                (call.op == Op::Call
+                    && module.data.function_names[callee.as_raw() as usize]
+                        .eq_ignore_ascii_case("throwing_nested_offset_index"))
+                    .then_some((block, position))
+            })
+        }).expect("the nested offset fixture retains its throwing index call");
+        let outer_read = block.instructions[call_position + 1..].iter().position(|id| {
+            function.instruction(*id).unwrap().op == Op::StrCharAt
+        }).map(|position| call_position + 1 + position)
+            .expect("the outer string read follows the nested index call");
+        assert_eq!(function.instructions.iter().filter(|instruction| {
+            instruction.op == Op::PushCallOperandOwner
+        }).count(), 1, "{target}: the receiver needs one owner record");
+        assert_eq!(function.instructions.iter().filter(|instruction| {
+            instruction.op == Op::PopCallOperandOwner
+        }).count(), 1, "{target}: the receiver owner record must retire once");
+        assert!(block.instructions[..call_position].iter().any(|id| {
+            function.instruction(*id).unwrap().op == Op::PushCallOperandOwner
+        }), "{target}: the byte receiver must be published before the nested index call");
+        assert!(block.instructions[outer_read + 1..].iter().any(|id| {
+            function.instruction(*id).unwrap().op == Op::PopCallOperandOwner
+        }), "{target}: the byte receiver must stay published through the outer read");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

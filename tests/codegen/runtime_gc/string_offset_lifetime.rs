@@ -599,3 +599,28 @@ echo "done\n";
 fn test_string_offset_lifetime_throwing_warning_pending_operands_without_ir_opt() {
     crate::support::without_ir_opt(test_string_offset_lifetime_throwing_warning_pending_operands);
 }
+
+/// A persisted byte receiver remains unwind-visible while its nested index is evaluated.
+#[test]
+fn test_string_offset_lifetime_throwing_nested_index() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function throwingNestedOffsetIndex(Exception $error): int { throw $error; }
+function runThrowingNestedOffsetIndex(string $text, Exception $error): void {
+    for ($i = 0; $i < 8; $i++) {
+        try { echo $text[0][throwingNestedOffsetIndex($error)]; }
+        catch (Exception $caught) { unset($caught); }
+    }
+}
+runThrowingNestedOffsetIndex(str_repeat("Z", 4000), new Exception("index"));
+echo "done\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "done\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested-index unwind cleanup also works without optional EIR optimization.
+#[test]
+fn test_string_offset_lifetime_throwing_nested_index_without_ir_opt() {
+    crate::support::without_ir_opt(test_string_offset_lifetime_throwing_nested_index);
+}
