@@ -80,6 +80,8 @@ mod static_receiver_dynamic;
 mod reflection_attribute_filter;
 #[path = "oop/reflection_to_string.rs"]
 mod reflection_to_string;
+#[path = "oop/reflection_union_type.rs"]
+mod reflection_union_type;
 #[path = "oop/reflection_to_string_review.rs"]
 mod reflection_to_string_review;
 #[path = "oop/reflection_to_string_fallbacks.rs"]

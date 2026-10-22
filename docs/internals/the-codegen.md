@@ -345,7 +345,9 @@ and after the eval fragment:
   spelling limits are listed in [the Reflection API documentation](../php/classes.md).
 - `elephc_builtin_contract::reflection_format` shares float, string and union formatting with
   eval. Float defaults use 14 significant digits. Value strings escape control and non-ASCII bytes,
-  and `iterable` renders as `Traversable|array`.
+  and `iterable` renders as `Traversable|array`. Its `union_member_rank` is also the order both
+  engines sort `ReflectionUnionType` metadata with, so `getType()` and `getTypes()` answer in the
+  same order as the dump (#1118).
 - Method headers distinguish the overwritten parent declaration from the root prototype.
   `ClassInfo::declared_interfaces` retains the direct clauses separately from flattened interfaces:
   the last newly implemented contract supplies the interface prototype, while an inherited method
