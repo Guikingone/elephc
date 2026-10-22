@@ -215,6 +215,7 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
 /// Boxes the pointer word in the result register: address 0 is PHP null, and any other
 /// address is kept as an integer-like payload.
 fn emit_box_pointer_word_as_mixed(emitter: &mut Emitter) {
+    // -- box the pointer word: address 0 as PHP null, any other address as an integer --
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x1, x0");                                  // move the raw pointer into the mixed helper payload register

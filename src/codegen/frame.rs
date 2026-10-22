@@ -537,6 +537,7 @@ pub(super) fn emit_function_prologue_with_label(
 /// callee is the one place they all meet, so the slot is normalized here: the sentinel becomes
 /// address 0, the null of a `?ptr<T>`, and every real address is left alone.
 fn normalize_nullable_pointer_param(ctx: &mut FunctionContext<'_>, offset: usize) {
+    // -- rewrite a null sentinel bound to a ?ptr<T> parameter into the null pointer word --
     abi::emit_load(ctx.emitter, &PhpType::Int, offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
