@@ -61,13 +61,19 @@ packed class Vec2 { public float $x; public float $y; }
 
 final class Points {
     public buffer<Vec2> $data;
+    public buffer<int> $ids;
 
     public function __construct(int $n) {
         $this->data = buffer_new<Vec2>($n);
+        $this->ids = buffer_new<int>($n);
     }
 
     public function moveX(int $i, float $dx): void {
         $this->data[$i]->x = $this->data[$i]->x + $dx;
+    }
+
+    public function setId(int $i, int $id): void {
+        $this->ids[$i] = $id;
     }
 
     public function all(): buffer<Vec2> {
@@ -82,10 +88,9 @@ final class Store<T> {
 $store = new Store<Vec2>(buffer_new<Vec2>(16));
 ```
 
-Packed element fields can be written through a buffer-typed property, as in
-`moveX()` above. Writing a whole element through a property
-(`$this->ids[$i] = 42` on a `buffer<int>` property) is not supported yet, and
-a static property cannot hold a buffer yet.
+Packed element fields and whole scalar elements can be written through a
+buffer-typed property, as in `moveX()` and `setId()` above. A static property
+cannot hold a buffer yet.
 
 ## Buffer length
 
