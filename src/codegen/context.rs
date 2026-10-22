@@ -951,11 +951,77 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn prepare_mutated_source_local_owner(
         &mut self, slot: LocalSlotId, value: ValueId,
     ) -> Result<()> {
+        if self.source_local_owner_was_released_before_current_instruction(slot, value)? {
+            return Ok(());
+        }
         if self.needs_borrowed_container_lease(slot, value)? {
             self.retake_mutated_source_local_owner(slot, value)
         } else {
             self.release_mutated_source_local_owner(slot, value)
         }
+    }
+
+    /// Detects an EIR storage cleanup that already transferred a boxed local's child owner.
+    ///
+    /// Nested writes may load a concrete container view, then load and release the same local as
+    /// `Mixed` before the consuming mutation. That release leaves the concrete view as the
+    /// container's owner. Retiring the frame slot again here would decref the freed Mixed box a
+    /// second time. Only releases after the concrete load in the current basic block qualify.
+    fn source_local_owner_was_released_before_current_instruction(
+        &self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<bool> {
+        let Some(current_inst) = self.current_inst else { return Ok(false); };
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst: source_inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let Some(block) = self.function.blocks.iter()
+            .find(|block| block.instructions.contains(&current_inst))
+        else {
+            return Err(CodegenIrError::invalid_module(format!(
+                "current instruction {} has no containing block", current_inst.as_raw()
+            )));
+        };
+        let Some(source_index) = block.instructions.iter().position(|inst| *inst == source_inst)
+        else {
+            return Ok(false);
+        };
+        let Some(current_index) = block.instructions.iter().position(|inst| *inst == current_inst)
+        else {
+            return Ok(false);
+        };
+        if source_index >= current_index {
+            return Ok(false);
+        }
+        for release_id in &block.instructions[source_index + 1..current_index] {
+            let Some(release) = self.function.instruction(*release_id) else {
+                return Err(CodegenIrError::missing_entry("instruction", release_id.as_raw()));
+            };
+            if release.op != Op::Release {
+                continue;
+            }
+            let Some(released) = release.operands.first().copied() else { continue; };
+            if !matches!(self.value_php_type(released)?.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_))
+            {
+                continue;
+            }
+            let Some(released_ref) = self.function.value(released) else {
+                return Err(CodegenIrError::missing_entry("value", released.as_raw()));
+            };
+            let ValueDef::Instruction { inst: load_id, .. } = released_ref.def else { continue; };
+            let Some(load) = self.function.instruction(load_id) else {
+                return Err(CodegenIrError::missing_entry("instruction", load_id.as_raw()));
+            };
+            if matches!(load.op, Op::LoadLocal | Op::LoadRefCell)
+                && load.immediate == Some(Immediate::LocalSlot(slot))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Publishes a mutation's replacement, transferring its explicitly retaken borrowed lease.
