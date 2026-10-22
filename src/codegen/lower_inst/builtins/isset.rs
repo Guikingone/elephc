@@ -344,6 +344,7 @@ fn emit_isset_hash_found_null_check_aarch64(
         return Ok(());
     }
     if matches!(value_ty.codegen_repr(), PhpType::Pointer(_)) {
+        // -- a stored null pointer word is a missing entry for isset --
         ctx.emitter.instruction(&format!("cbz x1, {}", missing));               // a stored null pointer word is PHP null for isset
     }
     ctx.emitter.instruction("cmp x3, #8");                                      // runtime tag 8 means the found hash value is PHP null
@@ -371,6 +372,7 @@ fn emit_isset_hash_found_null_check_x86_64(
         return Ok(());
     }
     if matches!(value_ty.codegen_repr(), PhpType::Pointer(_)) {
+        // -- a stored null pointer word is a missing entry for isset --
         ctx.emitter.instruction("test rdi, rdi");                               // a stored null pointer word is PHP null for isset
         ctx.emitter.instruction(&format!("jz {}", missing));                    // treat the null pointer entry as missing
     }
@@ -559,6 +561,7 @@ fn emit_isset_array_in_bounds_missing_aarch64(
             ctx.emitter.instruction("cset x0, eq");                             // return missing when the in-bounds Mixed element is null
         }
         PhpType::Pointer(_) => {
+            // -- a null pointer element is missing for isset --
             ctx.emitter.instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach the pointer words
@@ -599,6 +602,7 @@ fn emit_isset_array_in_bounds_missing_x86_64(
             ctx.emitter.instruction("movzx rax, al");                           // widen the Mixed null-check result into the integer result register
         }
         PhpType::Pointer(_) => {
+            // -- a null pointer element is missing for isset --
             ctx.emitter.instruction(
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach the pointer words
