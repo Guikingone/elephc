@@ -49,7 +49,7 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
         PhpType::Void => 8,
         PhpType::Resource(_) => 9,
         PhpType::Callable => 10,
-        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) | PhpType::Never => 0,
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) | PhpType::Never | PhpType::Narrow(_) => 0,
         PhpType::TaggedScalar => {
             unreachable!("TaggedScalar carries its runtime tag in the tag register, not a static tag")
         }
@@ -119,6 +119,7 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
         | PhpType::False
         | PhpType::Void
         | PhpType::Never
+        | PhpType::Narrow(_)
         | PhpType::Resource(_) => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x1, x0");                              // move the current scalar payload into the mixed helper argument register

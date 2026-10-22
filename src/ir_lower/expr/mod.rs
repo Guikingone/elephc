@@ -185,6 +185,7 @@ use core_introspection::*;
 use reflection_new_instance::*;
 use nullable_method_calls::*;
 use method_metadata::*;
+pub(in crate::ir_lower) use method_metadata::method_signature;
 use static_method_calls::*;
 use scoped_values::*;
 use generators::*;

@@ -183,12 +183,48 @@ fn validate_value_table(function: &Function) -> Result<(), ValidationError> {
                 }
             }
         }
+        // A buffer element's storage width (`buffer<i32>`) is never a value type: element reads
+        // and writes carry the `int` or `float` the width reads as.
+        if matches!(value.php_type, PhpType::Narrow(_)) {
+            return Err(ValidationError::PhpTypeMismatch(value_id));
+        }
         if !php_type_compatible(value.ir_type, &value.php_type) {
             return Err(ValidationError::PhpTypeMismatch(value_id));
         }
         if !ownership_compatible(value.ir_type, &value.php_type, value.ownership) {
             return Err(ValidationError::OwnershipTypeMismatch(value_id));
         }
+    }
+    Ok(())
+}
+
+/// Verifies a resolved buffer access takes its descriptor straight from a `BufferResolve`
+/// result: codegen reads the element's storage width (`buffer<i32>`, `buffer<f32>`) from that
+/// instruction's handle operand, so a descriptor that reaches the access through a block
+/// parameter or another instruction would lose the width.
+fn check_descriptor_from_buffer_resolve(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    let descriptor = inst.operands[0];
+    let value = function
+        .value(descriptor)
+        .ok_or(ValidationError::UnknownValue(descriptor))?;
+    let mismatch = || ValidationError::OperandTypeMismatch {
+        inst: inst_id,
+        operand: descriptor,
+        expected: "buffer_resolve descriptor",
+        actual: value.ir_type,
+    };
+    let ValueDef::Instruction { inst: def, .. } = value.def else {
+        return Err(mismatch());
+    };
+    let def_inst = function
+        .instruction(def)
+        .ok_or(ValidationError::UnknownInstruction(def))?;
+    if def_inst.op != Op::BufferResolve {
+        return Err(mismatch());
     }
     Ok(())
 }
@@ -929,11 +965,13 @@ fn validate_opcode_rules(
         BufferGetResolved => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::I64, "I64 buffer descriptor")?;
+            check_descriptor_from_buffer_resolve(function, inst_id, inst)?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64 buffer index")
         }
         BufferSetResolved => {
             check_count(inst_id, inst, 3, "3")?;
             check_operand_type(function, inst_id, inst, 0, IrType::I64, "I64 buffer descriptor")?;
+            check_descriptor_from_buffer_resolve(function, inst_id, inst)?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64 buffer index")
         }
         DynamicObjectNewWithoutConstructorMixed

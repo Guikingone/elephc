@@ -12,7 +12,7 @@ use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::pcntl_constants::pcntl_int_constants;
-use crate::types::{packed_type_size, PhpType, TypeEnv};
+use crate::types::{PhpType, TypeEnv};
 
 impl Checker {
     /// Infers types for calls, closures, objects, property access, assignments, and generators.
@@ -63,13 +63,11 @@ impl Checker {
                         "buffer_new<T>() length must be integer",
                     ));
                 }
-                let elem_ty = self.resolve_type_expr(element_type, expr.span)?;
-                if packed_type_size(&elem_ty, &self.packed_classes).is_none() {
-                    return Err(CompileError::new(
-                        expr.span,
-                        "buffer_new<T>() requires a POD scalar, pointer, or packed class element type",
-                    ));
-                }
+                let elem_ty = self.resolve_buffer_element_type(
+                    element_type,
+                    expr.span,
+                    "buffer_new<T>() requires a POD scalar, pointer, or packed class element type",
+                )?;
                 Ok(PhpType::Buffer(Box::new(elem_ty)))
             }
             ExprKind::BitNot(inner) => {

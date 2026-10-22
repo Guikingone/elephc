@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::types::{packed_type_size, PhpType};
+use crate::types::{packed_type_size, width_spelling_hint, width_type_from_type_expr, PhpType};
 
 use super::object_types::canonical_builtin_iterable_interface_name;
 use super::super::builtin_enums::is_builtin_enum_name;
@@ -63,6 +63,60 @@ impl Checker {
                     .find(|declared| php_symbol_key(declared) == key)
                     .cloned()
             }
+        }
+    }
+
+    /// Resolves the element type of `buffer<T>` or `buffer_new<T>()`.
+    ///
+    /// A C width name (`buffer<i32>`, `buffer<u8>`, `buffer<f32>`) is the element's storage
+    /// format and resolves to `PhpType::Narrow`, with `i64`, `u64` and `f64` the plain word
+    /// types; any other element type resolves normally and must be POD-sized, otherwise
+    /// `message` is reported.
+    pub(crate) fn resolve_buffer_element_type(
+        &self,
+        inner: &crate::parser::ast::TypeExpr,
+        span: crate::span::Span,
+        message: &str,
+    ) -> Result<PhpType, CompileError> {
+        if let Some(width_type) = width_type_from_type_expr(inner) {
+            return Ok(width_type);
+        }
+        let inner_ty = self
+            .resolve_type_expr(inner, span)
+            .map_err(|error| self.width_position_type_error(inner, span, error))?;
+        if packed_type_size(&inner_ty, &self.packed_classes).is_none() {
+            return Err(CompileError::new(span, message));
+        }
+        Ok(inner_ty)
+    }
+
+    /// Rewrites the diagnostic of a packed field or buffer element type that failed to resolve
+    /// when its name looks like a misspelled width (`I32`, `uint8_t`, `double`): the message
+    /// then lists the accepted spellings instead of pointing at a missing class. Any other
+    /// failure keeps its original diagnostic.
+    pub(crate) fn width_position_type_error(
+        &self,
+        type_expr: &crate::parser::ast::TypeExpr,
+        span: crate::span::Span,
+        error: CompileError,
+    ) -> CompileError {
+        let crate::parser::ast::TypeExpr::Named(name) = type_expr else {
+            return error;
+        };
+        if self.normalize_pointer_target_type(name.as_str()).is_some() {
+            return error;
+        }
+        match width_spelling_hint(name.as_str()) {
+            Some(hint) => CompileError::new(
+                span,
+                &format!(
+                    "Unknown type: {}; storage widths are spelled {} (did you mean {}?)",
+                    name.as_str(),
+                    crate::parser::ast::c_width_type_names().join(", "),
+                    hint
+                ),
+            ),
+            None => error,
         }
     }
 
@@ -157,13 +211,11 @@ impl Checker {
                 Ok(PhpType::Pointer(Some(normalized)))
             }
             crate::parser::ast::TypeExpr::Buffer(inner) => {
-                let inner_ty = self.resolve_type_expr(inner, span)?;
-                if packed_type_size(&inner_ty, &self.packed_classes).is_none() {
-                    return Err(CompileError::new(
-                        span,
-                        "buffer<T> requires a POD scalar, pointer, or packed class element type",
-                    ));
-                }
+                let inner_ty = self.resolve_buffer_element_type(
+                    inner,
+                    span,
+                    "buffer<T> requires a POD scalar, pointer, or packed class element type",
+                )?;
                 Ok(PhpType::Buffer(Box::new(inner_ty)))
             }
             crate::parser::ast::TypeExpr::Named(name) => {

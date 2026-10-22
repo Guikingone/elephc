@@ -26,7 +26,48 @@ buffer<float> $speeds = buffer_new<float>(1000);
 buffer<Enemy> $enemies = buffer_new<Enemy>(256);
 ```
 
-Only POD scalar, pointer, or packed-record element types are accepted. No union types (`buffer<int|string>`) or nullable (`buffer<?int>`).
+Only POD scalar, pointer, packed-record, or C width element types are accepted. No union types (`buffer<int|string>`) or nullable (`buffer<?int>`).
+
+## Element widths
+
+A scalar element type may be one of the C width names, and the buffer then stores each
+element at that width, so index data, pixels and vertex streams take only the bytes they
+need:
+
+| Element type | Stride | Reads as |
+|---|---|---|
+| `int`, `i64`, `u64`, `bool`, `ptr`, `ptr<T>` | 8 | `int`, `bool`, pointer |
+| `i32`, `u32` | 4 | `int` |
+| `i16`, `u16` | 2 | `int` |
+| `i8`, `u8` | 1 | `int` |
+| `float`, `f64` | 8 | `float` |
+| `f32` | 4 | `float` |
+| a packed class | the record's size | the record's address |
+
+```php
+<?php
+buffer<u16> $indices = buffer_new<u16>(6);    // 12 bytes of payload
+buffer<u8> $pixels = buffer_new<u8>(640 * 480);
+buffer<f32> $positions = buffer_new<f32>(3 * 1024);
+
+$indices[0] = 70000;   // stores the low 16 bits: 4464
+$pixels[0] = -1;       // 255
+$positions[0] = 0.1;   // the nearest single: 0.10000000149012
+echo $indices[0] + 1;  // int arithmetic, as with buffer<int>
+```
+
+The width is a storage format: an element of any integer width reads as `int` and an `f32`
+reads as `float`, a write takes the same value type a `buffer<int>` or `buffer<float>` element
+takes and keeps only the declared width (signed widths sign-extend and unsigned widths
+zero-extend on a read, an out-of-range integer keeps its low bits like a C conversion, a float
+written to `f32` rounds to single precision). `buffer<i32>` and `buffer<int>` are distinct
+types because their strides differ. Packed classes take the same width names for their fields;
+see [Field widths](packed-classes.md#field-widths).
+
+A scalar buffer has no payload pointer yet, so it cannot be passed to C: only a buffer of
+packed records reaches C, through an element (`$buf[0]`) read as a `ptr<T>`. A one-field
+packed class (`packed class Index { public u16 $v; }`) keeps the width in memory and gives C
+that pointer.
 
 ## Buffer builtins
 
@@ -151,7 +192,7 @@ Offset 32:  [active marker: 8 bytes]
 Offset 40:  [free-list successor: 8 bytes]
 ```
 
-The payload is a separate heap allocation containing exactly `length * stride` zero-initialized bytes. Reusing a descriptor increments its generation, so a stale alias cannot resolve to a newer buffer lifetime.
+The payload is a separate heap allocation containing exactly `length * stride` zero-initialized bytes, where the stride is the element size: 8 for the word types, the width of a `u8`, `i16`, `i32` or `f32` element, or the padded size of a packed record. Reusing a descriptor increments its generation, so a stale alias cannot resolve to a newer buffer lifetime.
 
 ## SoA vs AoS patterns
 

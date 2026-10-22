@@ -1674,7 +1674,8 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
         | PhpType::Callable
         | PhpType::Pointer(_)
         | PhpType::Buffer(_)
-        | PhpType::Packed(_) => {
+        | PhpType::Packed(_)
+        | PhpType::Narrow(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
             abi::emit_store_zero_to_address(emitter, cell_reg, 8);

@@ -232,12 +232,18 @@ pub(in crate::codegen::lower_inst) fn release_adopted_mixed_source(
 }
 
 /// Emits a compact packed-field store without writing object-property metadata words.
+///
+/// A width-declared field stores only its width: an integer keeps its low bytes like a C
+/// conversion and an `f32` is rounded to single precision.
 pub(super) fn emit_packed_field_store(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
     slot: &PropertySlot,
     base_reg: &str,
 ) -> Result<()> {
+    if let Some(width) = slot.width {
+        return emit_packed_width_field_store(ctx, value, slot, width, base_reg);
+    }
     match &slot.php_type {
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
@@ -279,15 +285,50 @@ pub(super) fn emit_packed_field_store(
     Ok(())
 }
 
+/// Stores a value into a packed field declared with a C width name.
+///
+/// The integer payload is loaded into the integer result register (a boxed `Mixed` was already
+/// narrowed to a raw int by lowering), an `f32` payload into the float result register with the
+/// same `Mixed`-to-float conversion a `float` field uses; the receiver address survives the load
+/// on the temporary stack, and the shared width emitter truncates or rounds the payload.
+fn emit_packed_width_field_store(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    slot: &PropertySlot,
+    width: ScalarWidth,
+    base_reg: &str,
+) -> Result<()> {
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    let payload_reg = match width {
+        ScalarWidth::F32 => {
+            let float_reg = abi::float_result_reg(ctx.emitter);
+            if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                load_property_store_value_to_result(ctx, value, slot)?;
+            } else {
+                ctx.load_value_to_reg(value, float_reg)?;
+            }
+            float_reg
+        }
+        _ => {
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            ctx.load_value_to_reg(value, int_reg)?;
+            int_reg
+        }
+    };
+    abi::emit_pop_reg(ctx.emitter, base_reg);
+    super::super::scalar_widths::emit_width_store(ctx, width.abi(), base_reg, slot.offset, payload_reg)
+}
+
 /// Copies a whole embedded record into a nested packed field.
 ///
 /// `value` holds the address of a record of the same packed class (a buffer element, another
-/// nested field, or a `ptr<T>`); its `total_size` bytes are copied word by word into the field at
-/// `base_reg + field_offset`. Packed fields are all 8-byte words or nested packed records, so the
-/// size is always a multiple of 8. Like C struct assignment, the copy assumes the source and the
-/// destination are the same record or do not overlap. A `ptr<T>` source is null-checked first.
-/// The copy advances `base_reg`, the source register and two scratch registers; the store is the
-/// last thing the property write emits, so none of them is read afterwards.
+/// nested field, or a `ptr<T>`); its `total_size` bytes are copied into the field at
+/// `base_reg + field_offset`, one 8-byte word at a time and then the tail a record of
+/// width-declared fields can leave (4, 2 and 1 bytes, in that order). Like C struct assignment,
+/// the copy assumes the source and the destination are the same record or do not overlap. A
+/// `ptr<T>` source is null-checked first. The copy advances `base_reg`, the source register and
+/// two scratch registers; the store is the last thing the property write emits, so none of them
+/// is read afterwards.
 fn emit_packed_record_copy(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
@@ -311,8 +352,7 @@ fn emit_packed_record_copy(
     if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Pointer(_)) {
         abi::emit_call_label(ctx.emitter, "__rt_ptr_check_nonnull");
     }
-    let words = size / 8;
-    if words == 0 {
+    if size == 0 {
         return Ok(());
     }
     let data_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -330,23 +370,57 @@ fn emit_packed_record_copy(
             }
         }
     }
-    // -- copy the record one 8-byte word at a time --
-    abi::emit_load_int_immediate(ctx.emitter, count_reg, words as i64);
-    ctx.emitter.label(&loop_label);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}], #8", data_reg, source_reg)); // load the next source record word and advance the source
-            ctx.emitter.instruction(&format!("str {}, [{}], #8", data_reg, base_reg)); // store it into the nested field and advance the destination
-            ctx.emitter.instruction(&format!("subs {}, {}, #1", count_reg, count_reg)); // count down the record words still to copy
-            ctx.emitter.instruction(&format!("b.ne {}", loop_label));           // keep copying until the whole record is written
+    let words = size / 8;
+    if words > 0 {
+        // -- copy the record one 8-byte word at a time --
+        abi::emit_load_int_immediate(ctx.emitter, count_reg, words as i64);
+        ctx.emitter.label(&loop_label);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("ldr {}, [{}], #8", data_reg, source_reg)); // load the next source record word and advance the source
+                ctx.emitter.instruction(&format!("str {}, [{}], #8", data_reg, base_reg)); // store it into the nested field and advance the destination
+                ctx.emitter.instruction(&format!("subs {}, {}, #1", count_reg, count_reg)); // count down the record words still to copy
+                ctx.emitter.instruction(&format!("b.ne {}", loop_label));       // keep copying until the whole record is written
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{}]", data_reg, source_reg)); // load the next source record word
+                ctx.emitter.instruction(&format!("mov QWORD PTR [{}], {}", base_reg, data_reg)); // store it into the nested field
+                ctx.emitter.instruction(&format!("add {}, 8", source_reg));     // advance the source to the next record word
+                ctx.emitter.instruction(&format!("add {}, 8", base_reg));       // advance the destination to the next field word
+                ctx.emitter.instruction(&format!("sub {}, 1", count_reg));      // count down the record words still to copy
+                ctx.emitter.instruction(&format!("jne {}", loop_label));        // keep copying until the whole record is written
+            }
         }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{}]", data_reg, source_reg)); // load the next source record word
-            ctx.emitter.instruction(&format!("mov QWORD PTR [{}], {}", base_reg, data_reg)); // store it into the nested field
-            ctx.emitter.instruction(&format!("add {}, 8", source_reg));         // advance the source to the next record word
-            ctx.emitter.instruction(&format!("add {}, 8", base_reg));           // advance the destination to the next field word
-            ctx.emitter.instruction(&format!("sub {}, 1", count_reg));          // count down the record words still to copy
-            ctx.emitter.instruction(&format!("jne {}", loop_label));            // keep copying until the whole record is written
+    }
+    // -- copy the tail left by width-declared fields, widest piece first --
+    let arch = ctx.emitter.target.arch;
+    let tail = size % 8;
+    for piece in [4usize, 2, 1] {
+        if tail & piece == 0 {
+            continue;
+        }
+        let piece_reg = super::super::scalar_widths::sub_register(arch, data_reg, piece);
+        match arch {
+            Arch::AArch64 => {
+                let (load, store) = match piece {
+                    4 => ("ldr", "str"),
+                    2 => ("ldrh", "strh"),
+                    _ => ("ldrb", "strb"),
+                };
+                ctx.emitter.instruction(&format!("{} {}, [{}], #{}", load, piece_reg, source_reg, piece)); // load the next tail piece and advance the source
+                ctx.emitter.instruction(&format!("{} {}, [{}], #{}", store, piece_reg, base_reg, piece)); // store it into the nested field and advance the destination
+            }
+            Arch::X86_64 => {
+                let ptr = match piece {
+                    4 => "DWORD PTR",
+                    2 => "WORD PTR",
+                    _ => "BYTE PTR",
+                };
+                ctx.emitter.instruction(&format!("mov {}, {} [{}]", piece_reg, ptr, source_reg)); // load the next tail piece of the source record
+                ctx.emitter.instruction(&format!("mov {} [{}], {}", ptr, base_reg, piece_reg)); // store it into the nested field
+                ctx.emitter.instruction(&format!("add {}, {}", source_reg, piece)); // advance the source past the tail piece
+                ctx.emitter.instruction(&format!("add {}, {}", base_reg, piece)); // advance the destination past the tail piece
+            }
         }
     }
     Ok(())

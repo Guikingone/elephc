@@ -174,7 +174,7 @@ pub(in crate::codegen::lower_inst) fn static_gettype_name(ty: &PhpType) -> Optio
         // checker types `ptr<T>`, so it names itself like a pointer.
         PhpType::Packed(_) => Some(b"pointer".as_slice()),
         PhpType::Resource(_) => Some(b"resource".as_slice()),
-        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => None,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::Narrow(_) => None,
     }
 }
 

@@ -1223,6 +1223,7 @@ pub(crate) fn emit_runtime_data_user(
                     | PhpType::Buffer(_)
                     | PhpType::Packed(_)
                     | PhpType::Never
+                    | PhpType::Narrow(_)
                     | PhpType::Void => 0,
                 }
             };
@@ -1273,6 +1274,7 @@ pub(crate) fn emit_runtime_data_user(
                         | PhpType::Buffer(_)
                         | PhpType::Packed(_)
                         | PhpType::Never
+                        | PhpType::Narrow(_)
                         | PhpType::Void => 0,
                     }
                 };

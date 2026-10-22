@@ -14,6 +14,10 @@
 //!   volatile-safe for the register allocator.
 //! - A true immediate on a resolved access proves its exact loop index is in range. Codegen still
 //!   tests the descriptor for zero but omits the descriptor-length load and comparison.
+//! - A width-declared element type (`buffer<i32>`, `buffer<u8>`, `buffer<f32>`) sets the stride
+//!   to the width and loads and stores through the shared `scalar_widths` emitter; the resolved
+//!   forms recover that element type from the `buffer_resolve` their descriptor came from, since
+//!   their own result type is the element's value type.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -22,6 +26,7 @@ use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
+use super::scalar_widths::{emit_width_load, emit_width_store};
 use super::{expect_operand, store_if_result};
 
 /// Lowers `BufferNew` by passing length and element stride to `__rt_buffer_new`.
@@ -135,8 +140,9 @@ pub(super) fn lower_buffer_get_resolved(
     let descriptor = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
     let index_in_bounds = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    let elem_ty = resolved_buffer_element_type(ctx, descriptor)?;
     let address_reg = emit_resolved_element_address(ctx, descriptor, index, index_in_bounds)?;
-    load_element_value(ctx, &inst.result_php_type.codegen_repr(), address_reg)?;
+    load_element_value(ctx, &elem_ty, address_reg)?;
     store_if_result(ctx, inst)
 }
 
@@ -151,20 +157,37 @@ pub(super) fn lower_buffer_set_resolved(
     let index = expect_operand(inst, 1)?;
     let value = expect_operand(inst, 2)?;
     let index_in_bounds = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    let elem_ty = resolved_buffer_element_type(ctx, descriptor)?;
     let address_reg = emit_resolved_element_address(ctx, descriptor, index, index_in_bounds)?;
-    let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
-    match value_ty {
-        PhpType::Float | PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Resource(_) => {
-            store_element_value(ctx, &value_ty, address_reg)?;
-        }
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "buffer_set_resolved value PHP type {:?}",
-                other
-            )))
+    let value_ty = ctx.load_value_to_result(value)?;
+    ensure_set_value_matches(&elem_ty, &value_ty)?;
+    store_element_value(ctx, &elem_ty, address_reg)?;
+    store_if_result(ctx, inst)
+}
+
+/// Returns the element type of the buffer a hoisted descriptor was resolved from.
+///
+/// `BufferResolve` is the only producer of a descriptor and its operand is the handle, whose
+/// static type names the element. The resolved access forms carry the element's VALUE type as
+/// their result (`int` for `buffer<i32>`), so a width-declared element's storage format is only
+/// reachable through the handle.
+fn resolved_buffer_element_type(ctx: &FunctionContext<'_>, descriptor: ValueId) -> Result<PhpType> {
+    let Some(value_ref) = ctx.function.value(descriptor) else {
+        return Err(CodegenIrError::missing_entry("value", descriptor.as_raw()));
+    };
+    if let ValueDef::Instruction { inst, .. } = value_ref.def {
+        let Some(inst_ref) = ctx.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if inst_ref.op == Op::BufferResolve {
+            if let Some(&handle) = inst_ref.operands.first() {
+                return require_buffer(ctx.value_php_type(handle)?, "buffer_resolve handle");
+            }
         }
     }
-    store_if_result(ctx, inst)
+    Err(CodegenIrError::unsupported(
+        "resolved buffer access whose descriptor is not a buffer_resolve result".to_string(),
+    ))
 }
 
 /// Checks a hoisted descriptor and any unproven index, then returns the element address register.
@@ -250,6 +273,7 @@ fn buffer_stride(ctx: &FunctionContext<'_>, buffer_ty: &PhpType) -> Result<usize
             | PhpType::Bool
             | PhpType::Pointer(_)
             | PhpType::Resource(_) => Ok(8),
+            PhpType::Narrow(width) => Ok(width.size()),
             PhpType::Packed(name) => ctx
                 .module
                 .packed_class_infos
@@ -382,7 +406,7 @@ fn emit_checked_address_x86_64(ctx: &mut FunctionContext<'_>, descriptor_reg: &s
 
 /// Pushes the materialized BufferSet RHS so resolver and bounds code cannot clobber it.
 fn push_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
-    match elem_ty.codegen_repr() {
+    match elem_ty.storage_value_type().codegen_repr() {
         PhpType::Float => {
             abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
             Ok(())
@@ -400,7 +424,7 @@ fn push_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Re
 
 /// Restores the BufferSet RHS after resolver and bounds code have produced the payload address.
 fn pop_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
-    match elem_ty.codegen_repr() {
+    match elem_ty.storage_value_type().codegen_repr() {
         PhpType::Float => {
             abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
             Ok(())
@@ -417,8 +441,12 @@ fn pop_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Res
 }
 
 /// Loads a scalar element from the checked payload address.
+///
+/// A width-declared element extends or widens into the PHP value through the shared width
+/// emitter; a packed element yields its address as the packed receiver pointer.
 fn load_element_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType, address_reg: &str) -> Result<()> {
     match elem_ty.codegen_repr() {
+        PhpType::Narrow(width) => emit_width_load(ctx, width.abi(), address_reg, 0),
         PhpType::Float => {
             abi::emit_load_from_address(ctx.emitter, abi::float_result_reg(ctx.emitter), address_reg, 0);
             Ok(())
@@ -459,7 +487,15 @@ fn materialize_set_value(
     elem_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.load_value_to_result(value)?;
-    match (elem_ty.codegen_repr(), value_ty.codegen_repr()) {
+    ensure_set_value_matches(elem_ty, &value_ty)
+}
+
+/// Verifies a materialized value has the representation a buffer element stores.
+///
+/// A width-declared element takes what its value type takes: an `int` or `bool` for the
+/// integer widths, a `float` for `f32`; the store then narrows it to the element width.
+fn ensure_set_value_matches(elem_ty: &PhpType, value_ty: &PhpType) -> Result<()> {
+    match (elem_ty.storage_value_type().codegen_repr(), value_ty.codegen_repr()) {
         (PhpType::Float, PhpType::Float) => Ok(()),
         (PhpType::Int, PhpType::Int | PhpType::Bool)
         | (PhpType::Bool, PhpType::Int | PhpType::Bool)
@@ -474,8 +510,15 @@ fn materialize_set_value(
 }
 
 /// Stores the current scalar result into the checked payload address.
+///
+/// A width-declared element keeps only its width: the low bytes of an integer, or the PHP
+/// double rounded to an IEEE 754 single for `f32`.
 fn store_element_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType, address_reg: &str) -> Result<()> {
     match elem_ty.codegen_repr() {
+        PhpType::Narrow(width) => {
+            let payload_reg = abi::int_result_reg(ctx.emitter);
+            emit_width_store(ctx, width.abi(), address_reg, 0, payload_reg)
+        }
         PhpType::Float => {
             abi::emit_store_to_address(ctx.emitter, abi::float_result_reg(ctx.emitter), address_reg, 0);
             Ok(())

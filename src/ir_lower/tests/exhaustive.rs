@@ -119,7 +119,7 @@ fn dummy_check_result() -> CheckResult {
     let mut packed_classes = HashMap::new();
     packed_classes.insert(
         "P".to_string(),
-        PackedClassInfo { fields: Vec::new(), total_size: 0 },
+        PackedClassInfo { fields: Vec::new(), total_size: 0, align: 1 },
     );
 
     CheckResult {

@@ -162,6 +162,7 @@ pub struct Value {
 | `Array(inner)` | `Heap(Array)` | Indexed array heap object; element type stays in `php_type`. |
 | `AssocArray { key, value }` | `Heap(Hash)` | Hash table heap object; key/value types stay in `php_type`. |
 | `Buffer(inner)` | `Heap(Buffer(inner))` | Opaque generation/index handle resolved through the static buffer descriptor registry; not PHP array COW storage. |
+| `Narrow(width)` | never a value | Storage width of a `buffer<T>` element (`buffer<i32>`, `buffer<u8>`, `buffer<f32>`); only appears inside `Buffer(inner)`. Element reads and writes carry its value type (`Int` or `Float`); packed fields keep their width in `PackedFieldInfo::width` instead. |
 | `Callable` | `I64` | Callable descriptor address; ownership is tracked separately and released via callable descriptor runtime. |
 | `Object(name)` | `Heap(Object(name))` | Runtime object pointer and class metadata. |
 | `Packed(name)` | `Heap(Packed(name))` | Pointer/layout handle for packed POD data. |

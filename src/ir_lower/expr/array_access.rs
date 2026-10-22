@@ -504,7 +504,7 @@ pub(super) fn array_access_result_type(
             _ => fallback_expr_type(expr),
         },
         Op::BufferGet => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::Buffer(elem_ty) => normalize_value_php_type(*elem_ty),
+            PhpType::Buffer(elem_ty) => normalize_value_php_type(elem_ty.storage_value_type()),
             _ => fallback_expr_type(expr),
         },
         Op::RuntimeCall => array_access_runtime_call_result_type(ctx, array, expr),
