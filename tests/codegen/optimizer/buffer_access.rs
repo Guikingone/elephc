@@ -397,6 +397,9 @@ fn test_buffer_index_proof_refuses_unsafe_loop_shapes() {
 
 /// A do-while header access executes before its continuation comparison, so it retains the
 /// bounds check and reports the same fatal with either optimizer mode for empty and full buffers.
+///
+/// The post-increment counter may stay a boxed int|float that keeps the loop unhoisted; the
+/// header exclusion itself is covered by the hand-built `self_loop_header_access_is_not_proven_in_bounds`.
 #[test]
 fn test_do_while_header_access_keeps_bounds_fatal() {
     for length in [0, 1] {
@@ -405,7 +408,6 @@ fn test_do_while_header_access_keeps_bounds_fatal() {
         );
         if length == 0 {
             let ir = function_ir(&source, true, "past_end");
-            assert!(ir.contains("buffer_get_resolved"), "{ir}");
             assert!(
                 !ir.lines()
                     .any(|line| line.contains("_resolved") && line.contains(" true")),
@@ -495,7 +497,10 @@ echo total($b, 3), "\n";
     assert_both_modes_fail_after(source, "4\n", "buffer index out of bounds");
 }
 
-/// An inclusive same-buffer length loop keeps the resolved bounds check and dies on index `len`.
+/// An inclusive same-buffer length loop keeps its bounds check and dies on index `len`.
+///
+/// Its counter can pass `buffer_len()`, so it may stay a boxed int|float that keeps the loop
+/// unhoisted; either way no access may carry the in-range flag.
 #[test]
 fn test_inclusive_same_buffer_bound_still_traps() {
     let source = r#"<?php
@@ -511,7 +516,6 @@ echo "before\n";
 echo total($b), "\n";
 "#;
     let ir = function_ir(source, true, "total");
-    assert!(ir.contains("buffer_get_resolved"), "{ir}");
     assert!(
         !ir.lines().any(|line| {
             line.contains("buffer_get_resolved") && line.contains(" true")
