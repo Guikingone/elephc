@@ -932,34 +932,49 @@ impl<'a> FunctionContext<'a> {
         self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep)
     }
 
-    /// Gives a native append a lease before retiring an unpromoted borrowed ref-cell box.
-    /// Returns whether writeback must transfer the newly acquired lease into its replacement box.
-    pub(super) fn prepare_array_append_to_local(
-        &mut self, slot: LocalSlotId, value: ValueId,
+    /// Identifies a borrowed concrete container read from an unpromoted boxed reference local.
+    pub(super) fn needs_borrowed_container_lease(
+        &self, slot: LocalSlotId, value: ValueId,
     ) -> Result<bool> {
         let ref_load = self.function.value(value).and_then(|value| match value.def {
             ValueDef::Instruction { inst, .. } => self.function.instruction(inst),
             _ => None,
         }).is_some_and(|inst| inst.op == Op::LoadRefCell);
-        let retake = ref_load
+        Ok(ref_load
             && self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
             && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
-            && matches!(self.value_php_type(value)?.codegen_repr(), PhpType::Array(_));
-        if retake { self.retake_mutated_source_local_owner(slot, value)?; }
-        else { self.release_mutated_source_local_owner(slot, value)?; }
-        Ok(retake)
+            && matches!(self.value_php_type(value)?.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable))
     }
 
-    /// Publishes a native append's replacement, transferring only its explicitly retaken lease.
-    pub(super) fn store_array_append_writeback_to_local(
-        &mut self, slot: LocalSlotId, value: ValueId, retaken: bool,
+    /// Gives a consuming mutation a lease before retiring its source local's previous box.
+    pub(super) fn prepare_mutated_source_local_owner(
+        &mut self, slot: LocalSlotId, value: ValueId,
     ) -> Result<()> {
-        if self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
-            && self.value_is_released_later(value)
-        {
-            return self.store_receiver_value_to_local(slot, value);
+        if self.needs_borrowed_container_lease(slot, value)? {
+            self.retake_mutated_source_local_owner(slot, value)
+        } else {
+            self.release_mutated_source_local_owner(slot, value)
         }
-        if !retaken { return self.store_container_writeback_to_local(slot, value); }
+    }
+
+    /// Publishes a mutation's replacement, transferring its explicitly retaken borrowed lease.
+    pub(super) fn store_mutated_container_writeback_to_local(
+        &mut self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<()> {
+        if self.needs_borrowed_container_lease(slot, value)? {
+            if self.value_is_released_later(value) {
+                return self.store_receiver_value_to_local(slot, value);
+            }
+            return self.store_owned_container_to_raw_local(slot, value);
+        }
+        self.store_container_writeback_to_local(slot, value)
+    }
+
+    /// Moves a consuming mutation's concrete container lease into its raw local's Mixed box.
+    fn store_owned_container_to_raw_local(
+        &mut self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<()> {
         let ty = self.load_value_to_result(value)?;
         emit_box_current_owned_value_as_mixed(self.emitter, &ty);
         let target_ty = self.local_php_type(slot)?;
@@ -1109,6 +1124,9 @@ impl<'a> FunctionContext<'a> {
         if self.local_slot_representation(slot) != LocalSlotRepresentation::Raw
             || !self.value_is_released_later(value)
         {
+            if self.needs_borrowed_container_lease(slot, value)? {
+                return self.store_owned_container_to_raw_local(slot, value);
+            }
             return self.store_value_to_local(slot, value);
         }
         let source_ty = self.load_value_to_result(value)?;
@@ -1142,7 +1160,11 @@ impl<'a> FunctionContext<'a> {
             && self.value_is_released_later(value)
             && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
             && self.value_php_type(value)?.codegen_repr() != PhpType::Mixed;
-        self.store_value_to_local(slot, value)?;
+        if self.needs_borrowed_container_lease(slot, value)? {
+            self.store_owned_container_to_raw_local(slot, value)?;
+        } else {
+            self.store_value_to_local(slot, value)?;
+        }
         Ok(owed)
     }
 

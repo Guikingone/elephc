@@ -96,7 +96,7 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
 
 /// Keeps a ref-cell read borrowed on the raw side of a conditional promotion.
 /// The cell path already borrows its payload; an unpromoted Mixed box must not add a lease.
-fn coerce_borrowed_ref_cell_local(
+pub(super) fn coerce_borrowed_ref_cell_local(
     ctx: &mut FunctionContext<'_>,
     source_ty: &PhpType,
     result_ty: &PhpType,

@@ -1019,12 +1019,13 @@ fn ensure_unique_static_iter_source(
             // Retire and clear the old box before the consuming conversion, then publish the
             // converted owner below. Raw concrete slots need no release here.
             if let Some(slot) = source_local {
-                ctx.release_mutated_source_local_owner(slot, source)?;
+                ctx.prepare_mutated_source_local_owner(slot, source)?;
             }
+            ctx.load_value_to_result(source)?;
             convert_loaded_indexed_source_to_hash(ctx);
             ctx.store_result_value(source)?;
             if let Some(slot) = source_local {
-                ctx.store_container_writeback_to_local(slot, source)?;
+                ctx.store_mutated_container_writeback_to_local(slot, source)?;
             }
             return Ok(());
         }
@@ -1037,15 +1038,13 @@ fn ensure_unique_static_iter_source(
     // local's payload owner into that operation so storeback neither leaks the previous box nor
     // leaves the iterator's origin pointing at a retired generation.
     if let Some(slot) = source_local {
-        ctx.release_mutated_source_local_owner(slot, source)?;
+        ctx.prepare_mutated_source_local_owner(slot, source)?;
     }
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the foreach source pointer to the COW helper
-    }
+    ctx.load_value_to_reg(source, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(source)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, source)?;
+        ctx.store_mutated_container_writeback_to_local(slot, source)?;
     }
     Ok(())
 }

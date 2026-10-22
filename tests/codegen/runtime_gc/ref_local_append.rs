@@ -304,7 +304,7 @@ eval($code);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Untaken reference calls preserve native append owners across joining and returning branches.
+/// Untaken reference calls preserve native mutation owners across joining and returning branches.
 #[test]
 fn test_ref_local_append_untaken_reference_native_views() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -321,10 +321,97 @@ function earlyNativeAppend(int $flag): void {
     $items[] = "c";
     echo "early:", count($items), "\n";
 }
+
+function earlyNativeKey(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchNativeAppendItems($items); return; }
+    $items["k"] = 1;
+    echo "key:", count($items), "\n";
+}
+function earlyNativeAssoc(int $flag): void {
+    $items = ["keep" => 1];
+    if ($flag < 0) { touchNativeAppendItems($items); return; }
+    $items["k"] = 2;
+    echo "assoc:", $items["keep"], "\n";
+}
+function earlyNativeForeach(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchNativeAppendItems($items); return; }
+    foreach ($items as &$v) { $v = "z"; }
+    echo "each:", $items[0], "\n";
+}
+function earlyNativeIndex(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchNativeAppendItems($items); return; }
+    $items[0] = "z";
+    echo "idx:", $items[0], "\n";
+}
+function earlyNativeUnset(int $flag): void {
+    $items = ["keep" => 1, "drop" => 2];
+    if ($flag < 0) { touchNativeAppendItems($items); return; }
+    unset($items["drop"]);
+    echo "unset:", count($items), "\n";
+}
+function earlyNativeNested(int $flag): void {
+    $items = ["keep" => ["a"]];
+    if ($flag < 0) { touchNativeAppendItems($items); return; }
+    $items["keep"][] = "b";
+    echo "nested:", count($items["keep"]), "\n";
+}
+
+function joinNativeKey(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchNativeAppendItems($items); }
+    $items["k"] = 1;
+    echo "key:", count($items), "\n";
+}
+function joinNativeAssoc(int $flag): void {
+    $items = ["keep" => 1];
+    if ($flag < 0) { touchNativeAppendItems($items); }
+    $items["k"] = 2;
+    echo "assoc:", $items["keep"], "\n";
+}
+function joinNativeForeach(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchNativeAppendItems($items); }
+    foreach ($items as &$v) { $v = "z"; }
+    echo "each:", $items[0], "\n";
+}
+function joinNativeIndex(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchNativeAppendItems($items); }
+    $items[0] = "z";
+    echo "idx:", $items[0], "\n";
+}
+function joinNativeUnset(int $flag): void {
+    $items = ["keep" => 1, "drop" => 2];
+    if ($flag < 0) { touchNativeAppendItems($items); }
+    unset($items["drop"]);
+    echo "unset:", count($items), "\n";
+}
+function joinNativeNested(int $flag): void {
+    $items = ["keep" => ["a"]];
+    if ($flag < 0) { touchNativeAppendItems($items); }
+    $items["keep"][] = "b";
+    echo "nested:", count($items["keep"]), "\n";
+}
+
 joinNativeAppend(1); joinNativeAppend(-1);
 earlyNativeAppend(1); earlyNativeAppend(-1);
+earlyNativeKey(1); earlyNativeKey(-1);
+earlyNativeAssoc(1); earlyNativeAssoc(-1);
+earlyNativeForeach(1); earlyNativeForeach(-1);
+earlyNativeIndex(1); earlyNativeIndex(-1);
+earlyNativeUnset(1); earlyNativeUnset(-1);
+earlyNativeNested(1); earlyNativeNested(-1);
+joinNativeKey(1); joinNativeKey(-1);
+joinNativeAssoc(1); joinNativeAssoc(-1);
+joinNativeForeach(1); joinNativeForeach(-1);
+joinNativeIndex(1); joinNativeIndex(-1);
+joinNativeUnset(1); joinNativeUnset(-1);
+joinNativeNested(1); joinNativeNested(-1);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "join:3\ntjoin:3\nearly:3\nt", "{}", out.stderr);
+    assert_eq!(out.stdout, "join:3\ntjoin:3\nearly:3\ntkey:3\ntassoc:1\nteach:z\ntidx:z\ntunset:1\ntnested:2\ntkey:3\ntkey:3\nassoc:1\ntassoc:1\neach:z\nteach:z\nidx:z\ntidx:z\nunset:1\ntunset:1\nnested:2\ntnested:2\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

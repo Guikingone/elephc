@@ -55,6 +55,43 @@ function earlyNativeAppend(int $flag): void {
     if ($flag < 0) { touchUnknown($items); return; }
     $items[] = "c"; echo count($items);
 }
+
+function earlyNativeKey(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchUnknown($items); return; }
+    $items["k"] = 1;
+    echo "key:", count($items), "\n";
+}
+function earlyNativeAssoc(int $flag): void {
+    $items = ["keep" => 1];
+    if ($flag < 0) { touchUnknown($items); return; }
+    $items["k"] = 2;
+    echo "assoc:", $items["keep"], "\n";
+}
+function earlyNativeForeach(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchUnknown($items); return; }
+    foreach ($items as &$v) { $v = "z"; }
+    echo "each:", $items[0], "\n";
+}
+function earlyNativeIndex(int $flag): void {
+    $items = ["b", "a"];
+    if ($flag < 0) { touchUnknown($items); return; }
+    $items[0] = "z";
+    echo "idx:", $items[0], "\n";
+}
+function earlyNativeUnset(int $flag): void {
+    $items = ["keep" => 1, "drop" => 2];
+    if ($flag < 0) { touchUnknown($items); return; }
+    unset($items["drop"]);
+    echo "unset:", count($items), "\n";
+}
+function earlyNativeNested(int $flag): void {
+    $items = ["keep" => ["a"]];
+    if ($flag < 0) { touchUnknown($items); return; }
+    $items["keep"][] = "b";
+    echo "nested:", count($items["keep"]), "\n";
+}
 function replaceAppendScalar(&$items, string $pending): string { $items = 7; return $pending; }
 function appendReplaced(): void {
     $items = [1];
