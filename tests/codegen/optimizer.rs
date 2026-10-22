@@ -94,3 +94,5 @@ mod tail_call;
 
 #[path = "optimizer/stack_numeric.rs"]
 mod stack_numeric;
+#[path = "optimizer/numeric_continuation.rs"]
+mod numeric_continuation;

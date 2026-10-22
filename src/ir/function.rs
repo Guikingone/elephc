@@ -175,8 +175,8 @@ impl Function {
     ///
     /// A packed receiver is the checked address of one flat record (a `buffer<T>` element or
     /// a nested packed field). The field resolves to a compile-time offset with no class id,
-    /// hook, magic accessor, typed-slot guard, dynamic property, or refcounted payload behind
-    /// it, so the access is exactly one load or one store of a scalar.
+    /// hook, magic accessor, dynamic property, or refcounted field behind it. Boxed source
+    /// values still require typed materialization and retain their conservative store effects.
     pub fn is_packed_field_access(&self, inst: &Instruction) -> bool {
         matches!(inst.op, Op::PropGet | Op::PropSet)
             && matches!(inst.immediate, Some(Immediate::Data(_)))

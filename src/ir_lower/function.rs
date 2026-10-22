@@ -1816,7 +1816,7 @@ fn lower_body_into_function(
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
-            crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
+            crate::ir_lower::numeric_storage::lower_body(ctx, body);
         }
     });
     terminate_open_block(&mut ctx);

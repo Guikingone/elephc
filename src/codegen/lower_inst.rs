@@ -51,6 +51,8 @@ mod implicit_int_cast;
 mod enums;
 pub(super) mod exceptions;
 mod mixed_narrowing;
+mod numeric_payloads;
+mod numeric_comparisons;
 mod externs;
 mod floats;
 mod hashes;

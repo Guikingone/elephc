@@ -163,6 +163,7 @@ pub(crate) struct ReferenceCallContext {
 }
 
 /// Rollback point for a speculative statement lowering.
+#[derive(Clone)]
 pub(crate) struct LoweringSnapshot {
     function: Function,
     insertion_block: Option<BlockId>,
@@ -211,11 +212,12 @@ pub(crate) struct LoweringSnapshot {
     eval_scope_flush_names: BTreeSet<String>,
     numeric_closure_sites: std::collections::HashSet<Span>,
     numeric_tracked_locals: std::collections::HashSet<String>,
-    final_mixed_locals: std::collections::HashSet<String>,
+    final_mixed_locals: std::collections::HashMap<String, std::collections::HashSet<usize>>,
     numeric_proof_sealed: bool,
 }
 
 /// Lengths of append-only intern pools captured for speculative rollback.
+#[derive(Clone)]
 struct DataPoolLengths {
     strings: usize,
     float_literals: usize,
@@ -433,11 +435,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) numeric_closure_sites: HashSet<Span>,
     /// Locals read or written by an admitted numeric proof.
     pub(crate) numeric_tracked_locals: HashSet<String>,
-    /// Locals whose frame slot must be Mixed from the first store.
+    /// Named storage epochs whose frame slot must be Mixed from the first store.
     ///
-    /// Set only on the replay that follows a discovery pass. The sealed proof
-    /// still describes the `int|float` value; this set is only the storage.
-    pub(crate) final_mixed_locals: HashSet<String>,
+    /// Set on replay when a closure proof or numeric backedge requires stable runtime tags.
+    /// Ordinals keep an unset/rebound variable independent from its old storage.
+    /// This map fixes storage only; fast arithmetic needs its own numeric-domain proof.
+    pub(crate) final_mixed_locals: HashMap<String, HashSet<usize>>,
     /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
     /// another proof from the now-Mixed slots.
     pub(crate) numeric_proof_sealed: bool,
@@ -593,7 +596,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_scope_flush_names: BTreeSet::new(),
             numeric_closure_sites: HashSet::new(),
             numeric_tracked_locals: HashSet::new(),
-            final_mixed_locals: HashSet::new(),
+            final_mixed_locals: HashMap::new(),
             numeric_proof_sealed: false,
             source_path,
         }
@@ -986,6 +989,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
     }
 
+    /// Counts earlier storage bindings of one PHP name, independently of unrelated hidden slots.
+    /// Parameter COW shadows are separate storage epochs and retain their generated suffix.
+    pub(crate) fn local_binding_ordinal(&self, name: &str, slot: Option<LocalSlotId>) -> usize {
+        let locals = &self.builder.function().locals;
+        let limit = slot.map_or(locals.len(), |slot| slot.as_raw() as usize);
+        locals.iter().take(limit).filter(|local| local.name.as_deref().is_some_and(|stored| {
+            stored == name || stored.strip_suffix("#cow") == Some(name)
+        })).count()
+    }
+
+    /// Applies a replay constraint only to its original binding, including before the first store.
+    pub(crate) fn is_final_mixed_local(&self, name: &str) -> bool {
+        self.final_mixed_locals.get(name).is_some_and(|bindings| {
+            bindings.contains(&self.local_binding_ordinal(name, self.local_slots.get(name).copied()))
+        })
+    }
+
     /// Returns the frame storage type a local must use, boxing the locals PHP's `++`/`--`
     /// can retype.
     ///
@@ -1004,7 +1024,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// slot back to `I64` wherever no access can observe the float, which is what keeps an
     /// ordinary counter loop as fast as it was.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
-        if self.final_mixed_locals.contains(name) {
+        if self.is_final_mixed_local(name) {
             return PhpType::Mixed;
         }
         if !matches!(php_type.codegen_repr(), PhpType::Str) {
@@ -1808,9 +1828,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // in every scope. Ordinary globals remain boxed Mixed cells.
         let php_type = if uses_global {
             self.global_alias_type(name)
-        } else if self.final_mixed_locals.contains(name) && !self.is_ref_bound_local(name) {
-            // The sealed proof already established int|float. Read the boxed slot
-            // as Mixed so codegen does not insert a truncating mixed-to-int cast.
+        } else if self.is_final_mixed_local(name) && !self.is_ref_bound_local(name) {
+            // Replay fixed the final representation. Preserve its actual runtime tag
+            // instead of truncating a promoted float to the entry integer type.
             PhpType::Mixed
         } else {
             self.local_type(name)

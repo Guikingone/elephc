@@ -85,12 +85,13 @@ fn compile_and_run_variant(source: &str, extra_args: &[&str]) -> (String, String
 }
 
 /// Replaces the benchmark's boxed multiply/add region with one fused scalar EIR instruction.
+/// An explicit integer bound and strict comparison make the counter's raw representation provable.
 #[test]
 fn test_checked_numeric_chain_fuses_benchmark_shape() {
     let source = r#"<?php
 $h = $argc;
-$n = $argc + 4;
-for ($i = 1; $i <= $n; $i++) {
+$n = (int)($argc + 4);
+for ($i = 1; $i < $n; $i++) {
     $h = ($h * 31 + $i) & 0x3fffffff;
 }
 echo $h;

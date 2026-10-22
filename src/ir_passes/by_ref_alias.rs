@@ -36,7 +36,7 @@ use crate::ir::{
 /// Returns every local slot whose `load_local` result escapes to an instruction that may
 /// take its address, i.e. every slot a callee may be able to write through a
 /// by-reference alias.
-pub(super) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
+pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
     let mut load_result_slot: HashMap<ValueId, LocalSlotId> = HashMap::new();
     for inst in &function.instructions {
         if inst.op != Op::LoadLocal {
@@ -106,9 +106,9 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             // Numeric/string/mixed conversions.
             | IToF | FToI | IToStr | FToStr | BoolToStr | StrToI | StrToF | StrToNumber
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
-            | MixedCastFloat | MixedCastString
+            | MixedCastFloat | MixedCastString | ReturnBoundaryMixedToInt
             // String value operations.
-            | StrConcat | StrAppend | StrLen | StrPersist | StrCharAt | StrInterpolate
+            | StrConcat | StrAppend | StrLen | StrPersist | StrCharAt | StrInterpolate | StrIncDec
             // Output operations consume their operand by value.
             | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | Warn
             // Stores copy the value into other storage; they never alias the source slot.

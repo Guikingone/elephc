@@ -122,16 +122,34 @@ path reconstructs an immediate operand only when conversion needs it. Boxed
 checked arithmetic follows its runtime call ABI unless its entire lifetime is
 proven eligible for a frame-local cell.
 
+Loop-carried numeric locals must preserve an overflow-promoted float on later
+iterations. Lowering discovers integer reads of a final Mixed slot inside a
+cyclic region, then replays the body with Mixed storage from its first store.
+Constraints belong to individual storage bindings, so a name reused after
+`unset` retains its new representation. This decision is separate from the
+sealed per-call-site closure proof.
+`src/ir_passes/numeric_domain.rs` can prove an integer/float domain from a
+dominating numeric seed and every writer of a private local. A nonescaping
+add/subtract/multiply or numeric increment can reuse a 24-byte frame cell: two integer tags take
+checked integer arithmetic, while an existing float remains a float. Both input
+payloads are read before the output cell changes. Proven numeric relational
+comparisons avoid temporary boxes, compare integer pairs exactly and reject
+unordered NaN predicates. Unknown tags, calls, references
+and escaping pointers keep ordinary heap-backed operations.
+
 `examples/constant-rematerialization/main.php` demonstrates bounded sample
 accumulation with immediate masks, scaling, increments, and a fixed loop bound.
 
 ## Frame-local checked numeric cells
 
-`src/codegen/stack_numeric.rs::plan()` runs before frame sizing and selects only
-owned checked integer add/subtract/multiply results whose complete pointer
-lifetime remains in the current activation. Numeric observations and one
-ordinary local are permitted; delayed reads, escaping consumers, aliases,
-references, executable main, `eval` and suspension fail the proof.
+`src/codegen/stack_numeric.rs::plan()` runs before frame sizing and selects owned
+add/subtract/multiply results from checked integer or proven numeric Mixed
+operations, plus numeric increments or decrements, whose complete pointer lifetime
+remains in the current activation. Numeric observations and one ordinary local
+are permitted.
+Private slots in the executable main frame use the same lifetime proof; globals
+retain heap storage. Delayed reads, escaping consumers, aliases, references,
+`eval` and suspension fail the proof.
 
 Each selected producer reserves a 24-byte `mixed` cell in the frame, without a
 heap header. `src/codegen/lower_inst/arithmetic/stack_cell.rs` writes its runtime

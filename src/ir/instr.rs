@@ -1492,7 +1492,8 @@ impl Op {
     /// record, so it reads the heap as well; `MAY_FATAL` stays for the payload guard a
     /// `false`-typed field keeps and the null check of a `ptr<T>` copy source. Neither can warn,
     /// throw, run user code, or touch the concat scratch. Effect refinement attaches these to
-    /// packed receivers, and the validator accepts exactly this value as the one refinement of an
+    /// packed receivers with already materialized values; boxed sources keep default effects.
+    /// The validator accepts exactly this value as the one refinement of an
     /// otherwise default-only `prop_set`.
     pub fn packed_field_access_effects(self) -> Effects {
         if self == Op::PropSet {
