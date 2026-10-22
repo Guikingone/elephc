@@ -146,16 +146,32 @@ accumulation with immediate masks, scaling, increments, and a fixed loop bound.
 add/subtract/multiply results from checked integer or proven numeric Mixed
 operations, plus numeric increments or decrements, whose complete pointer lifetime
 remains in the current activation. Numeric observations and one ordinary local
-are permitted.
+are permitted, including a declared integer return check whose result copies the
+payload and preserves its TypeError guard. A checked result may also feed another
+closed numeric add/subtract/multiply or increment; every input must be proven
+integer or float, including all local writers. A float tag remains floating point
+on subsequent operations.
 Private slots in the executable main frame use the same lifetime proof; globals
 retain heap storage. Delayed reads, escaping consumers, aliases, references,
 `eval` and suspension fail the proof.
 
+Independent frame cells do not invalidate each other's borrowed reads. A same-block
+read must be consumed before its owning slot is stored or released, or before any
+producer that can back that slot executes again, even if its next store comes
+later. The per-slot invalidation index is bound to the immutable EIR function.
+An `OwnedTemp` or `HiddenTemp` call-operand slot may retain one selected cell
+through transparent borrows only with a single same-block store, balanced push/pop
+cleanup records and final retirement. Other temporary contracts stay excluded.
+Property access may still throw while such an index is staged. The
+ordinary unwinding dispatcher ignores frame addresses and retains heap-seed
+cleanup; neither the catch boundary nor the cleanup records are removed.
+
 Each selected producer reserves a 24-byte `mixed` cell in the frame, without a
 heap header. `src/codegen/lower_inst/arithmetic/stack_cell.rs` writes its runtime
 tag and payload directly, using the original operands for overflow-to-float
-conversion. Selected local stores copy scalar bits and ownership operations
-skip heap retirement for these cells. A cell must never escape, acquire heap
+conversion. Selected local stores retain the cell address, scalar observations
+copy its payload, and ownership operations skip heap retirement for these cells.
+A cell must never escape, acquire heap
 children or reach the heap free path. AArch64 and x86_64 use the same layout
 through target-aware frame helpers. This storage plan also applies with
 `--no-ir-opt`; it is separate from the EIR bounded-counter pass.

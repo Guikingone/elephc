@@ -148,10 +148,16 @@ the optimization does not narrow the arithmetic domain or replace promotion with
 a fatal error. Frame sizing and instruction emission support all five targets.
 
 `src/codegen/stack_numeric.rs` proves the complete use graph before frame layout.
-Only same-block numeric casts, ownership scaffolding and one ordinary local may
-consume a selected pointer. Every access to that local must preserve the numeric
-storage contract. A borrowed pointer must be converted before another checked
-producer executes. Returns of the cell, pointer-valued block arguments, a second
+Only same-block scalar observations, closed numeric producers, ownership
+scaffolding and one ordinary local or owned operand slot may consume a selected
+pointer. Declared integer returns copy the payload and retain their type check.
+Every access to the owning slot must preserve the numeric storage contract. A
+borrowed pointer must be converted before that slot is stored or released, or any
+producer that can back it executes again. Independent cells may intervene.
+Published operand slots require one same-block store, balanced owner records and
+final retirement. Their cleanup records remain intact when a property read can
+throw, and the dispatcher rejects frame addresses. Returns of the cell,
+pointer-valued block arguments, a second
 local, container stores and unknown consumers retain heap storage. Parameters,
 globals, statics, references, eval storage and suspended activations do not receive
 this local storage optimization. Private slots in the executable main frame use
