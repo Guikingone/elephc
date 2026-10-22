@@ -11,6 +11,23 @@
 
 use super::*;
 
+/// Declaring-function dumps retain source defaults whose evaluation raises a deferred Error.
+#[test]
+fn test_declaring_function_dump_preserves_lazy_source_defaults() {
+    let out = compile_and_run(r#"<?php
+function lazyOwner($x = new self()) {}
+$function = new ReflectionFunction('lazyOwner');
+$parameter = $function->getParameters()[0];
+echo $function, $parameter->getDeclaringFunction();
+try { $parameter->getDefaultValue(); }
+catch (Error $error) { echo get_class($error), ':', $error->getMessage(), "\n"; }
+"#);
+    let dump = "Function [ <user> function lazyOwner ] {\n\n  \
+        - Parameters [1] {\n    \
+        Parameter #0 [ <optional> $x = new self() ]\n  }\n}\n";
+    assert_eq!(out, format!("{dump}{dump}Error:Cannot access \"self\" when no class scope is active\n"));
+}
+
 /// Reflected constant arithmetic preserves exact integers and promotes overflow like PHP.
 #[test]
 fn test_reflection_constant_arithmetic_preserves_php_numeric_results() {

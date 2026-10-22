@@ -30,7 +30,7 @@ fn reflection_declaring_function_dump(
         if let Some(function) = ctx.function_by_name(name) {
             let signature = function.signature.as_ref()?;
             let parameters = reflection_parameter_members_with_declaring_function(
-                ctx, signature, "", None, None, None, &[], None,
+                ctx, signature, "", None, None, None, &[], Some(&function.source_defaults),
             )
             .ok()?;
             return Some(reflection_function_to_string(
