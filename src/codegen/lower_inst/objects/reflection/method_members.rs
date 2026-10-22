@@ -141,8 +141,9 @@ pub(super) fn reflection_class_method_member(
         declaring_class_name.as_deref().unwrap_or(class_name),
         &method_key,
     );
-    let prototype_member =
-        reflection_class_method_prototype_member(ctx, class_name, info, &method_key, flags)?;
+    let prototype_member = reflection_class_method_prototype_member(
+        ctx, class_name, info, &method_key, flags,
+    )?;
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: declared_name.clone(),
         declaring_class_name: declaring_class_name.clone(),
@@ -360,7 +361,7 @@ pub(super) fn reflection_trait_method_member(
         Some(trait_name),
         Some(declaring_function),
         &[],
-        None,
+        Some(&info.source_defaults),
     )?;
     Ok(Some(ReflectionListedMember {
         name: info.declared_name.clone(),
@@ -400,4 +401,3 @@ pub(super) fn reflection_method_is_generator(
             && function.flags.is_generator
     })
 }
-

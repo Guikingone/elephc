@@ -16,16 +16,28 @@ use crate::types::traits::FlattenedClass;
 use crate::types::ClassInfo;
 
 mod constants;
+mod enum_interfaces;
 mod interfaces;
 mod methods;
 mod properties;
+mod property_defaults;
 mod state;
+
+pub(crate) use property_defaults::validate_trait_property_defaults;
+pub(crate) use property_defaults::collect_trait_default_origins;
+pub(crate) use constants::validate_compile_time_default_in_scope;
+pub(crate) use constants::normalize_lexical_default_in_scope;
+pub(crate) use constants::normalize_free_function_default_in_scope;
 
 use super::super::Checker;
 use super::validation::build_constructor_param_map;
 use state::ClassBuildState;
 
 pub(super) use crate::types::{collect_attribute_args, collect_attribute_names};
+
+pub(crate) use enum_interfaces::{expand_enum_interfaces, validate_enum_interface_contracts};
+pub(super) use constants::resolve_lexical_class_value;
+pub(super) use methods::validate_method_shape;
 
 /// Recursively builds and registers `ClassInfo` for `class_name` and its inheritance chain.
 ///
@@ -66,7 +78,7 @@ pub(crate) fn build_class_info_recursive(
     validate_parent_constraints(&class, parent_info.as_ref())?;
 
     let mut state = ClassBuildState::from_parent(parent_info.as_ref());
-    properties::apply_properties(&mut state, &class, checker)?;
+    properties::apply_properties(&mut state, &class, class_map, checker)?;
     methods::apply_methods(&mut state, &class, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
     validate_final_constant_constraints(&class, parent_info.as_ref(), &state, checker)?;
@@ -81,7 +93,16 @@ pub(crate) fn build_class_info_recursive(
     interfaces::ensure_concrete_class_implements_abstracts(&state, &class)?;
 
     let constructor_param_to_prop = constructor_param_to_prop_for(&class, parent_info.as_ref());
-    let class_info = state.into_class_info(*next_class_id, &class, constructor_param_to_prop)?;
+    // Builtins registered without source carry no source span; a prelude's classes do, but come
+    // from compiler-generated statements.
+    let is_internal =
+        !class.span.is_from_source() || checker.internal_class_decls.contains(&class.name);
+    let class_info = state.into_class_info(
+        *next_class_id,
+        &class,
+        constructor_param_to_prop,
+        is_internal,
+    )?;
     checker.classes.insert(class.name.clone(), class_info);
     *next_class_id += 1;
     building.remove(class_name);

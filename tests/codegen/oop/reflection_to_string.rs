@@ -11,16 +11,35 @@
 //!   (`__toString` read `__name`).
 //! - Every expected string here is real `LC_ALL=C php` 8.5.10 output with one line removed: PHP
 //!   prints `  @@ <file> <line> - <line>` after the header, which a compiled binary cannot
-//!   honestly answer — the source it was built from need not exist where it runs. The blank line
+//!   honestly answer, the source it was built from need not exist where it runs. The blank line
 //!   after it stays: it opens the parameter block, and PHP prints it for internal callables too.
-//!   The eval bridge omits the same line, but still differs in two places the compiled path gets
-//!   right: the prototype marker and the empty body. Both print a union in PHP's order (#1118).
+//!   The eval bridge omits the same line and shares scalar, empty-body and union formatting.
+//!   Its prototype and internal-origin metadata remain incomplete (#1117).
 //! - A union prints in PHP's type-mask order, not the declared one: `int|string` comes back as
-//!   `string|int`. See `elephc_builtin_contract::union_member_rank`.
+//!   `string|int`. See `elephc_builtin_contract::reflection_format::union`.
 //! - Internal callable origins include their owning PHP module under the name PHP registers it
 //!   with: `<internal:Core>`, `<internal:SPL>`, `<internal:standard>`.
 
 use super::*;
+
+/// Returned snapshots outlive inline reflectors and remain independent when their bytes change.
+#[test]
+fn test_reflection_dump_copies_do_not_mutate_shared_snapshots() {
+    let out = compile_and_run(r#"<?php
+function snapshot(int $value = 1): void {}
+class Snapshot { public function run(int $value = 1): void {} }
+$function = (string) new ReflectionFunction('snapshot');
+$method = (string) new ReflectionMethod('Snapshot', 'run');
+$parameter = (string) new ReflectionParameter('snapshot', 0);
+$originalFunction = $function; $originalMethod = $method; $originalParameter = $parameter;
+$function .= '!'; $method .= '?'; $parameter .= '#';
+echo substr($function, -1), "|", substr($method, -1), "|", substr($parameter, -1), "|";
+echo $originalFunction === (string) new ReflectionFunction('snapshot') ? 'F' : 'bad';
+echo $originalMethod === (string) new ReflectionMethod('Snapshot', 'run') ? 'M' : 'bad';
+echo $originalParameter === (string) new ReflectionParameter('snapshot', 0) ? 'P' : 'bad';
+"#);
+    assert_eq!(out, "!|?|#|FMP");
+}
 
 /// The reported shape: a method with parameters, defaults and a return type.
 #[test]
@@ -44,7 +63,7 @@ echo (new ReflectionMethod('Demo', 'plain'))->__toString();
     );
 }
 
-/// Modifiers print in PHP's order — abstract, final, static, then visibility — and an override
+/// Modifiers print in PHP's order, abstract, final, static, then visibility, and an override
 /// carries the class it came from in the `<user, prototype C>` marker.
 #[test]
 fn test_reflection_method_to_string_renders_modifiers_and_prototype() {
@@ -206,7 +225,7 @@ foreach ((new ReflectionMethod('Demo', 'plain'))->getParameters() as $p) {
 }
 
 /// The entries `ReflectionClass::getMethods()` hands back carry the same rendering as the ones
-/// built by `new ReflectionMethod(...)` — they are populated by a different emitter.
+/// built by `new ReflectionMethod(...)`, they are populated by a different emitter.
 #[test]
 fn test_listed_method_to_string_matches_the_constructed_one() {
     let out = compile_and_run(
@@ -247,7 +266,7 @@ echo $compiled === $fromEval ? "same" : "differs", "\n";
 
 /// A default written as a GLOBAL constant has to carry its VALUE as well as its name: the name
 /// alone left `isDefaultValueConstant()` true while `isDefaultValueAvailable()` was false and
-/// `getDefaultValue()` threw — a combination PHP never produces.
+/// `getDefaultValue()` threw, a combination PHP never produces.
 #[test]
 fn test_global_constant_default_is_available_and_named() {
     let out = compile_and_run(
@@ -269,7 +288,7 @@ foreach ((new ReflectionFunction('f'))->getParameters() as $p) {
     assert_eq!(out, "n:y:y:LIMIT:7\nm:y:y:E::CEIL:9\n");
 }
 
-/// A namespaced constant answers with the RESOLVED name, which is what PHP answers too — measured
+/// A namespaced constant answers with the RESOLVED name, which is what PHP answers too, measured
 /// on 8.5.10, where `namespace N; const LIMIT = 7;` gives `'N\LIMIT'`.
 #[test]
 fn test_namespaced_constant_default_keeps_its_resolved_name() {
@@ -318,8 +337,8 @@ echo (new ReflectionFunction('f'))->__toString();
 
 /// An object default keeps what was WRITTEN: a constant stays a name instead of its value, a
 /// named argument keeps its name, a nested `new` and an array holding a constant print as
-/// written, and a string is escaped. An array made only of literals is folded by PHP, so it
-/// prints every key. Expected output measured on PHP 8.5.10.
+/// written, and a string is escaped. A foldable literal array inside this AST export prints
+/// every key, while an evaluated top-level parameter list omits packed keys. Checked on PHP 8.5.11.
 #[test]
 fn test_object_default_exports_its_written_argument_expressions() {
     let out = compile_and_run(
@@ -395,7 +414,7 @@ echo (new ReflectionFunction('f'))->__toString();
 }
 
 /// `getDeclaringFunction()` builds its reflector from metadata that deliberately carries no
-/// parameters — emitting them would emit a `ReflectionParameter` for each, and each of those emits
+/// parameters: emitting them would emit a `ReflectionParameter` for each, and each of those emits
 /// its own declaring function, which does not terminate. The DUMP is a string, so it is rendered
 /// from the real member instead of from that metadata; without that it claimed `Parameters [0]`
 /// for a method that has two.
@@ -475,7 +494,7 @@ echo (new ReflectionFunction('pi'))->__toString();
 /// claimed `Parameters [0]` for a function PHP reports one parameter for.
 ///
 /// The two leading reads are not decoration. Stringifying this object in a program that does
-/// nothing else SEGFAULTS, on this branch and at the merge-base alike (#1229) — a pre-existing
+/// nothing else SEGFAULTS, on this branch and at the merge-base alike (#1229), a pre-existing
 /// crash this fixture must not trip over while covering the parameters, so it is written in the
 /// shape that runs.
 #[test]
@@ -518,15 +537,9 @@ echo (string) new ReflectionFunction('nonFinite');
     );
 }
 
-/// Verifies a global constant this evaluator cannot fold does not fail the COMPILE.
-///
-/// `ReflectionConstantValue` has no array variant, so routing global constants through the
-/// fallible evaluator made `const ITEMS = [1, 2]; function f($items = ITEMS) {}` a compile error
-/// for the whole program. The metadata is still missing — PHP reports the array — but the program
-/// builds, and the predicates then behave exactly as they do for a parameter with no default,
-/// which is what PHP does in that state too.
+/// Global array and scalar constant defaults retain their availability, names and values.
 #[test]
-fn test_an_unfoldable_global_constant_default_still_compiles() {
+fn test_global_array_constant_defaults_keep_their_value() {
     let out = compile_and_run(
         r#"<?php
 const ITEMS = [1, 2];
@@ -539,15 +552,16 @@ $s = new ReflectionParameter('withScalar', 0);
 echo $a->isDefaultValueAvailable() ? "y" : "n";
 echo $s->isDefaultValueAvailable() ? "y" : "n";
 echo $s->isDefaultValueConstant() ? "y" : "n";
+echo $a->isDefaultValueConstant() ? "y" : "n";
+echo $a->getDefaultValueConstantName(), ":";
+echo implode(",", $a->getDefaultValue()), ":";
 echo $s->getDefaultValue();
 "#,
     );
-    assert_eq!(out, "nyy7");
+    assert_eq!(out, "yyyyITEMS:1,2:7");
 }
 
-/// The same array constant one level down, as an object default's argument, must not fail the
-/// build either. The dump still prints the default as written (`new \Box(ITEMS)`, as PHP does);
-/// only the folded value is missing, as it is at the top level.
+/// An array constant used as an object default argument keeps its written name in the dump.
 #[test]
 fn test_an_unfoldable_global_constant_in_an_object_default_still_compiles() {
     let out = compile_and_run(

@@ -57,3 +57,10 @@ echo "\n", new ReflectionMethod('Inbox', 'route');
 
 // One parameter renders on its own too.
 echo "\n", (new ReflectionMethod('Inbox', 'route'))->getParameters()[1], "\n";
+
+// A formatter can inspect collection, floating-point and escaped string defaults together.
+function configureReport(iterable $columns = [], float $ratio = 0.3, string $separator = "\n", int $flags = ENT_QUOTES): void
+{
+}
+
+echo "\n", new ReflectionFunction('configureReport');

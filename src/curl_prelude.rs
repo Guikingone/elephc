@@ -1951,7 +1951,23 @@ pub fn inject_if_used(
 /// would. The version-specific parts of the source are fenced with
 /// `// -- elephc PHP >= <version> … begin/end --` markers and removed by
 /// [`prelude_source_for_version`], the same mechanism `crate::pdo_prelude` uses.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used_for_version(
+    program: crate::parser::ast::Program,
+    force: bool,
+    php_version: crate::php_version::PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> crate::parser::ast::Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_for_version_on_compiler_stack(program, force, php_version, inventory)
+    })
+}
+
+/// The body of [`inject_if_used_for_version`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_for_version_on_compiler_stack(
     program: crate::parser::ast::Program,
     force: bool,
     php_version: crate::php_version::PhpVersion,
@@ -2331,7 +2347,7 @@ mod reachability_tests {
     fn injected(source: &str, force: bool) -> (Program, PreludeInventory, crate::types::CheckResult) {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         let program = crate::parser::parse(&tokens).expect("fixture must parse");
-        let program = crate::autoload::collect_aliases(program);
+        let program = crate::autoload::collect_aliases(program).expect("alias collection failed");
         let mut inventory = PreludeInventory::new();
         let program = super::inject_if_used(program, force, &mut inventory);
         let program = crate::name_resolver::resolve(program).expect("fixture must resolve");

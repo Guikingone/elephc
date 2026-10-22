@@ -392,3 +392,72 @@ fn test_parse_enum_with_methods_implements_constants() {
         other => panic!("Expected EnumDecl, got {:?}", other),
     }
 }
+
+/// Extracts `(name, int value)` from every top-level `ConstDecl` in `stmts`.
+fn const_decl_names_and_ints(stmts: &[Stmt]) -> Vec<(String, Option<i64>)> {
+    stmts
+        .iter()
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::ConstDecl { name, value } => Some((
+                name.clone(),
+                match value.kind {
+                    ExprKind::IntLiteral(value) => Some(value),
+                    _ => None,
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Verifies a file-scope `const` declarator list parses to one flat `ConstDecl` per name
+/// (issue #1142).
+///
+/// `const A = 1, B = 2;` used to report `Expected ';'`. The declarations are spliced into the
+/// program list itself rather than nested in a wrapper, so every pass that collects top-level
+/// declarations sees exactly what two `const` statements produce. The first keeps the statement
+/// span, as a lone `const` always did; the second carries its own declarator span.
+#[test]
+fn test_file_scope_const_declarator_list_parses_one_decl_per_name() {
+    let stmts = parse_source("<?php const A = 1, BB = 22;");
+    assert_eq!(stmts.len(), 2, "{:?}", stmts);
+    assert_eq!(
+        const_decl_names_and_ints(&stmts),
+        vec![("A".to_string(), Some(1)), ("BB".to_string(), Some(22))]
+    );
+    assert_eq!((stmts[0].span.line, stmts[0].span.col), (1, 7));
+    assert_eq!(
+        (stmts[1].span.line, stmts[1].span.col, stmts[1].span.end_column()),
+        (1, 20, 27)
+    );
+}
+
+/// Verifies the list form inside both namespace spellings, and that a later value may name an
+/// earlier constant.
+#[test]
+fn test_namespaced_const_declarator_lists_parse_one_decl_per_name() {
+    let stmts = parse_source("<?php namespace Shop; const MIN = 1, MAX = MIN + 9;");
+    assert_eq!(stmts.len(), 3, "{:?}", stmts);
+    let names: Vec<_> = const_decl_names_and_ints(&stmts)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(names, vec!["MIN", "MAX"]);
+
+    let stmts = parse_source("<?php namespace Shop { const MIN = 1, MAX = 10; }");
+    let StmtKind::NamespaceBlock { body, .. } = &stmts[0].kind else {
+        panic!("Expected NamespaceBlock, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(
+        const_decl_names_and_ints(body),
+        vec![("MIN".to_string(), Some(1)), ("MAX".to_string(), Some(10))]
+    );
+}
+
+/// Verifies a malformed file-scope list is rejected by its own cause: a trailing comma and a
+/// declarator without a value, both of which PHP reports as syntax errors.
+#[test]
+fn test_malformed_file_scope_const_declarator_lists_are_rejected() {
+    assert!(parse_fails("<?php const A = 1, ;"));
+    assert!(parse_fails("<?php const A = 1, B;"));
+}

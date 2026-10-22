@@ -47,10 +47,13 @@ mod class_members;
 mod member_resolution;
 mod method_members;
 mod property_members;
+mod property_defaults_fold;
 mod default_members;
 mod parameter_defaults;
+mod object_defaults;
 mod default_export;
 mod names_constants;
+mod constant_arithmetic;
 mod operand_extract;
 mod string_attrs_emit;
 mod member_properties_emit;
@@ -72,8 +75,10 @@ use class_members::*;
 use member_resolution::*;
 use method_members::*;
 use property_members::*;
+use property_defaults_fold::*;
 use default_members::*;
 use parameter_defaults::*;
+use object_defaults::*;
 use default_export::*;
 use names_constants::*;
 use operand_extract::*;
@@ -137,12 +142,12 @@ struct ReflectionOwnerMetadata {
     is_iterable: bool,
     modifiers: i64,
     member_flags: ReflectionMemberFlags,
-    /// A `__toString()` dump to use instead of rendering one from the fields above.
+    /// A literal-byte-encoded `__toString()` dump instead of rendering from the fields above.
     ///
     /// `getDeclaringFunction()` builds its reflector from metadata that deliberately carries NO
     /// parameters: emitting them would emit a `ReflectionParameter` for each, and each of those
     /// emits its own declaring function, which does not terminate. The dump is a string, so it
-    /// does not recurse — it is rendered from the real member and carried across (#1080).
+    /// does not recurse: it is rendered from the real member and carried across (#1080).
     rendered_to_string: Option<String>,
 }
 
@@ -201,7 +206,7 @@ struct ReflectionParameterMember {
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
     default_value_constant_name: Option<String>,
-    /// The default as PHP's dump prints its written AST, for the shapes the value cannot rebuild.
+    /// The written AST dump, using literal-byte encoding for shapes the value cannot rebuild.
     default_value_export: Option<String>,
 }
 
@@ -269,17 +274,24 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    DeferredError(String),
+    EirHelper(String),
     Object {
         class_name: String,
-        /// Every constructor argument the object ends up with, the written ones followed by the
-        /// constructor defaults that fill the rest — what `getDefaultValue()` has to construct.
+        /// Every constructor argument in parameter order, including omitted defaults.
         args: Vec<ReflectionParameterDefaultValue>,
-        /// How many of those were WRITTEN. PHP's dump exports the source, so `new Foo()` prints
-        /// `new \Foo()` however many defaults the constructor would supply.
-        written_args: usize,
+        /// Arguments in written order, preserving names and excluding omitted defaults.
+        written_args: Vec<ReflectionDefaultObjectArg>,
     },
     Array(Vec<ReflectionParameterDefaultValue>),
     AssocArray(Vec<ReflectionDefaultAssocEntry>),
+}
+
+/// One written constructor argument kept separately from normalized value-materialization slots.
+#[derive(Clone)]
+struct ReflectionDefaultObjectArg {
+    name: Option<String>,
+    value: ReflectionParameterDefaultValue,
 }
 
 /// Metadata for one key/value pair in an associative Reflection default array.

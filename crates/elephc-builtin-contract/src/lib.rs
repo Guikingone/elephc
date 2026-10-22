@@ -28,9 +28,12 @@ mod catalog_xml;
 mod catalog_curl;
 mod catalog_surfaces;
 mod core_functions;
+mod core_constants;
+mod core_attributes;
 mod eval_profile;
 mod id;
 mod module;
+mod object_operators;
 mod php_version;
 mod registry;
 mod requirements;
@@ -40,6 +43,9 @@ mod type_spec;
 pub mod mbstring_abi;
 pub mod output_abi;
 pub mod string_literal;
+pub mod reflection_format;
+pub mod reflection_methods;
+pub mod reflection_inheritance;
 mod support;
 mod symbol_registry;
 
@@ -54,10 +60,13 @@ pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
 pub use core_functions::CORE_FUNCTION_NAMES;
 pub use union_order::union_member_rank;
+pub use core_constants::{core_environment_constant, EXECUTABLE_PATH_DEFAULT_KIND};
+pub use core_attributes::{core_attribute_flags, CORE_ATTRIBUTE_CONSTANTS, CORE_ATTRIBUTE_IS_REPEATABLE, CORE_ATTRIBUTE_TARGET_ALL};
 pub use module::PhpModule;
+pub use object_operators::{ClassOperators, ObjectArithmetic, ObjectOrdering, BCMATH_NUMBER_OPERATORS};
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
-pub use symbol_registry::{classes, constants, lookup_class, lookup_constant};
+pub use symbol_registry::{canonical_constant_name, classes, constants, lookup_class, lookup_constant};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{
     Area, BuiltinContract, BuiltinKind, BuiltinRequirement, BuiltinSignature, DefaultSpec,

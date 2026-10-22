@@ -24,6 +24,10 @@ mod new_by_name;
 mod object_vars;
 mod print_r_object;
 mod stdclass;
+mod weak_reference;
+mod weak_map;
+pub(crate) use weak_map::emit_weak_map;
+pub(crate) use weak_reference::emit_weak_reference;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
 pub(crate) use dump_dynamic_props::{
@@ -43,7 +47,9 @@ pub(crate) use mixed_array_append::emit_mixed_array_append;
 pub(crate) use magic_set_guard::emit_magic_set_guard;
 pub(crate) use mixed_array_fetch_for_write::emit_mixed_array_fetch_for_write;
 pub(crate) use mixed_array_get::emit_mixed_array_get;
-pub(crate) use object_not_array::{emit_throw_object_not_array, emit_throw_serialization_denied};
+pub(crate) use object_not_array::{
+    emit_throw_object_not_array, emit_throw_serialization_denied, emit_throw_unserialization_denied,
+};
 pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;

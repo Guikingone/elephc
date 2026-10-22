@@ -110,6 +110,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Intval,
     /// Dispatches `is_bool(...)`.
     IsBool,
+    /// Dispatches `is_countable(...)`.
+    IsCountable,
     /// Dispatches `is_double(...)`.
     IsDouble,
     /// Dispatches `is_finite(...)`.
@@ -242,6 +244,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     PtrRead16,
     /// Dispatches `ptr_read32(...)`.
     PtrRead32,
+    /// Dispatches `ptr_read_f32(...)`.
+    PtrReadF32,
+    /// Dispatches `ptr_read_f64(...)`.
+    PtrReadF64,
     /// Dispatches `ptr_read_string(...)`.
     PtrReadString,
     /// Dispatches `ptr_set(...)`.
@@ -254,12 +260,18 @@ pub(in crate::interpreter) enum EvalValuesHook {
     PtrWrite16,
     /// Dispatches `ptr_write32(...)`.
     PtrWrite32,
+    /// Dispatches `ptr_write_f32(...)`.
+    PtrWriteF32,
+    /// Dispatches `ptr_write_f64(...)`.
+    PtrWriteF64,
     /// Dispatches `ptr_write_string(...)`.
     PtrWriteString,
     /// Dispatches by-value `settype(...)` callable calls.
     Settype,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
+    /// Dispatches `strip_tags(...)`.
+    StripTags,
     /// Dispatches `sin(...)`.
     Sin,
     /// Dispatches `sinh(...)`.
@@ -418,6 +430,9 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),
+            Self::IsCountable => one_arg(evaluated_args, values, |value, values| {
+                eval_is_countable_result(value, context, values)
+            }),
             Self::IsDouble => one_arg(evaluated_args, values, eval_is_double_result),
             Self::IsFinite => one_arg(evaluated_args, values, eval_is_finite_result),
             Self::IsFloat => one_arg(evaluated_args, values, eval_is_float_result),
@@ -470,18 +485,24 @@ impl EvalValuesHook {
             },
             Self::Hex2Bin => one_arg(evaluated_args, values, eval_hex2bin_result),
             Self::HtmlEntity => {
-                // htmlspecialchars/htmlentities accept optional flags/encoding args;
-                // like the static runtime they are accepted without effect (ENT_QUOTES).
-                let value = match (name, evaluated_args) {
-                    (_, [value]) => *value,
-                    ("htmlspecialchars" | "htmlentities", [value, _flags]) => *value,
-                    ("htmlspecialchars" | "htmlentities", [value, _flags, _encoding]) => *value,
+                // htmlspecialchars/htmlentities accept optional flags/encoding args; the
+                // flags select quote handling like the compiled helper, the encoding is unused.
+                let (value, flags) = match (name, evaluated_args) {
+                    (_, [value]) => (*value, None),
+                    ("htmlspecialchars" | "htmlentities", [value, flags])
+                    | ("htmlspecialchars" | "htmlentities", [value, flags, _]) => {
+                        (*value, Some(*flags))
+                    }
                     _ => return Err(EvalStatus::RuntimeFatal),
+                };
+                let flags = match flags {
+                    Some(flags) => eval_int_value(flags, values)?,
+                    None => ENT_DEFAULT_FLAGS,
                 };
                 match name {
                     "html_entity_decode" => eval_html_entity_decode_result(value, values),
-                    "htmlentities" => eval_htmlentities_result(value, values),
-                    "htmlspecialchars" => eval_htmlspecialchars_result(value, values),
+                    "htmlentities" => eval_htmlentities_result(value, flags, values),
+                    "htmlspecialchars" => eval_htmlspecialchars_result(value, flags, values),
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }
@@ -571,12 +592,16 @@ impl EvalValuesHook {
             Self::PtrRead8 => eval_ptr_read8_values_result(evaluated_args, values),
             Self::PtrRead16 => eval_ptr_read16_values_result(evaluated_args, values),
             Self::PtrRead32 => eval_ptr_read32_values_result(evaluated_args, values),
+            Self::PtrReadF32 => eval_ptr_read_f32_values_result(evaluated_args, values),
+            Self::PtrReadF64 => eval_ptr_read_f64_values_result(evaluated_args, values),
             Self::PtrReadString => eval_ptr_read_string_values_result(evaluated_args, values),
             Self::PtrSet => eval_ptr_set_values_result(evaluated_args, values),
             Self::PtrSizeof => eval_ptr_sizeof_values_result(evaluated_args, context, values),
             Self::PtrWrite8 => eval_ptr_write8_values_result(evaluated_args, values),
             Self::PtrWrite16 => eval_ptr_write16_values_result(evaluated_args, values),
             Self::PtrWrite32 => eval_ptr_write32_values_result(evaluated_args, values),
+            Self::PtrWriteF32 => eval_ptr_write_f32_values_result(evaluated_args, values),
+            Self::PtrWriteF64 => eval_ptr_write_f64_values_result(evaluated_args, values),
             Self::PtrWriteString => eval_ptr_write_string_values_result(evaluated_args, values),
             Self::Settype => eval_settype_values_result(evaluated_args, values),
             Self::Sin => one_arg(evaluated_args, values, eval_sin_result),
@@ -586,6 +611,7 @@ impl EvalValuesHook {
                 "stripslashes" => eval_stripslashes_result(value, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             }),
+            Self::StripTags => eval_strip_tags_values_result(evaluated_args, context, values),
             Self::Sprintf => eval_sprintf_result(evaluated_args, context, values),
             Self::Sscanf => eval_sscanf_values_result(evaluated_args, values),
             Self::StringCase => one_arg(evaluated_args, values, |value, values| match name {

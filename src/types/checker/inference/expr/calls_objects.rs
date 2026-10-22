@@ -7,7 +7,8 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::{body_must_not_use_this, merge_null_coalesce_result_type, Checker};
+use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::pcntl_constants::pcntl_int_constants;
@@ -88,15 +89,11 @@ impl Checker {
                 let probed =
                     crate::types::checker::null_probe::null_probe_env(self, value, env);
                 let probed_env = probed.clone();
-                let vt = self
-                    .infer_null_probe_operand(value, probed_env.as_ref().unwrap_or(env))?;
+                let operand_env = probed_env.as_ref().unwrap_or(env);
+                let vt = self.infer_null_probe_operand(value, operand_env)?;
+                let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
                 let dt = self.infer_type(default, env)?;
-                let non_null_value = if Self::union_contains_void(&vt) {
-                    self.strip_void_from_union(&vt)
-                } else {
-                    vt
-                };
-                Ok(merge_null_coalesce_result_type(self, non_null_value, dt))
+                Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {
                 self.infer_pipe_type(value, callable, expr, env)
@@ -185,6 +182,29 @@ impl Checker {
             }
             ExprKind::NewObject { class_name, args } => {
                 self.infer_new_object_type(class_name.as_str(), args, expr, env)
+            }
+            // `generics::classes` rewrites every generic construction to a `NewObject` naming
+            // the instantiated class, so one arriving here means no template answered it — the
+            // named class declares no type parameters. Reported rather than widened: a
+            // template has no representation, and inferring `Plain` for `new Plain<int>()`
+            // would compile a program whose type arguments meant nothing.
+            ExprKind::NewGeneric { class_type, args } => {
+                if let Some(instantiated) =
+                    self.infer_written_generic_construction(class_type, args, expr, env)?
+                {
+                    return Ok(instantiated);
+                }
+                Err(CompileError::new(
+                expr.span,
+                &format!(
+                    "'{}' is written with type arguments but declares no type parameters",
+                    match class_type {
+                        crate::parser::ast::TypeExpr::GenericClass { name, .. } =>
+                            name.as_str().to_string(),
+                        other => crate::generics::describe_type(other),
+                    }
+                ),
+                ))
             }
             ExprKind::Clone(inner) => {
                 let ty = self.infer_type(inner, env)?;
@@ -308,7 +328,16 @@ impl Checker {
                 self.infer_scoped_constant_access(receiver, name, expr)
             }
             ExprKind::NewScopedObject { receiver, args } => {
+                // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+                // it, and this pass can run on a generic function's template body — which is
+                // walked and then stripped, never instantiated.
+                let receiver = &receiver.written_class_receiver();
                 let class_name = match receiver {
+                    // A generic receiver is instantiated into an ordinary named one before type checking;
+                    // a template has no class to reach through.
+                    crate::parser::ast::StaticReceiver::Generic(_) => unreachable!(
+                        "StaticReceiver::Generic must be instantiated by generics::classes"
+                    ),
                     crate::parser::ast::StaticReceiver::Self_ => {
                         self.current_class.clone().ok_or_else(|| {
                             CompileError::new(
@@ -382,7 +411,7 @@ impl Checker {
                     return Err(CompileError::new(
                         inner.span,
                         &format!(
-                            "yield from expects an array literal or Generator, got {:?}",
+                            "yield from expects an array literal or Generator, got {}",
                             inner_ty
                         ),
                     ));

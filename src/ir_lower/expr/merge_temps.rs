@@ -59,7 +59,11 @@ pub(super) fn branch_merge_result_type(
     let then_ty = materialized_expr_type_for_merge(ctx, then_expr);
     let else_ty = materialized_expr_type_for_merge(ctx, else_expr);
     let branch_ty = nullable_aware_branch_merge_type(&then_ty, &else_ty);
-    if php_type_allows_null(&branch_ty) {
+    // A pointer merge (a `ptr<T>` or packed record address on both sides) is already exact; the
+    // syntactic fallback would answer `int` for the ternary and widen the word into `Mixed`.
+    if php_type_allows_null(&branch_ty)
+        || matches!(branch_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_))
+    {
         return branch_ty;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
@@ -86,7 +90,10 @@ pub(super) fn match_merge_result_type(
     let Some(merged) = merged else {
         return fallback_expr_type(expr);
     };
-    if php_type_allows_null(&merged) {
+    // As for a ternary, an exact pointer merge must not be widened by the syntactic fallback.
+    if php_type_allows_null(&merged)
+        || matches!(merged.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_))
+    {
         return merged;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
@@ -160,8 +167,91 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             property_access_expr_type_for_ir(ctx, object, property)
                 .unwrap_or_else(|| fallback_expr_type(expr))
         }
+        // Calls are typed from the return metadata their own lowering uses. The syntactic
+        // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
+        // typed from that guess coerced a string, array or object branch into an integer slot or,
+        // beside a `null` branch, into a tagged `?int` scalar the backend cannot store an array
+        // in (issue #1364). A call whose result cannot be named here merges as boxed `mixed`,
+        // which holds whatever the call returns.
+        ExprKind::FunctionCall { name, .. } => function_call_type_for_merge(ctx, name.as_str(), expr),
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
+        ExprKind::ExprCall { .. } => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
+}
+
+/// Returns the merge type of a named function call before it is lowered.
+///
+/// A user or extern function answers the return type `lower_function_call` stamps on the call.
+/// A pop or shift uses its shared EIR result contract, which is boxed `Mixed` even when
+/// the checker sees a scalar array element: removing from an empty array returns null.
+/// Other builtins keep the syntactic answer when that names a type, and otherwise consult
+/// the checker's result type for this very call (`int`, `bool`, `float` and `string` stay
+/// scalar, anything else is boxed), because syntactic `int` is only a default outside its
+/// allowlist.
+fn function_call_type_for_merge(ctx: &LoweringContext<'_, '_>, canonical: &str, expr: &Expr) -> PhpType {
+    if !source_prefers_extension_builtin(canonical) {
+        if let Some(signature) = ctx.functions.get(canonical) {
+            return normalize_value_php_type(eir_user_function_return_type(signature));
+        }
+    }
+    if let Some(signature) = ctx.extern_functions.get(canonical) {
+        return normalize_value_php_type(signature.return_type.clone());
+    }
+    if let Some(def) = crate::builtins::registry::lookup(canonical.trim_start_matches('\\')) {
+        if matches!(
+            def.spec.semantics.lowering,
+            crate::builtins::semantics::BuiltinLowering::Runtime(
+                crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::ArrayPop | crate::ir::RuntimeFnId::ArrayShift
+                )
+            )
+        ) {
+            return resolve_registry_builtin_result_type(
+                ctx,
+                def.name,
+                &[],
+                &[],
+                expr.span,
+                None,
+            )
+            .expect("registered pop/shift builtin must resolve its result type");
+        }
+    }
+    let syntactic = fallback_expr_type(expr);
+    if syntactic != PhpType::Int {
+        return syntactic;
+    }
+    builtin_call_result_type_for_ir(ctx, expr.span).unwrap_or(syntactic)
+}
+
+/// Returns the merge type of a `$callable(...)` call through a local variable.
+///
+/// Mirrors `lower_closure_call`: a statically known closure or user function answers its
+/// signature's return type and a typed callable parameter its descriptor signature's.
+/// Everything else (builtin names, methods, invokable objects, unknown callables) merges as
+/// boxed `mixed`.
+fn closure_call_type_for_merge(ctx: &LoweringContext<'_, '_>, var: &str) -> PhpType {
+    match ctx.static_callable_local(var) {
+        Some(target @ StaticCallableBinding::Closure { .. })
+        | Some(target @ StaticCallableBinding::UserFunction(_)) => {
+            return static_callable_return_type(ctx, &target);
+        }
+        Some(_) => return PhpType::Mixed,
+        None => {}
+    }
+    ctx.callable_param_signature(var)
+        .map(|signature| descriptor_invoker_result_type(Some(signature)))
+        .unwrap_or(PhpType::Mixed)
 }
 
 /// Coerces branch values to the hidden temp storage type before storing them.
@@ -178,11 +268,40 @@ pub(super) fn coerce_value_for_temp(
     }
     match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
+        PhpType::Pointer(_) if matches!(source_ty, PhpType::Packed(_)) => {
+            ctx.retype_packed_address_for_pointer_sink(value, &target_ty, Some(span))
+        }
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             coerce_to_int_at_span(ctx, value, Some(span))
         }
         PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
         PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
+        // A boxed `?C` (a nullable parameter or property) merged into a `C` temp: `$o ??= new C()`
+        // types the merge from the non-null side, so the arm that keeps `$o` must hand over the
+        // object inside the cell. Storing the cell pointer itself made the next member access
+        // read the box as the object (#1628). The unbox owns its own lease of the payload.
+        // `MixedUnbox` does not check the tag, so this arm relies on never seeing null: the
+        // only producer of an object temp from a nullable value is `null_coalesce_result_type`,
+        // and its value arm runs behind `IsNull`. Ternary, `match` and `?:` merges keep a
+        // nullable arm in a `Mixed` temp and never reach here. The default arms of
+        // `??`/`??=` are safe the same way: their materialized type is `Object` only because
+        // `materialized_expr_type_for_merge` mirrors the result type each lowering actually
+        // stamps, so a default can never hand a null-bearing cell to this arm either — keep
+        // that mirroring if either side changes.
+        PhpType::Object(_) | PhpType::Callable
+            if source_ty == PhpType::Mixed && value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
+        {
+            let unboxed = ctx.emit_owned_value(
+                Op::MixedUnbox,
+                vec![value.value],
+                None,
+                target_ty.clone(),
+                Op::mixed_unbox_effects(&target_ty),
+                Some(span),
+            );
+            release_coerced_source_if_owned(ctx, value, Some(span));
+            unboxed
+        }
         _ => coerce_container_to_mixed_payload(ctx, value, &source_ty, &target_ty, span),
     }
 }
@@ -207,6 +326,38 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
         _ => false,
     };
     if !target_has_mixed_payload {
+        // A TYPED container target with a whole-boxed source is the `?array<int>` shape, and it
+        // only exists since `array<T>` did: before that a container merge target was always
+        // `array<mixed>`, so this early return could only ever see a source that needed nothing.
+        // It stored the CELL into the raw slot untouched, and the first element read then saw the
+        // cell header — `function g(?array<int> $a) { $r = $a ?? [4, 5]; echo $r[0]; }` printed
+        // `0` and dumped four zeros where php prints `1` and `[1, 2, 3]`. A ternary was correct,
+        // and a bare `?array` was correct, which is what kept it hidden.
+        //
+        // Unboxing is exact here: the payload's slots carry the declared element type, because
+        // that declaration is what typed the caller's array in the first place. If that is ever
+        // false, the boundary guard in `lower_runtime_call` reads the payload's own value_type
+        // tag and fatals rather than handing back a cell pointer as an element.
+        if matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+            && value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+            && matches!(target_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            let cell_is_owning = ctx.value_is_owning_temporary(value);
+            let unboxed = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                target_ty.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            // The unbox takes its own reference to the payload, so an owning cell has no reader
+            // left — the same ledger the whole-boxed branch below keeps.
+            if cell_is_owning {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            return unboxed;
+        }
         return value;
     }
     let op = match (source_ty, target_ty) {
@@ -349,7 +500,16 @@ pub(crate) fn emit_bool_literal(
 
 /// Returns a printable static receiver name.
 pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => name.as_str().to_string(),
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Static => "static".to_string(),

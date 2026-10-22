@@ -54,7 +54,7 @@ pub(super) fn reflection_function_metadata(
         None,
         Some(declaring_function),
         &[],
-        None,
+        Some(&function.source_defaults),
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
@@ -78,7 +78,7 @@ pub(super) fn reflection_builtin_function_metadata(
         attr_args: Vec::new(),
         required_parameter_count,
         type_metadata: type_metadata.clone(),
-        is_deprecated: false,
+        is_deprecated: signature.deprecation.is_some(),
         is_generator: false,
         returns_reference: false,
     };
@@ -96,6 +96,7 @@ pub(super) fn reflection_builtin_function_metadata(
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
+    metadata.is_deprecated = signature.deprecation.is_some();
     Ok(metadata)
 }
 
@@ -145,7 +146,7 @@ pub(super) fn reflection_method_metadata(
         if let Some(member) =
             reflection_class_method_member(ctx, &reflected_class, info, &method_key)?
         {
-            return Ok(reflection_method_owner_metadata(member));
+            return Ok(reflection_method_owner_metadata(ctx, member));
         }
     }
     if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
@@ -153,7 +154,7 @@ pub(super) fn reflection_method_metadata(
             if let Some(member) =
                 reflection_interface_method_member(ctx, info, interface_name, &method_key)?
             {
-                return Ok(reflection_method_owner_metadata(member));
+                return Ok(reflection_method_owner_metadata(ctx, member));
             }
         }
     }
@@ -162,7 +163,7 @@ pub(super) fn reflection_method_metadata(
             if let Some(member) =
                 reflection_trait_method_member(ctx, methods, trait_name, &method_key)?
             {
-                return Ok(reflection_method_owner_metadata(member));
+                return Ok(reflection_method_owner_metadata(ctx, member));
             }
         }
     }
@@ -177,9 +178,10 @@ pub(super) fn reflection_method_metadata(
 /// the declaration (issue #571). The member carries the declared spelling, which is also what
 /// every listing path now reports, so the two agree by construction.
 pub(super) fn reflection_method_owner_metadata(
+    ctx: &FunctionContext<'_>,
     member: ReflectionListedMember,
 ) -> ReflectionOwnerMetadata {
-    let rendered_to_string = reflection_listed_method_to_string(&member);
+    let rendered_to_string = reflection_listed_method_to_string(ctx, &member);
     ReflectionOwnerMetadata {
         rendered_to_string: Some(rendered_to_string),
         reflected_name: Some(member.name.clone()),

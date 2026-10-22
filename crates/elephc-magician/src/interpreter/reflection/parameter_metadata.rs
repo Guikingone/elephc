@@ -98,6 +98,7 @@ pub(super) fn eval_reflection_parameters_from_names_and_type_flags(
             let is_callable_type =
                 eval_reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
             EvalReflectionParameterMetadata {
+                native_default_factory: None,
                 name: name.clone(),
                 declaring_class_name: declaring_class_name.map(str::to_string),
                 declaring_function: declaring_function.cloned(),
@@ -306,6 +307,9 @@ pub(super) fn eval_reflection_named_type_variant_metadata(
     allows_null: bool,
 ) -> Option<EvalReflectionNamedTypeMetadata> {
     match variant {
+        EvalParameterTypeVariant::Generic(ty) => Some(EvalReflectionNamedTypeMetadata {
+            name: ty.to_string(), allows_null, is_builtin: matches!(ty, elephc_generics::Type::Apply(name, _) if name == "array"),
+        }),
         EvalParameterTypeVariant::Array => {
             Some(eval_reflection_builtin_named_type("array", allows_null))
         }

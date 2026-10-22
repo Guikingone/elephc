@@ -32,6 +32,8 @@ mod mbstring_exception;
 mod search;
 #[path = "strings/transform.rs"]
 mod transform;
+#[path = "strings/implode_boxed.rs"]
+mod implode_boxed;
 #[path = "strings/encoding.rs"]
 mod encoding;
 #[path = "strings/inet.rs"]
@@ -44,6 +46,8 @@ mod formatting;
 mod interpolation_and_hashes;
 #[path = "strings/misc.rs"]
 mod misc;
+#[path = "strings/transient_string_ownership.rs"]
+mod transient_string_ownership;
 #[path = "strings/openssl.rs"]
 mod openssl;
 #[path = "strings/parse_url.rs"]

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Class-default Errors are retained until getDefaultProperties requests their values.
 
 use super::*;
 
@@ -108,6 +109,15 @@ pub(super) fn emit_reflection_owner_object(
                 "__default_properties",
                 &metadata.default_property_members,
             )?;
+            if let Some(message) = metadata.default_property_members.iter().find_map(|member| {
+                if let ReflectionParameterDefaultValue::DeferredError(message) = &member.value {
+                    Some(message.as_str())
+                } else {
+                    None
+                }
+            }) {
+                emit_reflection_owner_string_property_by_name(ctx, class_name, "__default_error", message)?;
+            }
             emit_reflection_static_property_array_property_by_name(
                 ctx,
                 class_name,
@@ -252,7 +262,9 @@ pub(super) fn emit_reflection_owner_object(
                     .as_deref()
                     .and_then(|prototype| prototype.declaring_class_name.as_deref()),
                 None,
+                None,
                 is_internal,
+                metadata.is_deprecated,
                 metadata.returns_reference,
                 &metadata.parameter_members,
                 metadata.type_metadata.as_ref(),
@@ -261,12 +273,13 @@ pub(super) fn emit_reflection_owner_object(
             reflection_function_to_string(
                 reflected_name,
                 is_internal,
+                metadata.is_deprecated,
                 metadata.returns_reference,
                 &metadata.parameter_members,
                 metadata.type_metadata.as_ref(),
             )
         };
-        emit_reflection_owner_string_property_by_name(ctx, class_name, "__string", &rendered)?;
+        emit_reflection_owner_dump_property(ctx, class_name, &rendered)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_internal", is_internal)?;
         emit_reflection_owner_bool_property(
             ctx,

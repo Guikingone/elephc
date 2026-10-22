@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Instruction, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -51,6 +51,9 @@ pub(super) fn lower_pop_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: 
 pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
+    if crate::codegen::stack_numeric::is_stack_value(ctx.function, &ctx.numeric_cell_offsets, value) {
+        return store_if_result(ctx, inst);
+    }
     match ty {
         PhpType::Str => {
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
@@ -107,9 +110,15 @@ pub(super) fn lower_release_unless_aliases(
     }
 
     let skip_label = ctx.next_label("release_unless_aliases_skip");
-    let value_reg = abi::int_result_reg(ctx.emitter);
     let result_reg = abi::symbol_scratch_reg(ctx.emitter);
     let ty = ctx.load_value_to_result(value)?;
+    // A string loads into the string result pair, whose pointer register is not the integer
+    // result register on AArch64 (`x1` against `x0`); boxed payloads stay single-word values.
+    let value_reg = if ty == PhpType::Str {
+        abi::string_result_regs(ctx.emitter).0
+    } else {
+        abi::int_result_reg(ctx.emitter)
+    };
     ctx.load_value_to_reg(result, result_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -140,11 +149,48 @@ pub(super) fn lower_release_unless_aliases(
     Ok(())
 }
 
+/// Lowers `EnsureOwned` on a string: claims a transient heap block for the value's owners.
+///
+/// `__rt_str_claim` retags a `CONCAT_TEMP_HEAP_KIND` block as an owned string in place and
+/// leaves every other pointer (concat scratch, literals, already owned blocks) unchanged, so the
+/// result shares the operand's payload without a copy. The result is released like any owned
+/// string, which `__rt_heap_free_safe` turns into a no-op for non-heap pointers. Once claimed, a
+/// later `__rt_str_persist` duplicates the block instead of adopting it, so a callee that
+/// persists or hands back the argument can no longer take over a block its caller still frees.
+pub(super) fn lower_ensure_owned(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.load_value_to_result(value)?;
+    if ty != PhpType::Str {
+        return Err(CodegenIrError::unsupported(format!(
+            "ensure_owned for PHP type {:?}",
+            ty
+        )));
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_claim");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a release only for values that own or may own runtime-managed storage.
 pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    release_value_if_owned(ctx, value)
+}
+
+/// Emits the release of one SSA value when it owns or may own runtime-managed storage.
+///
+/// Shared by `release` and by instructions that consume their operand on one path only,
+/// such as a static-local initializer that is dropped once the slot is already initialized.
+pub(super) fn release_value_if_owned(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ownership = ctx.value_ownership(value)?;
     if !ownership.may_require_release() {
+        return Ok(());
+    }
+    if crate::codegen::stack_numeric::is_stack_value(ctx.function, &ctx.numeric_cell_offsets, value) {
+        return Ok(());
+    }
+    if crate::codegen::stack_numeric::numeric_local_read(ctx.function, &ctx.numeric_local_slots, value) {
+        ctx.load_value_to_result(value)?;
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
         return Ok(());
     }
     if value_is_scratch_string(ctx, value)? {
@@ -178,7 +224,8 @@ pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     Ok(())
 }
 
-/// Returns whether a value is a transient string backed by concat scratch storage.
+/// Returns whether a value is a transient string: concat scratch, or a heap block stamped
+/// `CONCAT_TEMP_HEAP_KIND` that only an adopting consumer takes over, so a release is a no-op.
 fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
     if ctx.value_php_type(value)? != PhpType::Str {
         return Ok(false);
@@ -194,47 +241,7 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst.op == Op::RuntimeCall {
-        let result_is_releasable = match inst.immediate {
-            Some(crate::ir::Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
-            )) => false,
-            Some(crate::ir::Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::Function(target),
-            )) |
-            Some(crate::ir::Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
-            )) => matches!(
-                target.result_ownership(),
-                crate::builtins::semantics::BuiltinResultOwnership::Fresh
-            ) || matches!(target, crate::ir::RuntimeFnId::GetClass | crate::ir::RuntimeFnId::GetParentClass),
-            Some(crate::ir::Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::UnaryString(_),
-            )) => true,
-            Some(crate::ir::Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::Pcntl(target),
-            )) => matches!(
-                target.result_ownership(),
-                crate::builtins::semantics::BuiltinResultOwnership::Fresh
-            ),
-            _ => false,
-        };
-        // Class-name lookups return static metadata or an owned eval string, never
-        // concat scratch. Validated release ignores metadata and retires detached copies.
-        return Ok(!result_is_releasable);
-    }
-    // MixedCastString detaches an owned buffer for string-tagged inputs. Its
-    // other tags return scratch or literals, both ignored by validated release.
-    Ok(matches!(
-        inst.op,
-        Op::IToStr
-            | Op::FToStr
-            | Op::BoolToStr
-            | Op::ResourceToStr
-            | Op::StrConcat
-            | Op::StrCharAt
-            | Op::StrInterpolate
-    ))
+    Ok(inst.string_release_is_noop())
 }
 
 /// Lowers a pure ownership forwarding opcode by copying the operand into the result slot.

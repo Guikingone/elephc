@@ -58,11 +58,10 @@ pub(super) fn emit_reflection_member_object(
     if member_class_name == "ReflectionMethod" {
         // The same `__string` slot the standalone `new ReflectionMethod(...)` path fills, for the
         // entries `ReflectionClass::getMethods()` hands back (#1080).
-        let method_string = reflection_listed_method_to_string(member);
-        emit_reflection_owner_string_property_by_name(
+        let method_string = reflection_listed_method_to_string(ctx, member);
+        emit_reflection_owner_dump_property(
             ctx,
             member_class_name,
-            "__string",
             &method_string,
         )?;
         emit_reflection_parameter_array_property_by_name(

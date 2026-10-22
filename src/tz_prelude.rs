@@ -91,7 +91,22 @@ fn t_datetimezone() -> TypeExpr {
 /// `force` (set by `--with-tz`) bypasses the usage scan so the timezone surface
 /// is always injected, making it available even when auto-detection would not see
 /// the usage.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, force, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
