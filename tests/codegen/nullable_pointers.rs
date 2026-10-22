@@ -413,3 +413,26 @@ echo $b->take(null), "|", $b->take($v[0]), "\n";
     );
     assert_eq!(out, "null|set:4\n");
 }
+
+/// Verifies a first-class method callable returning `?ptr<T>`, invoked directly, hands back the
+/// pointer word: null for a null return and the record for a live one.
+#[test]
+fn test_nullable_pointer_result_of_invoked_method_callable() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+final class Finder {
+    public function __construct(private buffer<Vec2> $v) {}
+    public function none(): ?ptr<Vec2> { return null; }
+    public function first(): ?ptr<Vec2> { return $this->v[0]; }
+}
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 3;
+$f = new Finder($v);
+$n = ($f->none(...))();
+$p = ($f->first(...))();
+echo $n === null ? "null" : "set", "|", $p === null ? "null" : $p->x, "\n";
+"#,
+    );
+    assert_eq!(out, "null|3\n");
+}

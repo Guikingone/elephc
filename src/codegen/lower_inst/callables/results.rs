@@ -31,7 +31,9 @@ pub(super) fn emit_unbox_owned_descriptor_result(
             abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0x7fff_ffff_ffff_fffe);
             return Ok(());
         }
-        PhpType::Int => "__rt_mixed_cast_int",
+        // A `?ptr<T>` result comes back boxed (null as PHP null, a live address as an integer);
+        // the integer cast is that pointer word, 0 for null.
+        PhpType::Int | PhpType::Pointer(_) => "__rt_mixed_cast_int",
         PhpType::Bool => "__rt_mixed_cast_bool",
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Str => "__rt_mixed_cast_string",
