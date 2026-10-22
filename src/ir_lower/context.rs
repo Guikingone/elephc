@@ -3430,6 +3430,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(value.value),
                 Some(
                     Op::Acquire
+                    | Op::EnsureOwned
                     | Op::IToStr
                     | Op::FToStr
                     | Op::BoolToStr
