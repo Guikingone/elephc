@@ -386,7 +386,8 @@ pub(super) fn check_array_push(
         let merged_value = if **existing_value == val_ty {
             *existing_value.clone()
         } else {
-            PhpType::Mixed
+            // Pointers and `null` share the pointer word, as in the keyed write above.
+            crate::types::merge_pointer_elements(existing_value, &val_ty).unwrap_or(PhpType::Mixed)
         };
         env.insert(
             array.to_string(),

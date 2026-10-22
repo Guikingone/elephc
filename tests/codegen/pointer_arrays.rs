@@ -230,3 +230,23 @@ echo isset($h["b"]) ? "isset" : "unset", "|", isset($h["a"]) ? "isset" : "unset"
     ));
     assert_eq!(out, "unset|isset|unset|isset\n");
 }
+
+/// Verifies `array_push()` of packed record addresses and `null` keeps raw pointer storage like
+/// `$a[] = ...`, and a `null` appended to a pointer hash keeps the existing records reachable.
+#[test]
+fn test_pointer_array_push_of_records_and_null_and_hash_null_append() {
+    let out = compile_and_run(&format!(
+        "{PRELUDE}{}",
+        r#"$a = [];
+array_push($a, $v[1]);
+$b = [$v[0]];
+array_push($b, $v[2], null);
+$a[0]->x = 21;
+echo $v[1]->x, "|", $b[1]->x, "|", $b[2] === null ? "null" : "set", "|", count($b), "|";
+$h = ["a" => $v[0]];
+$h[] = null;
+echo $h["a"]->x, "|", count($h), "\n";
+"#
+    ));
+    assert_eq!(out, "21|12|null|3|10|2\n");
+}
