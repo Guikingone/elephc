@@ -374,6 +374,16 @@ pub(crate) fn is_nullable_pointer_type(php_type: &PhpType) -> bool {
     matches!(php_type, PhpType::Union(members) if nullable_pointer_union_member(members).is_some())
 }
 
+/// Spells a pointer parameter type for a diagnostic: `?ptr<T>` for the nullable union, which
+/// otherwise prints as `ptr<T>|null`.
+pub(crate) fn pointer_param_display(php_type: &PhpType) -> String {
+    if is_nullable_pointer_type(php_type) {
+        format!("?{}", php_type.codegen_repr())
+    } else {
+        php_type.to_string()
+    }
+}
+
 /// Returns the PHP type an EIR value carries for a declared type.
 ///
 /// That is the codegen representation, except for a `?ptr<T>`: its representation is the bare

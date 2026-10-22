@@ -1491,12 +1491,12 @@ fn test_error_bare_template_name_does_not_accept_another_instantiation() {
     );
 }
 
-/// Verifies a plain `null` local bound to a `?ptr<T>` by-reference parameter is rejected: the
-/// callee writes a pointer word back through it, and the local has no pointer-word storage.
+/// Verifies an array element bound to a `?ptr<T>` by-reference parameter is rejected: the callee
+/// writes a raw pointer word back, and the element lives in null or boxed element storage.
 #[test]
-fn test_error_nullable_pointer_by_ref_parameter_rejects_plain_null_local() {
+fn test_error_nullable_pointer_by_ref_parameter_rejects_array_element() {
     expect_error(
-        "<?php packed class Vec2 { public int $x; } function fill(?ptr<Vec2> &$p): void {} $x = null; fill($x);",
-        "Declare the variable as `?ptr<Vec2> $p = null;`",
+        "<?php packed class Vec2 { public int $x; } function fill(?ptr<Vec2> &$p): void {} $a = [null]; fill($a[0]);",
+        "a pointer by-reference parameter writes a pointer word back through its argument, so pass a variable",
     );
 }

@@ -122,10 +122,14 @@ it to an `extern` function that takes `ptr<T>`. Object introspection (`var_dump`
 `var_export`, `json_encode`, `serialize`) shows a pointer property as its integer address,
 so a null `?ptr<T>` property appears there as `0`.
 
-A `?ptr<T> &$p` by-reference parameter writes the pointer word back through the caller's
-variable, so that variable must already have pointer storage: declare it `?ptr<T> $p = null;`
-(a plain `$p = null;` local is rejected at compile time). A `?ptr<T>` variable that a
-`=== null` guard narrowed can still be passed, and reads as `?ptr<T>` again after the call.
+A `?ptr<T> &$p` (or `ptr<T> &$p`) by-reference parameter writes the pointer word back
+through the caller's variable, so that variable must hold a pointer word everywhere in its
+scope: a pointer value (`$p = $buffer[0];`), a declared `?ptr<T> $p = null;`, or a pointer
+parameter. A variable that holds only `null`, or `null` and a pointer at different points, is
+rejected at compile time (declare it `?ptr<T> $p = null;` instead), and so is an array
+element. A `?ptr<T>` variable that a `=== null` guard narrowed can still be passed, and reads
+as `?ptr<T>` again after the call. A plain `ptr<T>` variable stays a plain pointer after the
+call: if the callee stored `null`, it is address 0, not PHP `null`.
 
 ## Raw string copies
 

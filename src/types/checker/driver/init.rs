@@ -143,7 +143,6 @@ impl Checker {
             conditional_boxed_ref_invalidations: Vec::new(),
             static_local_names: HashSet::new(),
             typed_local_names: HashMap::new(),
-            pre_bound_own_storage: HashMap::new(),
             local_bind_kill_sites: HashMap::new(),
             local_ref_detach_sites: HashMap::new(),
             retired_ref_detach_sites: HashSet::new(),

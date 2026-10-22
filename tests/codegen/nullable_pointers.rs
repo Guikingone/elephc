@@ -500,6 +500,31 @@ echo $z === null ? "null" : $z->x, "\n";
     assert_eq!(out, "null|null|live|null|filled6|6|set|6\n");
 }
 
+/// Verifies a local whose frame slot is not a pointer word is refused for a `?ptr<T>`
+/// by-reference parameter: one that only holds `null`, and one that holds `null` before a pointer
+/// (in sequence or across branches, which boxes the slot). The callee writes a raw pointer word
+/// back, which the caller would misread in both.
+#[test]
+fn test_nullable_pointer_by_ref_parameters_reject_non_pointer_storage() {
+    let prelude = r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function fill(?ptr<Vec2> &$p, buffer<Vec2> $v): void { $p = $v[0]; }
+function first(buffer<Vec2> $v): ptr<Vec2> { return $v[0]; }
+$v = buffer_new<Vec2>(1);
+"#;
+    for body in [
+        "$x = null; fill($x, $v);",
+        "$x = null; $x = first($v); fill($x, $v);",
+        "if (count($argv) > 5) { $x = null; } else { $x = first($v); } fill($x, $v);",
+    ] {
+        let error = compile_cli_file_with_flags_expect_failure(&format!("{prelude}{body}"), &[]);
+        assert!(
+            error.contains("Declare it as `?ptr<Vec2> $x = null;`"),
+            "{body}: {error}"
+        );
+    }
+}
+
 /// Verifies a field write through a `?ptr<T>` local that was declared `= null` and is still
 /// null at run time reports the null-pointer dereference fatal.
 #[test]

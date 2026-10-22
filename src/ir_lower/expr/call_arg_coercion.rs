@@ -68,7 +68,29 @@ pub(super) fn lower_arg_with_signature(
         return lowered.value;
     }
     let lowered = lower_expr(ctx, arg);
+    record_pointer_reference_argument(ctx, sig, index, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Records a local passed to a pointer by-reference parameter for the final storage check.
+fn record_pointer_reference_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return;
+    }
+    let Some((_, param_ty)) = sig.params.get(index) else {
+        return;
+    };
+    if !matches!(param_ty.codegen_repr(), PhpType::Pointer(_)) {
+        return;
+    }
+    if let ExprKind::Variable(name) = &arg.kind {
+        ctx.record_pointer_reference_binding(name, arg.span, param_ty);
+    }
 }
 
 /// Captures a by-value runtime-parser argument while preserving by-reference places.

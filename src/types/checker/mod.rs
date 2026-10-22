@@ -516,12 +516,6 @@ pub(crate) struct Checker {
     /// typed parameters here made them permanently monomorphic and rejected that valid PHP
     /// with `cannot reassign $v from float to string`.
     pub typed_local_names: HashMap<String, PhpType>,
-    /// The storage the current body's frame holds on entry (its parameters and by-value
-    /// captures), with the type each arrives with. Empty at the top level.
-    ///
-    /// A guard can narrow a parameter's flow type to `null` for the rest of the body, but the
-    /// slot keeps this type; a `?ptr<T>` by-reference binding asks for the slot, not the view.
-    pub pre_bound_own_storage: HashMap<String, PhpType>,
     /// The `unset()` ARGUMENTS whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed there. EIR lowering consults these to abandon the old frame slot instead of
     /// null-storing into it. The name is half the key: a `Span` has no file identity and include
