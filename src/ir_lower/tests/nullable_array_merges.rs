@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Inspect the actual match merge slot and read producer on every supported target.
+//! - Null-receiver reads keep exactly one live unwind record per boxed receiver.
 
 use crate::codegen::platform::Target;
 use crate::ir::{Function, Immediate, LocalKind, Op};
@@ -100,6 +101,50 @@ pick($argc > 1, $argc, "missing");
             .filter(|inst| matches!(inst.op, Op::ArrayGet | Op::HashGet)).collect::<Vec<_>>();
         assert_eq!(reads.len(), 4, "{target}");
         for read in reads { assert_eq!(read.result_php_type, PhpType::Mixed, "{target}"); }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Null-receiver reads never publish one boxed receiver in two live unwind records.
+#[test]
+fn null_receiver_read_pins_boxed_null_once_on_all_targets() {
+    let source = r#"<?php
+function absent(): ?array { return null; }
+function reject_warning(int $level, string $message): bool { throw new Exception("warning"); }
+function run_case(): void {
+    set_error_handler("reject_warning");
+    try { $value = absent()[0]; } catch (Exception $error) { unset($error); }
+    restore_error_handler();
+}
+run_case();
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "run_case")
+            .expect("fixture must lower run_case");
+        let block = function.blocks.iter().find(|block| block.name == "nullable.index.null")
+            .expect("fixture must retain the null receiver arm");
+        let mut stored = std::collections::HashMap::new();
+        let mut live: Vec<(crate::ir::LocalSlotId, crate::ir::ValueId)> = Vec::new();
+        let mut pushes = 0;
+        for inst in block.instructions.iter().filter_map(|id| function.instruction(*id)) {
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate.as_ref().cloned() else { continue };
+            match inst.op {
+                Op::StoreLocal => { stored.insert(slot, inst.operands[0]); }
+                Op::PushCallOperandOwner => {
+                    let value = stored[&slot];
+                    assert!(live.iter().all(|(_, owned)| *owned != value),
+                        "{target}: one boxed receiver has two live unwind records");
+                    live.push((slot, value));
+                    pushes += 1;
+                }
+                Op::PopCallOperandOwner => live.retain(|(owner, _)| *owner != slot),
+                _ => {}
+            }
+        }
+        assert!(pushes >= 2, "{target}: offset evaluation and the getter must both stay pinned");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

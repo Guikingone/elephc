@@ -436,10 +436,14 @@ pub(super) fn lower_nullable_array_access(
     // so retire its owner first and protect the canonical receiver across throwing user code.
     release_owning_receiver_temporary(ctx, array_value, expr.span);
     let null_receiver = lower_boxed_null(ctx, expr);
+    // This pin covers only offset evaluation: the shared read publishes its own receiver
+    // record, and two live records over one reference would release it twice on a throw.
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[null_receiver.value], expr.span);
-    let null_value =
-        lower_array_access_from_value(ctx, null_receiver, index, expr, warn_on_missing);
+    let index_value = lower_expr(ctx, index);
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, expr.span);
+    let null_value = lower_array_access_from_values(
+        ctx, null_receiver, index_value, index, expr, warn_on_missing, false,
+    );
     store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
     branch_to(ctx, merge);
 
