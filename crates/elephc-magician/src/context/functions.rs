@@ -212,6 +212,7 @@ impl ElephcEvalContext {
         identity: u64,
         target: EvalClosureObjectTarget,
     ) {
+        self.may_have_foreign_pcntl_callables |= target.contains_foreign_context();
         self.closure_objects.insert(identity, target);
     }
 
@@ -310,6 +311,14 @@ impl ElephcEvalContext {
         self.native_functions
             .get_mut(function_name)
             .is_some_and(|function| function.set_param_default(index, default))
+    }
+
+    /// Retains source default names separately from native executable values and Error data.
+    pub fn define_native_function_param_default_constant_name(
+        &mut self, function_name: &str, index: usize, name: String,
+    ) -> bool {
+        self.native_functions.get_mut(function_name)
+            .is_some_and(|function| function.set_param_default_constant_name(index, name))
     }
 
     /// Records whether one native AOT callback parameter is by-reference.

@@ -59,7 +59,10 @@ const EVAL_CALLED_CLASS_LEN_OFFSET: usize = 80;
 const EVAL_RELOAD_THROWABLE_OFFSET: usize = 88;
 const EVAL_RELOAD_THROW_OWNER_OFFSET: usize = 96;
 const EVAL_RELOAD_VALUE_OWNER_OFFSET: usize = 144;
-const EVAL_BRIDGE_STACK_BYTES: usize = 192;
+const EVAL_SCOPE_ACCESS_MASK_OFFSET: usize = 192;
+/// Whether catalog registration must resume before scope flush or before interpreter entry.
+const EVAL_CATALOG_PHASE_OFFSET: usize = 200;
+const EVAL_BRIDGE_STACK_BYTES: usize = 208;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
@@ -215,7 +218,13 @@ struct EvalNativeAbstractPropertyRegistration {
 struct EvalNativePropertyDefaultRegistration {
     class_name: String,
     property_name: String,
-    default: EvalNativeCallableDefault,
+    default: EvalNativePropertyDefault,
+}
+
+/// Property default metadata separates stored values from deferred materialization failures.
+enum EvalNativePropertyDefault {
+    Value(EvalNativeCallableDefault),
+    DeferredError(String),
 }
 
 /// A module-local member attribute that can be registered with the eval context.
@@ -246,11 +255,14 @@ mod inventories;
 mod symbol_queries;
 mod argument_results;
 mod context_registration;
+mod context_initialization;
 mod registration_collection;
 mod member_collection;
 mod signature_metadata;
 mod default_expressions;
 mod default_constants;
+mod default_errors;
+mod default_source;
 mod user_constants;
 mod function_registration;
 mod method_registration;
@@ -279,6 +291,7 @@ use symbol_queries::*;
 use argument_results::*;
 #[allow(unused_imports)]
 use context_registration::*;
+use context_initialization::*;
 
 /// Returns the hidden eval-context local of this function, when it has one.
 ///
@@ -299,6 +312,7 @@ use signature_metadata::*;
 use default_expressions::*;
 #[allow(unused_imports)]
 use default_constants::*;
+use default_errors::*;
 #[allow(unused_imports)]
 use user_constants::*;
 #[allow(unused_imports)]
@@ -323,10 +337,12 @@ use scope_io::*;
 use scope_reload::*;
 #[allow(unused_imports)]
 use status::*;
+pub(in crate::codegen::lower_inst::builtins) use status::emit_eval_status_helper_body;
 
 /// Installing the compiled OPcache configuration is a STARTUP concern, not an eval one, so
 /// `crate::codegen::frame` reaches it directly from the prologue.
 pub(crate) use context_registration::configure_eval_opcache;
+pub(in crate::codegen::lower_inst::builtins) use context_registration::register_eval_inventory;
 pub(super) use calls::lower_eval;
 pub(super) use dynamic_calls::{
     lower_eval_function_call, lower_eval_function_call_array, lower_eval_method_call,

@@ -53,9 +53,15 @@ the materialization required for the statically known reads and writes.
 Interpreter fallback parses dynamic source into EvalIR. Exact source strings
 up to 64 KiB share a process-wide FIFO cache of 256 immutable parse results;
 larger fragments bypass the cache. The cache avoids repeated tokenization and
-parsing, but execution remains interpreted and scope/context state is never
-cached. Force-linking with `--with-eval` also increases binary size even if no
-call ultimately requires fallback.
+parsing, but execution remains interpreted. Repeated native function activations
+also share an immutable catalog of the module's native callable signatures,
+class metadata and constants. Each thread retains up to eight module catalogs;
+activation scopes, dynamic declarations, references, handlers and materialized
+default values remain separate. On a catalog cache miss, short numeric-only
+fragments can postpone metadata setup for up to 512 eval executions in one
+activation. The next eval initializes the complete catalog before synchronizing
+scope, bounding proof overhead in long loops. Force-linking with `--with-eval`
+also increases binary size even if no call ultimately requires fallback.
 
 ## Quick start
 
@@ -701,6 +707,16 @@ null, empty-array, supported array-valued, or supported object-valued default
 values when native signatures are registered. Eval code can also reflect
 supported callable-builtin signatures, including internal origin, parameter
 names, parameter types, and return type metadata.
+
+Generated method and constructor defaults that defer a missing-parent `Error`,
+including errors nested inside arrays or constructor arguments, retain their
+expression trees as eval metadata. Omitting the argument raises a catchable
+`Error` through direct or callback calls from `eval()`, while supplying the
+argument explicitly skips the default. Native reflected defaults retain the
+same lazy behavior. Reflection retains default availability without evaluating
+the tree when the parameter object is created. `getDefaultValue()` evaluates the
+whole default on each request, including earlier constructor side effects.
+
 Eval-declared
 functions and methods expose declared-type presence for parameters and return types, simple
 named type metadata through
@@ -828,6 +844,10 @@ for those APIs, including `PropertyHookType::cases()`, `from()`, and
 and bridge-supported generated/AOT instance and static property values, bypass
 public/protected/private visibility like PHP reflection, route concrete eval
 property hooks through their accessors, and still reject readonly writes.
+Readonly storage retained over a setter-only abstract contract may have a broader
+type than the setter, matching native declarations even with a generated/AOT
+parent. A retained abstract setter validates its original argument type without
+initializing that storage, including through `ReflectionProperty::setValue()`.
 `ReflectionProperty::getRawValue()` and `setRawValue()` are supported for
 eval-declared backed instance properties, including backed property hooks, and
 for bridge-supported generated/AOT instance properties. Raw access bypasses
@@ -984,6 +1004,8 @@ value, return `false`, and emit the same suppressible duplicate-constant warning
 as AOT `define()`.
 
 Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
+the Termwind-facing `LIBXML_NOERROR` / `LIBXML_COMPACT` / `LIBXML_HTML_NODEFDTD` /
+`LIBXML_NOBLANKS` / `LIBXML_NOXMLDECL` flags,
 `PHP_INT_MAX`, `INF`, `NAN`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
 `PATHINFO_*`, `PHP_URL_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `COUNT_*`, and the supported
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
@@ -1056,7 +1078,7 @@ where listed below unless a note says otherwise.
 | File and directory streams | `fopen()`, `fclose()`, `feof()`, `fflush()`, `fgetc()`, `fgets()`, `fgetcsv()`, `fpassthru()`, `fprintf()`, `fputcsv()`, `fread()`, `fscanf()`, `flock()`, `fseek()`, `fstat()`, `fsync()`, `fdatasync()`, `ftell()`, `ftruncate()`, `fwrite()`, `rewind()`, `vfprintf()`, `opendir()`, `readdir()`, `closedir()`, `rewinddir()` |
 | Streams and stream contexts | `stream_get_filters()`, `stream_get_transports()`, `stream_get_wrappers()`, `stream_isatty()`, `stream_is_local()`, `stream_supports_lock()`, `stream_get_contents()`, `stream_get_line()`, `stream_get_meta_data()`, `stream_copy_to_stream()`, `stream_resolve_include_path()`, `stream_select()`, `stream_set_blocking()`, `stream_set_chunk_size()`, `stream_set_read_buffer()`, `stream_set_timeout()`, `stream_set_write_buffer()`, `stream_context_create()`, `stream_context_get_default()`, `stream_context_get_options()`, `stream_context_get_params()`, `stream_context_set_default()`, `stream_context_set_option()`, `stream_context_set_params()`, `stream_wrapper_register()`, `stream_wrapper_unregister()`, `stream_wrapper_restore()`, `stream_filter_register()`, `stream_filter_append()`, `stream_filter_prepend()`, `stream_filter_remove()`, `stream_bucket_new()`, `stream_bucket_make_writeable()`, `stream_bucket_append()`, `stream_bucket_prepend()` |
 | Stream sockets and network databases | `stream_socket_server()`, `stream_socket_client()`, `stream_socket_accept()`, `stream_socket_enable_crypto()`, `stream_socket_get_name()`, `stream_socket_pair()`, `stream_socket_recvfrom()`, `stream_socket_sendto()`, `stream_socket_shutdown()`, `fsockopen()`, `pfsockopen()`, `gethostname()`, `gethostbyname()`, `gethostbyaddr()`, `getprotobyname()`, `getprotobynumber()`, `getservbyname()`, `getservbyport()`, `long2ip()`, `ip2long()`, `inet_pton()`, `inet_ntop()` |
-| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `parse_url()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
+| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `strip_tags()`, `parse_url()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
 | Hashing | `crc32()`, `hash()`, `hash_file()`, `hash_hmac()`, `md5()`, `sha1()`, `hash_equals()`, `hash_algos()`, `hash_init()`, `hash_update()`, `hash_final()`, `hash_copy()` |
 | JSON | `json_encode()`, `json_decode()`, `json_validate()`, `json_last_error()`, `json_last_error_msg()` |
 | Regex | `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_replace_callback()`, `preg_split()`, `mb_ereg_match()` |
@@ -1141,7 +1163,8 @@ fatals. Native non-eval regex codegen remains PCRE2-backed as documented in
 Eval JSON support covers null, booleans, integers, floats, strings, indexed
 arrays, associative arrays, and `stdClass` dynamic properties. `json_encode()`
 supports zero flags plus the documented `JSON_HEX_*`,
-`JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`, `JSON_FORCE_OBJECT`,
+`JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`,
+`JSON_UNESCAPED_LINE_TERMINATORS`, `JSON_FORCE_OBJECT`,
 `JSON_NUMERIC_CHECK`, `JSON_PARTIAL_OUTPUT_ON_ERROR`, `JSON_PRETTY_PRINT`,
 `JSON_PRESERVE_ZERO_FRACTION`, `JSON_INVALID_UTF8_IGNORE`,
 `JSON_INVALID_UTF8_SUBSTITUTE`, and `JSON_THROW_ON_ERROR` flags. `json_decode()`
@@ -1149,6 +1172,24 @@ and `json_validate()` support PHP-compatible depth handling, malformed UTF-8
 ignore/substitute modes where applicable, `JSON_BIGINT_AS_STRING` for
 overflowing integer tokens in `json_decode()`, and `JsonException` through
 `JSON_THROW_ON_ERROR`.
+
+Both unescaped flags are required to keep U+2028 and U+2029 literal. Backed enum
+cases encode as their integer or string value. Enum `JsonSerializable` callbacks
+run before either default enum rule, and their returned value is encoded
+recursively with the outer flags. Unit enums without custom serialization fail
+with `JSON_ERROR_NON_BACKED_ENUM` (11), or encode as `0` when partial output is
+requested. A serializer returning its enum receiver exposes `name`, then the
+backing `value` when present. This also works for native enum cases passed into
+eval, with the same depth and pretty-print rules as eval-declared cases.
+
+When an encoded result exceeds the depth limit, eval returns `false` and records
+`JSON_ERROR_DEPTH`, or throws a catchable `JsonException` with `JSON_THROW_ON_ERROR`.
+Partial output takes precedence over throwing and keeps the encoded tree while
+recording the depth error. Owned serializer results and traversal reads are
+released on success and failure.
+Invalid UTF-8 array keys still allow their associated values and later callbacks to run.
+If a callback throws after a partial JSON failure, the caller can inspect that
+JSON error after catching the callback's exception.
 
 Eval local filesystem calls operate on host filesystem paths and support the
 implemented stream-wrapper paths, including `file://`, `php://memory`,

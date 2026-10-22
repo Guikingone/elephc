@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **982 / 2169** (45%), classes **142 / 329** (43%), constants **1114 / 3180** (35%).
+Overall coverage: functions **983 / 2169** (45%), classes **171 / 329** (52%), constants **1173 / 3180** (37%).
 
 ## Coverage by PHP module
 
@@ -18,15 +18,15 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 
 | PHP module | Functions | Classes | Constants |
 |---|---|---|---|
-| [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | - |
+| [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 1 / 1 · 100% | - |
 | `bz2` | 0 / 10 · 0% | - | - |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | - | 21 / 21 · 100% |
-| `core` | 62 / 62 · 100% | 21 / 40 · 52% | 37 / 89 · 42% |
+| `core` | 62 / 62 · 100% | 40 / 40 · 100% | 89 / 89 · 100% |
 | `ctype` | 4 / 11 · 36% | - | - |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | - |
-| `dom` | 0 / 2 · 0% | 0 / 50 · 0% | 0 / 61 · 0% |
+| [`dom`](./dom-html.md#functions) | 0 / 2 · 0% | 8 / 50 · 16% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
 | `ffi` | - | 0 / 5 · 0% | - |
@@ -39,9 +39,9 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `hash` | 9 / 20 · 45% | 1 / 1 · 100% | 0 / 40 · 0% |
 | [`iconv`](./iconv.md#functions) | 10 / 10 · 100% | - | 4 / 4 · 100% |
 | `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
-| `json` | 5 / 5 · 100% | 2 / 2 · 100% | 27 / 29 · 93% |
+| `json` | 5 / 5 · 100% | 2 / 2 · 100% | 29 / 29 · 100% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
-| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 0 / 28 · 0% |
+| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 5 / 28 · 18% |
 | `mbstring` | 65 / 65 · 100% | - | 9 / 9 · 100% |
 | [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 384 / 545 · 70% | 2 / 6 · 33% | 163 / 400 · 41% |
+| `standard` | 385 / 545 · 71% | 3 / 6 · 50% | 163 / 400 · 41% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
@@ -87,7 +87,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 
 The counts above are what a compiled program has. Exported backend support differs in these modules (compiled / eval()):
 
-- `core` constants: 37 / 34
+- `core` constants: 89 / 86
 - `exif` functions: 4 / 0
 - `exif` constants: 1 / 0
 - `gd` functions: 83 / 0
@@ -96,7 +96,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
 - `session` functions: 23 / 0
-- `standard` functions: 384 / 344
+- `standard` functions: 385 / 345
 - `standard` constants: 163 / 142
 
 Of those functions, 195 from `exif`, `gd`, `mysqli`, `pdo`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
@@ -183,12 +183,16 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `ptr_read16()` | Pointer | Reads one unsigned 16-bit word through a raw pointer and returns it as an integer. |
 | `ptr_read32()` | Pointer | Reads one unsigned 32-bit word through a raw pointer and returns it as an integer. |
 | `ptr_read8()` | Pointer | Reads one unsigned byte through a raw pointer and returns it as an integer. |
+| `ptr_read_f32()` | Pointer | Reads one IEEE 754 single-precision value through a raw pointer and returns it as a float. |
+| `ptr_read_f64()` | Pointer | Reads one IEEE 754 double-precision value through a raw pointer and returns it as a float. |
 | `ptr_read_string()` | Pointer | Copies raw bytes from a pointer into a PHP string of the given length. |
 | `ptr_set()` | Pointer | Writes one machine word through a raw pointer. |
 | `ptr_sizeof()` | Pointer | Returns the byte size of the named pointer target type. |
 | `ptr_write16()` | Pointer | Writes one 16-bit word through a raw pointer. |
 | `ptr_write32()` | Pointer | Writes one 32-bit word through a raw pointer. |
 | `ptr_write8()` | Pointer | Writes one byte through a raw pointer. |
+| `ptr_write_f32()` | Pointer | Writes one IEEE 754 single-precision value through a raw pointer, rounding the float to 32 bits. |
+| `ptr_write_f64()` | Pointer | Writes one IEEE 754 double-precision value through a raw pointer. |
 | `ptr_write_string()` | Pointer | Copies PHP string bytes into raw memory at the given pointer. |
 | `zval_free()` | Pointer | Frees a PHP zval pointer allocated by `zval_pack`. |
 | `zval_pack()` | Pointer | Packs an elephc runtime value into a heap-allocated PHP zval pointer. |
@@ -197,7 +201,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `grapheme_strrev()` | String | Reverses a string by grapheme cluster, returning false on failure. *(No PHP equivalent (not in PHP 8.4/8.5 intl))* |
 | `is_real()` | Type | Alias of is_float(). *(Removed in PHP 8.0; kept as a compatibility alias of is_float())* |
 
-Classes: `DateUnknownException` (`date`), `ImageException` (`gd`).
+Classes: `DateUnknownException` (`date`), `Elephc\Testing\AssertionFailedError`, `Elephc\Testing\IncompleteTestError`, `Elephc\Testing\Runner`, `Elephc\Testing\SkippedTestError`, `Elephc\Testing\TestCase`, `ImageException` (`gd`), `PHPUnit\Framework\TestCase`.
 
 Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli`).
 

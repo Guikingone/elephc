@@ -37,6 +37,7 @@ pub(crate) use params::{
     type_arguments_end,
 };
 pub(crate) use assign::{
+    assignment_target_store_stmt, lower_nested_append_assignment,
     can_replay_assignment_target, lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
@@ -53,6 +54,29 @@ pub(crate) use recovery::recover_to_statement_boundary;
 /// because the checker and source-map lowering consume their boundaries.
 pub(crate) fn push_parsed_stmt(stmts: &mut Vec<Stmt>, stmt: Stmt) {
     super::declaration_groups::append_root_statement(stmts, stmt);
+}
+
+/// Parses and appends one item allowed directly in a file or braced namespace.
+///
+/// Extern library blocks can expand to several declarations, while every ordinary statement
+/// produces one item that still passes through the shared const-list expansion.
+/// `allows_strict_types` is true only for a leading file-scope `declare`; braced namespace
+/// bodies always pass false.
+pub(crate) fn parse_file_or_namespace_scope_item(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    stmts: &mut Vec<Stmt>,
+    allows_strict_types: bool,
+) -> Result<(), CompileError> {
+    if tokens.get(*pos).is_some_and(|(token, _)| token == &Token::Extern) {
+        let mut extern_stmts = parse_extern_stmts(tokens, pos)?;
+        stmts.append(&mut extern_stmts);
+    } else {
+        let stmt =
+            crate::parser::declare_context::parse_top_level_stmt(tokens, pos, allows_strict_types)?;
+        push_parsed_stmt(stmts, stmt);
+    }
+    Ok(())
 }
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.

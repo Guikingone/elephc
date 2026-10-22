@@ -14,6 +14,22 @@ use crate::errors::EvalStatus;
 use crate::interpreter::RuntimeValueOps;
 
 impl ElephcEvalContext {
+    /// Returns whether an earlier complex fragment requires full scope synchronization.
+    pub(crate) const fn eval_scope_sync_requires_full(&self) -> bool {
+        self.scope_sync_requires_full
+    }
+
+    /// Permanently selects full scope synchronization for this activation context.
+    pub(crate) fn require_full_eval_scope_sync(&mut self) {
+        self.scope_sync_requires_full = true;
+    }
+
+    /// Requires full escape validation once foreign callable metadata is possible.
+    /// Draining cell pins or replacing a handler never clears this capability.
+    pub(crate) fn needs_pcntl_escape_scan(&self) -> bool {
+        self.may_have_foreign_pcntl_callables
+    }
+
     /// Pins one foreign callable cell and the context metadata needed to invoke it.
     pub(crate) fn retain_pcntl_foreign_callable(
         &mut self,
@@ -28,6 +44,7 @@ impl ElephcEvalContext {
         let retained = values.retain(callback)?;
         self.pcntl_foreign_callables
             .insert(identity, (retained, owner));
+        self.may_have_foreign_pcntl_callables = true;
         Ok(())
     }
 
@@ -53,6 +70,7 @@ impl ElephcEvalContext {
         let retained = values.retain(target)?;
         self.pcntl_foreign_callables
             .insert(target_identity, (retained, owner));
+        self.may_have_foreign_pcntl_callables = true;
         Ok(())
     }
 
@@ -471,6 +489,13 @@ impl ElephcEvalContext {
     /// Returns whether the object is inside either readonly clone reinitialization phase.
     pub(crate) fn clone_initialization_is_active(&self, identity: u64) -> bool {
         self.clone_reinitialized_properties.contains_key(&identity)
+    }
+
+    /// Checks a readonly clone allowance without consuming it before visibility validation.
+    pub(crate) fn clone_property_can_be_reinitialized(&self, identity: u64, property: &str) -> bool {
+        self.clone_reinitialized_properties
+            .get(&identity)
+            .is_some_and(|properties| !properties.contains(property))
     }
 
     /// Consumes one property's single readonly rewrite allowance in the active phase.

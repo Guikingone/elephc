@@ -32,6 +32,17 @@ pub(super) fn lower_arg_with_signature(
     arg: &Expr,
 ) -> crate::ir::ValueId {
     if sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(&arg.kind, ExprKind::ArrayAccess { array, .. }
+            if instance_object_class_for_ir(ctx, array)
+                .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))
+    {
+        let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+        lower_ref_assign_array_elem(ctx, &alias, arg, arg.span);
+        publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
+        let variable = Expr::new(ExprKind::Variable(alias), arg.span);
+        return lower_arg_with_signature(ctx, sig, index, &variable);
+    }
+    if sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(
             &arg.kind,
             ExprKind::ArrayAccess { array, .. }
@@ -367,6 +378,12 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     {
         return unbox_callable_param_storage(ctx, value, Some(arg.span));
     }
+    if param_ty == PhpType::Iterable
+        && !sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        return unbox_iterable_param_storage(ctx, value, Some(arg.span));
+    }
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
@@ -439,6 +456,21 @@ pub(super) fn unbox_callable_param_storage(
         PhpType::Callable,
         Op::mixed_unbox_effects(&PhpType::Callable),
         span,
+    );
+    release_coerced_source_if_owned(ctx, value, span);
+    result
+}
+
+/// Extracts a checked iterable's raw array, hash or Traversable pointer from a Mixed cell.
+/// The layout-neutral unbox acquires its payload before retiring the cell's source lease.
+fn unbox_iterable_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let result = ctx.emit_owned_value(
+        Op::MixedUnbox, vec![value.value], None, PhpType::Iterable,
+        Op::mixed_unbox_effects(&PhpType::Iterable), span,
     );
     release_coerced_source_if_owned(ctx, value, span);
     result
@@ -527,6 +559,13 @@ pub(super) fn coerce_operands_to_params(
             let coerced = unbox_callable_param_storage(ctx, lowered, None);
             operands[index] =
                 root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
+        } else if param_ty == PhpType::Iterable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+            let coerced = unbox_iterable_param_storage(ctx, lowered, None);
+            operands[index] =
+                root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
         } else if matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
@@ -573,6 +612,8 @@ fn operand_needs_param_coercion(
         || (param_ty == PhpType::Str
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (param_ty == PhpType::Callable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
+        || (param_ty == PhpType::Iterable
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
@@ -802,6 +843,11 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     };
     let literal_bound = rewrite_literal_param_bindings(sig, args);
     let args = literal_bound.as_deref().unwrap_or(args);
+    if crate::func_args::sig_collects_surplus_args(sig) {
+        if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, "", false) {
+            return operands;
+        }
+    }
     if crate::types::call_args::has_named_args(args) {
         let operands = lower_named_args_with_signature_options(
             ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
@@ -873,7 +919,11 @@ pub(super) fn lower_args_with_signature_options_for_capture(
                 } else { prepare_captured_output_argument(ctx, arg, ty) });
             let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
             if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
-            if !capture_values && index + 1 < args.len() {
+            // Omitted defaults execute after every caller expression, including the last one.
+            let deferred_default = !trim_trailing_defaults
+                && sig.defaults.iter().take(regular_param_count).skip(fixed_arg_count)
+                    .flatten().any(crate::types::deferred_defaults::contains_deferred_error);
+            if !capture_values && (index + 1 < args.len() || deferred_default) {
                 root_prior_argument_preserving_reference_place(
                     ctx, sig, index, arg, value,
                 )

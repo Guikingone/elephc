@@ -87,7 +87,8 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // class is only known at run time needs the runtime-name form to carry that mode.
         let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
         let object = lower_expr(ctx, object);
-        if property_can_be_uninitialized(ctx, object.value, property) {
+        if property_can_be_uninitialized(ctx, object.value, property)
+            || union_hook_probe_class(ctx, object.value, property).is_some() {
             return lower_initialized_property_value(ctx, object, property, value);
         }
         if needs_probe {
@@ -166,6 +167,29 @@ pub(super) fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
         ) => right.clone(),
+        // A packed record address and a `ptr<T>` are the same raw pointer word. Boxing them as
+        // `Mixed` would tag the address like an integer, so field reads through the merge would
+        // miss the record. An untyped side (`ptr_null()`) adopts the other side's class; two
+        // different classes merge to an untyped pointer.
+        (
+            PhpType::Pointer(_) | PhpType::Packed(_),
+            PhpType::Pointer(_) | PhpType::Packed(_),
+        ) => {
+            let class_of = |ty: &PhpType| match ty {
+                PhpType::Pointer(class) => class.clone(),
+                PhpType::Packed(class) => Some(class.clone()),
+                _ => None,
+            };
+            match (class_of(&left), class_of(&right)) {
+                (Some(left_class), Some(right_class)) => {
+                    let same = crate::names::php_symbol_key(left_class.trim_start_matches('\\'))
+                        == crate::names::php_symbol_key(right_class.trim_start_matches('\\'));
+                    PhpType::Pointer(same.then_some(left_class))
+                }
+                (Some(class), None) | (None, Some(class)) => PhpType::Pointer(Some(class)),
+                (None, None) => PhpType::Pointer(None),
+            }
+        }
         _ => PhpType::Mixed,
     }
 }

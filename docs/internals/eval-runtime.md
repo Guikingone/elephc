@@ -38,9 +38,14 @@ eval($code)
   -> target-aware assembly and optional bridge linking
 ```
 
-The checker and AST optimizer deliberately stay conservative even for a source
-literal. The more precise AOT decision happens during EIR lowering, after the
-front end has already preserved PHP's dynamic semantics and diagnostics.
+The front end reads a parsable source literal as inline code: reachability,
+prelude pruning and the throwable, SPL and Reflection checker gates keep what
+the fragment names and drop the rest, exactly as for the same statements written
+outside `eval`. Only a runtime-sourced or unparsable `eval`, or a dynamic hazard
+inside the fragment (a computed call or callable, `new $c`, `include`, a
+namespace), keeps the previous whole-surface behaviour. The AOT decision itself
+still happens during EIR lowering, after the front end has preserved PHP's
+dynamic semantics and diagnostics.
 
 ## Execution-path decision
 
@@ -145,17 +150,88 @@ front-end safety rules.
 When interpreter fallback is required, generated code performs these steps:
 
 1. Coerce the code argument to a PHP string.
-2. Lazily allocate the `EvalContext`, activation `EvalScope`, and, when needed,
-   `EvalGlobalScope`.
-3. Register bridge-compatible AOT functions, methods, constructors, class
-   metadata, parameter names, defaults, and visibility information.
-4. Flush visible locals, by-reference cells, closure captures, and eligible
-   globals into boxed scope cells.
-5. Set call-site file, directory, namespace, class, trait, function, and method
-   metadata used by magic constants.
-6. Call `__elephc_eval_execute` through the target-aware ABI.
-7. Reload dirty, created, or unset scope entries and propagate return/fatal/
+2. Lazily allocate the activation's `EvalContext` handle and attach the module's
+   immutable native catalog on a cache hit. A cache miss leaves the catalog
+   unpublished until a later guard requires it.
+3. Set the strict-PHP/version profile and call-site file, directory, namespace,
+   class, trait, function and method metadata. Ensure the activation `EvalScope`
+   and, when needed, `EvalGlobalScope` handles.
+4. Compute the fragment's conservative caller-scope access mask. Ask
+   `__elephc_eval_context_can_flush_without_native_catalog` whether replacing
+   existing local and global cells is safe and whether the activation still
+   has a numeric-deferral budget. Otherwise, register and publish the complete
+   native catalog before flushing any scope owner.
+5. Flush selected locals and globals or the complete eligible scope into boxed
+   cells, mark global aliases and attach the global scope to the context.
+6. Ask `__elephc_eval_context_can_defer_native_catalog` whether the parsed
+   fragment and current scopes can execute safely without native metadata. If
+   not, register and publish the complete catalog before executing PHP. Both
+   guards share one registration block and an already published catalog is
+   reused. Registration includes AOT functions, methods, constructors, class
+   metadata, constants, parameter names, defaults and visibility information.
+7. Push the caller class scope when required and call
+   `__elephc_eval_execute_with_deferred_catalog` through the target-aware ABI,
+   then restore that class scope.
+8. Reload dirty, created or unset scope entries and propagate return/fatal/
    throwable state through the normal generated runtime paths.
+
+A bounded proof permits the first 512 straight-line numeric scalar evals in
+one activation to execute while the native catalog remains unpublished. The
+next eval uses the existing full-catalog path before flushing scope owners,
+limiting repeated proof work in long loops. The saturating execution counter
+belongs to the activation and is not shared with the immutable catalog.
+Class imports are postponed only while the catalog is unready; an earlier
+metadata-dependent fragment upgrades the same activation immediately. The
+legacy `__elephc_eval_execute` entry retains eager class imports for existing
+bridge consumers.
+
+### Selective dynamic scope synchronization
+
+Before crossing into Magician, generated code asks the parser or parse cache for
+a conservative 64-bit mask of caller-scope names used by the fragment. The
+parser and native code use the same FNV-1a name hash. Each set bit gates both the
+pre-eval flush and post-eval reload for that name. Hash collisions can only
+cause an additional name to be synchronized.
+
+Selective synchronization is restricted to direct numeric scalar arithmetic
+and assignment expressions. Calls, strings, references, variable variables,
+arrays, objects, `$GLOBALS`, includes, handlers, introspection, and every other
+syntax class select the complete scope. Parse failures and fragments larger
+than 64 KiB also select the complete scope. Once a context encounters one of
+those cases, the full-scope requirement remains active for that function
+activation. A later activation creates a fresh context.
+
+A selected `Mixed` or union binding keeps the narrow mask only when its current
+runtime value is an integer, float, or boolean. Other tags promote that call to
+full synchronization. Throwable writeback reloads the selected or complete
+scope before native propagation, using the same mask as normal completion.
+
+Generated modules own a private, aligned, zero-initialized catalog token. The
+bridge assigns it a process-unique generation and retains up to eight catalogs
+per thread, ordered by last use. Reloading an image initializes a new token and
+cannot select callbacks from an older generation. Eviction removes the cache's
+ownership; already attached contexts keep their metadata alive. Registration
+failures disable publication for that context. Valid metadata replacements keep
+the registration ABI's legacy zero result and are distinguished internally from
+rejected inputs. Legacy bridge consumers using
+`__elephc_eval_context_new` continue to register independently.
+
+A cache hit shares Rust-owned descriptions and module-lifetime callback
+addresses without cloning signature maps. The cache contains no runtime cells,
+scopes, dynamic declarations, reference targets, handlers or materialized
+parameter defaults. Those remain activation-local. Native metadata writes and
+appending dynamic declared names use copy-on-write for the affected collection.
+Opaque descriptors never cross threads through this cache. Module callbacks
+and default factories must remain loaded while a context using them is live.
+
+Before native writeback, Magician validates returned values and visible scope
+graphs for restricted foreign PCNTL callables. Each context has a sticky
+capability set when a foreign callable is retained or copied, or a foreign-context
+closure target is registered. Contexts that have never acquired that metadata
+skip the graph walk and scope-cell collection. Once set, the capability stays
+active through handler replacement and pin cleanup. Full validation then covers
+cyclic containers, globals, detached handlers, and scope writes before a throw.
+Ordinary scope synchronization and throwable propagation use the same paths.
 
 Magician has no direct PCRE2 symbols in its base static library. If the final
 EIR module requires the regex runtime, generated eval setup registers the
@@ -224,6 +300,11 @@ temporary results; assignments transfer an owner and balance replacements even
 when the old and new cell pointers coincide. Class-default collection builders
 also acquire a lease for defaults borrowed from persistent class constants or
 enum cases before inserting and releasing their temporary operands.
+
+By-value `foreach` likewise owns its evaluated receiver until iteration finishes.
+The receiver lease survives body callbacks and replacement of its source local,
+then retires on normal completion, `break`, `return`, or failure. Literal temporary
+arrays do not depend on a scope binding to keep their owner balanced.
 
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
@@ -319,13 +400,25 @@ Float and bool keys use a temporary integer
 cell for contract validation; that cell is released on success and failure, while storage receives
 the original key so native normalization and diagnostics keep their existing operands. No new
 value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
-mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
-format 16 includes the retained templates, tokens, imports, structural types, and typed locals,
-alongside preserved source spelling for direct and first-class function calls. It invalidates
+mode acceptance; `EvalProgram` records native syntax for rejection before execution. The current
+file-cache layout includes retained templates, tokens, imports, structural types, typed locals,
+and the conservative caller-scope access mask, alongside preserved source spelling for direct
+and first-class function calls, native deferred-default error expressions, and retained readonly
+setter contracts.
+`FORMAT_VERSION` in `crates/elephc-magician/src/script_cache/file_store.rs` identifies the complete
+serialized layout; incompatible entries are rejected before decoding. Format changes invalidate
 older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents and
 member annotations discarded after uppercase or mixed-case native class-like keywords.
-Version 16 also invalidates stored parse errors for valid comparisons after class references.
+Earlier format changes also invalidated stored parse errors for valid comparisons after class references.
 The format guard covers the combined serialized IR and its corresponding type sources.
+
+Native callable defaults retain array-unpack operands through a private array-element marker.
+Registration validates and normalizes that marker before execution; it is not public PHP syntax.
+The interpreter evaluates each unpack operand once, appends numeric entries, overwrites string
+keys, and releases partial results if evaluation fails. Generated code checks registration results
+before installing a default factory. Native class-initialization errors have a separate catalog
+entry from reflected property defaults: static access checks visibility first, then initialization,
+without invalidating an independently readable `ReflectionProperty` default.
 
 ## Parsing and cache
 

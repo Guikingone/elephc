@@ -80,6 +80,10 @@ pub(crate) mod types;
 
 pub(crate) use count_empty::*;
 pub(in crate::codegen::lower_inst) use eval_facade::*;
+// The eval inventory helper lives at the `codegen` level, so the facade entry
+// point that reaches the eval registration body has to be visible there too.
+pub(in crate::codegen) use eval_facade::register_eval_inventory;
+pub(in crate::codegen) use eval_facade::emit_eval_status_helper_body;
 pub(crate) use function_queries::*;
 pub(crate) use member_queries::*;
 pub(crate) use scalar_metadata::*;

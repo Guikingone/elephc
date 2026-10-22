@@ -225,7 +225,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             continue;
         }
 
-        let modifiers = parse_member_modifiers(tokens, pos);
+        let modifiers = parse_member_modifiers(tokens, pos)?;
 
         if *pos >= tokens.len() {
             return Err(CompileError::new(
@@ -476,13 +476,41 @@ fn parse_optional_property_type(
     if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Variable(_))) {
         return Ok(None);
     }
+    // PHP 8.2's standalone `false` / `true` / `null` are KEYWORD tokens, not identifiers.
+    // Property parsing preserves null's declaration and rejects unimplemented true-only slots.
+    // Excluding these tokens here made `public false $v;` parse
+    // as an untyped property whose NAME is a keyword — an immediate statement-level error.
     if !matches!(
         tokens.get(*pos).map(|(t, _)| t),
-        Some(Token::Identifier(_)) | Some(Token::Question) | Some(Token::Backslash)
+        Some(Token::Identifier(_))
+            | Some(Token::Question)
+            | Some(Token::Backslash)
+            | Some(Token::False)
+            | Some(Token::True)
+            | Some(Token::Null)
     ) {
         return Ok(None);
     }
-    Ok(Some(parse_type_expr(tokens, pos, span)?))
+    Ok(Some(parse_property_type_expr(tokens, pos, span)?))
+}
+
+/// Keeps null-only property declarations distinct from void and refuses true-only storage.
+pub(super) fn parse_property_type_expr(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<TypeExpr, CompileError> {
+    let start = *pos;
+    let parsed = parse_type_expr(tokens, pos, span)?;
+    if tokens[start..*pos].iter().any(|(token, _)| matches!(token, Token::True)) {
+        return Err(CompileError::new(span, "Literal true property types are not supported"));
+    }
+    if matches!(tokens.get(start).map(|(token, _)| token), Some(Token::Null))
+        && matches!(parsed, TypeExpr::Void)
+    {
+        return Ok(TypeExpr::Named(crate::names::Name::unqualified("null")));
+    }
+    Ok(parsed)
 }
 
 /// Parses the optional PHP 8.3 type between `const` and a class-constant name.
@@ -522,7 +550,7 @@ pub(super) struct MemberModifiers {
 /// Scans tokens to collect member modifiers (visibility, static, readonly, abstract, final).
 /// Consumes any matching modifier tokens and returns a `MemberModifiers` struct.
 /// Default visibility is `Public` if no visibility modifier is present.
-fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> MemberModifiers {
+fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<MemberModifiers, CompileError> {
     let mut visibility = Visibility::Public;
     let mut set_visibility = None;
     let mut is_static = false;
@@ -540,8 +568,12 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> MemberMod
             _ => None,
         };
         if let Some(keyword) = visibility_keyword {
+            let modifier_span = tokens[*pos].1.span;
             *pos += 1;
             if consume_set_marker(tokens, pos) {
+                if set_visibility.is_some() {
+                    return Err(CompileError::new(modifier_span, "Multiple set visibility modifiers"));
+                }
                 set_visibility = Some(keyword);
             } else {
                 visibility = keyword;
@@ -569,14 +601,14 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> MemberMod
         }
     }
 
-    MemberModifiers {
+    Ok(MemberModifiers {
         visibility,
         set_visibility,
         is_static,
         is_readonly,
         is_abstract,
         is_final,
-    }
+    })
 }
 
 /// Consumes a `(set)` marker at `*pos` (an `LParen`, the `set` identifier, and an `RParen`),
@@ -729,7 +761,7 @@ fn parse_interface_body(
             break;
         }
         let member_span = tokens[*pos].1.span;
-        let modifiers = parse_member_modifiers(tokens, pos);
+        let modifiers = parse_member_modifiers(tokens, pos)?;
         if *pos >= tokens.len() {
             return Err(CompileError::new(
                 member_span,

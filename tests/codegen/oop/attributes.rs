@@ -414,13 +414,13 @@ foreach ($names as $n) {
 fn test_class_attribute_names_normalises_fully_qualified_form() {
     let out = compile_and_run(
         r#"<?php
-#[\Override]
+#[\AllowDynamicProperties]
 class A {}
 $names = class_attribute_names('A');
 echo $names[0];
 "#,
     );
-    assert_eq!(out, "Override");
+    assert_eq!(out, "AllowDynamicProperties");
 }
 
 /// Verifies that `class_attribute_names()` returns an empty array for a
@@ -986,19 +986,19 @@ echo count($attrs);
 }
 
 /// Verifies that `class_get_attributes()` returns the resolved short name
-/// (no leading backslash) from a fully-qualified attribute like `#[\Override]`,
+/// (no leading backslash) from a fully-qualified attribute like `#[\AllowDynamicProperties]`,
 /// matching PHP's `ReflectionAttribute::getName()` normalization.
 #[test]
 fn test_class_get_attributes_normalises_fully_qualified_name() {
     let out = compile_and_run(
         r#"<?php
-#[\Override]
+#[\AllowDynamicProperties]
 class A {}
 $attrs = class_get_attributes('A');
 echo $attrs[0]->getName();
 "#,
     );
-    assert_eq!(out, "Override");
+    assert_eq!(out, "AllowDynamicProperties");
 }
 
 /// Verifies that `class_get_attributes()` correctly handles an attribute
@@ -2720,7 +2720,7 @@ if ($directType instanceof ReflectionNamedType) {
     );
     assert_eq!(
         out.stdout,
-        "id:T:n:int!B|name:T:N:string?B|dep:T:n:ReflectParamTypeDep!C|plain:t:N:null|union:T:n:union!:intB:stringB|nullableUnion:T:N:union?:intB:stringB|intersection:T:n:intersection!:ReflectParamTypeAC:ReflectParamTypeBC|direct:ReflectParamTypeDep"
+        "id:T:n:int!B|name:T:N:string?B|dep:T:n:ReflectParamTypeDep!C|plain:t:N:null|union:T:n:union!:stringB:intB|nullableUnion:T:N:union?:stringB:intB|intersection:T:n:intersection!:ReflectParamTypeAC:ReflectParamTypeBC|direct:ReflectParamTypeDep"
     );
 }
 
@@ -2755,7 +2755,7 @@ echo $unionType;
     );
     assert_eq!(
         out.stdout,
-        "dep:?ReflectTypeStringDep|union:int|string|null|both:ReflectTypeStringLeft&ReflectTypeStringRight|mixed:mixed|items:?array|cast:int|string|null|concat:int|string|null|echo:int|string|null"
+        "dep:?ReflectTypeStringDep|union:string|int|null|both:ReflectTypeStringLeft&ReflectTypeStringRight|mixed:mixed|items:?array|cast:string|int|null|concat:string|int|null|echo:string|int|null"
     );
 }
 
@@ -2852,7 +2852,7 @@ if ($directUnionSettableType instanceof ReflectionUnionType) {
     );
     assert_eq!(
         out.stdout,
-        "id:T:int!B|name:T:string?B|dep:T:ReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:ReflectPropertyTypeDep:set:ReflectPropertyTypeDep:plainSet:N:unionSet:2"
+        "id:T:int!B|name:T:string?B|dep:T:ReflectPropertyTypeDep!C|plain:t:null|union:T:union!:stringB:intB|direct:ReflectPropertyTypeDep:set:ReflectPropertyTypeDep:plainSet:N:unionSet:2"
     );
 }
 
@@ -3921,7 +3921,7 @@ foreach ((new ReflectionClass(TypedReflectConstants::class))->getReflectionConst
     );
     assert_eq!(
         out,
-        "typed:int:builtin\nReflectionUnionType:int|string\nuntyped:null\nlisted:int"
+        "typed:int:builtin\nReflectionUnionType:string|int\nuntyped:null\nlisted:int"
     );
 }
 

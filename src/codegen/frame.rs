@@ -63,6 +63,9 @@ pub(super) const WEB_HANDLER_SYMBOL: &str = "_elephc_web_handler";
 pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    pub(super) numeric_local_slots: HashSet<LocalSlotId>,
+    pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
@@ -124,6 +127,12 @@ pub(super) fn layout_for_function(
         offset += bytes;
         local_offsets.insert(local.id, offset);
     }
+    let mut numeric_cell_offsets = HashMap::new();
+    let numeric = super::stack_numeric::plan(function);
+    for value in numeric.cells {
+        offset += 24;
+        numeric_cell_offsets.insert(value, offset);
+    }
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
@@ -172,6 +181,9 @@ pub(super) fn layout_for_function(
     FrameLayout {
         value_placement,
         local_offsets,
+        numeric_cell_offsets,
+        numeric_local_slots: numeric.locals,
+        numeric_values: numeric.proven_values,
         ref_cell_state_offsets,
         try_handler_offsets,
         exception_guard_offsets,
@@ -1567,6 +1579,13 @@ pub(super) fn emit_owned_local_cleanup(
     offset: usize,
     ty: &PhpType,
 ) {
+    if ctx.numeric_local_slots.contains(&slot) {
+        // -- numeric cells have no child that can run a PHP destructor --
+        abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        return;
+    }
     let done = ctx
         .ref_cell_state_offset(slot)
         .map(|_| ctx.next_label("raw_local_cleanup_done"));
@@ -2107,16 +2126,17 @@ fn emit_registered_instr_enter(ctx: &mut FunctionContext<'_>) {
 
 /// Emits the `--instrument` entry hook at the end of a user function's prologue:
 /// registers the function (assigning its id), records the id on the context for
-/// the epilogue, and calls `elephc_instr_enter(id)`. Synthetic bodies are not
-/// user code and stay uninstrumented; `{main}` is registered by its dedicated
+/// the epilogue, and calls `elephc_instr_enter(id)`. Private PHP implementation
+/// variants reuse their source identity; synthetic scaffolding stays uninstrumented.
+/// `{main}` is registered by its dedicated
 /// process/web prologue before the name table is initialized.
 fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
-    // Synthetic bodies are not user code. Beyond that, a selective set hooks
-    // only the functions it names — the rest run at full speed.
-    if ctx.function.flags.is_synthetic || !ctx.shared.instrument.covers(&ctx.function.name) {
+    // Source implementation variants share the PHP identity. A selective set hooks
+    // only the source functions it names — the rest run at full speed.
+    if !ctx.function.has_source_identity() || !ctx.shared.instrument.covers(ctx.function.display_name()) {
         return;
     }
-    let id = ctx.shared.register_instr(ctx.function.name.clone());
+    let id = ctx.shared.register_instr(ctx.function.display_name().to_owned());
     ctx.instr_id = Some(id);
     emit_registered_instr_enter(ctx);
 }
@@ -2296,17 +2316,22 @@ fn emit_instr_dump(ctx: &mut FunctionContext<'_>) {
 ///
 /// Placed with the stack guard, before the parameter spill: only scratch
 /// registers are touched (AArch64 x9/x10, x86_64 r10), so the incoming ABI
-/// arguments are undisturbed. The count is a plain load/add/store — a lost
-/// update under threads costs a tick of precision, never correctness. Synthetic
-/// bodies are not user code and stay uncounted; `main` never reaches this
-/// prologue (it has its own), which keeps the dump to functions the user wrote.
+/// arguments are undisturbed. The count is a plain load/add/store; a lost
+/// update under threads costs a tick of precision, never correctness. Private
+/// PHP variants share their source counter, while synthetic scaffolding stays
+/// uncounted. Main has its own prologue and does not register an extra entry.
 fn emit_call_counter_increment(ctx: &mut FunctionContext<'_>, entry_label: &str) {
-    if !ctx.shared.counters || ctx.function.flags.is_synthetic {
+    if !ctx.shared.counters || !ctx.function.has_source_identity() {
         return;
     }
-    let slot = ctx.data.add_comm(format!("_elephc_cnt{}", entry_label), 8);
-    ctx.shared
-        .register_counter(ctx.function.name.clone(), slot.clone());
+    let name = ctx.function.display_name().to_owned();
+    let slot = if let Some((_, slot)) = ctx.shared.counter_registry().iter().find(|(registered, _)| *registered == name) {
+        slot.clone()
+    } else {
+        let slot = ctx.data.add_comm(format!("_elephc_cnt{}", entry_label), 8);
+        ctx.shared.register_counter(name, slot.clone());
+        slot
+    };
     ctx.emitter.comment("call counter (--counters)");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

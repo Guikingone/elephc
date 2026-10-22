@@ -12,6 +12,13 @@ declaration pruning before lowering; the EIR backend then runs value-, block-,
 and dominance-aware passes over the lowered module. This page focuses on the
 AST layer.
 
+EIR then runs its own passes. After that module reaches its ordinary optimization
+fixed point, an ownership finalizer may transfer a fresh checked-integer box
+through an assignment copy. The finalizer, and why it stays outside the inliner
+and the checked-integer sink, is documented in
+[Fresh Mixed Assignment Transfer](the-ir.md#fresh-mixed-assignment-transfer).
+`--ir-opt=off` retains the original copy path.
+
 Today the AST optimizer is split into six passes:
 
 1. `fold_constants_for_target(program, target)` runs before type checking
@@ -519,6 +526,125 @@ on macOS. Enabling user-object atom splitting requires explicit relocation and
 metadata roots plus callable regression coverage; applying the runtime-object
 strategy directly can produce dangling callable descriptors.
 
+## EIR tail recursion
+
+`src/ir_passes/tail_call.rs` runs once after the inliner/per-function fixed point
+and before ownership finalizers. It discovers direct `Call` instructions whose
+result reaches `Return` without further work, including scalar local-slot or
+block-parameter forwarding through shared return joins. Numeric owner retirement
+and scratch resets must occur in the call block so a new edge cannot bypass them.
+Iterative strongly connected component analysis identifies self and mutual tail
+cycles without consuming the compiler's recursive call stack.
+
+Each original function keeps its name, signature and ABI prologue. Mutual
+components clone the other bodies once into that function, remapping block,
+instruction, value and local IDs. `tail_initial` loads the incoming ABI slots;
+`tail_rebind_<name>` accepts typed block parameters, resets fresh local storage,
+stores the new parameters and branches to that body's entry. Tail calls become
+`Br` to the appropriate rebinding block. Argument evaluation and parallel block
+moves precede parameter stores, preserving swaps and named argument order.
+The backend emits the declared `function.entry` first, including when this pass
+appended it after the original blocks.
+
+The frame proof requires scalar boundaries and local storage, no references,
+variadics, handlers, persistent locals or implicit frame readers. Checked
+arithmetic's boxed numeric argument roots are a bounded exception: each root
+must have one store/push/pop/clear sequence and a proven numeric producer, with
+slot and unwind-record balance verified on every normal CFG path. Integer ABI coercions are emitted while those owners
+are live; the existing cleanup then executes before the branch. Arbitrary
+`Mixed` owners cannot pass this proof because their cleanup can invoke PHP.
+Eval or backtrace snapshots disable the transform module-wide. Mutual cloning
+is capped at 16 bodies and 4096 instructions per entry.
+
+All local load effects are restored because parameter immutability proofs from
+the old call graph no longer hold. The ordinary scalar passes then optimize the
+new CFG before ownership finalization. The transform and its resulting branches
+are target-independent. See the
+[compilation guide](../compiling/optimization.md#tail-recursion) for eligibility
+and a PHP example.
+
+## EIR bounded mixed counters
+
+`src/ir_passes/bounded_mixed_counter.rs` runs after checked-integer sinking and
+before canonical loop optimization. It finds closed function-local integer
+counter graphs, scalarizes a private trial and requires `Mem2Reg` to eliminate
+every addressable load/store of the candidate slot. `IntegerRange` must then
+turn every introduced checked update into a plain integer add/subtract before
+the trial replaces the original function.
+
+The proof preserves the physical ABI of eligible by-value, nonvariadic `mixed`
+call parameters by rematerializing their integer arguments at the existing call
+boundary. It does not authorize a different closure call or change dispatch.
+Executable main, parameter slots, references, dynamic `eval`, suspension,
+exception handlers, escaping values and uncertain integer/type facts are
+excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
+
+The backend's [frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells)
+are a separate storage optimization and do not require this pass to run.
+
+## EIR buffer resolution hoisting
+
+`src/ir_passes/buffer_access.rs` runs once after the module fixed point (and
+after tail recursion), then the scalar passes run again. Every `buffer_get` and
+`buffer_set` normally resolves its generation-safe handle through
+`__rt_buffer_resolve` before the bounds check. In a loop whose natural body
+cannot free, allocate or rebind a buffer, that answer cannot change between
+iterations, so the pass appends one `buffer_resolve` to the preheader and turns
+each access with a loop-invariant handle into `buffer_get_resolved` or
+`buffer_set_resolved`.
+
+The pass also recognizes a zero-initialized, unit-step induction parameter whose
+loop continuation is a strict signed comparison against `buffer_len` of that
+same handle. When the continuation block dominates an access using the exact
+induction value and the access is not in the loop header itself, the resolved
+instruction receives a true immediate. Header accesses keep the bounds check
+because they may precede a header-local continuation comparison. This proof also
+accepts a dominating cached length value. When the cached length and the access
+use different loads of one local handle slot, that slot must not escape by
+reference or be written anywhere in the function. It deliberately refuses
+inclusive comparisons, unrelated or other-buffer bounds, negative starts,
+decreasing or non-unit recurrences, and derived indexes. The handle identity is
+the same `HandleSource` used for descriptor hoisting, so a length from another
+buffer cannot justify removing an access check.
+
+The hoisted `buffer_resolve` calls `__rt_buffer_try_resolve`, which applies the
+same registry, activity and generation checks but answers 0 instead of failing.
+The resolved access tests the descriptor before its bounds check, so a stale
+handle still raises the use-after-free fatal at the access, and a loop that never
+runs its body never reports anything. A loop qualifies only when every
+instruction in its body is on a default-deny allowlist: buffer element accesses,
+packed field reads and writes, local loads, stores to scalar locals, concat
+resets, and instructions whose effects only read state or fatal. That last group
+includes direct user function and method calls once effect refinement has proven
+the callee's whole summary read-only; every other call, and releases, allocations,
+warnings, output and throws, disqualify the loop, because each can run user code
+(a callee, a destructor, an error handler, an output callback) that frees a buffer
+through an alias. The handle must be an SSA value defined outside the loop
+or a `load_local` of a slot that nothing in the loop writes and no by-reference
+alias reaches. Generators, functions with exception handlers or dynamic `eval`,
+and modules that call `pcntl_async_signals()` (whose backend dispatches signal
+handlers after every instruction) are skipped.
+
+Inside a rewritten loop, packed `buffer_get_resolved` instructions with the same
+descriptor and index compute the same record address, so a dominated access
+reuses its dominator's result. Index operands are compared after seeing through
+block parameters whose every incoming edge passes the same value, which scalar
+promotion leaves at each join. Scalar element reads are not shared: a
+`buffer_set_resolved` between them can change the loaded value.
+
+Codegen always tests a resolved descriptor for zero. It omits the descriptor
+length load and unsigned comparison only for the true-immediate form. Every
+other resolved or unresolved access uses one unsigned `index < length`
+comparison; a negative signed index has a large unsigned representation and
+therefore reaches the same bounds fatal without a separate signed test.
+
+Packed field reads and writes (`prop_get`/`prop_set` on a packed record) also get
+their exact effects during effect refinement (`reads_heap` for a read;
+`reads_heap`, `writes_heap` and `may_fatal` for a write, which may copy a whole
+nested record), count as concat-inert, and consume their operands by value for the
+by-reference alias analysis, so the loop index and the locals they store stay in
+SSA. See the [compilation guide](../compiling/optimization.md#buffer-loops).
+
 ## Effect summaries: purity and `may_throw`
 
 The optimizer now maintains a small local effect-analysis layer that sits underneath the pruning and dead-code-elimination passes.
@@ -807,16 +933,81 @@ runs a linear-scan register allocator (`src/ir_passes/`), described in
 [The IR](the-ir.md). It is a backend pass over EIR rather than an AST-level
 optimization, so it lives outside `src/optimize/`.
 
+The allocator admits caller-saved homes only across instructions on a default-deny
+clobber allowlist. Packed field reads and concrete integer, float, or boolean
+field writes qualify because their lowering touches only the fixed result and
+documented scratch registers. A nested packed-record write does not qualify:
+its word-copy loop consumes secondary and tertiary scratch registers, and a
+`ptr<T>` source first calls the non-null runtime guard. The `false` field payload
+check is safe for this purpose because its error branch throws and never returns
+to the guarded store.
+
+During EIR lowering, `src/ir_lower/loop_closures/` checks a loop's condition,
+update, and complete body before emitting its closure calls. Identity and the
+numeric domain are separate proofs. Both apply with EIR optimization enabled or disabled.
+
+The existing direct path in `for` and `while` still requires an invariant local
+identity, by-value scalar captures, an exact positional argument list, and a
+scalar-or-Mixed signature without references or source variadics. Its arguments are
+literals or locals that the condition, update, and body never write, and those
+locals must already have physical `I64` or `F64` storage. Declared parameter
+types must match without coercion. Nested loops, assignment expressions,
+increments, and `continue` paths are part of that identity scan. A type seen on
+the first iteration is not proof of a later representation.
+
+A second path can direct-call a known local closure when an argument local is
+written. A fixed point over the straight-line condition, body, and update must
+show that every argument and the closure result stay in PHP `int|float`. The
+seed is the entry slot: logical `int` with `I64` storage, or logical `float`
+with `F64` storage. A `Mixed` label is unknown and blocks this path. Checked
+integer arithmetic widens the domain to `int|float`; that domain is not an `I64`
+proof and does not emit a truncating conversion. The call uses the ordinary
+Mixed operand ABI of `Op::Call`, including by-value captures and the usual
+owner cleanup. Locals in the proof whose final slot is Mixed are stored and
+loaded as Mixed from the first store, so a later float, null sentinel, or
+signed zero is not read back through an integer cast. The admission is recorded
+per call span. One admitted call does not admit a different call of the same
+local. Bindings retained by the numeric proof carry a separate marker, including
+during final-storage replay. An unadmitted call on such a binding keeps descriptor
+invocation instead of falling back to the unwritten-scalar gate.
+
+Both paths can retain the compiler-generated `func_args::HIDDEN_ARGS_PARAM`
+collector used by frame metadata, including eval-originated backtraces. This
+parameter does not count toward public arity. Its generated name, physical
+parameter position, array representation, and spanless ownership prologue must
+match the compiler contract. The collector may only be loaded into its owning
+parameter shadow; any other read, write, or escape rejects the target. The
+ordinary call binder still creates and passes the array with its normal
+ownership. User variadics, argument introspection, and other array values do
+not qualify. The collector seeds no numeric fact and does not broaden another
+call's admission.
+
+The numeric path requires an untyped Mixed signature, no references, source variadics,
+generators, named arguments, spreads, or omitted defaults, and captures that are
+absent or by-value int or float. The lowered body must be one block whose
+opcodes are in the closed primitive allowlist and have no throw, fatal, or
+warning effects. A branch, nested loop, `break`, `continue`, unmodeled
+assignment, or expression argument such as `$value + 0` keeps descriptor
+invocation. `do/while` does not use this path. Fresh bindings created in a
+condition do not bypass the identity gate. Refined call effects do not bypass
+the opcode allowlist.
+
 IR-level transformations also no longer live here. The EIR backend runs a
 fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting with
 identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
 patterns (box/unbox cancellation, scalar load/store forwarding, paired
 acquire/release cancellation, string-literal concat folding, redundant
 `move`/`borrow` cleanup), then scalar local promotion into SSA values with block
-parameters at joins and loop back edges, then immutable integer-local
+parameters at joins and loop back edges, then immutable concrete numeric-local
 classification and integer-sink specialization for checked add/subtract/multiply.
-Those passes make
-proven-stable local loads pure and replace transient boxed Mixed arithmetic with
+Immutable-load classification also covers concrete float locals. It refines integer
+loads only in functions with checked integer arithmetic and float loads only in
+functions with float arithmetic, so identical generic bodies stay identical for
+shape merging. It accepts an
+unwritten by-value parameter or one entry-block store that dominates every load,
+and rejects by-reference aliases, dynamic `eval`, other storage representations,
+and any unrecognized slot operation. Those passes make proven-stable integer and
+float local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
 integer. `IntegerRange` then propagates inclusive signed 64-bit intervals through
 constants, branch comparisons, block arguments, masks, shifts, and integer

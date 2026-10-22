@@ -69,6 +69,21 @@ parameters, liveness, dominance, register placement, CSE, LICM, and inlining.
 
 ## Backend Contract
 
+Virtual instance, interface and late-static calls validate literal `false` and
+`null` parameters against the runtime implementation before ABI coercion.
+Ordinary signatures skip the literal guard lookup. A module-local parameter
+index caches candidates by method, staticness and argument count, including
+empty results, without resolving emitted method bodies. Ancestor traversal
+follows the complete chain with cycle detection; valid deep hierarchies do
+not lose argument checks.
+
+Runtime callable invokers also check declared `false` and `null` value parameters
+before converting their boxed arguments to the callee ABI. Indexed and named
+containers use the same checks after normal argument binding. Diagnostics name
+the declaring method while dispatch retains the actual receiver or called class.
+Temporary source boxes and earlier converted arguments remain rooted until the
+call succeeds or unwinds; null has no pushed result slot during source cleanup.
+
 The compiler lowers EIR through the target-aware assembly emitter in
 `src/codegen/`.
 
@@ -237,12 +252,16 @@ back to a source declaration.
 ### C Type Mapping
 
 Extern declarations use `CType`. EIR preserves the C-facing type in
-`ExternDecl` metadata so the IR backend can use the correct C ABI helpers.
+`ExternDecl` metadata so the IR backend can use the correct C ABI helpers: the
+PHP type decides the storage, and the parallel `ExternAbiType` keeps the
+declared C width so the backend can normalize registers at the call boundary.
 
 | `CType` | EIR storage |
 |---|---|
 | `Int`, `Bool`, `Ptr`, `TypedPtr(_)`, `Callable` | `I64` |
+| `IntWidth(_)` (`i8`..`u32`, `u64`) | `I64`; the width lives in `ExternAbiType` and only drives sign/zero extension of returns and caller-side extension of narrow arguments. |
 | `Float` | `F64` |
+| `F32` | `F64`; `ExternAbiType::Float32` rounds the argument to a single before the call and widens the return after it. |
 | `Str` | `I64` native C string pointer; PHP strings are converted at the boundary. |
 | `Void` | `Void` |
 
@@ -377,10 +396,11 @@ Ownership operations:
 |---|---|---|---|---|
 | `Acquire` | refcounted/string/callable value | `Void` or retained value alias | `REFCOUNT_OP`, maybe `WRITES_HEAP` | `__rt_incref`, string persist/retain, callable descriptor retain if added |
 | `Acquire` + `Bool` immediate | same | same | same | same; the immediate marks a *lifetime pin* and only opts the pair out of acquire/release cancellation |
-| `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
+| `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, destruction may throw and debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
 | `Move` | any value | same type | pure validator operation | no machine instruction |
 | `Borrow` | value with live owner | same type | pure validator operation | no machine instruction |
-| `EnsureOwned` | maybe-owned value | same type | may branch, refcount effect | emits conditional retain/ownership normalization |
+| `EnsureOwned` | fresh transient `Str` argument (`.`, interpolation, scalar-to-string; never a builtin view) | `Str`, same payload, owned | `REFCOUNT_OP`, `WRITES_HEAP` | `__rt_str_claim`: retags a `CONCAT_TEMP_HEAP_KIND` block as an owned string in place, leaves scratch and literals untouched; emitted before a user call that may return the argument |
+| `ReleaseUnlessAliases` | owned argument, call result | `Void` | `REFCOUNT_OP`, `WRITES_HEAP`, `READS_HEAP` | releases the argument unless its payload pointer equals the result's: boxed `Mixed` pairs, and owned `Str` arguments (claimed or acquired) of a user call |
 
 Strings are not modeled as generic heap pointers because their ABI is `(ptr,
 len)`, but string ownership still participates in validator checks.
@@ -448,6 +468,33 @@ retain a conservative fallback. The descriptor can distinguish fresh, borrowed,
 independent, explicit argument-alias, and may-alias storage, including scratch-backed
 results that are not fresh heap blocks. That contract feeds direct-call cleanup,
 optimizer reasoning, and summaries for source wrappers.
+
+#### Property publication and throwing cleanup
+
+For a receiver whose property storage is known only at runtime, lowering keeps an
+owning source temporary explicit through `PropSet` or `DynamicPropSet`. Each backend
+arm borrows or retains the representation it stores. EIR releases the source after
+publication, so a Stringable source's destructor observes the new property value.
+Scalar narrowing paths that adopt a box retire that box in the shared property
+materializer; receiver dispatch must not repeat that retirement.
+
+An owning nested receiver, such as the read of `$h->next` in
+`$h->next->s = make_label()`, has a separate in-flight cleanup pin. These pins do
+not acquire references: they park the existing owner for exceptional cleanup.
+The source pin is detached after a successful store and before releasing the
+source. The receiver pin remains registered throughout that release, because a
+source destructor can throw after the field has already been published. Only
+after source cleanup returns is the receiver pin detached and the receiver's
+normal release emitted. Detaching both pins immediately after the store would
+leak the nested receiver whenever the source destructor throws; retaining the
+source pin during its release would instead expose the same source to cleanup
+twice.
+
+Borrowed receivers and sources keep their existing owners. A source whose
+reference moves into a known slot follows that slot's transfer discipline rather
+than receiving an additional post-store release. These rules live in
+`src/ir_lower/stmt/instance_property_writes.rs` and the shared property-store
+materializer, using target-aware runtime cleanup on every supported target.
 
 ### A reference cell must be as wide as what the callee may write
 
@@ -718,6 +765,7 @@ preserves PHP exponentiation result rules.
 | Op | Operands | Result | Effects |
 |---|---|---|---|
 | `StrConcat` | `Str`, `Str` | `Str` | `alloc_concat` |
+| `StrAppend` | `Str`, borrowed `Str`; destination local slot | owned `Str` | `reads_local`, `writes_local`, `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op`, `may_fatal` |
 | `StrLen` | `Str` | `I64` | pure |
 | `StrPersist` | `Str` | `Str` | `alloc_heap`, `refcount_op` when copy needed |
 | `StrCharAt` | `Str`, `I64` | `Str` | `may_fatal`, `alloc_concat` |
@@ -728,6 +776,46 @@ preserves PHP exponentiation result rules.
 Concat-buffer operations are statement-boundary-sensitive. Lowering must emit
 statement boundaries so EIR passes do not reorder `alloc_concat` operations
 across a reset point.
+
+### Consuming local string append
+
+`StrAppend` carries the destination `LocalSlot` as its immediate. Its left operand
+is the adjacent load of that local's existing string owner. On success the helper
+consumes that owner and returns exactly one replacement owner; the next instruction
+must store the result into the same slot, without another acquire or old-value
+release. The validator checks this adjacency, owned result, plain string storage,
+and exclusive SSA uses, including terminator uses. Allocation failure keeps the
+old local owner valid until the native boundary unwinds.
+
+Lowering admits `$s .= $rhs` and `$s = $s . $rhs` only for initialized plain local
+strings. Parameters, captures, references, globals, extern storage, eval-visible
+state and mixed/retyped storage retain ordinary assignment. RHS must be a string
+literal or an initialized plain string local, which may be a borrowed parameter.
+RHS evaluation finishes before the transaction and cannot call or mutate a PHP
+value. Other RHS expressions retain ordinary evaluation and exception handling.
+Generic `StrConcat` continues to preserve both source values and use concat scratch.
+
+The owner proof also checks the final frame storage after the body is lowered.
+If a later writable capture or other operation widens an admitted destination,
+lowering restores the body-entry checkpoint and lowers that body again with
+consuming append disabled. Ordinary concat and assignment then emit their existing
+acquires and releases for the widened slot. The validator remains strict; no
+consuming transaction can target boxed `Mixed` storage. Nested closures and interned
+data from the discarded lowering are restored with the same checkpoint.
+
+The append helper uses the allocator's payload size as capacity and the returned
+string pair as logical length. A unique owned buffer reuses spare capacity when
+RHS does not overlap it. Otherwise the helper copies into independent storage,
+using doubled capacity for unique growth. A required copy instead uses the old
+logical length as its growth basis, so retained snapshots cannot repeatedly double
+unused capacity. Both paths reserve at least the required length and 16 bytes.
+Near the size limit it uses the checked required size. Length and header-size
+checks precede payload access. Shared, borrowed, literal and overlapping inputs
+remain unchanged; the consumed old reference is retired only after copying.
+Fresh mbstring/INI origin metadata is installed before any changed byte is stored;
+an empty append preserves the existing origin. These operations do not allocate
+concat scratch. Spare capacity trades additional reserved memory for linear copy
+volume across repeated appends.
 
 ### Arrays and Hashes
 
@@ -1009,6 +1097,8 @@ eval-scope helpers, or retain interpreter fallback. See
 | `BufferNew(element_type, len)` | length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal` |
 | `BufferLen` | buffer handle | `I64` | resolves generation/activity, then `reads_heap`; `may_fatal` on stale or invalid handles |
 | `BufferGet`, `BufferSet` | buffer handle, index, value | typed value or `Void` | resolve generation/activity before payload access; `reads_heap`/`writes_heap`, bounds `may_fatal` |
+| `BufferResolve` | buffer handle | `I64` descriptor | optimizer-only; resolves generation/activity WITHOUT faulting and answers 0 for a stale or invalid handle; `reads_heap` |
+| `BufferGetResolved`, `BufferSetResolved` | descriptor, index, value; optional `true` immediate | typed value or `Void` | optimizer-only forms of `BufferGet`/`BufferSet` behind a hoisted `BufferResolve`; a zero descriptor always raises the use-after-free fatal at the access; absent immediate performs the usual unsigned bounds check, while `true` records a same-buffer loop proof and omits that check; `reads_heap` or `writes_heap`, `may_fatal` |
 | `BufferFree` | local buffer handle | `Void` | invalidates the descriptor before releasing the payload and clears the local; `writes_heap`, `may_fatal` on stale aliases |
 | `PackedFieldGet`, `PackedFieldSet` | packed pointer, field metadata | typed value or `Void` | raw memory effects |
 | `ExternGlobalLoad`, `ExternGlobalStore` | global metadata | typed value or `Void` | external state effects |
@@ -1227,7 +1317,11 @@ Validation has two modes:
 8. Callable descriptor ops require `PhpType::Callable` metadata even when the
    storage type is `I64`.
 9. Pointer ops require `PhpType::Pointer(_)` metadata.
-10. Buffer ops require `Heap(Buffer(_))`.
+10. Buffer ops require `Heap(Buffer(_))`, except `BufferGetResolved` and
+    `BufferSetResolved`, whose first operand is the `I64` descriptor of a
+    `BufferResolve`. Their optional immediate may only be `true`, meaning the
+    optimizer proved the exact index nonnegative and below that descriptor's
+    logical length.
 
 ### Ownership Rules
 
@@ -1275,16 +1369,22 @@ over each function-like body (functions, methods, closures, trampolines,
 invokers) repeatedly until a full sweep reports no change, capped at a fixed
 iteration budget. Candidate-driven passes can cheaply declare themselves
 inapplicable to a function; skipped passes perform neither analysis nor the
-debug-build post-pass validation.
+debug-build post-pass validation. A pass that opts into `run_after_fixed_point`
+is removed from this sweep.
 
-The whole pipeline runs to a **module-level fixed point**: `optimize_module`
-interleaves the cross-function [small-function inliner](#small-function-inlining)
-with these per-function passes and repeats the round until neither layer changes
-anything (capped by a separate module-iteration budget). Interleaving lets the two
-feed each other — inlined bodies expose new constants and dead code for the
+The representation-changing pipeline runs to a **module-level fixed point**:
+`optimize_module` partitions those post-fixed-point passes out, then
+`optimize_module_to_fixed_point` interleaves the cross-function
+[small-function inliner](#small-function-inlining) with the remaining
+per-function passes and repeats the round until neither layer changes anything
+(capped by a separate module-iteration budget). Interleaving lets the two feed
+each other — inlined bodies expose new constants and dead code for the
 per-function passes, and the simplified functions expose new (smaller) inline
 candidates. The first round reproduces the prior "inline once, then optimize"
 behavior, so later rounds only optimize further and never change semantics.
+After `optimize_module_to_fixed_point` returns, the partitioned ownership
+finalizer runs on its own. See
+[Fresh Mixed Assignment Transfer](#fresh-mixed-assignment-transfer).
 
 In debug and test builds (`debug_assertions`), the driver re-validates the
 function with `validate_function` after every pass that runs and panics — naming
@@ -1411,6 +1511,33 @@ Codegen keeps the in-range path in scalar registers. On signed overflow it
 recomputes the operation as a double and applies the shared PHP float-to-int
 conversion, so removing the box does not change PHP's overflow semantics. The
 typed opcode is implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
+`FreshMixedTransfer` runs only after this specialization has finished, so a later
+ownership rewrite cannot hand the sink a new integer-only use graph. See
+[Fresh Mixed Assignment Transfer](#fresh-mixed-assignment-transfer).
+
+### Bounded Mixed Counters
+
+`src/ir_passes/bounded_mixed_counter.rs` considers ordinary Mixed locals updated
+only by increment/decrement and seeded with concrete PHP integers. A complete
+storage/use scan excludes aliases, other types, pointer escapes, parameters,
+static/global storage, eval, suspension and exceptional CFGs. Direct-call
+consumers are accepted only at physical, by-value `mixed` parameter positions
+recorded from the module before function optimization. The snapshot uses the
+backend's PHP canonical name keys and first-match priority (free functions before
+closures), retaining an ineligible first target instead of selecting a later one.
+Call targets, signatures,
+closure eligibility and return representations remain unchanged.
+
+The pass scalarizes a private trial function, removes transparent numeric owner
+copies with the shared rewrite helpers, and requires successful SSA promotion.
+The existing integer-range analysis must rewrite every new checked update to an
+unchecked integer operation before the trial can replace the original function.
+Strict integer bounds can establish that the update fits even at a runtime limit
+of PHP_INT_MAX or PHP_INT_MIN. An inclusive bound, an unrelated loop condition,
+a late type change or a missing proof keeps the boxed path and PHP float promotion.
+The analysis is capped at 16 candidate locals in functions of at most 4096
+instructions. It runs only with IR optimization enabled and uses the existing
+scalar and call-argument backends for every supported target.
 
 ### Boxed Numeric Chain Fusion
 
@@ -1708,6 +1835,161 @@ in-flight scratch string argument. Call-site name resolution (`call` Data immedi
 and `function_variant_call` include-variant refs) uses snapshots taken before
 mutation, so the rewrite loop never aliases the module while holding a function.
 
+### Fresh Mixed Assignment Transfer
+
+`FreshMixedTransfer` (`src/ir_passes/fresh_mixed_transfer.rs`) is the ownership
+finalizer. It implements `IrPass`, and `run_after_fixed_point` makes
+`optimize_module` partition it out of `optimize_module_to_fixed_point`. The
+inliner and the per-function passes, including
+[checked integer sink specialization](#checked-integer-sink-specialization),
+run to the module fixed point first. `optimize_module` then runs the finalizer
+phase once, through the ordinary per-function sweep. A change inside that phase
+repeats the finalizer until a sweep reports no change. The repetition stays
+inside the finalizer: the inliner and the checked-integer sink have already
+finished. `--ir-opt=off` skips `optimize_module`, so the copy lowered for the
+assignment stays in the module.
+
+The rewrite removes a `MixedClone` of a fresh owned `ICheckedAdd`,
+`ICheckedSub`, `ICheckedMul`, or dynamic `MixedNumericBinop` add/sub/mul result.
+The dynamic helpers always box a new integer or float result, including PHP
+overflow promotion; `Pow` and other producers remain outside this proof.
+The source must be an owned
+`Heap(Mixed)` value with exactly two uses: the clone, and the next non-`nop`
+instruction in the same block, which must be a `Release` of the source with no
+immediate. The producer has to precede the clone in that block. The clone result
+is also an owned `Heap(Mixed)` value. Uses of the clone result are redirected to
+the source, and the clone and that release become `nop`. The arithmetic operation
+stays in place, so an overflow still promotes through the boxed result. Borrowed
+sources, acquired sources, shared sources, any other extra observation, and a
+release in another block keep the copy.
+
+That order is required. While the clone is present it is a `Mixed` use, so the
+sink leaves the producer boxed. Removing the clone earlier would make the
+remaining integer cast or store look like an integer-only use graph, and the
+next sink sweep would rewrite `ICheckedAdd` / `ICheckedSub` / `ICheckedMul` to
+the corresponding `IChecked*ToInt` result. The transfer therefore runs where
+that rewrite can no longer see it. The same split is summarized in
+[Optimization and codegen controls](../compiling/optimization.md#fresh-mixed-assignment-transfer).
+
+### Identical Lowered-Body Folding
+
+Monomorphization leaves duplication behind: a `T`-independent generic function
+instantiated once per concrete object class lowers to the same machine code every
+time, under a different name. elephc does **not** merge those bodies in EIR. An
+EIR-level merge compares a projection of the program, and every projection used so
+far — structural identity under a collapsed object shape, with nominal-use
+refusals bolted on — kept missing ways the backend consults the exact type after
+the projection claimed two bodies equal: property slot offsets keyed by the
+receiver's class, `get_object_vars` baking the lexical class id, `__toString` casts
+resolved through a `Cast`, static-local storage symbols derived from the
+instantiated name, and class-naming error strings. Getting each of those wrong is a
+silent miscompilation, so the projection approach was removed entirely.
+
+The active mechanism is emission-time folding (`src/codegen/block_emit.rs`). After
+the EIR is final, every candidate body — free functions and class methods whose
+name carries a type-argument list — is lowered **alone** into a fresh emitter with
+its own literal pool, so the text depends only on the body and the module's
+read-only context, never on label counters or caches the whole-module emission had
+reached. The isolated lowering's text AND its data section are shape-normalized:
+
+- every symbol naming the candidate (entry, epilogue and exceptional-cleanup
+  suffixes, the raw name the source-map marker quotes) is replaced by a
+  placeholder — except inside `.ascii` payloads, where the candidate's own name is
+  real string data whose bytes the program can print;
+- internal labels are renamed by definition order (the Linux assembler spells them
+  `.L_eir_…` where Apple spells them `L_eir_…`);
+- the isolated data section's emitted text is appended to the comparison, so two
+  bodies whose literal pools intern different contents under the same label are
+  refused — this is what keeps a folded `gettype` from returning the wrong word.
+
+Bodies whose normalized text is byte-equal share one emitted body: the survivor
+keeps the full body and each victim's entry becomes a jump to it
+(`emit_folded_body`). The victim **keeps its EIR function**, so direct calls still
+resolve the instantiation's own parameter types and pick their own coercion from
+them — the property that makes an int/bool fold sound where a name redirect would
+not be. The victim's `.globl` entry stays addressable through the thunk, so
+exports, vtables, callables and reflection all keep resolving it.
+
+Two state classes are refused up front: a body with a `StaticLocal` or
+`GlobalAlias` local (its storage symbol is derived from the instantiated name, and
+the erasure would fuse two counters into one), and the usual wrapper shapes
+(`main`, generators, closures, synthetic and invoker bodies).
+
+Because the comparison runs on the backend's final output, it is sound by
+observation: any lowering that consults the exact type — a boxing tag, a cast's
+resolved symbol, a class id, a class-naming error string — shows up in the emitted
+text or data and refuses the fold. The guard cannot rot as the lowering grows.
+What it costs is compile time (every candidate is lowered twice) and IR memory
+(duplicate functions are not freed), while the emitted size win is what remains:
+identical bodies collapse to one body plus a jump each.
+
+Class-naming error data makes whole method slots unfoldable in practice: a typed
+property read, `isset`, and an array append all carry the uninitialized-access
+fatal (`Typed property Box<User>::$value …`), and a dynamic property access on a
+`mixed` receiver carries the lexical-class private-property message. Constructors
+and class-independent stores carry no such data and fold. `--report-generics`
+measures the residual opportunity per slot (the assembly oracle), so a template's
+folding headroom is visible rather than guessed.
+
+### Why the earlier EIR shape merge was rejected
+
+The earlier EIR proposal used `shape()` and `has_nominal_use` to decide which type
+information could be erased. Those mechanisms were removed: EIR shape equality did
+not prove that the backend would emit equivalent code. The active merge compares
+normalized assembly bodies, including type-dependent tags and lowering choices.
+
+`Int`/`Bool`/`Float` illustrate why the rejected shape approach was insufficient. The backend stores scalars
+in raw untagged `I64` slots and bakes the runtime value tag only when boxing a value
+into a `Mixed` cell (`codegen_support/value_boxing.rs`), reading it from the exact
+`PhpType`: an int boxes with tag 0, a bool with tag 3. The tag is not an EIR immediate,
+so two bodies differing only by the scalar's static type compare equal under a collapsed
+shape while emitting different boxing code — the survivor's tag would be applied to the
+other instantiation.
+
+The blocker is wider than the boxing tag, and it splits into two classes:
+
+- **Constant divergence** — the same lowering arm bakes a different constant: the boxing
+  tag above, static-store tags, a search's `expected_tag`, `array_fill` element tags.
+  `value_php_type` is read and branched on at over a hundred lowering sites, and
+  `runtime_value_tag` is baked at about ninety codegen points.
+- **Structural divergence** — a DIFFERENT lowering arm is selected from the exact type:
+  truthiness as a cast destination (`conversions.rs`: `result_php_type == Bool ⇒
+  lower_is_truthy`), and comparison-arm selection (`comparisons.rs`: a comparison is
+  lowered as truthiness when either side is `Bool`). So `clamp<T>(T $v): T { if ($v ==
+  0) … }` compares equal under a collapsed shape while emitting different comparison
+  code, with no boxing anywhere.
+
+A class-2 divergence cannot be repaired by supplying a tag at runtime: the fix would be
+to emit BOTH arms under a runtime branch, which reintroduces the dynamic-type dispatch
+the AOT thesis exists to delete. And the distinction is load-bearing PHP semantics, not a
+lowering artifact: the runtime must remember that a stored `false` is a bool, and raw `0`
+stringifies as `"0"` for an int and `""` for a bool (`strings.rs`).
+
+Not every exact-type consultation implies different machine code — an FFI `(Int, Bool)`
+pair forwards the payload, and raw int and bool call operands materialize identically —
+but the sites that DO differ are the ones the EIR cannot see. Two further constraints
+close the door on a naive widening:
+
+- **Identical bodies do not imply interchangeable signatures.** A direct call resolves
+  the callee's parameter types at codegen time and picks its coercion from them, so
+  redirecting an `int` instantiation to a `bool` survivor would change the CALLER's
+  coercion even when the callee's instructions happen to match. The object merge is safe
+  precisely because object coercion is class-independent; a scalar merge is not. Concrete
+  PHP signatures must therefore be retained independently of shared machine-code
+  ownership.
+- **The only sound widening is post-lowering identical-body folding**: compare what the
+  backend actually emits — not the EIR, not a projection of it — so the differing boxing
+  tag, a resolved cast symbol and the per-function cleanup obligations are all visible.
+  That is the LLVM `MergeFunctions` analogue, and it is what elephc implements (the
+  section above): candidates are lowered into isolated emitters, the emitted text and
+  data are shape-normalized, and byte-equal bodies fold into one body plus a jump while
+  the victim's EIR function — and therefore its concrete signature for caller-side
+  coercion — stays intact. The measured win is bounded to the int/bool pair: `Float`
+  lowers to `F64` while `Int`/`Bool` lower to `I64`. `--report-generics` reports the
+  foldable count measured against the emitted output, so the measurement cannot rot as
+  the lowering grows: a future scalar-consulting lowering shows up as a refusal, not as
+  a silent miscompile.
+
 ## Dominance Analysis
 
 `src/ir_passes/dominance.rs` is a read-only sidecar analysis (like liveness, not
@@ -1786,7 +2068,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ClassProperty` / `PropertyHooks` | Class metadata, property layout, readonly/final/static flags, hooks, defaults, and attributes. |
 | `ClassConst` | Class/interface/trait constant metadata and value expression. |
 | `ClassMethod` | Separate `Function` plus method metadata and vtable/static dispatch metadata. |
-| `CType::Int`, `Float`, `Str`, `Bool`, `Void`, `Ptr`, `TypedPtr`, `Callable` | Extern ABI metadata consumed by `ExternCall`, extern globals, and callback trampolines. |
+| `CType::Int`, `IntWidth`, `Float`, `F32`, `Str`, `Bool`, `Void`, `Ptr`, `TypedPtr`, `Callable` | Extern ABI metadata. `ExternAbiType` drives `ExternCall` argument and return normalization only; extern globals and callback trampolines still see the PHP type. |
 | `ExternParam` | Extern function parameter metadata. |
 | `ExternField` | Extern class/struct field offset/type metadata. |
 | `PackedField` | Packed class field offset/type metadata. |

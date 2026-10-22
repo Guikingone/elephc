@@ -6,7 +6,7 @@
 //! - `crate::main()` before invoking `crate::pipeline::compile()`.
 //!
 //! Key details:
-//! - Only an exact `args[1] == "native"` selects native dependency commands.
+//! - Only an exact `args[1]` of `native`, `repl`, `monitor`, or `test` selects a subcommand.
 //! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
 use std::collections::HashSet;
@@ -121,6 +121,8 @@ Arguments:
 Subcommands:
   native <COMMAND>        Native dependency management (see `elephc native --help`)
   repl                    Interactive PHP through eval (see `elephc repl --help`)
+  test [PATH]             Compile and run the test suite under PATH, default `tests`
+                          (see `elephc test --help`)
   monitor <TARGET>        Profile a program built with --with-monitoring: a .php
                           source, a binary, or a running service's address
                           (see `elephc monitor --help`)
@@ -174,6 +176,8 @@ Linking:
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
+  --report-generics       Summarize monomorphized generic instantiations per
+                          template on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
@@ -214,6 +218,8 @@ pub(crate) struct CliConfig {
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
+    /// Print a per-template summary of monomorphized generic instantiations on stderr.
+    pub(crate) report_generics: bool,
     pub(crate) emit_debug_info: bool,
     /// Keep the symbol table in the linked executable; it is stripped by default.
     pub(crate) keep_symbols: bool,
@@ -267,6 +273,8 @@ pub(crate) enum Command {
     Native(NativeCommand),
     /// One validated `elephc monitor` sampling invocation.
     Monitor(crate::monitor::MonitorCommand),
+    /// One `elephc test` run: compile the suite under a path and run it.
+    Test(crate::test_command::TestCommand),
 }
 
 /// Dispatches exact top-level subcommand selectors before falling back to compilation.
@@ -276,6 +284,15 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
             Ok(command) => Command::Repl(command),
             Err(error) => {
                 eprintln!("{error}\n\n{}", crate::repl::HELP);
+                process::exit(1);
+            }
+        };
+    }
+    if args.get(1).map(String::as_str) == Some("test") {
+        return match crate::test_command::parse_args(&args[2..]) {
+            Ok(command) => Command::Test(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::test_command::HELP);
                 process::exit(1);
             }
         };
@@ -336,6 +353,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut check_only = false;
     let mut emit_timings = false;
     let mut emit_source_map = false;
+    let mut report_generics = false;
     let mut emit_debug_info = false;
     let mut keep_symbols = false;
     let mut filename_arg = None;
@@ -441,6 +459,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_timings = true;
         } else if arg == "--source-map" {
             emit_source_map = true;
+        } else if arg == "--report-generics" {
+            report_generics = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
         } else if arg == "--keep-symbols" {
@@ -625,6 +645,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         check_only,
         emit_timings,
         emit_source_map,
+        report_generics,
         emit_debug_info,
         keep_symbols,
         regalloc_linear,

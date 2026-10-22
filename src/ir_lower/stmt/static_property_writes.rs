@@ -43,6 +43,10 @@ pub(super) fn lower_static_property_assign(
     span: Span,
 ) {
     let source = lower_expr(ctx, value);
+    if has_deferred_default_error(ctx, receiver) {
+        raise_deferred_default_error(ctx, receiver, &[source], span);
+        return;
+    }
     let source = static_property_type(ctx, receiver, property)
         .map(|slot_ty| coerce_typed_assign_value(ctx, source, &slot_ty, span))
         .unwrap_or(source);
@@ -159,8 +163,17 @@ pub(super) fn lower_static_property_array_push(
     value: &Expr,
     span: Span,
 ) {
-    if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
+    if has_deferred_default_error(ctx, receiver) {
         let value = lower_expr(ctx, value);
+        raise_deferred_default_error(ctx, receiver, &[value], span);
+        return;
+    }
+    let source = Expr::new(ExprKind::StaticPropertyAccess {
+        receiver: receiver.clone(), property: property.into(),
+    }, span);
+    if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &source, value, span) { return; }
+    let value = lower_expr(ctx, value);
+    if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![array.value, value.value],
@@ -177,7 +190,6 @@ pub(super) fn lower_static_property_array_push(
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
-        let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::ArrayPush,
             vec![property_value.value, value.value],
@@ -190,7 +202,6 @@ pub(super) fn lower_static_property_array_push(
     }
 
     let property_value = load_static_property(ctx, receiver, property, span);
-    let value = lower_expr(ctx, value);
     if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::MixedArrayAppend,
@@ -226,8 +237,44 @@ pub(super) fn lower_static_property_array_assign(
     let update = desugared_element_update(value, span, |read| {
         reads_static_property_array_element(read, receiver, property, index)
     });
+    if has_deferred_default_error(ctx, receiver) {
+        let index = lower_expr(ctx, index);
+        // An eager compound settles its RHS before the failing element read.
+        // Plain assignments and lazy coalescing retain their original expression semantics.
+        let value = if matches!(&update, Some(ElementUpdate::Compound)) {
+            let ExprKind::BinaryOp { right, .. } = &value.kind else { unreachable!() };
+            lower_expr(ctx, right)
+        } else {
+            lower_expr(ctx, value)
+        };
+        raise_deferred_default_error(ctx, receiver, &[index, value], span);
+        return;
+    }
+    if matches!(&update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
+        && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
+    {
+        return;
+    }
     if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
         crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+        return;
+    }
+    if matches!(update, Some(ElementUpdate::Compound)) {
+        let ExprKind::BinaryOp { left, op, right } = &value.kind else { unreachable!() };
+        let rhs = lower_expr(ctx, right);
+        let ty = ctx.builder.value_php_type(rhs.value);
+        let name = ctx.declare_synthetic_php_local(ty.clone());
+        let rhs = crate::ir_lower::ownership::copy_assignment_value(ctx, rhs, Some(span));
+        ctx.store_local(&name, rhs, ty, Some(span));
+        let staged = Expr::new(ExprKind::BinaryOp {
+            left: left.clone(), op: op.clone(),
+            right: Box::new(Expr::new(ExprKind::Variable(name.clone()), right.span)),
+        }, value.span);
+        lower_static_property_array_assign_with_diagnosed_key(
+            ctx, receiver, property, index, &staged, span, true,
+        );
+        let null = LoweredValue { value: ctx.builder.emit_const_null(), ir_type: IrType::I64 };
+        ctx.unset_local(&name, null, Some(span));
         return;
     }
     lower_static_property_array_assign_with_diagnosed_key(
@@ -239,6 +286,26 @@ pub(super) fn lower_static_property_array_assign(
         span,
         update.is_some(),
     );
+}
+
+/// Identifies a class-wide initialization failure before emitting an unreachable storage operation.
+fn has_deferred_default_error(ctx: &LoweringContext<'_, '_>, receiver: &StaticReceiver) -> bool {
+    static_receiver_class_name(ctx, receiver).and_then(|name| ctx.classes.get(&name))
+        .is_some_and(|class| class.deferred_property_default_error.is_some())
+}
+
+/// Preserves write operand effects and releases owned operands if initialization throws.
+fn raise_deferred_default_error(
+    ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, values: &[LoweredValue], span: Span,
+) {
+    ctx.begin_argument_guard_scope();
+    for (index, value) in values.iter().copied().enumerate() {
+        if ctx.value_is_owning_temporary(value) && !ctx.value_is_owned_unboxed_local_load(value.value) {
+            ctx.guard_call_argument(value, index, span);
+        }
+    }
+    ctx.end_argument_guard_scope();
+    crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, span);
 }
 
 /// Returns whether `read` is the element `Class::$property[index]` a statement writes.
@@ -275,8 +342,8 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     key_already_diagnosed: bool,
 ) {
     let key_marker = key_already_diagnosed.then_some(Immediate::Bool(true));
+    let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
-        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![array.value, index.value, value.value],
@@ -290,6 +357,16 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         }
         return;
     }
+    let root = Expr::new(ExprKind::StaticPropertyAccess {
+        receiver: receiver.clone(), property: property.to_string(),
+    }, span);
+    if let Some(name) = bind_mixed_static_array_write_root(ctx, &root) {
+        let array = load_array_local_for_write(ctx, &name, span);
+        array_write_core::lower_concrete_array_set_values(
+            ctx, array, index, value, span, key_already_diagnosed,
+        );
+        return;
+    }
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
@@ -299,8 +376,6 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         let index =
             coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &array_ty, value, Some(span));
@@ -328,8 +403,6 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
     // rule; sharing the helper is what keeps the two from answering differently for
     // the same source line.
-    let (index, value) =
-        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
     if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::RuntimeCall,
@@ -348,6 +421,34 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Binds mixed-element static storage through a hash-aware relocating write alias.
+/// A previous statement or call may already have promoted an indexed declaration to a hash.
+pub(super) fn bind_mixed_static_array_write_root(
+    ctx: &mut LoweringContext<'_, '_>, root: &Expr,
+) -> Option<String> {
+    let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else { return None; };
+    let ty = static_property_type(ctx, receiver, property)?;
+    let indexed = match ty.codegen_repr() {
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => true,
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => false,
+        _ => return None,
+    };
+    let name = ctx.declare_synthetic_php_local(ty.clone());
+    crate::ir_lower::expr::lower_ref_assign_static_property(ctx, &name, root, root.span);
+    if indexed {
+        let source = ctx.load_local(&name, Some(root.span));
+        let assoc_ty = promoted_assoc_array_type(ty, PhpType::Mixed);
+        ctx.prepare_mutated_local_owner_for_backend_retire(
+            &name, source, assoc_ty.clone(), Some(root.span),
+        );
+        // ArrayToHash checks the actual heap kind, reusing already-promoted storage.
+        let hash = ctx.emit_value(Op::ArrayToHash, vec![source.value], None, assoc_ty.clone(),
+            Op::ArrayToHash.default_effects(), Some(root.span));
+        ctx.store_prepared_mutated_local(&name, hash, assoc_ty, Some(root.span));
+    }
+    Some(name)
 }
 
 /// Publishes a detached boxed PHP array before a static-property element mutation.
