@@ -617,8 +617,13 @@ pub(super) fn array_literal_element_type_for_ir(
             target: CastType::Array,
             expr: inner,
         } => array_cast_literal_element_type(ctx, inner),
-        ExprKind::Ternary { .. } => {
-            // Keep array element ownership consistent with the lowered branch result.
+        ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::Match { .. }
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::Assignment { .. } => {
+            // Keep the element stamp and ownership consistent with the lowered merge temp: the
+            // syntactic fallback widens an int/bool pair to one scalar the boxed temp is cast to.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, item))
         }
         ExprKind::Spread(inner) => match spread_source_storage_type_for_ir(ctx, inner).codegen_repr() {

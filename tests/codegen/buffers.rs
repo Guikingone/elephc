@@ -85,6 +85,137 @@ buffer_free($things);
     );
 }
 
+/// Regression for task b4024b9a: scalar buffer elements keep their element type in ternary,
+/// `??` and array-literal merges instead of the syntactic `int`, so a `buffer<float>` element is
+/// not truncated and a `buffer<bool>` element merged with an int keeps both types.
+#[test]
+fn test_buffer_scalar_elements_keep_their_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+function from_float(?int $n, buffer<float> $b): void { echo $n ?? $b[0], "|"; }
+function from_bool(?int $n, buffer<bool> $b): void { echo $n ?? $b[0], "|"; }
+$floats = buffer_new<float>(1);
+$floats[0] = 1.5;
+echo ($argc > 0) ? $floats[0] : $floats[0], "|";
+$list = [$floats[0]];
+echo $list[0], "|";
+echo ($argc > 0) ? $floats[0] : 2, "|";
+from_float(null, $floats);
+from_float(3, $floats);
+echo "\n";
+$flags = buffer_new<bool>(1);
+$flags[0] = false;
+from_bool(0, $flags);
+from_bool(2, $flags);
+from_bool(null, $flags);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "1.5|1.5|1.5|1.5|3|\n0|2||\n");
+}
+
+/// Regression for task b4024b9a: a nullsafe read of a `buffer<float>` property element merges
+/// as the boxed chain result, so a ternary with an int arm does not truncate `1.5` to `1`.
+#[test]
+fn test_nullsafe_buffer_float_element_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+class S { public buffer<float> $floats; }
+$store = new S();
+$store->floats = buffer_new<float>(1);
+$store->floats[0] = 1.5;
+echo ($argc > 0) ? $store?->floats[0] : 0, "|";
+$list = [$store?->floats[0]];
+echo $list[0], "\n";
+"#,
+    );
+    assert_eq!(out, "1.5|1.5\n");
+}
+
+/// Regression for task b4024b9a: a buffer element read through a `??` or assignment receiver
+/// keeps the buffer's element type in merges and array literals instead of the syntactic `int`.
+#[test]
+fn test_buffer_element_through_expression_receivers_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+function from_float(?int $n, buffer<float> $b): void { echo $n ?? ($b ?? $b)[0], "|"; }
+function from_bool(?int $n, buffer<bool> $b): void { echo $n ?? ($b ?? $b)[0], "|"; }
+$floats = buffer_new<float>(1);
+$floats[0] = 1.5;
+from_float(null, $floats);
+$flags = buffer_new<bool>(1);
+$flags[0] = false;
+from_bool(null, $flags);
+$list = [($alias = $floats)[0], ($floats ?? $floats)[0]];
+echo $list[0], "|", $list[1], "|", ($argc > 0) ? ($alias = $floats)[0] : 0, "\n";
+"#,
+    );
+    assert_eq!(out, "1.5||1.5|1.5|1.5\n");
+}
+
+/// Regression for task b4024b9a: inside a function, a buffer element read through a property
+/// assignment receiver (`($s->buf = make())[0]`, whose call is bound in the assignment's prelude)
+/// keeps the buffer's element type in a literal and a ternary.
+#[test]
+fn test_buffer_element_through_property_assignment_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+function make(): buffer<float> {
+    $b = buffer_new<float>(1);
+    $b[0] = 1.5;
+    return $b;
+}
+class S { public buffer<float> $buf; }
+function show(S $s, int $argc): void {
+    $list = [($s->buf = make())[0]];
+    echo $list[0], "|";
+    echo ($argc > 0) ? ($s->buf = make())[0] : 0, "\n";
+}
+show(new S(), $argc);
+"#,
+    );
+    assert_eq!(out, "1.5|1.5\n");
+}
+
+/// Regression for task b4024b9a: an element read straight from `buffer_new<T>(n)` keeps the
+/// buffer's element type in a ternary with an int arm and in an array literal.
+#[test]
+fn test_buffer_new_element_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+echo ($argc > 0) ? buffer_new<bool>(1)[0] : 1, ":", gettype(($argc > 0) ? buffer_new<bool>(1)[0] : 1);
+$list = [buffer_new<float>(1)[0]];
+echo "|", gettype($list[0]), "\n";
+"#,
+    );
+    assert_eq!(out, ":boolean|double\n");
+}
+
+/// Regression for task b4024b9a: a buffer property read through an assignment receiver
+/// (`($t = $s)->buf[0]`) keeps the element type in a ternary and an array literal.
+#[test]
+fn test_buffer_property_through_assignment_receiver_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+class S { public buffer<float> $buf; public buffer<bool> $flags; }
+function show(int $argc): void {
+    $s = new S();
+    $s->buf = buffer_new<float>(1);
+    $s->buf[0] = 1.5;
+    $s->flags = buffer_new<bool>(1);
+    $s->flags[0] = false;
+    echo ($argc > 0) ? ($t = $s)->buf[0] : 0, "|";
+    $row = [($t = $s)->buf[0]];
+    echo $row[0], "|";
+    $flag = ($argc > 0) ? ($t = $s)->flags[0] : 0;
+    echo $flag, ":", gettype($flag), "\n";
+}
+show($argc);
+"#,
+    );
+    assert_eq!(out, "1.5|1.5|:boolean\n");
+}
+
 /// Verifies declared buffer properties accept both literal and runtime integer index writes.
 #[test]
 fn test_buffer_property_declared_literal_and_runtime_index_writes() {
