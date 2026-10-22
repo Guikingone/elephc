@@ -159,7 +159,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     // A packed record address or a `null` passed where the signature (extern, builtin or user)
     // declares a pointer parameter becomes that pointer word; for `?ptr<T>` a null is the word
     // 0. The declared parameter type decides, never the name. By-reference parameters receive
-    // the caller's storage instead.
+    // the caller's storage instead. A `?ptr<T>` passed to a builtin's `mixed` parameter is
+    // boxed (address 0 as PHP null), the shape `json_encode`, `var_dump`, `serialize`,
+    // `is_numeric` and `intval` read it in.
     if let Some(signature) = sig.as_ref() {
         for (index, (operand, (_, expected))) in
             operands.iter_mut().zip(&signature.params).enumerate()
@@ -168,9 +170,15 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
                 continue;
             }
             let value = lowered_value_from_id(ctx, *operand);
-            *operand = ctx
-                .retype_packed_address_for_pointer_sink(value, expected, Some(expr.span))
-                .value;
+            let boxes_nullable_pointer = !is_extern
+                && !is_user_function
+                && expected.codegen_repr() == PhpType::Mixed
+                && crate::types::is_nullable_pointer_type(&ctx.builder.value_php_type(value.value));
+            *operand = if boxes_nullable_pointer {
+                ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span)).value
+            } else {
+                ctx.retype_packed_address_for_pointer_sink(value, expected, Some(expr.span)).value
+            };
         }
     }
     let php_type = if is_extern || is_user_function {

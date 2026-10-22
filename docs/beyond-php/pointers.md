@@ -113,7 +113,10 @@ echo gettype(find($items, 9)); // "NULL"
 
 Because the two are the same value, a `ptr_null()` stored in a `?ptr<T>` reads as `null`:
 `echo`, `(string)`, concatenation, interpolation and `sprintf("%s")` give the empty string,
-`gettype()` answers `NULL`, and boxing it into a `mixed` value stores PHP `null`. A
+`gettype()` answers `NULL`, and boxing it into a `mixed` value stores PHP `null`. Builtins
+that take `mixed` (`gettype`, `is_int`, `json_encode`, `var_dump`, `serialize`) and the
+`(int)`/`(float)` casts see a live `?ptr<T>` as its integer address, so `gettype()` answers
+`integer` for it. A
 non-nullable `ptr` keeps printing `0x0`. Narrow a `?ptr<T>` with `!== null` before passing
 it to an `extern` function that takes `ptr<T>`. Object introspection (`var_dump`, `print_r`,
 `var_export`, `json_encode`, `serialize`) shows a pointer property as its integer address,

@@ -38,7 +38,7 @@ $local = null;
 echo is_null($local) ? "cleared" : "kept", "\n";
 "#,
     );
-    assert_eq!(out, "7|null|null|unset|set\n7|-1|7|-1\n[]|NULL|pointer\ncleared\n");
+    assert_eq!(out, "7|null|null|unset|set\n7|-1|7|-1\n[]|NULL|integer\ncleared\n");
 }
 
 /// Verifies `?ptr<T>` instance and static properties start null (through the literal default
@@ -312,4 +312,27 @@ echo "[", $y, "]", $y === null ? "n" : "s", "\n";
 "#,
     );
     assert_eq!(out, "ns|n|ns|[]n\n");
+}
+
+/// Verifies builtins and casts read a `?ptr<T>` as the PHP value it stands for: `json_encode`,
+/// `serialize`, `var_dump`, `print_r`, `is_numeric`, `intval`/`floatval` and `(int)`/`(float)`
+/// see null for address 0 and an integer for a live address.
+#[test]
+fn test_nullable_pointer_builtins_and_casts_see_php_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> { return $ok ? $v[0] : null; }
+$v = buffer_new<Vec2>(1);
+$q = first($v, false);
+$p = first($v, true);
+echo json_encode($q), "|", json_encode($p) === "null" ? "null" : "int", "|";
+echo (int)$q, "|", (float)$q, "|", intval($q), "|", floatval($q), "|", (int)$p > 0 ? "addr" : "zero", "|";
+echo is_numeric($q) ? "num" : "not", is_numeric($p) ? "num" : "not", "|";
+var_dump($q);
+print_r($q);
+echo "|", serialize($q), "|", serialize($p) === "N;" ? "N" : "i", "\n";
+"#,
+    );
+    assert_eq!(out, "null|int|0|0|0|0|addr|notnum|NULL\n|N;|i\n");
 }

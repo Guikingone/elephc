@@ -88,13 +88,16 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-/// Emits `gettype()` for a `?ptr<T>` word: `NULL` for 0, `pointer` otherwise.
+/// Emits `gettype()` for a `?ptr<T>` word: `NULL` for 0, `integer` otherwise.
+///
+/// A direct call boxes the `?ptr<T>` argument into `mixed` first, where a live address is an
+/// integer; this unboxed path (a dynamic callable) answers the same.
 fn emit_nullable_pointer_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let null_case = ctx.next_label("gettype_nullable_pointer_null");
     let done = ctx.next_label("gettype_nullable_pointer_done");
     ctx.load_value_to_result(value)?;
     abi::emit_branch_if_int_result_zero(ctx.emitter, &null_case);
-    emit_type_name_result(ctx, b"pointer");
+    emit_type_name_result(ctx, b"integer");
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&null_case);
     emit_type_name_result(ctx, b"NULL");
