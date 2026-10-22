@@ -434,6 +434,18 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
     }
 
+    /// Returns the type a local slot's value is boxed into `mixed` as.
+    ///
+    /// Like `mixed_box_type`, the slot's codegen type except for a `?ptr<T>` slot, which keeps
+    /// its declared union so address 0 boxes as PHP null.
+    pub(super) fn local_mixed_box_type(&self, slot: LocalSlotId) -> Result<PhpType> {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .map(|metadata| crate::types::mixed_box_php_type(&metadata.php_type))
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
+    }
+
     /// Returns the semantic role attached to a local slot.
     pub(super) fn local_kind(&self, slot: LocalSlotId) -> Result<LocalKind> {
         self.function

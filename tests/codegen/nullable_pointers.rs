@@ -752,3 +752,90 @@ live();
     );
     assert_eq!(out, "nullNnullnull|nullnullnull|integer\n");
 }
+
+/// Verifies a `?ptr<T>` that reaches `mixed` through a generated wrapper is PHP null for address
+/// 0 and an integer when live: a `Fiber` closure's declared return, an interface method whose
+/// implementation takes `mixed` (the source method adapter boxes the argument), and the result
+/// of a string callable.
+#[test]
+fn test_nullable_pointer_values_box_as_null_through_wrappers() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ?ptr<Vec2> { return $v[0]; }
+function none(): ?ptr { return null; }
+interface Taker { public function take(?ptr $p): string; }
+class T implements Taker { public function take(mixed $p): string { return gettype($p); } }
+function via(Taker $t, ?ptr $p): string { return $t->take($p); }
+$v = buffer_new<Vec2>(1);
+$f = new Fiber(function (): ?ptr { return null; });
+$f->start();
+$g = new Fiber(function () use ($v): ?ptr { return first($v); });
+$g->start();
+echo gettype($f->getReturn()), gettype($g->getReturn()), "|";
+echo via(new T(), none()), via(new T(), first($v)), "|";
+$name = "none";
+echo json_encode($name()), "\n";
+"#,
+    );
+    assert_eq!(out, "NULLinteger|NULLinteger|null\n");
+}
+
+/// Verifies a null `?ptr<T>` parameter is PHP null where a function's own frame slots are read
+/// back as values: `debug_backtrace()` arguments (plain and `#[\SensitiveParameter]`),
+/// `debug_print_backtrace()`, `get_defined_vars()`, `func_get_args()` and a closure capture.
+#[test]
+fn test_nullable_pointer_parameters_read_as_null_through_introspection() {
+    let out = compile_and_run(
+        r#"<?php
+function none(): ?ptr { return null; }
+function bt(?ptr $p): string { return json_encode(debug_backtrace()[0]["args"]); }
+function sens(#[\SensitiveParameter] ?ptr $p): string { return json_encode(debug_backtrace()[0]["args"][0]->getValue()); }
+function pbt(?ptr $p): void { debug_print_backtrace(); }
+function vars(?ptr $p): string { return json_encode(get_defined_vars()); }
+function args(?ptr $p): string { return json_encode(func_get_args()); }
+function cap(?ptr $p): string { $f = function () use ($p) { return json_encode($p); }; return $f(); }
+echo bt(none()), sens(none()), "|";
+ob_start();
+pbt(none());
+$t = ob_get_clean();
+echo str_contains($t, "pbt(NULL)") ? "NULL" : $t, "|";
+echo vars(none()), args(none()), cap(none()), "\n";
+"#,
+    );
+    assert_eq!(out, "[null]null|NULL|{\"p\":null}[null]null\n");
+}
+
+/// Verifies `?ptr<T>` properties read and written by name at run time keep PHP null as address
+/// 0: `ReflectionClass` static property values, `ReflectionProperty` reads and writes, a read and
+/// a write through a `mixed` receiver, and a dynamic property name (including one that misses).
+#[test]
+fn test_nullable_pointer_properties_by_runtime_name() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ?ptr<Vec2> { return $v[0]; }
+class S { public static ?ptr $sp = null; public ?ptr $ip = null; }
+function read(mixed $o): string { return json_encode($o->ip); }
+function kind(mixed $o): string { return gettype($o->ip); }
+function write(mixed $o, mixed $v): void { $o->ip = $v; }
+function named(S $o, string $n): string { return json_encode($o->$n); }
+$c = new ReflectionClass('S');
+echo json_encode($c->getStaticProperties()), json_encode($c->getStaticPropertyValue('sp')), "|";
+$o = new S();
+$rp = new ReflectionProperty('S', 'ip');
+$rs = new ReflectionProperty('S', 'sp');
+echo json_encode($rp->getValue($o)), json_encode($rs->getValue()), "|";
+echo read($o), named($o, "ip"), named($o, "nope"), "|";
+$v = buffer_new<Vec2>(1);
+$o->ip = first($v);
+echo gettype($rp->getValue($o)), kind($o), "|";
+$rp->setValue($o, null);
+echo json_encode($o->ip === null), "|";
+$o->ip = first($v);
+write($o, null);
+echo json_encode($o->ip === null), read($o), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"sp\":null}null|nullnull|nullnullnull|integerinteger|true|truenull\n");
+}

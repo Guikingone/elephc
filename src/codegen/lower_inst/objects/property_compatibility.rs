@@ -265,12 +265,13 @@ pub(super) fn can_store_boxed_value_for_mixed_property(value_ty: &PhpType, slot_
         && matches!(slot_ty.codegen_repr(), PhpType::Mixed)
 }
 
-/// Returns true when a boxed Mixed value can be coerced before a scalar typed-property store.
+/// Returns true when a boxed Mixed value can be coerced before a scalar or pointer typed-property
+/// store (a pointer slot casts the value like an int, so PHP null becomes address 0).
 pub(super) fn can_coerce_mixed_to_scalar_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && matches!(
             slot_ty.codegen_repr(),
-            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Pointer(_)
         )
 }
 

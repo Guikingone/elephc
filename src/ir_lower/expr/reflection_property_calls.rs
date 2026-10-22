@@ -399,7 +399,7 @@ pub(super) fn reflection_property_any_instance_target(
     Some((
         class_name,
         property,
-        normalize_value_php_type(property_ty.codegen_repr()),
+        normalize_value_php_type(crate::types::eir_value_php_type(property_ty)),
     ))
 }
 

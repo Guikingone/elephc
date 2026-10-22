@@ -60,7 +60,7 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     emitter.instruction("blr x20");                                             // call the original closure with ABI-correct arguments
     abi::emit_release_temporary_stack(emitter, call_stack_padding); // drop the wrapper-only caller-stack alignment pad
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the Fiber callback returns
-    box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
+    box_wrapper_return(emitter, crate::types::mixed_box_php_type(&wrapper.sig.return_type));
 
     emitter.instruction(&format!(
         "ldp x22, x23, [sp, #{}]",
@@ -627,7 +627,7 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     let overflow_bytes = materialize_spilled_args_for_closure_call_x86_64(emitter, &arg_types);
     abi::emit_call_reg(emitter, "r13");
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the Fiber callback returns
-    box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
+    box_wrapper_return(emitter, crate::types::mixed_box_php_type(&wrapper.sig.return_type));
 
     abi::load_at_offset(emitter, "rbx", saved_tail_index_offset);
     abi::load_at_offset(emitter, "r15", saved_tail_count_offset);

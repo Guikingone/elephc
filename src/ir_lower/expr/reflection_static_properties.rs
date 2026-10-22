@@ -145,7 +145,7 @@ pub(super) fn reflection_class_static_property_map_entries(
                     .get(property)
                     .cloned()
                     .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
-                let property_ty = normalize_value_php_type(property_ty.codegen_repr());
+                let property_ty = normalize_value_php_type(crate::types::eir_value_php_type(property_ty));
                 (property.clone(), declaring_class, property_ty)
             })
             .collect(),
@@ -249,7 +249,7 @@ pub(super) fn reflection_class_static_property_target(
         .static_properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))?;
+        .map(|(_, property_ty)| normalize_value_php_type(crate::types::eir_value_php_type(property_ty)))?;
     let declaring_class = class_info
         .static_property_declaring_classes
         .get(property)
