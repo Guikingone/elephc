@@ -13,6 +13,7 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// Marks or retires the payload in x0/rax, preserving the allocator header in x10/r10.
 pub(crate) fn emit_update(emitter: &mut Emitter, live: bool) {
     if emitter.target.arch == Arch::X86_64 {
+        // -- locate and update the exact payload-base bit --
         abi::emit_symbol_address(emitter, "r8", "_heap_buf");
         emitter.instruction("mov rdx, rax");                                    // copy the payload before deriving its heap-relative offset
         emitter.instruction("sub rdx, r8");                                     // derive the payload's heap-relative byte offset
@@ -39,6 +40,7 @@ pub(crate) fn emit_update(emitter: &mut Emitter, live: bool) {
         }
         return;
     }
+    // -- locate and update the exact payload-base bit --
     abi::emit_symbol_address(emitter, "x12", "_heap_buf");
     emitter.instruction("sub x13, x0, x12");                                    // derive the payload's heap-relative byte offset
     emitter.instruction("lsr x14, x13, #6");                                    // select one bitmap byte for each 64 heap bytes
@@ -59,6 +61,7 @@ pub(crate) fn emit_update(emitter: &mut Emitter, live: bool) {
 /// Clears bits for the used arena before the web request resets its bump extent.
 pub(crate) fn emit_reset(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
+        // -- clear every bitmap byte covered by the previous request's arena --
         abi::emit_load_symbol_to_reg(emitter, "rcx", "_heap_off", 0);
         emitter.instruction("add rcx, 63");                                     // round the used heap extent to bitmap bytes
         emitter.instruction("shr rcx, 6");                                      // derive the number of bitmap bytes to clear
@@ -70,6 +73,7 @@ pub(crate) fn emit_reset(emitter: &mut Emitter) {
         emitter.instruction("mov BYTE PTR [r8 + rcx], 0");                      // retire every base in this arena granule group
         emitter.instruction("jmp __rt_web_reset_live_base_loop");               // clear the remaining used bitmap bytes
     } else {
+        // -- clear every bitmap byte covered by the previous request's arena --
         abi::emit_load_symbol_to_reg(emitter, "x9", "_heap_off", 0);
         emitter.instruction("add x9, x9, #63");                                 // round the used heap extent to bitmap bytes
         emitter.instruction("lsr x9, x9, #6");                                  // derive the number of bitmap bytes to clear

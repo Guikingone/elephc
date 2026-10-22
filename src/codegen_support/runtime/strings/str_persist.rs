@@ -42,7 +42,7 @@ fn emit_transient_base_probe(emitter: &mut Emitter) {
         emitter.instruction("test al, 7");                                      // every real payload base has eight-byte alignment
         emitter.instruction("jnz __rt_str_transient_base_zero_x86");            // reject unaligned interior byte pointers
         emitter.instruction("mov r10, QWORD PTR [rax - 8]");                    // cheaply reject ordinary strings before probing the side table
-        emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND)));// materialize the complete transient kind word
+        emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND))); // materialize the complete transient kind word
         emitter.instruction("cmp r10, r11");                                    // do the candidate's preceding bytes even carry the full marker?
         emitter.instruction("jne __rt_str_transient_base_zero_x86");            // ordinary strings avoid all side-table work
         emitter.instruction("mov r9, rax");                                     // copy the candidate before deriving its heap-relative offset
@@ -172,7 +172,7 @@ fn emit_str_claim_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
     emitter.instruction("test eax, eax");                                       // did the exact-base probe accept this payload?
     emitter.instruction("jz __rt_str_claim_keep_x86");                          // scratch, slices, literals and owned strings are already safe to share
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the transient block pointer for the in-place retag
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1)));// materialize the owned-string heap kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // retag the transient block as owned so later persists duplicate it
     if mbstring {
         emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                   // restore the length the metadata hook expects in the result pair
@@ -325,7 +325,7 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
     emitter.instruction("test eax, eax");                                       // did the exact-base probe accept this payload?
     emitter.instruction("jz __rt_str_persist_duplicate");                       // every other source, including slices, gets a fresh owned duplicate
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the concat temporary payload pointer for the in-place retag
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1)));// materialize the owned-string heap kind word with the x86_64 heap magic marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap magic marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // retag the concat temporary as an owned string in place
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the original string length for the x86_64 string result pair
     if mbstring {
@@ -338,7 +338,7 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
     emitter.label("__rt_str_persist_duplicate");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the byte length into the x86_64 heap helper input register
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned string storage and return the payload pointer in rax
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1)));// materialize the owned-string heap kind word with the x86_64 heap magic marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap magic marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a persisted elephc string in the uniform heap header
     emitter.instruction("mov r8, rax");                                         // preserve the destination heap pointer for the byte-copy loop and final return value
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source pointer after the allocator helper returns
