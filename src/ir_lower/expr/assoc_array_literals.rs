@@ -271,9 +271,13 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         PhpType::Str => Some(PhpType::Str),
         PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),
         // A packed buffer element reads as its record address, which the checker types `ptr<T>`.
-        // Scalar elements keep the previous syntactic answer.
+        // A scalar element keeps its own type: the syntactic fallback answers `int`, which
+        // truncated a `buffer<float>` element in merges and literals.
         PhpType::Buffer(elem_ty) => match normalize_value_php_type(*elem_ty).codegen_repr() {
             PhpType::Packed(class_name) => Some(PhpType::Pointer(Some(class_name))),
+            scalar @ (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_)) => {
+                Some(scalar)
+            }
             _ => None,
         },
         _ => None,

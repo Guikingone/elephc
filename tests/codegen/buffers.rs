@@ -85,6 +85,35 @@ buffer_free($things);
     );
 }
 
+/// Regression for task b4024b9a: scalar buffer elements keep their element type in ternary,
+/// `??` and array-literal merges instead of the syntactic `int`, so a `buffer<float>` element is
+/// not truncated and a `buffer<bool>` element merged with an int keeps both types.
+#[test]
+fn test_buffer_scalar_elements_keep_their_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+function from_float(?int $n, buffer<float> $b): void { echo $n ?? $b[0], "|"; }
+function from_bool(?int $n, buffer<bool> $b): void { echo $n ?? $b[0], "|"; }
+$floats = buffer_new<float>(1);
+$floats[0] = 1.5;
+echo ($argc > 0) ? $floats[0] : $floats[0], "|";
+$list = [$floats[0]];
+echo $list[0], "|";
+echo ($argc > 0) ? $floats[0] : 2, "|";
+from_float(null, $floats);
+from_float(3, $floats);
+echo "\n";
+$flags = buffer_new<bool>(1);
+$flags[0] = false;
+from_bool(0, $flags);
+from_bool(2, $flags);
+from_bool(null, $flags);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "1.5|1.5|1.5|1.5|3|\n0|2||\n");
+}
+
 /// Verifies declared buffer properties accept both literal and runtime integer index writes.
 #[test]
 fn test_buffer_property_declared_literal_and_runtime_index_writes() {
