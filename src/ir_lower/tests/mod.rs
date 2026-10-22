@@ -24,6 +24,7 @@ mod array_membership;
 mod call_coercion_owners;
 mod callable_flow_safety;
 mod loop_closures;
+mod method_loop_counters;
 mod callable_property_owners;
 mod class_introspection_owners;
 mod closure_bind_owners;

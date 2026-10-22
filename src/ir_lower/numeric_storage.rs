@@ -231,6 +231,29 @@ fn readonly_calls(ctx: &LoweringContext<'_, '_>) -> HashMap<InstId, HashSet<usiz
                 }
                 signature.ref_params.clone()
             }
+            (Op::MethodCall, Some(Immediate::Data(target))) => {
+                let receiver = *inst.operands.first()?;
+                let PhpType::Object(class_name) = ctx.builder.value_php_type(receiver) else {
+                    return None;
+                };
+                let class = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+                let method = ctx.data.strings.get(target.as_raw() as usize)?;
+                // Exact final user targets share lowering's ordinary method argument ABI.
+                // Dynamic receivers, intrinsics and source adapters remain conservative.
+                if class.is_internal || !(class.is_final
+                    || class.final_methods.contains(&crate::names::php_symbol_key(method)))
+                { return None; }
+                let signature = super::expr::method_signature(ctx, receiver, method)?;
+                if signature.variadic.is_some() || signature.by_ref_return || signature.is_generator
+                    || signature.ref_params.len() != signature.params.len()
+                    || inst.operands.len() != signature.params.len() + 1
+                { return None; }
+                // The receiver is never a scalar candidate. Account for its hidden position
+                // without admitting it as an ordinary by-value argument to this proof.
+                let mut parameters = vec![true];
+                parameters.extend(signature.ref_params);
+                parameters
+            }
             (Op::RuntimeCall, Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))) => {
                 let definition = crate::builtins::registry::lookup(target.as_eir())?;
                 if !definition.spec.semantics.runtime_functions.contains(*target) { return None; }
