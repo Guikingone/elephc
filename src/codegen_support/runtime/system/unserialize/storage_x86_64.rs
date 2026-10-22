@@ -102,12 +102,12 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value box
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // preserve the property tag across the previous-value release
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // preserve the slot address across the previous-value release
-    emitter.instruction("sub rsp, 16");                                        // reserve an aligned spill for the property offset
-    emitter.instruction("mov QWORD PTR [rsp], r8");                            // preserve the property byte offset across the release
-    emitter.instruction("mov rdi, r10");                                       // pass the property slot to the previous-value release
-    emitter.instruction("mov rsi, r9");                                        // pass the compile-time property tag
-    emitter.instruction("call __rt_unser_release_prev_prop");                  // release the default value this hydration overwrites
-    emitter.instruction("mov r8, QWORD PTR [rsp]");                            // recover the property byte offset after the release
+    emitter.instruction("sub rsp, 16");                                         // reserve an aligned spill for the property offset
+    emitter.instruction("mov QWORD PTR [rsp], r8");                             // preserve the property byte offset across the release
+    emitter.instruction("mov rdi, r10");                                        // pass the property slot to the previous-value release
+    emitter.instruction("mov rsi, r9");                                         // pass the compile-time property tag
+    emitter.instruction("call __rt_unser_release_prev_prop");                   // release the default value this hydration overwrites
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // recover the property byte offset after the release
     emitter.instruction("add rsp, 16");                                         // release the offset spill
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // recover the property tag
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // recover the slot address
@@ -167,18 +167,18 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // NULL_SENTINEL is not a Mixed cell pointer, and every reader of the slot
     // (`=== null`, var_dump, json_encode) dereferenced it.
     emitter.label("__rt_obj_store_prop_mixed");
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                       // current property metadata word
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // current property metadata word
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    emitter.instruction("cmp r11, r9");                                        // is this Mixed property still uninitialized?
-    emitter.instruction("je __rt_obj_store_prop_mixed_new");                   // a fresh slot takes the parsed box directly
-    emitter.instruction("mov rdi, QWORD PTR [r10]");                           // existing Mixed value or in-band null sentinel
-    emitter.instruction("test rdi, rdi");                                      // does the slot already own a value?
-    emitter.instruction("jz __rt_obj_store_prop_mixed_new");                   // a zero slot takes the parsed box directly
+    emitter.instruction("cmp r11, r9");                                         // is this Mixed property still uninitialized?
+    emitter.instruction("je __rt_obj_store_prop_mixed_new");                    // a fresh slot takes the parsed box directly
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // existing Mixed value or in-band null sentinel
+    emitter.instruction("test rdi, rdi");                                       // does the slot already own a value?
+    emitter.instruction("jz __rt_obj_store_prop_mixed_new");                    // a zero slot takes the parsed box directly
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", crate::codegen_support::sentinels::NULL_SENTINEL);
-    emitter.instruction("cmp rdi, r9");                                        // is the slot holding the canonical null sentinel?
-    emitter.instruction("je __rt_obj_store_prop_mixed_new");                   // sentinels have no box to reuse
+    emitter.instruction("cmp rdi, r9");                                         // is the slot holding the canonical null sentinel?
+    emitter.instruction("je __rt_obj_store_prop_mixed_new");                    // sentinels have no box to reuse
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // parsed replacement box for the in-place reuse
-    emitter.instruction("call __rt_unser_reuse_box");                          // keep the earlier reference slot tied to the new value
+    emitter.instruction("call __rt_unser_reuse_box");                           // keep the earlier reference slot tied to the new value
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored in the reused box
     emitter.label("__rt_obj_store_prop_mixed_new");
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // store the boxed Mixed cell pointer

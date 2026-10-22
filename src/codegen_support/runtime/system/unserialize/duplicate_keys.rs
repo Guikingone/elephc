@@ -30,7 +30,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
 fn ins(emitter: &mut Emitter, arm: &str, x86: &str, comment: &str) {
     let text = if emitter.target.arch == Arch::AArch64 { arm } else { x86 };
     let padding = 76usize.saturating_sub(text.len()).max(1);
-    emitter.instruction(&format!("{text}{}// {comment}", " ".repeat(padding)));
+    emitter.instruction(&format!("{text}{}                                      // {comment}", " ".repeat(padding)));
 }
 
 /// Emits the AArch64 duplicate-aware entry store.
@@ -178,7 +178,7 @@ fn emit_store_entry_x86_64(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, "rdx", 24);
     abi::emit_call_label(emitter, "__rt_hash_get");
     emitter.instruction("test rax, rax");                                       // did the destination key already exist?
-    emitter.instruction("jnz __rt_unser_store_duplicate_x");                   // reuse the published box when the key already exists
+    emitter.instruction("jnz __rt_unser_store_duplicate_x");                    // reuse the published box when the key already exists
 
     emitter.label("__rt_unser_store_insert_x");
     abi::load_at_offset(emitter, "rdi", 8);
@@ -188,16 +188,16 @@ fn emit_store_entry_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, 0");                                           // boxed Mixed values carry no high payload word
     emitter.instruction("mov r9, 7");                                           // value tag = boxed Mixed (transfer the box)
     abi::emit_call_label(emitter, "__rt_hash_set");
-    emitter.instruction("jmp __rt_unser_store_done_x");                        // return the possibly grown hash
+    emitter.instruction("jmp __rt_unser_store_done_x");                         // return the possibly grown hash
 
     emitter.label("__rt_unser_store_duplicate_x");
     abi::store_at_offset(emitter, "rdi", 40);
     abi::load_at_offset(emitter, "r9", 40);
-    emitter.instruction("mov r10, QWORD PTR [r9]");                           // previous value tag
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // previous value tag
     abi::store_at_offset(emitter, "r10", 48);
-    emitter.instruction("mov r10, QWORD PTR [r9 + 8]");                       // previous payload low word
+    emitter.instruction("mov r10, QWORD PTR [r9 + 8]");                         // previous payload low word
     abi::store_at_offset(emitter, "r10", 56);
-    emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                      // previous payload high word
+    emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                        // previous payload high word
     abi::store_at_offset(emitter, "r10", 64);
 
     abi::load_at_offset(emitter, "rax", 48);
@@ -212,58 +212,58 @@ fn emit_store_entry_x86_64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_unser_release_payload");
 
     abi::load_at_offset(emitter, "r9", 32);
-    emitter.instruction("mov r10, QWORD PTR [r9]");                           // replacement value tag
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // replacement value tag
     abi::store_at_offset(emitter, "r10", 48);
-    emitter.instruction("mov r10, QWORD PTR [r9 + 8]");                       // replacement payload low word
+    emitter.instruction("mov r10, QWORD PTR [r9 + 8]");                         // replacement payload low word
     abi::store_at_offset(emitter, "r10", 56);
-    emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                      // replacement payload high word
+    emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                        // replacement payload high word
     abi::store_at_offset(emitter, "r10", 64);
     abi::load_at_offset(emitter, "r9", 40);
     abi::load_at_offset(emitter, "r10", 48);
-    emitter.instruction("mov QWORD PTR [r9], r10");                           // publish the replacement tag in the existing box
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the replacement tag in the existing box
     abi::load_at_offset(emitter, "r10", 56);
-    emitter.instruction("mov QWORD PTR [r9 + 8], r10");                       // publish the replacement low payload word
+    emitter.instruction("mov QWORD PTR [r9 + 8], r10");                         // publish the replacement low payload word
     abi::load_at_offset(emitter, "r10", 64);
-    emitter.instruction("mov QWORD PTR [r9 + 16], r10");                      // publish the replacement high payload word
+    emitter.instruction("mov QWORD PTR [r9 + 16], r10");                        // publish the replacement high payload word
 
     abi::load_at_offset(emitter, "r10", 48);
-    emitter.instruction("cmp r10, 4");                                         // is the replacement an indexed array or hash?
-    emitter.instruction("jl __rt_unser_store_duplicate_scalar_x");            // scalars have no reference slot to preserve
-    emitter.instruction("cmp r10, 5");                                         // does the replacement use container storage?
-    emitter.instruction("jle __rt_unser_store_duplicate_container_x");        // arrays and hashes own retained payload storage
-    emitter.instruction("cmp r10, 6");                                         // is the replacement an object?
-    emitter.instruction("je __rt_unser_store_duplicate_object_x");            // objects need a retained nested wrapper
-    emitter.instruction("jmp __rt_unser_store_duplicate_scalar_x");           // other wire values cannot be published references
+    emitter.instruction("cmp r10, 4");                                          // is the replacement an indexed array or hash?
+    emitter.instruction("jl __rt_unser_store_duplicate_scalar_x");              // scalars have no reference slot to preserve
+    emitter.instruction("cmp r10, 5");                                          // does the replacement use container storage?
+    emitter.instruction("jle __rt_unser_store_duplicate_container_x");          // arrays and hashes own retained payload storage
+    emitter.instruction("cmp r10, 6");                                          // is the replacement an object?
+    emitter.instruction("je __rt_unser_store_duplicate_object_x");              // objects need a retained nested wrapper
+    emitter.instruction("jmp __rt_unser_store_duplicate_scalar_x");             // other wire values cannot be published references
 
     emitter.label("__rt_unser_store_duplicate_container_x");
     abi::load_at_offset(emitter, "r9", 32);
-    emitter.instruction("mov QWORD PTR [r9], 7");                             // repurpose the parsed box as a nested Mixed wrapper
+    emitter.instruction("mov QWORD PTR [r9], 7");                               // repurpose the parsed box as a nested Mixed wrapper
     abi::load_at_offset(emitter, "r10", 40);
-    emitter.instruction("mov QWORD PTR [r9 + 8], r10");                       // point the wrapper at the reused box
-    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                        // nested wrappers carry no high payload word
+    emitter.instruction("mov QWORD PTR [r9 + 8], r10");                         // point the wrapper at the reused box
+    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // nested wrappers carry no high payload word
     abi::load_at_offset(emitter, "rax", 40);
     abi::emit_call_label(emitter, "__rt_incref");
     abi::load_at_offset(emitter, "rax", 32);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
-    emitter.instruction("jmp __rt_unser_store_duplicate_return_x");           // preserve the wrapper published by the array parser
+    emitter.instruction("jmp __rt_unser_store_duplicate_return_x");             // preserve the wrapper published by the array parser
 
     emitter.label("__rt_unser_store_duplicate_object_x");
     abi::load_at_offset(emitter, "r9", 32);
-    emitter.instruction("mov QWORD PTR [r9], 7");                             // repurpose the parsed box as a nested Mixed wrapper
+    emitter.instruction("mov QWORD PTR [r9], 7");                               // repurpose the parsed box as a nested Mixed wrapper
     abi::load_at_offset(emitter, "r10", 40);
-    emitter.instruction("mov QWORD PTR [r9 + 8], r10");                       // point the wrapper at the reused box
-    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                        // nested wrappers carry no high payload word
+    emitter.instruction("mov QWORD PTR [r9 + 8], r10");                         // point the wrapper at the reused box
+    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // nested wrappers carry no high payload word
     abi::load_at_offset(emitter, "rax", 40);
     abi::emit_call_label(emitter, "__rt_incref");
     abi::load_at_offset(emitter, "rax", 32);
     abi::emit_call_label(emitter, "__rt_unserialize_defer_data");
-    emitter.instruction("jmp __rt_unser_store_duplicate_return_x");           // keep the duplicate object's reference slot valid
+    emitter.instruction("jmp __rt_unser_store_duplicate_return_x");             // keep the duplicate object's reference slot valid
 
     emitter.label("__rt_unser_store_duplicate_scalar_x");
     abi::load_at_offset(emitter, "r9", 32);
-    emitter.instruction("mov QWORD PTR [r9], 8");                             // canonical null tag
-    emitter.instruction("mov QWORD PTR [r9 + 8], 0");                         // null has no low payload word
-    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                        // null has no high payload word
+    emitter.instruction("mov QWORD PTR [r9], 8");                               // canonical null tag
+    emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // null has no low payload word
+    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // null has no high payload word
     abi::load_at_offset(emitter, "rax", 32);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
 
@@ -283,11 +283,11 @@ fn emit_release_payload_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: unserialize replaced-payload release ---");
     emitter.label_global("__rt_unser_release_payload");
     emitter.instruction("cmp x0, #1");                                          // is the replaced payload an owned string?
-    emitter.instruction("b.eq __rt_unser_release_payload_string");             // strings release through the safe heap helper
+    emitter.instruction("b.eq __rt_unser_release_payload_string");              // strings release through the safe heap helper
     emitter.instruction("cmp x0, #4");                                          // is the replaced payload below the container tag range?
-    emitter.instruction("b.lo __rt_unser_release_payload_done");               // scalars, bools, floats, and null own no payload
+    emitter.instruction("b.lo __rt_unser_release_payload_done");                // scalars, bools, floats, and null own no payload
     emitter.instruction("cmp x0, #7");                                          // does the replaced tag stay inside the refcounted range?
-    emitter.instruction("b.hi __rt_unser_release_payload_done");               // other tags do not come from the wire decoder
+    emitter.instruction("b.hi __rt_unser_release_payload_done");                // other tags do not come from the wire decoder
     emitter.instruction("mov x0, x1");                                          // pass the replaced container payload to the uniform release dispatcher
     abi::emit_jump(emitter, "__rt_decref_any");
     emitter.label("__rt_unser_release_payload_string");
@@ -305,15 +305,15 @@ fn emit_release_payload_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: unserialize replaced-payload release ---");
     emitter.label_global("__rt_unser_release_payload");
     emitter.instruction("cmp rdi, 1");                                          // is the replaced payload an owned string?
-    emitter.instruction("je __rt_unser_release_payload_string_x");            // strings release through the safe heap helper
+    emitter.instruction("je __rt_unser_release_payload_string_x");              // strings release through the safe heap helper
     emitter.instruction("cmp rdi, 4");                                          // is the replaced payload below the container tag range?
-    emitter.instruction("jb __rt_unser_release_payload_done_x");              // scalars, bools, floats, and null own no payload
+    emitter.instruction("jb __rt_unser_release_payload_done_x");                // scalars, bools, floats, and null own no payload
     emitter.instruction("cmp rdi, 7");                                          // does the replaced tag stay inside the refcounted range?
-    emitter.instruction("ja __rt_unser_release_payload_done_x");              // other tags do not come from the wire decoder
-    emitter.instruction("mov rax, rsi");                                       // pass the replaced container payload to the uniform release dispatcher
+    emitter.instruction("ja __rt_unser_release_payload_done_x");                // other tags do not come from the wire decoder
+    emitter.instruction("mov rax, rsi");                                        // pass the replaced container payload to the uniform release dispatcher
     abi::emit_jump(emitter, "__rt_decref_any");
     emitter.label("__rt_unser_release_payload_string_x");
-    emitter.instruction("mov rax, rsi");                                       // pass the replaced string payload to the safe free helper
+    emitter.instruction("mov rax, rsi");                                        // pass the replaced string payload to the safe free helper
     abi::emit_jump(emitter, "__rt_heap_free_safe");
     emitter.label("__rt_unser_release_payload_done_x");
     abi::emit_return(emitter);

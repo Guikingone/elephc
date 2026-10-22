@@ -41,11 +41,11 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_unser_finish_stored_prop_done");          // a missing box needs no cleanup
     emitter.instruction("ldr x9, [x0]");                                        // boxed value tag
     emitter.instruction("cmp x9, #1");                                          // is the stored payload an owned string?
-    emitter.instruction("b.eq __rt_unser_finish_stored_prop_string");          // the slot now owns the persisted string
+    emitter.instruction("b.eq __rt_unser_finish_stored_prop_string");           // the slot now owns the persisted string
     emitter.instruction("cmp x9, #4");                                          // is the value below the refcounted container range?
-    emitter.instruction("b.lo __rt_unser_finish_stored_prop_scalar");          // scalars copy inline and own no heap payload
+    emitter.instruction("b.lo __rt_unser_finish_stored_prop_scalar");           // scalars copy inline and own no heap payload
     emitter.instruction("cmp x9, #6");                                          // does the value stay inside the container range?
-    emitter.instruction("b.hi __rt_unser_finish_stored_prop_scalar");          // other wire values transfer no container owner
+    emitter.instruction("b.hi __rt_unser_finish_stored_prop_scalar");           // other wire values transfer no container owner
     emitter.instruction("ldr x9, [x0, #8]");                                    // container payload stored in the property slot
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the parsed box across the payload retain
     emitter.instruction("mov x0, x9");                                          // pass the property's payload to the retain helper
@@ -69,18 +69,18 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_unser_finish_stored_prop");
     emitter.instruction("test rax, rax");                                       // a missing box needs no cleanup
     emitter.instruction("jz __rt_unser_finish_stored_prop_done_x");             // nothing to release
-    emitter.instruction("mov r10, QWORD PTR [rax]");                           // boxed value tag
-    emitter.instruction("cmp r10, 1");                                         // is the stored payload an owned string?
-    emitter.instruction("je __rt_unser_finish_stored_prop_string_x");          // the slot now owns the persisted string
-    emitter.instruction("cmp r10, 4");                                         // is the value below the refcounted container range?
-    emitter.instruction("jb __rt_unser_finish_stored_prop_scalar_x");          // scalars copy inline and own no heap payload
-    emitter.instruction("cmp r10, 6");                                         // does the value stay inside the container range?
-    emitter.instruction("ja __rt_unser_finish_stored_prop_scalar_x");          // other wire values transfer no container owner
-    emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                       // container payload stored in the property slot
-    emitter.instruction("push rax");                                           // preserve the parsed box across the payload retain
-    emitter.instruction("mov rax, rdi");                                       // __rt_incref consumes its argument in rax
-    emitter.instruction("call __rt_incref");                                   // give the property slot its own container owner
-    emitter.instruction("pop rax");                                            // restore the parsed box for the context deferral
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // boxed value tag
+    emitter.instruction("cmp r10, 1");                                          // is the stored payload an owned string?
+    emitter.instruction("je __rt_unser_finish_stored_prop_string_x");           // the slot now owns the persisted string
+    emitter.instruction("cmp r10, 4");                                          // is the value below the refcounted container range?
+    emitter.instruction("jb __rt_unser_finish_stored_prop_scalar_x");           // scalars copy inline and own no heap payload
+    emitter.instruction("cmp r10, 6");                                          // does the value stay inside the container range?
+    emitter.instruction("ja __rt_unser_finish_stored_prop_scalar_x");           // other wire values transfer no container owner
+    emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // container payload stored in the property slot
+    emitter.instruction("push rax");                                            // preserve the parsed box across the payload retain
+    emitter.instruction("mov rax, rdi");                                        // __rt_incref consumes its argument in rax
+    emitter.instruction("call __rt_incref");                                    // give the property slot its own container owner
+    emitter.instruction("pop rax");                                             // restore the parsed box for the context deferral
     abi::emit_jump(emitter, "__rt_unserialize_defer_data");                     // keep the registry box alive until the context completes
     emitter.label("__rt_unser_finish_stored_prop_string_x");
     abi::emit_jump(emitter, "__rt_heap_free");                                  // free the shell; the property slot owns the string payload
@@ -100,22 +100,22 @@ fn emit_release_previous_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_unser_release_prev_prop_done");           // a missing slot owns no previous value
     emitter.instruction("ldr x9, [x0, #8]");                                    // slot metadata word (string length or typed marker)
     abi::emit_load_int_immediate(emitter, "x10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    emitter.instruction("cmp x9, x10");                                        // is this typed property still uninitialized?
-    emitter.instruction("b.eq __rt_unser_release_prev_prop_done");             // no previous owner exists for an uninitialized slot
+    emitter.instruction("cmp x9, x10");                                         // is this typed property still uninitialized?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_done");              // no previous owner exists for an uninitialized slot
     emitter.instruction("ldr x9, [x0]");                                        // previous payload low word
-    emitter.instruction("cmp x1, #1");                                         // is the previous value an owned string?
-    emitter.instruction("b.eq __rt_unser_release_prev_prop_any");              // strings release through the uniform dispatcher
-    emitter.instruction("cmp x1, #4");                                         // is the previous value below the container range?
-    emitter.instruction("b.lo __rt_unser_release_prev_prop_done");             // scalar slots own no heap payload
-    emitter.instruction("cmp x1, #6");                                         // does the previous value stay inside the container range?
-    emitter.instruction("b.ls __rt_unser_release_prev_prop_any");              // arrays, hashes, and objects release uniformly
-    emitter.instruction("cmp x1, #7");                                         // is the previous value a boxed Mixed cell?
-    emitter.instruction("b.eq __rt_unser_release_prev_prop_mixed");            // Mixed cells stay alive for their reference slot
-    emitter.instruction("cmp x1, #10");                                        // is the previous value a callable descriptor?
-    emitter.instruction("b.eq __rt_unser_release_prev_prop_callable");         // callable descriptors own capture state
-    emitter.instruction("cmp x1, #11");                                        // is the previous value an owned reference cell?
-    emitter.instruction("b.eq __rt_unser_release_prev_prop_any");              // reference cells release through uniform dispatch
-    emitter.instruction("b __rt_unser_release_prev_prop_done");                // other tags hold no release obligation here
+    emitter.instruction("cmp x1, #1");                                          // is the previous value an owned string?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_any");               // strings release through the uniform dispatcher
+    emitter.instruction("cmp x1, #4");                                          // is the previous value below the container range?
+    emitter.instruction("b.lo __rt_unser_release_prev_prop_done");              // scalar slots own no heap payload
+    emitter.instruction("cmp x1, #6");                                          // does the previous value stay inside the container range?
+    emitter.instruction("b.ls __rt_unser_release_prev_prop_any");               // arrays, hashes, and objects release uniformly
+    emitter.instruction("cmp x1, #7");                                          // is the previous value a boxed Mixed cell?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_mixed");             // Mixed cells stay alive for their reference slot
+    emitter.instruction("cmp x1, #10");                                         // is the previous value a callable descriptor?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_callable");          // callable descriptors own capture state
+    emitter.instruction("cmp x1, #11");                                         // is the previous value an owned reference cell?
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_any");               // reference cells release through uniform dispatch
+    emitter.instruction("b __rt_unser_release_prev_prop_done");                 // other tags hold no release obligation here
     emitter.label("__rt_unser_release_prev_prop_any");
     emitter.instruction("mov x0, x9");                                          // pass the previous payload to the uniform release helper
     abi::emit_jump(emitter, "__rt_decref_any");
@@ -137,31 +137,31 @@ fn emit_release_previous_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_unser_release_prev_prop");
     emitter.instruction("test rdi, rdi");                                       // a missing slot owns no previous value
     emitter.instruction("jz __rt_unser_release_prev_prop_done_x");              // nothing to release
-    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                       // slot metadata word (string length or typed marker)
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // slot metadata word (string length or typed marker)
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    emitter.instruction("cmp r10, r11");                                       // is this typed property still uninitialized?
-    emitter.instruction("je __rt_unser_release_prev_prop_done_x");             // no previous owner exists for an uninitialized slot
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                           // previous payload low word
-    emitter.instruction("cmp rsi, 1");                                         // is the previous value an owned string?
-    emitter.instruction("je __rt_unser_release_prev_prop_any_x");              // strings release through the uniform dispatcher
-    emitter.instruction("cmp rsi, 4");                                         // is the previous value below the container range?
-    emitter.instruction("jb __rt_unser_release_prev_prop_done_x");             // scalar slots own no heap payload
-    emitter.instruction("cmp rsi, 6");                                         // does the previous value stay inside the container range?
-    emitter.instruction("jbe __rt_unser_release_prev_prop_any_x");             // arrays, hashes, and objects release uniformly
-    emitter.instruction("cmp rsi, 7");                                         // is the previous value a boxed Mixed cell?
-    emitter.instruction("je __rt_unser_release_prev_prop_mixed_x");            // Mixed cells stay alive for their reference slot
-    emitter.instruction("cmp rsi, 10");                                        // is the previous value a callable descriptor?
-    emitter.instruction("je __rt_unser_release_prev_prop_callable_x");         // callable descriptors own capture state
-    emitter.instruction("cmp rsi, 11");                                        // is the previous value an owned reference cell?
-    emitter.instruction("je __rt_unser_release_prev_prop_any_x");              // reference cells release through uniform dispatch
-    emitter.instruction("jmp __rt_unser_release_prev_prop_done_x");            // other tags hold no release obligation here
+    emitter.instruction("cmp r10, r11");                                        // is this typed property still uninitialized?
+    emitter.instruction("je __rt_unser_release_prev_prop_done_x");              // no previous owner exists for an uninitialized slot
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // previous payload low word
+    emitter.instruction("cmp rsi, 1");                                          // is the previous value an owned string?
+    emitter.instruction("je __rt_unser_release_prev_prop_any_x");               // strings release through the uniform dispatcher
+    emitter.instruction("cmp rsi, 4");                                          // is the previous value below the container range?
+    emitter.instruction("jb __rt_unser_release_prev_prop_done_x");              // scalar slots own no heap payload
+    emitter.instruction("cmp rsi, 6");                                          // does the previous value stay inside the container range?
+    emitter.instruction("jbe __rt_unser_release_prev_prop_any_x");              // arrays, hashes, and objects release uniformly
+    emitter.instruction("cmp rsi, 7");                                          // is the previous value a boxed Mixed cell?
+    emitter.instruction("je __rt_unser_release_prev_prop_mixed_x");             // Mixed cells stay alive for their reference slot
+    emitter.instruction("cmp rsi, 10");                                         // is the previous value a callable descriptor?
+    emitter.instruction("je __rt_unser_release_prev_prop_callable_x");          // callable descriptors own capture state
+    emitter.instruction("cmp rsi, 11");                                         // is the previous value an owned reference cell?
+    emitter.instruction("je __rt_unser_release_prev_prop_any_x");               // reference cells release through uniform dispatch
+    emitter.instruction("jmp __rt_unser_release_prev_prop_done_x");             // other tags hold no release obligation here
     emitter.label("__rt_unser_release_prev_prop_any_x");
-    emitter.instruction("mov rax, r10");                                       // pass the previous payload to the uniform release helper
+    emitter.instruction("mov rax, r10");                                        // pass the previous payload to the uniform release helper
     abi::emit_jump(emitter, "__rt_decref_any");
     emitter.label("__rt_unser_release_prev_prop_mixed_x");
     abi::emit_return(emitter);                                                  // the Mixed store reuses real boxes and skips sentinels
     emitter.label("__rt_unser_release_prev_prop_callable_x");
-    emitter.instruction("mov rax, r10");                                       // pass the previous callable descriptor to its release helper
+    emitter.instruction("mov rax, r10");                                        // pass the previous callable descriptor to its release helper
     abi::emit_jump(emitter, "__rt_callable_descriptor_release");
     emitter.label("__rt_unser_release_prev_prop_done_x");
     abi::emit_return(emitter);
@@ -314,7 +314,7 @@ fn emit_reuse_box_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_unser_reuse_container_x");
     abi::load_at_offset(emitter, "r9", 32);
-    emitter.instruction("mov QWORD PTR [r9], 7");                              // repurpose the parsed box as a wrapper
+    emitter.instruction("mov QWORD PTR [r9], 7");                               // repurpose the parsed box as a wrapper
     abi::load_at_offset(emitter, "r10", 40);
     emitter.instruction("mov QWORD PTR [r9 + 8], r10");                         // point the wrapper at the reused box
     emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // nested wrappers carry no high payload word
@@ -326,7 +326,7 @@ fn emit_reuse_box_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_unser_reuse_object_x");
     abi::load_at_offset(emitter, "r9", 32);
-    emitter.instruction("mov QWORD PTR [r9], 7");                              // repurpose the parsed box as a wrapper
+    emitter.instruction("mov QWORD PTR [r9], 7");                               // repurpose the parsed box as a wrapper
     abi::load_at_offset(emitter, "r10", 40);
     emitter.instruction("mov QWORD PTR [r9 + 8], r10");                         // point the wrapper at the reused box
     emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // nested wrappers carry no high payload word
@@ -338,9 +338,9 @@ fn emit_reuse_box_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_unser_reuse_scalar_x");
     abi::load_at_offset(emitter, "r9", 32);
-    emitter.instruction("mov QWORD PTR [r9], 8");                              // canonical null tag
-    emitter.instruction("mov QWORD PTR [r9 + 8], 0");                          // null has no low payload word
-    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                         // null has no high payload word
+    emitter.instruction("mov QWORD PTR [r9], 8");                               // canonical null tag
+    emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // null has no low payload word
+    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // null has no high payload word
     abi::load_at_offset(emitter, "rax", 32);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
 
