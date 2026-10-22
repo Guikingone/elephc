@@ -459,6 +459,18 @@ pub(super) fn root_user_call_operands(
         if !independent_result
             && !signature.is_some_and(|sig| sig.returned_parameter_has_independent_owner(index))
         {
+            // An alias-returning callee may hand this exact argument back to the caller.
+            // A selected string byte still needs real storage before that transfer, because
+            // the call result no longer exposes the StrCharAt producer to later consumers.
+            let value =
+                LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
+            let value = crate::ir_lower::ownership::persist_string_byte_view(
+                ctx,
+                value,
+                Some(span),
+            );
+            *operand = value.value;
+
             // One SSA value in two operand positions would be claimed, pinned and released
             // twice; it keeps the unclaimed path instead.
             let repeated = original_operands.iter().filter(|other| **other == *operand).count() > 1;
@@ -699,6 +711,7 @@ pub(crate) fn root_owned_call_operand(
     value: LoweredValue,
     span: Span,
 ) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
+    let value = crate::ir_lower::ownership::persist_string_byte_view(ctx, value, Some(span));
     if !ctx.value_needs_release_after_use(value) {
         return (value, None);
     }

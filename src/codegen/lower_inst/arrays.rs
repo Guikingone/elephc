@@ -1844,7 +1844,9 @@ fn lower_array_set_aarch64(
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "x2", "x3")?;
+            let staged = super::ownership::stage_string_byte_view(ctx, value, "x2", "x3");
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
+            super::ownership::release_string_byte_stage(ctx, staged);
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "x2")?;
@@ -1989,7 +1991,9 @@ fn lower_array_set_x86_64(
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "rdx", "rcx")?;
+            let staged = super::ownership::stage_string_byte_view(ctx, value, "rdx", "rcx");
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
+            super::ownership::release_string_byte_stage(ctx, staged);
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "rdx")?;
@@ -2621,7 +2625,9 @@ fn lower_array_push_aarch64(
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the string append helper
+            let staged = super::ownership::stage_string_byte_view(ctx, value, "x1", "x2");
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+            super::ownership::release_string_byte_stage(ctx, staged);
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "x1")?;
@@ -2731,7 +2737,9 @@ fn lower_array_push_x86_64(
             ctx.load_value_to_reg(array, "r11")?;
             ctx.load_string_value_to_regs(value, "rsi", "rdx")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the string append helper
+            let staged = super::ownership::stage_string_byte_view(ctx, value, "rsi", "rdx");
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+            super::ownership::release_string_byte_stage(ctx, staged);
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(array, "r11")?;
@@ -3203,6 +3211,12 @@ fn box_value_for_mixed_container(
     value_ty: &PhpType,
 ) -> Result<()> {
     ctx.load_value_to_result(value)?;
+    let staged = if matches!(value_ty.codegen_repr(), PhpType::Str) {
+        let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+        super::ownership::stage_string_byte_view(ctx, value, pointer_reg, length_reg)
+    } else {
+        false
+    };
     // A `?ptr<T>` boxes by its declared type, so address 0 is stored as PHP null.
     let raw_ty = ctx.raw_value_php_type(value)?;
     let box_ty = if crate::types::is_nullable_pointer_type(&raw_ty) {
@@ -3215,6 +3229,7 @@ fn box_value_for_mixed_container(
     } else {
         emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
+    super::ownership::release_string_byte_stage(ctx, staged);
     Ok(())
 }
 

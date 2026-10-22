@@ -52,11 +52,23 @@ fn load_accepted_property_store_value_to_result(
 ) -> Result<()> {
     let value_ty = value_ty.clone();
     if can_box_value_for_mixed_property(&value_ty, slot_ty) {
-        ctx.load_value_to_result(value)?;
+        let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
         let box_ty = ctx.mixed_box_type(value)?;
+        let staged = if loaded_ty == PhpType::Str {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            super::super::ownership::stage_string_byte_view(
+                ctx,
+                value,
+                pointer_reg,
+                length_reg,
+            )
+        } else {
+            false
+        };
         // Property stores do not consume the SSA source; explicit release ops still
         // own temporary cleanup after `prop_set`.
         emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        super::super::ownership::release_string_byte_stage(ctx, staged);
         return Ok(());
     }
     if can_store_boxed_value_for_mixed_property(&value_ty, slot_ty) {
@@ -169,7 +181,7 @@ fn load_accepted_property_store_value_to_result(
     }
     let loaded_ty = ctx.load_value_to_result(value)?;
     if matches!(slot_ty.codegen_repr(), PhpType::Str) {
-        abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        super::super::ownership::persist_loaded_string(ctx, value)?;
         return Ok(());
     }
     if matches!(slot_ty.codegen_repr(), PhpType::Callable) {

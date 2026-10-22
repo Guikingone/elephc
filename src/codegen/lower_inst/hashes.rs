@@ -771,7 +771,9 @@ fn lower_hash_set_aarch64_with(
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
     ctx.load_value_to_reg(hash, "x0")?;
     abi::emit_load_int_immediate(ctx.emitter, "x5", hash_set_value_tag(value_ty, storage_value_ty));
+    let staged = super::ownership::stage_string_byte_view(ctx, key, "x1", "x2");
     abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    super::ownership::release_string_byte_stage(ctx, staged);
     Ok(())
 }
 
@@ -830,7 +832,9 @@ fn lower_hash_set_x86_64_with(
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
     ctx.load_value_to_reg(hash, "rdi")?;
     abi::emit_load_int_immediate(ctx.emitter, "r9", hash_set_value_tag(value_ty, storage_value_ty));
+    let staged = super::ownership::stage_string_byte_view(ctx, key, "rsi", "rdx");
     abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    super::ownership::release_string_byte_stage(ctx, staged);
     Ok(())
 }
 
@@ -1192,7 +1196,7 @@ fn materialize_hash_value_aarch64(
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            super::ownership::persist_loaded_string(ctx, value)?;
             ctx.emitter.instruction("mov x3, x1");                              // pass the owned string pointer as the hash value low word
             ctx.emitter.instruction("mov x4, x2");                              // pass the owned string length as the hash value high word
         }
@@ -1238,7 +1242,7 @@ fn materialize_hash_value_x86_64(
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "rax", "rdx")?;
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            super::ownership::persist_loaded_string(ctx, value)?;
             ctx.emitter.instruction("mov rcx, rax");                            // pass the owned string pointer as the hash value low word
             ctx.emitter.instruction("mov r8, rdx");                             // pass the owned string length as the hash value high word
         }
@@ -1505,7 +1509,7 @@ fn materialize_hash_concrete_value_aarch64(
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            super::ownership::persist_loaded_string(ctx, value)?;
             ctx.emitter.instruction("mov x3, x1");                              // pass the owned string pointer as the hash value low word
             ctx.emitter.instruction("mov x4, x2");                              // pass the owned string length as the hash value high word
         }
@@ -1548,7 +1552,7 @@ fn materialize_hash_concrete_value_x86_64(
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "rax", "rdx")?;
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            super::ownership::persist_loaded_string(ctx, value)?;
             ctx.emitter.instruction("mov rcx, rax");                            // pass the owned string pointer as the hash value low word
             ctx.emitter.instruction("mov r8, rdx");                             // pass the owned string length as the hash value high word
         }

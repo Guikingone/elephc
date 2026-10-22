@@ -458,6 +458,17 @@ pub(super) fn materialize_dynamic_property_mixed_value(
             abi::emit_incref_if_refcounted(ctx.emitter, &value_ty.codegen_repr());
         }
     } else {
+        let staged = if value_ty == &PhpType::Str {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            super::super::ownership::stage_string_byte_view(
+                ctx,
+                value,
+                pointer_reg,
+                length_reg,
+            )
+        } else {
+            false
+        };
         // A `?ptr<T>` boxes by its declared type, so address 0 is stored as PHP null.
         let raw_ty = ctx.raw_value_php_type(value)?;
         let box_ty = if crate::types::is_nullable_pointer_type(&raw_ty) {
@@ -466,6 +477,7 @@ pub(super) fn materialize_dynamic_property_mixed_value(
             value_ty.clone()
         };
         emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        super::super::ownership::release_string_byte_stage(ctx, staged);
     }
     Ok(())
 }

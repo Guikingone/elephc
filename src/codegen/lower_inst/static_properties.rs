@@ -945,7 +945,21 @@ fn load_static_property_store_value_to_result(
     }
     ctx.load_value_to_result(value)?;
     let box_ty = ctx.mixed_box_type(value)?;
+    let staged = if matches!(
+        slot_ty.codegen_repr(),
+        PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+    ) && value_ty.codegen_repr() == PhpType::Str
+    {
+        let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+        super::ownership::stage_string_byte_view(ctx, value, pointer_reg, length_reg)
+    } else {
+        false
+    };
+    if staged && slot_ty.codegen_repr() == PhpType::Str {
+        abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    }
     box_static_property_value_if_needed(ctx, slot_ty, &box_ty);
+    super::ownership::release_string_byte_stage(ctx, staged);
     Ok(())
 }
 

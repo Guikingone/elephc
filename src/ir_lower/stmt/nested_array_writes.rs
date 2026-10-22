@@ -247,6 +247,11 @@ fn lower_boxed_static_nested_update(
     };
     let value = lower_expr(ctx, &value);
     let key = lower_expr(ctx, write_key);
+    let key = crate::ir_lower::ownership::persist_string_byte_view(
+        ctx,
+        key,
+        Some(write_key.span),
+    );
     // A warning handler may replace the stored parent. The pending update still
     // targets the old pinned cell, not a fresh traversal of the static property.
     ctx.emit_void(Op::RuntimeCall, vec![pinned.value, key.value, value.value],
@@ -355,6 +360,11 @@ fn lower_static_update_array_parent(
         }
     }
     let key = lower_expr(ctx, write_key);
+    let key = crate::ir_lower::ownership::persist_string_byte_view(
+        ctx,
+        key,
+        Some(write_key.span),
+    );
     let parent = ctx.emit_value(Op::RuntimeCall, vec![pinned.value, key.value],
         Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
@@ -496,6 +506,11 @@ fn lower_nested_array_assign_inner(
         } else { parent };
         let parent = root_operand(ctx, parent);
         let key = lower_expr(ctx, index);
+        let key = crate::ir_lower::ownership::persist_string_byte_view(
+            ctx,
+            key,
+            Some(index.span),
+        );
         let key = root_operand(ctx, key);
         let value = match value_first {
             Some(value) => value,
@@ -614,6 +629,11 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
             return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span);
         }
         let key = lower_expr(ctx, index);
+        let key = crate::ir_lower::ownership::persist_string_byte_view(
+            ctx,
+            key,
+            Some(index.span),
+        );
         let pending_append = matches!(&array.kind,
             ExprKind::Variable(name) if ctx.append_update_cell_aliases.contains(name));
         let target = match (pending_append, key_already_diagnosed) {
@@ -672,6 +692,11 @@ fn lower_local_parent_fetch_for_write_inner(
                 PhpType::Int => {
                     let array = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
+                    let key = crate::ir_lower::ownership::persist_string_byte_view(
+                        ctx,
+                        key,
+                        Some(index.span),
+                    );
                     if matches!(key.ir_type, IrType::Str
                         | IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)) {
                         // Syntactic inference defaults variables/calls to integer keys. Their
@@ -712,6 +737,11 @@ fn lower_local_parent_fetch_for_write_inner(
                 PhpType::Float | PhpType::Bool => {
                     let array = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
+                    let key = crate::ir_lower::ownership::persist_string_byte_view(
+                        ctx,
+                        key,
+                        Some(index.span),
+                    );
                     let key = coerce_array_key_to_int_at_span(
                         ctx,
                         key,
@@ -726,6 +756,11 @@ fn lower_local_parent_fetch_for_write_inner(
                     // parent can promote storage, but must not reinterpret marker payloads.
                     let array = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
+                    let key = crate::ir_lower::ownership::persist_string_byte_view(
+                        ctx,
+                        key,
+                        Some(index.span),
+                    );
                     let cell = lower_indexed_parent_fetch_for_write(
                         ctx, name, array, key, span, key_already_diagnosed,
                     );
@@ -838,6 +873,7 @@ fn lower_hash_parent_fetch_for_write_with_key(
     span: Span,
     key_already_diagnosed: bool,
 ) -> LoweredValue {
+    let key = crate::ir_lower::ownership::persist_string_byte_view(ctx, key, Some(span));
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![hash_value.value, key.value],

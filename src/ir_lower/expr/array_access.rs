@@ -233,6 +233,11 @@ pub(super) fn lower_array_access_from_value_with_null_preservation(
     warn_on_missing: bool,
     preserve_null: bool,
 ) -> LoweredValue {
+    let array_value = crate::ir_lower::ownership::persist_string_byte_view(
+        ctx,
+        array_value,
+        Some(expr.span),
+    );
     let index_value = lower_expr(ctx, index);
     lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing, preserve_null)
 }
@@ -351,6 +356,11 @@ pub(crate) fn lower_array_access_from_values(
         op.default_effects(),
         Some(expr.span),
     );
+    if op == Op::StrCharAt {
+        // The backend returns a view into the receiver. The common stabilization below
+        // must copy that byte before an owning receiver can be retired (issue #1908).
+        ctx.builder.set_value_ownership(result.value, Ownership::Borrowed);
+    }
     super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
     // path) is consumed by the read without any runtime refcount operation on

@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Instruction, ValueDef, ValueId};
+use crate::ir::{Instruction, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -56,7 +56,7 @@ pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     match ty {
         PhpType::Str => {
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            persist_loaded_string(ctx, value)?;
         }
         PhpType::Callable => {
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
@@ -83,6 +83,64 @@ pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Reports whether a string value is a direct view of one selected source byte.
+fn is_string_byte_view(ctx: &FunctionContext<'_>, value: ValueId) -> bool {
+    ctx.function.value(value).and_then(|value| match value.def {
+        ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
+        _ => None,
+    }).is_some_and(|inst| inst.op == Op::StrCharAt)
+}
+
+/// Copies a selected byte through stack storage before a helper can persist the string.
+/// Empty offset results keep their original pointer and length so missing sentinels survive.
+pub(super) fn stage_string_byte_view(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    pointer_reg: &str,
+    length_reg: &str,
+) -> bool {
+    if !is_string_byte_view(ctx, value) {
+        return false;
+    }
+    let ready = ctx.next_label("str_byte_persist_ready");
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {length_reg}, #1"));          // only a present offset has one byte to stage
+            ctx.emitter.instruction(&format!("b.ne {ready}"));                  // preserve the original empty or missing string pair
+            ctx.emitter.instruction(&format!("ldrb w9, [{pointer_reg}]"));      // read the selected byte before its receiver can be retired
+            ctx.emitter.instruction("strb w9, [sp]");                           // stage the byte outside the managed heap
+            ctx.emitter.instruction(&format!("mov {pointer_reg}, sp"));         // persistence must duplicate stack storage instead of taking over a heap view
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {length_reg}, 1"));           // only a present offset has one byte to stage
+            ctx.emitter.instruction(&format!("jne {ready}"));                   // preserve the original empty or missing string pair
+            ctx.emitter.instruction(&format!("movzx r10d, BYTE PTR [{pointer_reg}]")); // read the selected byte before its receiver can be retired
+            ctx.emitter.instruction("mov BYTE PTR [rsp], r10b");                // stage the byte outside the managed heap
+            ctx.emitter.instruction(&format!("mov {pointer_reg}, rsp"));        // persistence must duplicate stack storage instead of taking over a heap view
+        }
+    }
+    ctx.emitter.label(&ready);
+    true
+}
+
+/// Releases stack storage reserved by [`stage_string_byte_view`] after its consumer returns.
+pub(super) fn release_string_byte_stage(ctx: &mut FunctionContext<'_>, staged: bool) {
+    if staged {
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
+}
+
+/// Copies offset bytes through stack storage so payload bytes cannot impersonate heap headers.
+/// Empty offset results bypass staging so the persistence helper preserves missing sentinels.
+pub(super) fn persist_loaded_string(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+    let staged = stage_string_byte_view(ctx, value, pointer_reg, length_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    release_string_byte_stage(ctx, staged);
+    Ok(())
 }
 
 /// Lowers `ReleaseUnlessAliases`: releases operand 0 only when it is not the same payload the

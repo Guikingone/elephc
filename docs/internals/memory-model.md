@@ -317,6 +317,17 @@ Generator switches replace the active value with their guarded-stack floor and
 restore the main value on return. Reaching the floor raises the compiler's
 maximum-call-stack fatal instead of falling through to a raw guard-page fault.
 
+String offset reads return a borrowed one-byte view into their receiver. If the receiver is an
+owned temporary, EIR lowering acquires the selected byte before releasing the receiver, so a
+property, array element, or call result can be indexed without leaving a dangling view.
+A byte needed after another expression is materialized before that expression runs, so
+replacing the source cannot invalidate a pending key, comparison, dispatch, or call operand.
+When acquiring or persisting a present byte view, the backend stages that byte on the stack
+before calling the string helper. This prevents preceding payload bytes from masquerading as
+a transferable concat allocation header. Empty and missing views bypass byte staging so the
+string helper preserves its sentinel behavior.
+Silent `empty()` string probes use PHP string truthiness, including the one-byte string `"0"`.
+
 ## The string buffer (scratch pad)
 
 ```asm

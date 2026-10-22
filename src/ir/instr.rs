@@ -924,7 +924,7 @@ pub enum Op {
     StrAppend,
     StrLen,
     StrPersist,
-    /// Reads a string offset; an optional Bool immediate controls missing-offset warnings.
+    /// Borrows a string offset view; an optional Bool immediate controls missing-offset warnings.
     StrCharAt,
     StrInterpolate,
     ConcatReset,

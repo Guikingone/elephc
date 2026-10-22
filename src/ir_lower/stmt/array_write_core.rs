@@ -85,6 +85,11 @@ pub(super) fn lower_write_key_and_value(
         return (lower_expr(ctx, index), value_value);
     }
     let index_value = lower_expr(ctx, index);
+    let index_value = crate::ir_lower::ownership::persist_string_byte_view(
+        ctx,
+        index_value,
+        Some(index.span),
+    );
     (index_value, lower_expr(ctx, value))
 }
 

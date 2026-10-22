@@ -3526,7 +3526,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::StrConcat
                     | Op::StrAppend
                     | Op::StrPersist
-                    | Op::StrCharAt
                     | Op::StrInterpolate
                     | Op::ArrayNew
                     | Op::HashNew
@@ -3886,6 +3885,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(inst) = self.builder.value_defining_instruction(value.value) else {
             return false;
         };
+        // A byte view owns no allocation, but a later argument can replace its source.
+        // Preserve source-evaluation pinning; backend release skips the borrowed view itself.
+        if inst.op == Op::StrCharAt { return true; }
         if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
             return false;
         }
