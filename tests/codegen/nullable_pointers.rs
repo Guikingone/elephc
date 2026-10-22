@@ -131,3 +131,54 @@ $q->x = 1;
     );
     assert!(err.contains("Fatal error: null pointer dereference"));
 }
+
+/// Verifies freeing an object whose `?ptr<T>` property still holds an interior record address
+/// leaves the memory before that address alone. The slot used to be described as a Mixed cell,
+/// so object teardown decref'd the address and, on AArch64, rewrote the preceding record; the
+/// property then appears in `json_encode` as its integer address like a `ptr` property.
+#[test]
+fn test_nullable_pointer_property_teardown_does_not_release_the_address() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+final class Holder { public ?ptr<Vec2> $p = null; }
+function plant(buffer<Vec2> $v): void {
+    $h = new Holder();
+    $h->p = $v[1];
+}
+$v = buffer_new<Vec2>(2);
+$v[0]->x = 0;
+$v[0]->y = 1;
+plant($v);
+echo $v[0]->x, "|", $v[0]->y, "|", json_encode(new Holder()), "\n";
+"#,
+    );
+    assert_eq!(out, "0|1|{\"p\":0}\n");
+}
+
+/// Verifies a `?ptr<T>` boxed into `mixed` (a parameter or a property) boxes a null pointer as
+/// PHP null and a set one as its integer address, and that string conversions of a null
+/// pointer give the empty string `echo` prints.
+#[test]
+fn test_nullable_pointer_boxes_and_converts_null_as_php_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+final class Bag { public mixed $m = 1; }
+function show(mixed $m): void { echo $m === null ? "null" : gettype($m), "|"; }
+function first(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> { return $ok ? $v[0] : null; }
+$v = buffer_new<Vec2>(1);
+show(first($v, false));
+show(first($v, true));
+$b = new Bag();
+$b->m = first($v, false);
+echo $b->m === null ? "null" : "set", "|";
+$b->m = first($v, true);
+echo $b->m === null ? "null" : "set", "\n";
+$q = first($v, false);
+echo "x{$q}y|", "a" . $q . "b|", (string)$q, "|", sprintf("%s", $q), "|", strlen((string)$q), "|";
+echo strlen("a" . first($v, true)) > 3 ? "address" : "empty", "\n";
+"#,
+    );
+    assert_eq!(out, "null|integer|null|set\nxy|ab|||0|address\n");
+}

@@ -52,10 +52,13 @@ fn load_accepted_property_store_value_to_result(
 ) -> Result<()> {
     let value_ty = value_ty.clone();
     if can_box_value_for_mixed_property(&value_ty, slot_ty) {
-        let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+        let loaded_ty = ctx.load_value_to_result(value)?;
+        // A `?ptr<T>` keeps its declared union so a null word boxes as PHP null.
+        let raw_ty = ctx.raw_value_php_type(value)?;
+        let box_ty = if crate::types::is_nullable_pointer_type(&raw_ty) { raw_ty } else { loaded_ty };
         // Property stores do not consume the SSA source; explicit release ops still
         // own temporary cleanup after `prop_set`.
-        emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
         return Ok(());
     }
     if can_store_boxed_value_for_mixed_property(&value_ty, slot_ty) {

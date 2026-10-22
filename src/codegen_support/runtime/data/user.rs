@@ -1204,6 +1204,9 @@ pub(crate) fn emit_runtime_data_user(
                 0
             } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                 TAGGED_SCALAR_PROPERTY_TAG
+            } else if crate::types::is_nullable_pointer_type(prop_ty) {
+                // A `?ptr<T>` slot holds the bare pointer word (null is 0), like a `ptr` slot.
+                0
             } else {
                 match prop_ty {
                     PhpType::Int => 0,
@@ -1252,6 +1255,10 @@ pub(crate) fn emit_runtime_data_user(
                 } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                     // An inline `{payload, tag}` slot owns no heap reference: reading it as
                     // Mixed (7) handed the integer payload to decref/mark as a cell pointer.
+                    0
+                } else if crate::types::is_nullable_pointer_type(prop_ty) {
+                    // A `?ptr<T>` slot is a bare pointer word that owns nothing; as Mixed (7)
+                    // the object's teardown decref'd whatever the address points into.
                     0
                 } else {
                     match prop_ty {
@@ -4059,6 +4066,10 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
     }
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return TAGGED_SCALAR_PROPERTY_TAG;
+    }
+    // A `?ptr<T>` slot holds the bare pointer word, serialized like a `ptr` slot.
+    if crate::types::is_nullable_pointer_type(prop_ty) {
+        return 0;
     }
     match prop_ty {
         PhpType::Int => 0,

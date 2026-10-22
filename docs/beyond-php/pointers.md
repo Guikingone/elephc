@@ -111,10 +111,13 @@ if ($hit !== null) {
 echo gettype(find($items, 9)); // "NULL"
 ```
 
-Because the two are the same value, a `ptr_null()` stored in a `?ptr<T>` reads as `null`,
-`echo` prints nothing for it and `gettype()` answers `NULL`; a non-nullable `ptr` keeps
-printing `0x0`. Narrow a `?ptr<T>` with `!== null` before passing it to an `extern` function
-that takes `ptr<T>`.
+Because the two are the same value, a `ptr_null()` stored in a `?ptr<T>` reads as `null`:
+`echo`, `(string)`, concatenation, interpolation and `sprintf("%s")` give the empty string,
+`gettype()` answers `NULL`, and boxing it into a `mixed` value stores PHP `null`. A
+non-nullable `ptr` keeps printing `0x0`. Narrow a `?ptr<T>` with `!== null` before passing
+it to an `extern` function that takes `ptr<T>`. Object introspection (`var_dump`, `print_r`,
+`var_export`, `json_encode`, `serialize`) shows a pointer property as its integer address,
+so a null `?ptr<T>` property appears there as `0`.
 
 ## Raw string copies
 
