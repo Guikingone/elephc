@@ -143,11 +143,16 @@ fn test_class_or_alias_named_like_a_width_resolves_as_a_class() {
     );
 }
 
-/// Verifies a packed class named like a width is still laid out: a `u8` field of another packed
-/// class is the width, not an embed of that class, so no false cycle is reported.
+/// Verifies a packed class named like a width shadows the width where it is visible: a `u8`
+/// field of another packed class then embeds that class, and a genuine embedding cycle through
+/// it is still reported.
 #[test]
-fn test_packed_class_named_like_a_width_does_not_create_a_false_cycle() {
+fn test_packed_class_named_like_a_width_is_embedded_as_a_class() {
     expect_no_error(
-        "<?php packed class A { public u8 $x; } packed class u8 { public A $a; } echo ptr_sizeof(\"u8\");",
+        "<?php packed class u8 { public int $v; } packed class A { public u8 $x; } echo ptr_sizeof(\"A\");",
+    );
+    expect_error(
+        "<?php packed class A { public u8 $x; } packed class u8 { public A $a; }",
+        "embeds itself through its packed class fields",
     );
 }

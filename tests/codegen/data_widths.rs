@@ -471,3 +471,37 @@ echo show(new u8(5)), "\n";
     );
     assert_eq!(out, "5\n");
 }
+
+/// Verifies a class really named like a width stays a class when it is named explicitly: a
+/// fully qualified `\u8`, the bare name where that class is visible, and a `use` import of a
+/// namespaced `u8` all give a buffer of that packed record, not a byte buffer.
+#[test]
+fn test_qualified_or_imported_class_named_like_a_width_is_the_class() {
+    let out = compile_and_run(
+        r#"<?php
+packed class u8 { public int $v; }
+$q = buffer_new<\u8>(1);
+$q[0]->v = 7;
+$bare = buffer_new<u8>(1);
+$bare[0]->v = 11;
+echo $q[0]->v, " ", $bare[0]->v, " ", ptr_sizeof("u8"), "\n";
+"#,
+    );
+    assert_eq!(out, "7 11 8\n");
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib { packed class u8 { public int $v; } }
+namespace App {
+    use Lib\u8;
+    $b = buffer_new<u8>(2);
+    $b[1]->v = 9;
+    $w = buffer_new<\Lib\u8>(1);
+    $w[0]->v = 3;
+    $bytes = buffer_new<u16>(1);
+    $bytes[0] = 70000;
+    echo $b[1]->v, " ", $w[0]->v, " ", $bytes[0], "\n";
+}
+"#,
+    );
+    assert_eq!(out, "9 3 4464\n");
+}

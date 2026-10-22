@@ -15,8 +15,8 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind, TypeExpr};
 use crate::types::{
     align_up, ctype_field_layout, ctype_to_abi_type, ctype_to_php_type, packed_type_layout,
-    width_type_from_name, width_type_from_type_expr, ExternClassInfo, ExternFieldInfo,
-    ExternFunctionSig, FunctionSig, PackedClassInfo, PackedFieldInfo, PhpType,
+    width_type_from_type_expr, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig,
+    PackedClassInfo, PackedFieldInfo, PhpType,
 };
 
 use super::super::Checker;
@@ -377,14 +377,14 @@ impl Checker {
 }
 
 /// Yields the class names a packed declaration embeds by value (fields typed as a bare class
-/// name). Pointer fields only store an address and do not need the target's layout, and a C
-/// width name (`u8`, `f32`) is a storage format that `prescan_packed_class` resolves before any
-/// class lookup, so it never waits for a class of that name.
+/// name). Pointer fields only store an address and do not need the target's layout, and an
+/// unqualified C width name (`u8`, `f32`) is a storage format that `prescan_packed_class`
+/// resolves before any class lookup, so it never waits for a class of that name.
 fn embedded_packed_names(
     fields: &[crate::parser::ast::PackedField],
 ) -> impl Iterator<Item = &str> {
     fields.iter().filter_map(|field| match &field.type_expr {
-        TypeExpr::Named(name) if width_type_from_name(name.as_str()).is_none() => {
+        TypeExpr::Named(name) if width_type_from_type_expr(&field.type_expr).is_none() => {
             Some(name.as_str())
         }
         _ => None,

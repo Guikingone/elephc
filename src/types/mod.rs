@@ -72,7 +72,7 @@ pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayC
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{
     align_up, ctype_field_layout, ctype_to_abi_type, ctype_to_php_type, packed_type_layout,
-    packed_type_size, width_spelling_hint, width_type_from_name, width_type_from_type_expr,
+    packed_type_size, width_spelling_hint, width_type_from_type_expr,
     ExternAbiType, ScalarWidth,
 };
 pub use model::{PhpType, TypeEnv};
