@@ -130,12 +130,18 @@ pub(super) fn null_coalesce_merge_type(
     value_ty: PhpType,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = strip_void_from_union(value_ty).codegen_repr();
+    let raw_value_ty = value_ty;
+    let value_ty = strip_void_from_union(raw_value_ty.clone()).codegen_repr();
     let declared_default_ty = materialized_expr_type_for_merge(ctx, default);
-    // `$p ?? $q` with a `?ptr<T>` default can still be null; the default's codegen form (the
-    // bare pointer) would drop that.
-    if matches!(value_ty, PhpType::Pointer(_))
-        && crate::types::is_nullable_pointer_type(&declared_default_ty)
+    // A `?ptr<T>` on either side keeps the merge nullable when the other side may be null: the
+    // codegen form of both (the bare pointer, or `Void` for a literal null) would drop that.
+    // `$p ?? null` with a non-null `ptr<T>` keeps the plain pointer, its default being dead.
+    let value_nullable_pointer = crate::types::is_nullable_pointer_type(&raw_value_ty);
+    let default_nullable_pointer = crate::types::is_nullable_pointer_type(&declared_default_ty);
+    let value_is_null = matches!(raw_value_ty, PhpType::Void | PhpType::Never);
+    let default_is_null = matches!(declared_default_ty, PhpType::Void | PhpType::Never);
+    if (value_nullable_pointer && (default_nullable_pointer || default_is_null))
+        || ((value_is_null || matches!(value_ty, PhpType::Pointer(_))) && default_nullable_pointer)
     {
         return nullable_aware_branch_merge_type(&value_ty, &declared_default_ty);
     }

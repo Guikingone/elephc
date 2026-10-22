@@ -157,7 +157,9 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
         return Ok(());
     }
     match (&source_ty, &result_ty) {
-        (PhpType::Mixed, PhpType::Int) => {
+        // A boxed pointer is an integer-like payload and a boxed null casts to 0, which is the
+        // null of a `?ptr<T>` read (a `mixed` static local later holding a pointer).
+        (PhpType::Mixed, PhpType::Int | PhpType::Pointer(_)) => {
             move_int_result_to_first_arg(ctx);
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             Ok(())

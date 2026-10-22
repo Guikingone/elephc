@@ -236,3 +236,80 @@ echo $y === null ? "null" : $y->x, "\n";
     );
     assert_eq!(out, "null[]|null|null|null|null|3\n");
 }
+
+/// Verifies `??` and `??=` with a literal `null` on either side of a `?ptr<T>` stay nullable,
+/// so the result is PHP null (`=== null`, `isset()` false, empty echo) rather than a pointer.
+#[test]
+fn test_nullable_pointer_coalesce_with_null_arms_stays_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+final class Holder { public ?ptr<Vec2> $p = null; }
+function first(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> { return $ok ? $v[0] : null; }
+$v = buffer_new<Vec2>(1);
+$q = first($v, false);
+$h = new Holder();
+$a = $q ?? null;
+$b = null ?? $q;
+$c = $h->p ?? null;
+$d = first($v, false) ?? null;
+$e = $q;
+$e ??= null;
+echo $a === null ? "n" : "s", $b === null ? "n" : "s", $c === null ? "n" : "s";
+echo $d === null ? "n" : "s", $e === null ? "n" : "s", "|";
+echo isset($a) ? "set" : "unset", "|[", $a, "]\n";
+"#,
+    );
+    assert_eq!(out, "nnnnn|unset|[]\n");
+}
+
+/// Verifies `==`, `!=` and `switch` compare a `?ptr<T>` through PHP's loose table as the value
+/// it stands for: null for address 0, its integer address otherwise.
+#[test]
+fn test_nullable_pointer_loose_comparisons_and_switch() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> { return $ok ? $v[0] : null; }
+$v = buffer_new<Vec2>(1);
+$q = first($v, false);
+$p = first($v, true);
+echo $q == null ? "eq" : "ne", $q == 0 ? "0" : "-", $q == false ? "f" : "-", $q == "" ? "e" : "-";
+echo $q != null ? "!" : ".", $p == null ? "!" : ".", $p != null ? "set" : "null", "|";
+switch ($q) { case null: echo "q-null"; break; default: echo "q-default"; }
+echo "|";
+switch ($p) { case null: echo "p-null"; break; default: echo "p-default"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "eq0fe..set|q-null|p-default\n");
+}
+
+/// Verifies a null pointer stored into `mixed` storage (a static property, a by-reference
+/// parameter, a static local, a merge with a string) is PHP null, and a live one is not.
+#[test]
+fn test_nullable_pointer_null_boxes_as_null_in_mixed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+final class Box { public static mixed $m = 1; }
+function first(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> { return $ok ? $v[0] : null; }
+function set(mixed &$m, ?ptr<Vec2> $p): void { $m = $p; }
+function keep(?ptr<Vec2> $p): bool { static $m = null; $m = $p; return $m === null; }
+$v = buffer_new<Vec2>(1);
+$q = first($v, false);
+$p = first($v, true);
+Box::$m = $q;
+echo Box::$m === null ? "n" : "s";
+Box::$m = $p;
+echo Box::$m === null ? "n" : "s", "|";
+$m = 1;
+set($m, $q);
+echo $m === null ? "n" : "s", "|";
+echo keep($q) ? "n" : "s", keep($p) ? "n" : "s", "|";
+$y = $argc > 5 ? "none" : ptr_null();
+echo "[", $y, "]", $y === null ? "n" : "s", "\n";
+"#,
+    );
+    assert_eq!(out, "ns|n|ns|[]n\n");
+}

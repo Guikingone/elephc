@@ -80,7 +80,12 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         loaded_ty = PhpType::Int;
     }
-    if loaded_ty.is_refcounted() {
+    // A pointer word (a `?ptr<T>` value, which used to arrive as a Mixed cell) stored into a
+    // Mixed-typed static local is boxed here, a null address as PHP null; the fresh box is the
+    // slot's only owner.
+    if matches!(slot.php_type.codegen_repr(), PhpType::Mixed) && matches!(loaded_ty, PhpType::Pointer(_)) {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
+    } else if loaded_ty.is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
     }
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, true);
@@ -207,8 +212,11 @@ fn local_slot<'a>(
 /// Verifies that this backend slice knows how to represent the static-local type.
 fn ensure_static_local_type_supported(slot: &StaticLocalSlot, inst: &Instruction) -> Result<()> {
     let ty = slot.php_type.codegen_repr();
-    if matches!(ty, PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void)
-        || ty.is_refcounted()
+    // A `?ptr<T>` static local is one pointer word (null is address 0).
+    if matches!(
+        ty,
+        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void | PhpType::Pointer(_)
+    ) || ty.is_refcounted()
     {
         return Ok(());
     }
@@ -252,8 +260,15 @@ fn static_local_value_type_matches(value_ty: &PhpType, slot_ty: &PhpType) -> boo
         return true;
     }
     if matches!(slot_ty, PhpType::Mixed)
-        && matches!(value_ty, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float)
+        && matches!(
+            value_ty,
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float | PhpType::Pointer(_)
+        )
     {
+        return true;
+    }
+    // Any pointer fits a pointer slot once the checker accepted the assignment.
+    if matches!((value_ty, slot_ty), (PhpType::Pointer(_), PhpType::Pointer(_))) {
         return true;
     }
     matches!(
