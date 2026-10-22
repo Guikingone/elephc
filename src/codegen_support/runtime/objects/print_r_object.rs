@@ -467,7 +467,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // pass the projected hash to the entry walker
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // entry indent
     emitter.instruction("call __rt_print_r_hash_entries");                      // write one `[name] => value` line per row
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the projected hash
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the projected hash into the free ABI
     emitter.instruction("call __rt_hash_free_deep");                            // release the throwaway projection
     emitter.instruction("jmp __rt_pr_obj_close_x86");                           // close the object body
 
