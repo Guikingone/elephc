@@ -465,6 +465,29 @@ echo $w === null ? "null" : "set", "\n";
     assert_eq!(out, "nullnull|null|set|null|null|null\n");
 }
 
+/// Verifies a `null` variable (plain, or a `?ptr<T>` parameter narrowed to null by a guard)
+/// bound to a `?ptr<T>` by-reference parameter is read as null by the callee, and that a
+/// pointer the callee stores through it reaches the caller.
+#[test]
+fn test_nullable_pointer_by_ref_parameters_accept_null_variables() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function take(?ptr<Vec2> &$p): string { return $p === null ? "null" : "set"; }
+function fill(?ptr<Vec2> &$p, buffer<Vec2> $v): void { if ($p === null) { $p = $v[0]; } }
+function guarded(?ptr<Vec2> $p): string { if ($p === null) { return take($p); } return "live"; }
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 6;
+$x = null;
+echo take($x), "|", guarded(null), "|", guarded($v[0]), "|";
+?ptr<Vec2> $y = null;
+fill($y, $v);
+echo $y === null ? "null" : $y->x, "\n";
+"#,
+    );
+    assert_eq!(out, "null|null|live|6\n");
+}
+
 /// Verifies a field write through a `?ptr<T>` local that was declared `= null` and is still
 /// null at run time reports the null-pointer dereference fatal.
 #[test]

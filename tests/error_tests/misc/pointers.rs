@@ -311,18 +311,3 @@ fn test_error_ptr_cast_rejects_unknown_target() {
         "Unknown ptr_cast target type: NoSuchType",
     );
 }
-
-/// Tests that a `null` variable passed to a `?ptr<T>` by-reference parameter is refused: the
-/// parameter reads the caller's raw pointer word, which a `null` local does not hold.
-#[test]
-fn test_error_null_variable_to_nullable_pointer_by_ref_param() {
-    expect_error(
-        r#"<?php
-packed class Vec2 { public int $x; public int $y; }
-function take(?ptr<Vec2> &$p): bool { return $p === null; }
-$x = null;
-take($x);
-"#,
-        "a pointer by-reference parameter writes back",
-    );
-}
