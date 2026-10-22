@@ -137,15 +137,14 @@ impl Instruction {
         )
     }
 
-    /// Returns whether a string result of this instruction is a transient the backend never
-    /// releases.
+    /// Returns whether ordinary string cleanup must skip this producer.
     ///
-    /// These producers answer in concat scratch while the result fits and otherwise in a heap
-    /// block stamped `CONCAT_TEMP_HEAP_KIND`, which no release frees: the first consumer that
-    /// persists the value adopts that block in place. A `release` of such a value is therefore a
-    /// no-op. Runtime calls count as transient unless their result is fresh or independently
-    /// owned storage, which also covers results that borrow a view into an argument; see
-    /// [`Self::creates_transient_string`] for the fresh producers a user call may claim.
+    /// Scratch values and borrowed views do not carry an owned string reference here. Producers
+    /// recognized by [`Self::creates_transient_string`] need a separate conditional release:
+    /// the backend frees their heap block only while its kind is still `CONCAT_TEMP_HEAP_KIND`.
+    /// If persistence has adopted the block, its owned-string reference belongs to the consumer;
+    /// scratch storage and these already adopted results stay untouched by producer cleanup.
+    /// Runtime calls skip ordinary release unless their result is fresh or independently owned.
     pub fn string_release_is_noop(&self) -> bool {
         if self.op == Op::RuntimeCall {
             let result_is_releasable = match self.immediate {

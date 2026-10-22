@@ -119,7 +119,7 @@ pub(super) fn stage_string_byte_view(
             // -- stage a present offset byte before string persistence --
             ctx.emitter.instruction(&format!("cmp {length_reg}, 1"));           // only a present offset has one byte to stage
             ctx.emitter.instruction(&format!("jne {ready}"));                   // preserve the original empty or missing string pair
-            ctx.emitter.instruction(&format!("movzx r10d, BYTE PTR [{pointer_reg}]"));// read the selected byte before its receiver can be retired
+            ctx.emitter.instruction(&format!("movzx r10d, BYTE PTR [{pointer_reg}]")); // read the selected byte before its receiver can be retired
             ctx.emitter.instruction("mov BYTE PTR [rsp], r10b");                // stage the byte outside the managed heap
             ctx.emitter.instruction(&format!("mov {pointer_reg}, rsp"));        // persistence must duplicate stack storage instead of taking over a heap view
         }
