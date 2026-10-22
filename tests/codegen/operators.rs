@@ -1956,6 +1956,47 @@ var_dump($f == $g);
     );
 }
 
+/// Review regression: a 20-digit integer part overflows even when a `.` or an exponent follows.
+///
+/// PHP stops its integer scan at `MAX_LENGTH_OF_LONG` digits and records `oflow` before it
+/// reaches the fraction or exponent, so two such spellings that round to the same double
+/// compare by bytes, and one of them against an `IS_LONG` is decided by the overflow sign
+/// alone (`"10000000000000000000e-30" > "5"`). Nineteen digits stay a genuine float. The
+/// `$argc` operands keep the runtime path; the two literal rows check the compile-time fold.
+///
+/// Every expectation measured against the host PHP 8.5.12.
+#[test]
+fn test_twenty_digit_float_spellings_keep_phps_integer_overflow() {
+    let out = compile_and_run(
+        r#"<?php
+$a = $argc > 99 ? "0" : "99999999999999999999.0";
+$b = $argc > 99 ? "0" : "100000000000000000000.0";
+var_dump($a > $b);
+var_dump($a <=> $b);
+$c = $argc > 99 ? "0" : "10000000000000000000";
+$d = $argc > 99 ? "0" : "10000000000000000000e0";
+var_dump($c == $d);
+var_dump($c < $d);
+$e = $argc > 99 ? "0" : "-99999999999999999999.0";
+$f = $argc > 99 ? "0" : "-100000000000000000000.0";
+var_dump($e > $f);
+$g = $argc > 99 ? "0" : "10000000000000000000e-30";
+$h = $argc > 99 ? "0" : "5";
+var_dump($g > $h);
+$i = $argc > 99 ? "0" : "9999999999999999999.5";
+$j = $argc > 99 ? "0" : "9999999999999999999.4";
+var_dump($i == $j);
+var_dump("99999999999999999999.0" > "100000000000000000000.0");
+var_dump("10000000000000000000" == "10000000000000000000e0");
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nint(1)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n\
+         bool(true)\nbool(true)\nbool(false)\n"
+    );
+}
+
 /// Review regression: boxed string equality preserves exact numeric and byte-order rules.
 #[test]
 fn test_review_mixed_string_equality_preserves_php_numeric_context() {

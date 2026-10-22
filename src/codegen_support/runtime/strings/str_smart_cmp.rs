@@ -18,17 +18,19 @@
 //!   `"9007199254740993" > "9007199254740992"` can be true: both round to the same
 //!   double, so any `f64` route loses the answer.
 //! - Integer text that does not fit `zend_long` becomes `IS_DOUBLE` and records `oflow`
-//!   (`+1` / `-1`). PHP then leans on `oflow` twice: two same-side overflows that round to
-//!   the same double fall back to a BYTE comparison, and an `IS_LONG` against an
+//!   (`+1` / `-1`). So does any run whose integer part reaches 20 significant digits, even
+//!   when a `.` or an exponent follows: PHP stops its integer scan there and sets `oflow`
+//!   before it sees the rest. PHP then leans on `oflow` twice: two same-side overflows that
+//!   round to the same double fall back to a BYTE comparison, and an `IS_LONG` against an
 //!   overflowed side is decided by the overflow's sign alone without consulting either
 //!   value.
 //! - `dval1 - dval2 == 0.` is written as a subtraction on purpose and is not the same test
 //!   as `dval1 == dval2`: two integer strings long enough to round to infinity subtract to
 //!   NaN, which is *not* equal to zero, so PHP does not take the byte fallback for them.
-//! - A NUL byte anywhere in a string makes it non-numeric, which the bounded pre-scan in
-//!   `__rt_str_numeric_ex` enforces. The shared `__rt_php_num_scan` is C-string based and
-//!   cannot see past one; `is_numeric()` still goes through that path and still reads
-//!   `"2\0"` as numeric, which is a separate defect in the scanner, not in this ordering.
+//! - A NUL byte anywhere in a string makes it non-numeric, which the length-bounded pre-scan
+//!   in `__rt_str_numeric_ex` enforces. The shared `__rt_php_num_scan` is C-string based and
+//!   cannot see past one, so callers that need the whole-string answer (this ordering and
+//!   `is_numeric()`) go through `__rt_str_numeric_ex` rather than the scanner directly.
 //! - This is the runtime twin of `crate::optimize::fold::compare::compare_strings`, which
 //!   already folds literal pairs correctly; the two must agree or a literal and a variable
 //!   give different answers for the same comparison.
@@ -50,11 +52,14 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// - Output: rax = kind, rdx = `oflow`, rcx = the exact value
 ///
 /// The classification follows `_is_numeric_string_ex`: leading zeros are not significant,
-/// a `.` or an `e`/`E` anywhere in the run makes it `IS_DOUBLE` with `oflow` 0, and an
-/// integer run is `IS_LONG` only while its value fits `zend_long` — 19 significant digits
-/// are compared against 2^63 so that `-9223372036854775808` stays `IS_LONG` while
-/// `9223372036854775808` does not. The helper is a leaf: it makes no calls and needs no
-/// stack frame.
+/// and PHP stops counting integer digits at `MAX_LENGTH_OF_LONG` (20). A run whose integer
+/// part reaches 20 significant digits is therefore `IS_DOUBLE` with the sign's `oflow` even
+/// when a `.` or an exponent follows, so `"99999999999999999999.0"` overflows like
+/// `"99999999999999999999"`. Below that, a `.` or an `e`/`E` makes the run `IS_DOUBLE` with
+/// `oflow` 0, and an integer run is `IS_LONG` only while its value fits `zend_long`: 19
+/// significant digits are compared against 2^63 so that `-9223372036854775808` stays
+/// `IS_LONG` while `9223372036854775808` does not. The helper is a leaf: it makes no calls
+/// and needs no stack frame.
 pub fn emit_num_run_class(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_num_run_class_linux_x86_64(emitter);
@@ -103,9 +108,10 @@ pub fn emit_num_run_class(emitter: &mut Emitter) {
     emitter.instruction("b __rt_nrc_digit_loop");                               // keep scanning the mantissa
 
     emitter.label("__rt_nrc_end");
-    emitter.instruction("cbnz w10, __rt_nrc_double_spelling");                  // a surviving '.', 'e' or 'E' means the run spells a float
+    emitter.instruction("cmp x11, #19");                                        // PHP stops its integer scan at MAX_LENGTH_OF_LONG (20) digits
+    emitter.instruction("b.hi __rt_nrc_overflow");                              // 20 or more significant digits overflow, even before a '.' or exponent
+    emitter.instruction("cbnz w10, __rt_nrc_double_spelling");                  // a '.', 'e' or 'E' within 19 digits spells a genuine float
     emitter.instruction("cmp x11, #19");                                        // an integer spelling: does its magnitude fit?
-    emitter.instruction("b.hi __rt_nrc_overflow");                              // 20 or more significant digits never fit
     emitter.instruction("b.lo __rt_nrc_long");                                  // 18 or fewer always fit
     emitter.instruction("movz x15, #0x8000, lsl #48");                          // 2^63: LONG_MAX + 1, and |LONG_MIN|
     emitter.instruction("cmp x13, x15");                                        // compare the exact 19-digit magnitude against it
@@ -184,10 +190,11 @@ fn emit_num_run_class_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_nrc_digit_loop_linux_x86_64");                // keep scanning the mantissa
 
     emitter.label("__rt_nrc_end_linux_x86_64");
+    emitter.instruction("cmp r10, 19");                                         // PHP stops its integer scan at MAX_LENGTH_OF_LONG (20) digits
+    emitter.instruction("ja __rt_nrc_overflow_linux_x86_64");                   // 20 or more significant digits overflow, even before a '.' or exponent
     emitter.instruction("test al, al");                                         // did the run end, or is a '.'/'e'/'E' left?
-    emitter.instruction("jne __rt_nrc_double_spelling_linux_x86_64");           // a surviving byte means the run spells a float
+    emitter.instruction("jne __rt_nrc_double_spelling_linux_x86_64");           // a '.', 'e' or 'E' within 19 digits spells a genuine float
     emitter.instruction("cmp r10, 19");                                         // an integer spelling: does its magnitude fit?
-    emitter.instruction("ja __rt_nrc_overflow_linux_x86_64");                   // 20 or more significant digits never fit
     emitter.instruction("jb __rt_nrc_long_linux_x86_64");                       // 18 or fewer always fit
     emitter.instruction("mov rsi, 1");                                          // build 2^63 without a 64-bit immediate
     emitter.instruction("shl rsi, 63");                                         // 2^63: LONG_MAX + 1, and |LONG_MIN|

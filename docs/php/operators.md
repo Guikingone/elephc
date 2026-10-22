@@ -99,6 +99,16 @@ var_dump("99999999999999999999" > "100000000000000000000");   // true  — byte 
 var_dump("9223372036854775807" == "9223372036854775808");     // false — the right side overflowed
 ```
 
+PHP stops reading the integer part after 20 significant digits and records the overflow
+there, before it reaches a `.` or an exponent. A float spelling with a 20-digit integer part
+therefore overflows like the plain integer, while 19 digits stay an ordinary float:
+
+```php
+var_dump("99999999999999999999.0" > "100000000000000000000.0");  // true:  byte order decides
+var_dump("10000000000000000000" == "10000000000000000000e0");    // false: byte order decides
+var_dump("9999999999999999999.5" == "9999999999999999999.4");    // true:  equal floats
+```
+
 Numeric classification uses the full PHP byte length, including embedded NUL bytes.
 `is_numeric("2\0")` is `false`, and `"2\0" > "10"` uses byte ordering and is `true`,
 matching PHP. Boxed `mixed` strings use the same numeric-string and byte-order rules
