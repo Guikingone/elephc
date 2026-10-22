@@ -528,3 +528,12 @@ fn test_declare_strict_types_marks_prefix_assignment_preludes() {
     assert!(assign.strict_types);
     assert!(body.iter().all(|stmt| !stmt.strict_types), "closure bodies stay lexical");
 }
+
+/// A relative-name call is an ordinary statement body, unlike a namespace declaration.
+#[test]
+fn test_declare_single_statement_accepts_relative_name_call() {
+    let stmts = parse_source("<?php declare(ticks=1) namespace\\f();");
+    let call = declare_body_stmt(&stmts[0]);
+    assert!(matches!(&call.kind, StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { .. }, .. })),
+        "{:?}", call.kind);
+}

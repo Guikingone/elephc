@@ -77,13 +77,18 @@ pub(super) fn parse_declare(
                 "Expected a statement after declare(...)",
             ));
         }
+        // The namespace parser rejects any nested declaration with its own message, so a
+        // namespace body is classified before it is parsed; `namespace\f();` is a statement.
+        Some(Token::Namespace) if !crate::parser::relative_name_starts_at(tokens, *pos) => {
+            return Err(CompileError::new(tokens[*pos].1.span,
+                "A declaration cannot be the single-statement body of declare"));
+        }
         _ => {
             let stmt = parse_stmt(tokens, pos)?;
             let declaration = matches!(stmt.kind, StmtKind::FunctionDecl { .. }
                 | StmtKind::ClassDecl { .. } | StmtKind::TraitDecl { .. }
                 | StmtKind::InterfaceDecl { .. } | StmtKind::EnumDecl { .. }
-                | StmtKind::ConstDecl { .. } | StmtKind::NamespaceDecl { .. }
-                | StmtKind::NamespaceBlock { .. } | StmtKind::UseDecl { .. })
+                | StmtKind::ConstDecl { .. } | StmtKind::UseDecl { .. })
                 || matches!(&stmt.kind, StmtKind::Synthetic(body)
                     if !body.is_empty() && body.iter().all(|stmt| matches!(stmt.kind, StmtKind::ConstDecl { .. })));
             if declaration {
