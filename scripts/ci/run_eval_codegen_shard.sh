@@ -99,7 +99,9 @@ pass1_pid_file=$log_dir/pass1.pid
 # timing stable libtest allows (see EVAL_SHARD_JUNIT_FILE above). perl rather than awk:
 # the macOS runners' awk has no systime(), and both runners ship perl.
 {
-    "$test_binary" codegen::eval "${skipped[@]}" --test-threads 2 2>&1 &
+    # `${skipped[@]+...}`: a single-shard run skips nothing, and macOS's bash 3.2 treats an
+    # empty "${skipped[@]}" as an unbound variable under `set -u`.
+    "$test_binary" codegen::eval ${skipped[@]+"${skipped[@]}"} --test-threads 2 2>&1 &
     echo $! > "$pass1_pid_file"
     if wait $!; then echo 0 > "$pass1_status_file"; else echo $? > "$pass1_status_file"; fi
 } | tee "$pass1_log" | perl -pe 'BEGIN { $| = 1 } $_ = time . "\t" . $_' > "$pass1_times" &
