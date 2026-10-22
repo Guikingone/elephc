@@ -50,7 +50,8 @@ pub(super) fn emit_mark_reserved_result_temporary(emitter: &mut Emitter) {
             abi::emit_symbol_address(emitter, "r10", "_concat_buf");
             emitter.instruction("mov r11, rax");                                // preserve the output pointer while classifying its reservation
             emitter.instruction("sub r11, r10");                                // an unsigned out-of-window offset identifies owned heap fallback storage
-            emitter.instruction(&format!("cmp r11, {}", emitter.concat_capacity));  // scratch reservations do not own a heap header
+            crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", emitter.concat_capacity as i64); // load the shared scratch capacity
+            emitter.instruction("cmp r11, r9");                                 // scratch reservations do not own a heap header
             emitter.instruction(&format!("jb {}", ready));                      // leave scratch storage untagged for ordinary persistence
             abi::emit_load_int_immediate(emitter, "r10",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND) as i64);

@@ -175,7 +175,8 @@ fn emit_implode_publish_offset_x86_64(emitter: &mut Emitter, site: &str) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_buf");
     emitter.instruction("mov rdx, rcx");                                        // copy the base before converting it to a scratch offset
     emitter.instruction("sub rdx, r8");                                         // candidate scratch offset of the destination
-    emitter.instruction(&format!("cmp rdx, {}", cap));                          // is the destination outside the scratch window (unsigned: heap wraps high)?
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", cap as i64); // load the shared scratch capacity
+    emitter.instruction("cmp rdx, r9");                                         // is the destination outside the scratch window (unsigned: heap wraps high)?
     emitter.instruction(&format!("jae {}", grown));                             // a grown join holds no scratch
     emitter.instruction("mov r9, r10");                                         // copy the live cursor before converting it to an absolute offset
     emitter.instruction("sub r9, r8");                                          // absolute offset of the live destination cursor
@@ -528,7 +529,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the current concat-buffer destination cursor across glue and element copy loops
     // The destination starts as the scratch tail and grows out of it on demand, so the
     // capacity it is measured against is what remains of the 64 KiB buffer, not all of it.
-    emitter.instruction(&format!("mov rcx, {}", cap));                          // total concat scratch capacity in bytes
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rcx", cap as i64); // total concat scratch capacity in bytes
     emitter.instruction("sub rcx, r9");                                         // room left in the scratch buffer from the entry offset
     emitter.instruction("jns __rt_implode_capacity_ready");                     // a full (or over-full) scratch starts this join at zero capacity
     emitter.instruction("xor ecx, ecx");                                        // clamp the remaining capacity at zero
