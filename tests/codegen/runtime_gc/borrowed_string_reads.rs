@@ -80,9 +80,10 @@ function probeInteriorMarker(string $prefix): void {
 }
 probeInteriorMarker(str_repeat("\x07", 8));
 probeInteriorMarker("\x07\x00\x00\x00HPLE");
+probeInteriorMarker("\x07\x00\x00\x00\x00\x00\x00\x00");
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "5a5a5a|same|5a5a5a\n".repeat(2), "{}", out.stderr);
+    assert_eq!(out.stdout, "5a5a5a|same|5a5a5a\n".repeat(3), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
