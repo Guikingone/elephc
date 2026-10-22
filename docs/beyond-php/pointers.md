@@ -122,6 +122,11 @@ it to an `extern` function that takes `ptr<T>`. Object introspection (`var_dump`
 `var_export`, `json_encode`, `serialize`) shows a pointer property as its integer address,
 so a null `?ptr<T>` property appears there as `0`.
 
+A `?ptr<T> &$p` by-reference parameter writes the pointer word back through the caller's
+variable, so that variable must already have pointer storage: declare it `?ptr<T> $p = null;`
+(a plain `$p = null;` local is rejected at compile time). A `?ptr<T>` variable that a
+`=== null` guard narrowed can still be passed, and reads as `?ptr<T>` again after the call.
+
 ## Raw string copies
 
 ```php

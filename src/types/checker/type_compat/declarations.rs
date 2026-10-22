@@ -351,6 +351,25 @@ impl Checker {
                 ),
             ));
         }
+        // A `?ptr<T>` parameter writes a pointer word back through the caller's variable. A
+        // plain `$x = null` local has no pointer-word slot to receive it, while a pointer
+        // variable a null guard narrowed (or a declared `?ptr<T>` local) keeps its own.
+        if crate::types::is_nullable_pointer_type(expected_ty)
+            && matches!(actual_ty.codegen_repr(), PhpType::Void | PhpType::Never)
+            && !self.null_by_ref_argument_has_pointer_storage(arg)
+        {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects ?{}, got null: a pointer by-reference parameter writes back \
+                     through the caller's variable, which must already hold a pointer word. \
+                     Declare the variable as `?{} $p = null;`",
+                    context,
+                    expected_ty.codegen_repr(),
+                    expected_ty.codegen_repr()
+                ),
+            ));
+        }
         if *actual_ty == PhpType::Void && !Self::declared_type_accepts_null(expected_ty) {
             return Err(CompileError::new(
                 arg.span,
@@ -369,6 +388,27 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    /// Returns whether a `null` by-reference argument still has pointer-word storage.
+    ///
+    /// Only a whole local can be a plain `null` binding. Its storage is the type it had before a
+    /// guard narrowed it, its declaration, or the type a parameter arrived with; a local bound
+    /// to `null` alone has none of them.
+    fn null_by_ref_argument_has_pointer_storage(&self, arg: &Expr) -> bool {
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            return true;
+        };
+        self.narrowed_local_origins
+            .get(name)
+            .map(|narrowing| &narrowing.origin)
+            .or_else(|| self.typed_local_names.get(name))
+            .or_else(|| self.pre_bound_own_storage.get(name))
+            .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Pointer(_)))
     }
 
     /// Returns whether a by-reference call may give one ordinary local canonical Mixed storage.
@@ -686,8 +726,12 @@ impl Checker {
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
         self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        let saved_pre_bound_own_storage =
+            std::mem::replace(&mut self.pre_bound_own_storage, pre_bound_own_storage);
 
         let result = f(self);
+
+        self.pre_bound_own_storage = saved_pre_bound_own_storage;
 
         self.active_ref_params = saved_ref_params;
         self.active_external_ref_bindings = saved_external_ref_bindings;

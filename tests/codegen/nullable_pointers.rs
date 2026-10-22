@@ -465,9 +465,11 @@ echo $w === null ? "null" : "set", "\n";
     assert_eq!(out, "nullnull|null|set|null|null|null\n");
 }
 
-/// Verifies a `null` variable (plain, or a `?ptr<T>` parameter narrowed to null by a guard)
-/// bound to a `?ptr<T>` by-reference parameter is read as null by the callee, and that a
-/// pointer the callee stores through it reaches the caller.
+/// Verifies a null `?ptr<T>` variable (declared, or a parameter a guard narrowed to null for
+/// its region or for the rest of the body) bound to a `?ptr<T>` by-reference parameter is read
+/// as null by the callee, and that a pointer the callee stores through it reaches the caller,
+/// including inside the region the guard narrowed (where the variable is typed `?ptr<T>` again,
+/// so an untyped callee is not specialized for `null`).
 #[test]
 fn test_nullable_pointer_by_ref_parameters_accept_null_variables() {
     let out = compile_and_run(
@@ -476,16 +478,26 @@ packed class Vec2 { public int $x; public int $y; }
 function take(?ptr<Vec2> &$p): string { return $p === null ? "null" : "set"; }
 function fill(?ptr<Vec2> &$p, buffer<Vec2> $v): void { if ($p === null) { $p = $v[0]; } }
 function guarded(?ptr<Vec2> $p): string { if ($p === null) { return take($p); } return "live"; }
+function early(?ptr<Vec2> $p): string { if ($p !== null) { return "live"; } return take($p); }
+function id($m) { return $m; }
+function refill(?ptr<Vec2> $p, buffer<Vec2> $v): string {
+    if ($p === null) { fill($p, $v); return is_null($p) ? "null" : "filled" . $p->x; }
+    return "live";
+}
 $v = buffer_new<Vec2>(1);
 $v[0]->x = 6;
-$x = null;
-echo take($x), "|", guarded(null), "|", guarded($v[0]), "|";
+?ptr<Vec2> $x = null;
+echo take($x), "|", guarded(null), "|", guarded($v[0]), "|", early(null), "|";
+echo refill(null, $v), "|";
 ?ptr<Vec2> $y = null;
 fill($y, $v);
-echo $y === null ? "null" : $y->x, "\n";
+echo $y === null ? "null" : $y->x, "|";
+?ptr<Vec2> $z = null;
+if ($z === null) { fill($z, $v); echo id($z) === null ? "null" : "set", "|"; }
+echo $z === null ? "null" : $z->x, "\n";
 "#,
     );
-    assert_eq!(out, "null|null|live|6\n");
+    assert_eq!(out, "null|null|live|null|filled6|6|set|6\n");
 }
 
 /// Verifies a field write through a `?ptr<T>` local that was declared `= null` and is still
