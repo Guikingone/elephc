@@ -255,6 +255,34 @@ echo $prototype->getDeclaringClass()->getName(), ":", $prototype->getName(), ":"
         I:run:N|Method [ <user, inherits Q, prototype I> public method run ] {\n}\n");
 }
 
+/// Prototype casts use their declaring scope while ordinary inherited views retain their labels.
+#[test]
+fn test_reflection_prototype_dumps_drop_intermediate_inherited_labels() {
+    let out = compile_and_run(r#"<?php
+class A { public function run() {} }
+class B extends A {}
+class C extends B { public function run() {} }
+abstract class AA { abstract public function __construct(); }
+abstract class BB extends AA {}
+class CC extends BB { public function __construct() {} }
+interface I { public function run(); }
+interface J extends I {}
+class D implements J { public function run() {} }
+echo (new ReflectionMethod('C', 'run'))->getPrototype();
+echo (new ReflectionMethod('CC', '__construct'))->getPrototype();
+echo (new ReflectionMethod('D', 'run'))->getPrototype();
+echo new ReflectionMethod('B', 'run');
+echo new ReflectionMethod('BB', '__construct');
+echo new ReflectionMethod('J', 'run');
+"#);
+    assert_eq!(out, "Method [ <user> public method run ] {\n}\n\
+        Method [ <user, ctor> abstract public method __construct ] {\n}\n\
+        Method [ <user> abstract public method run ] {\n}\n\
+        Method [ <user, inherits A> public method run ] {\n}\n\
+        Method [ <user, inherits AA, ctor> abstract public method __construct ] {\n}\n\
+        Method [ <user, inherits I> abstract public method run ] {\n}\n");
+}
+
 /// AST-exported object arguments use double-quoted escapes for control characters.
 #[test]
 fn test_reflection_dump_object_string_escapes() {

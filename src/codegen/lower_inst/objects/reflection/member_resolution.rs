@@ -123,18 +123,24 @@ pub(super) fn reflection_parent_method_prototype_member(
             {
                 if !member.flags.is_private && member.flags.is_static == is_static {
                     if member.prototype_member.is_some() {
-                        return Ok(member.prototype_member.map(|prototype| *prototype));
+                        return Ok(member.prototype_member.map(|prototype| reflection_prototype_view(*prototype)));
                     }
                     if method_key.eq_ignore_ascii_case("__construct") && !member.flags.is_abstract {
                         return Ok(None);
                     }
-                    return Ok(Some(member));
+                    return Ok(Some(reflection_prototype_view(member)));
                 }
             }
         }
         current = reflection_parent_class_name(ctx, parent_info);
     }
     Ok(None)
+}
+
+/// Shows a prototype from its declaring scope instead of the intermediate lookup scope.
+fn reflection_prototype_view(mut member: ReflectionListedMember) -> ReflectionListedMember {
+    member.flags.is_inherited = false;
+    member
 }
 
 /// Returns whether a class metadata entry has a method with the requested staticness.
@@ -182,7 +188,7 @@ pub(super) fn reflection_interface_method_prototype_member(
             reflection_interface_method_member(ctx, interface_info, interface_name, method_key)?
         {
             if member.flags.is_static == is_static {
-                return Ok(Some(member));
+                return Ok(Some(reflection_prototype_view(member)));
             }
         }
     }
