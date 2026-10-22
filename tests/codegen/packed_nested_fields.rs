@@ -487,6 +487,26 @@ echo $a->x, " ", $b->x, " ", $c->x, " ", $d->x, " ", $e->x, "\n";
     assert_eq!(out, "7 7 7 7 7\n");
 }
 
+/// Verifies a nested record read through a call returning `ptr<T>` keeps its pointer word
+/// through ternary, `match` and `?:` merges.
+#[test]
+fn test_nested_fields_through_pointer_returning_calls_survive_merges() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+packed class Body { public Vec2 $pos; }
+function first(buffer<Body> $bodies): ptr<Body> { return $bodies[0]; }
+$bodies = buffer_new<Body>(1);
+$bodies[0]->pos->x = 9;
+$a = ($argc > 0) ? first($bodies)->pos : ptr_null();
+$b = match ($argc) { 1 => first($bodies)->pos, default => ptr_null() };
+$c = first($bodies)->pos ?: ptr_null();
+echo $a->x, " ", $b->x, " ", $c->x, "\n";
+"#,
+    );
+    assert_eq!(out, "9 9 9\n");
+}
+
 /// Verifies a nested record placed beyond the AArch64 `add` immediate range (byte offset 4104)
 /// is addressed correctly for reads, writes and compound assignments.
 #[test]

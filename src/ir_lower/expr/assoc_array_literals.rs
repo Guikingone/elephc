@@ -282,7 +282,8 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
 
 /// Returns the packed class whose record an expression addresses, if the lowering knows it.
 ///
-/// Covers a packed buffer element, a nested packed field read, and a local holding either.
+/// Covers a packed buffer element, a nested packed field read, a call returning a `ptr<T>` to
+/// a packed record, and a local holding any of them.
 fn packed_record_class_of_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<String> {
     let ty = match &expr.kind {
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array),
@@ -290,6 +291,12 @@ fn packed_record_class_of_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Op
             property_access_expr_type_for_ir(ctx, object, property)
         }
         ExprKind::Variable(name) => ctx.local_types.get(name).cloned(),
+        // A call returning `ptr<T>` to a packed record (`first($b)->pos`).
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. } => {
+            Some(super::merge_temps::materialized_expr_type_for_merge(ctx, expr))
+        }
         _ => None,
     }?;
     let class_name = match ty.codegen_repr() {
