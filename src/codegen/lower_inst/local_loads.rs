@@ -95,15 +95,17 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Keeps a ref-cell read borrowed on the raw side of a conditional promotion.
-/// The cell path already borrows its payload; an unpromoted Mixed box must not add a lease.
+/// The cell path already borrows its payload; a flow-proven heap view from an unpromoted
+/// Mixed box must borrow the payload directly instead of adding a lease or string copy.
 pub(super) fn coerce_borrowed_ref_cell_local(
     ctx: &mut FunctionContext<'_>,
     source_ty: &PhpType,
     result_ty: &PhpType,
 ) -> Result<()> {
     if source_ty.codegen_repr() == PhpType::Mixed
-        && matches!(result_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }
-            | PhpType::Object(_) | PhpType::Callable | PhpType::Iterable)
+        && matches!(result_ty.codegen_repr(), PhpType::Str | PhpType::Array(_)
+            | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable
+            | PhpType::Iterable)
     {
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));

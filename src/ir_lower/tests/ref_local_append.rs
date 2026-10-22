@@ -7,6 +7,10 @@
 //! Key details:
 //! - Boxed append borrows directly; native layouts transfer the unboxed lease on storeback.
 
+use std::path::Path;
+
+use crate::codegen::platform::Target;
+
 /// Final storage normalization selects boxed or native append coherently on every target.
 #[test]
 fn ref_local_append_uses_final_storage_on_all_targets() {
@@ -20,6 +24,7 @@ function buildUnknown(int $n): void {
     for ($i = 0; $i < $n; $i++) { $items[] = $i; }
     touchUnknown($items); echo count($items);
 }
+
 function buildArray(int $n): void {
     $items = [];
     for ($i = 0; $i < $n; $i++) { $items[] = $i; }
@@ -191,5 +196,50 @@ touchUnknown($items); echo count($items);
         assert!(boxed > 0 && native > 0 && boxed + native >= 6,
             "{target}: cover boxed and native views in methods, functions, closures and main: {boxed}/{native}");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// A string view from the raw side of a conditional reference promotion borrows Mixed payload bytes.
+#[test]
+fn ref_local_mixed_string_reads_borrow_on_all_targets() {
+    use crate::ir::{Op, Ownership};
+    use crate::types::PhpType;
+
+    let source = r#"<?php
+function replace_ref_string(&$value): void { $value = 123; }
+function read_unpromoted_ref_string(int $flag): void {
+    $text = str_repeat("Z", 64);
+    if ($flag < 0) { replace_ref_string($text); return; }
+    echo $text;
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name == "read_unpromoted_ref_string")
+            .expect("fixture function");
+        let load = function.instructions.iter().find(|instruction| {
+            instruction.op == Op::LoadRefCell
+                && instruction.result.is_some_and(|result| {
+                    function.value(result).is_some_and(|value| {
+                        value.php_type.codegen_repr() == PhpType::Str
+                    })
+                })
+        }).expect("surviving branch reads the conditionally promoted string local");
+        assert_eq!(
+            function.value(load.result.unwrap()).unwrap().ownership,
+            Ownership::Borrowed,
+            "{name}: the storage-backed string view stays borrowed",
+        );
+
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=read_unpromoted_ref_string ").unwrap().1
+            .split_once("@endfn name=read_unpromoted_ref_string").unwrap().0;
+        let read = body.split_once("op=load_ref_cell").unwrap().1
+            .split_once("op=echo_value").unwrap().0;
+        assert!(read.contains("__rt_mixed_unbox"), "{name}: {read}");
+        assert!(!read.contains("__rt_mixed_cast_string"), "{name}: {read}");
     }
 }

@@ -315,6 +315,7 @@ function joinNativeAppend(int $flag): void {
     $items[] = "c";
     echo "join:", count($items), "\n";
 }
+
 function earlyNativeAppend(int $flag): void {
     $items = ["b", "a"];
     if ($flag < 0) { touchNativeAppendItems($items); return; }
@@ -414,4 +415,30 @@ joinNativeNested(1); joinNativeNested(-1);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "join:3\ntjoin:3\nearly:3\ntkey:3\ntassoc:1\nteach:z\ntidx:z\ntunset:1\ntnested:2\ntkey:3\ntkey:3\nassoc:1\ntassoc:1\neach:z\nteach:z\nidx:z\ntidx:z\nunset:1\ntunset:1\nnested:2\ntnested:2\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Repeated string reads on an untaken reference branch borrow the boxed payload without copies.
+#[test]
+fn test_ref_local_string_reads_borrow_mixed_payload() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function replaceRefString(&$value): void { $value = 123; }
+function readUnpromotedRefString(int $flag): void {
+    $text = str_repeat("Z", 4000);
+    if ($flag < 0) { replaceRefString($text); return; }
+    for ($i = 0; $i < 8; $i++) {
+        echo $text;
+    }
+    echo "\ndone\n";
+}
+readUnpromotedRefString($argc);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}\ndone\n", "Z".repeat(32000)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Mixed-backed string reference reads stay borrowed without optional EIR optimization.
+#[test]
+fn test_ref_local_string_reads_borrow_mixed_payload_without_ir_opt() {
+    crate::support::without_ir_opt(test_ref_local_string_reads_borrow_mixed_payload);
 }
