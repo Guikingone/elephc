@@ -199,6 +199,77 @@ touchUnknown($items); echo count($items);
     }
 }
 
+/// Mixed-backed nested writes clear their source slot before every consuming fetch.
+#[test]
+fn mixed_nested_writes_retire_source_slots_on_all_targets() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, ValueDef};
+    use crate::types::PhpType;
+
+    let source = r#"<?php
+function branchingKey(int $condition): void {
+    $items = [10, 20, 30];
+    $copy = $items;
+    try { $items[$condition ? "1" : "0"]["x"] = 1; }
+    catch (Throwable $error) {}
+}
+function republishedKey(int $condition): void {
+    $items = [[0], [0]];
+    $items["seed"] = [0];
+    $copy = $items;
+    $items[($items = [[0], [0]]) ? ($condition ? 1 : 0) : 0][0] = 1;
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        for function_name in ["branchingKey", "republishedKey"] {
+            let function = module.functions.iter()
+                .find(|function| function.name == function_name)
+                .unwrap_or_else(|| panic!("{name}: missing {function_name}"));
+            let mut witnessed = false;
+            for block in &function.blocks {
+                for (fetch_index, fetch_id) in block.instructions.iter().copied().enumerate() {
+                    let fetch = function.instruction(fetch_id).unwrap();
+                    if !matches!(fetch.immediate,
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite
+                            | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)))
+                    {
+                        continue;
+                    }
+                    let Some(receiver) = fetch.operands.first().copied() else { continue; };
+                    let Some(receiver_value) = function.value(receiver) else { continue; };
+                    let ValueDef::Instruction { inst: load_id, .. } = receiver_value.def else {
+                        continue;
+                    };
+                    let Some(load_index) = block.instructions.iter().position(|id| *id == load_id)
+                    else {
+                        continue;
+                    };
+                    let load = function.instruction(load_id).unwrap();
+                    if load.op != Op::LoadLocal {
+                        continue;
+                    }
+                    let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
+                    if !matches!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(),
+                        PhpType::Mixed | PhpType::Union(_))
+                    {
+                        continue;
+                    }
+                    assert!(block.instructions[load_index + 1..fetch_index].iter().any(|id| {
+                        let inst = function.instruction(*id).unwrap();
+                        inst.op == Op::ReleaseLocalSlot
+                            && inst.immediate == Some(Immediate::LocalSlot(slot))
+                    }), "{name}: {function_name} must clear the Mixed source slot before fetch");
+                    witnessed = true;
+                }
+            }
+            assert!(witnessed, "{name}: {function_name} must cover a Mixed-backed concrete fetch");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// A string view from the raw side of a conditional reference promotion borrows Mixed payload bytes.
 #[test]
 fn ref_local_mixed_string_reads_borrow_on_all_targets() {
