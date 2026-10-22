@@ -182,3 +182,57 @@ echo strlen("a" . first($v, true)) > 3 ? "address" : "empty", "\n";
     );
     assert_eq!(out, "null|integer|null|set\nxy|ab|||0|address\n");
 }
+
+/// Verifies `(bool)`, `boolval()`, `xor` and `empty()` test a `?ptr<T>` word against 0 instead
+/// of reading the record it points to as a Mixed cell (a live record of zeros read as falsy,
+/// and one starting with 7 faulted).
+#[test]
+fn test_nullable_pointer_truthiness_and_empty_test_the_address() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> { return $ok ? $v[0] : null; }
+function second(buffer<Vec2> $v): ?ptr<Vec2> { return $v[1]; }
+$v = buffer_new<Vec2>(2);
+$v[1]->x = 7;
+$v[1]->y = 1;
+$zero = first($v, true);
+$live = second($v);
+$none = first($v, false);
+echo ((bool)$zero) ? "y" : "n", boolval($live) ? "y" : "n", ((bool)$none) ? "y" : "n", "|";
+echo empty($zero) ? "e" : "s", empty($live) ? "e" : "s", empty($none) ? "e" : "s", "|";
+echo ($zero xor $none) ? "xor" : "same", "\n";
+"#,
+    );
+    assert_eq!(out, "yyn|sse|xor\n");
+}
+
+/// Verifies a merge whose null arm is a `?ptr<T>` local, instance property or static property
+/// (ternary, `??` and `?:`) stays nullable, so `=== null` and `echo` see PHP null.
+#[test]
+fn test_nullable_pointer_merges_keep_null_from_locals_and_properties() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+final class Holder { public ?ptr<Vec2> $p = null; public static ?ptr<Vec2> $s = null; }
+function first(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> { return $ok ? $v[0] : null; }
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 3;
+$q = first($v, false);
+$t = $argc > 5 ? $v[0] : $q;
+echo $t === null ? "null" : "set", "[", $t, "]|";
+$h = new Holder();
+$u = $argc > 5 ? $v[0] : $h->p;
+echo $u === null ? "null" : "set", "|";
+$s = $argc > 5 ? $v[0] : Holder::$s;
+echo $s === null ? "null" : "set", "|";
+$w = $q ?? $q;
+echo $w === null ? "null" : "set", "|";
+$x = $q ?: null;
+echo $x === null ? "null" : "set", "|";
+$y = $q ?? $v[0];
+echo $y === null ? "null" : $y->x, "\n";
+"#,
+    );
+    assert_eq!(out, "null[]|null|null|null|null|3\n");
+}

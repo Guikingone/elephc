@@ -131,7 +131,15 @@ pub(super) fn null_coalesce_merge_type(
     default: &Expr,
 ) -> PhpType {
     let value_ty = strip_void_from_union(value_ty).codegen_repr();
-    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+    let declared_default_ty = materialized_expr_type_for_merge(ctx, default);
+    // `$p ?? $q` with a `?ptr<T>` default can still be null; the default's codegen form (the
+    // bare pointer) would drop that.
+    if matches!(value_ty, PhpType::Pointer(_))
+        && crate::types::is_nullable_pointer_type(&declared_default_ty)
+    {
+        return nullable_aware_branch_merge_type(&value_ty, &declared_default_ty);
+    }
+    let default_ty = declared_default_ty.codegen_repr();
     // `$o ?? null` can still be null. An object or callable slot has no null of its own, so a
     // default that may be null keeps the merge nullable (boxed) instead of letting the non-null
     // side's slot type win and then reading the stored null back as an object.

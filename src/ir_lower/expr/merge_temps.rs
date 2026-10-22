@@ -113,9 +113,16 @@ pub(super) fn short_ternary_merge_result_type(
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
-    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
-    materialized_merge_type(&value_ty, &default_ty)
+    let value_ty = materialized_expr_type_for_merge(ctx, value);
+    let default_ty = materialized_expr_type_for_merge(ctx, default);
+    // A `?ptr<T>` side keeps the merge nullable: its codegen form is the bare pointer word, and
+    // joining that would type a null result as a set pointer.
+    if crate::types::is_nullable_pointer_type(&value_ty)
+        || crate::types::is_nullable_pointer_type(&default_ty)
+    {
+        return nullable_aware_branch_merge_type(&value_ty, &default_ty);
+    }
+    materialized_merge_type(&value_ty.codegen_repr(), &default_ty.codegen_repr())
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.
@@ -148,7 +155,9 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         return storage;
     }
     match &expr.kind {
-        ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name).codegen_repr()),
+        ExprKind::Variable(name) => {
+            normalize_value_php_type(crate::types::eir_value_php_type(&ctx.local_type(name)))
+        }
         ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
         ExprKind::BinaryOp { left, op, right } if mixed_numeric_op(op).is_some() => {
             let left_ty = materialized_expr_type_for_merge(ctx, left).codegen_repr();
@@ -192,8 +201,19 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)))
         }
         ExprKind::PropertyAccess { object, property } => {
-            property_access_expr_type_for_ir(ctx, object, property)
+            nullable_pointer_property_type(ctx, object, property)
+                .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
                 .unwrap_or_else(|| fallback_expr_type(expr))
+        }
+        // Only a `?ptr<T>` static property is resolved here, so its null member survives the
+        // merge; other static reads keep the syntactic answer.
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            let loaded = static_property_result_type(ctx, receiver, property, expr);
+            if crate::types::is_nullable_pointer_type(&loaded) {
+                loaded
+            } else {
+                fallback_expr_type(expr)
+            }
         }
         // Calls are typed from the return metadata their own lowering uses. The syntactic
         // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
@@ -252,6 +272,25 @@ fn null_coalesce_value_type_for_merge(ctx: &LoweringContext<'_, '_>, value: &Exp
         ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name)),
         _ => materialized_expr_type_for_merge(ctx, value),
     }
+}
+
+/// Returns the declared type of an instance property read when it is a `?ptr<T>`.
+///
+/// `property_access_expr_type_for_ir` answers the codegen form, the bare pointer, which is what
+/// literal storage wants but would drop the null member from a merge.
+fn nullable_pointer_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<PhpType> {
+    let class_name = instance_callable_object_class(ctx, object)?;
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    class_info
+        .properties
+        .iter()
+        .find(|(name, _)| name == property)
+        .map(|(_, ty)| ty.clone())
+        .filter(crate::types::is_nullable_pointer_type)
 }
 
 /// Returns the merge type of a named function call before it is lowered.
