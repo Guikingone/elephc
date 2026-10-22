@@ -211,6 +211,15 @@ for test_name in "${selected[@]}"; do
 done
 
 if [[ ${#remaining[@]} -eq 0 ]]; then
+    # The watchdog samples every 5s, so a shard whose last test passes just before the total
+    # budget can still be stopped while libtest is printing its summary and exiting: macOS
+    # shards reported "75 passed ... finished in 1797.91s" and then failed with 124. Once
+    # every selected test has reported ok, a watchdog stop is not a test failure. Any other
+    # non-zero status (a crash after the last test, for one) still fails the shard.
+    if [[ -n $watchdog_reason ]]; then
+        echo "::warning::eval shard $shard/$shard_count: every selected test passed before the watchdog stopped the single-process pass ($watchdog_reason)"
+        exit 0
+    fi
     echo "single-process pass exited with status $pass1_status but every selected test passed" >&2
     exit "$pass1_status"
 fi
