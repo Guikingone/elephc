@@ -78,6 +78,7 @@ function probeInteriorMarker(string $prefix): void {
     $subject = str_repeat("q", 32);
     echo bin2hex($slice), "\n";
 }
+
 probeInteriorMarker(str_repeat("\x07", 8));
 probeInteriorMarker("\x07\x00\x00\x00HPLE");
 probeInteriorMarker("\x07\x00\x00\x00\x00\x00\x00\x00");
@@ -130,5 +131,31 @@ run();
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "caught|caught|caught|caught|caught|4000\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Transient adoption remains valid after earlier live blocks, frees, coalescing and reuse.
+#[test]
+fn test_borrowed_string_reads_transients_after_heap_reuse() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function checkTransientReuse(): void {
+    $keep = [];
+    for ($i = 0; $i < 40; $i++) { $keep[] = str_repeat("q", 32 + $i); }
+    $input = str_repeat("a", 70000);
+    for ($i = 0; $i < 6; $i++) {
+        $result = strip_tags($input);
+        echo strlen($result), ":", substr($result, 0, 1), "|";
+        $subject = "\x07\x00\x00\x00\x00\x00\x00\x00" . str_repeat("Z", 32);
+        $slice = substr($subject, 8, 3);
+        unset($result, $subject);
+        echo $slice, ";";
+    }
+    echo count($keep), "\n";
+}
+checkTransientReuse();
+checkTransientReuse();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, ("70000:a|ZZZ;".repeat(6) + "40\n").repeat(2), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
+//! - Every successful allocation marks its exact payload base in `_heap_live_bases`, allowing
+//!   runtime consumers to validate candidate bases without scanning unrelated blocks.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -243,6 +245,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x0, x10, #16");                                    // return user pointer = header + 16
 
     emitter.label("__rt_heap_alloc_count");
+    super::heap_live_bases::emit_update(emitter, true);
     // -- increment gc_allocs counter --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_gc_allocs");
     emitter.instruction("ldr x13, [x12]");                                      // load current count
@@ -537,6 +540,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer for the reused free block
 
     emitter.label("__rt_heap_alloc_count");
+    super::heap_live_bases::emit_update(emitter, true);
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_allocs");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current allocation counter before recording this heap allocation
     emitter.instruction("add r9, 1");                                           // count the newly allocated or reused heap block

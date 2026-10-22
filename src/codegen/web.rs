@@ -353,6 +353,7 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
 /// lives outside `_heap_buf` and is unaffected.
 fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
+    crate::codegen_support::runtime::emit_heap_live_bases_reset(emitter);
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
@@ -380,10 +381,13 @@ mod handler_reset_tests {
             emit_heap_arena_reset(&mut emitter);
             let asm = emitter.output();
             let heap_reset = asm.rfind("_heap_small_bins").unwrap();
+            let bases = asm.find("_heap_live_bases").unwrap();
+            let extent_reset = asm.rfind("_heap_off").unwrap();
             let allocs = asm.find("_gc_allocs").unwrap();
             let frees = asm.find("_gc_frees").unwrap();
             let live = asm.find("_gc_live").unwrap();
             assert!(heap_reset < allocs && allocs < frees && frees < live, "{name}");
+            assert!(bases < extent_reset, "{name}: live bases must retire before the extent resets");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("_gc_peak"), "{name}");
         }
     }
