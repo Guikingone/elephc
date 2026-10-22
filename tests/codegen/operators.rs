@@ -2020,6 +2020,28 @@ echo "end";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Regression: two boxed operands compare a resource through its display id.
+///
+/// Boxed equality used to cast both sides to `int`; routing it through the full PHP table
+/// must keep a resource equal to its id as an int, a float, or a string with that leading
+/// number, as PHP does. Expectations measured against the host PHP 8.5.12.
+#[test]
+fn test_boxed_resource_equality_compares_its_display_id() {
+    let out = compile_and_run(r#"<?php
+function row(mixed $a, mixed $b): void {
+    echo (int)($a == $b), (int)($b == $a), (int)($a != $b), "|";
+}
+$r = fopen("php://memory", "r");
+$id = (int)$r;
+foreach ([$id, (float)$id, "$id", " $id", "{$id}abc", "abc", "$id.0", $id + 1, "$id.5"] as $v) {
+    row($r, $v);
+}
+fclose($r);
+echo "end";
+"#);
+    assert_eq!(out, "110|110|110|110|110|001|110|001|001|end");
+}
+
 /// Review regression: both typed and boxed numeric tests reject NUL anywhere in PHP bytes.
 #[test]
 fn test_review_is_numeric_rejects_nul_bytes() {
