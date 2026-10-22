@@ -510,7 +510,8 @@ pub(super) fn emit_function_prologue_with_label(
         }
         if converted_to_owned_mixed {
             abi::emit_load(ctx.emitter, &param.php_type.codegen_repr(), offset);
-            emit_box_current_value_as_mixed(ctx.emitter, &param.php_type.codegen_repr());
+            // The declared type, so a `?ptr<T>` parameter boxes address 0 as PHP null.
+            emit_box_current_value_as_mixed(ctx.emitter, &param.php_type);
             abi::emit_store(ctx.emitter, &PhpType::Mixed, offset);
         }
         if !param.by_ref && ctx.owns_parameter_slot(slot) && !converted_to_owned_mixed {

@@ -238,7 +238,10 @@ fn mixed_box_payload_type(source_ty: PhpType, raw_source_ty: PhpType) -> PhpType
         // be associative. Reuse the iterable boxer so the owned Mixed cell records tag 4 or 5
         // from the payload's heap kind instead of stamping every value as indexed storage.
         PhpType::Iterable
-    } else if matches!(raw_source_ty, PhpType::Resource(_)) {
+    } else if matches!(raw_source_ty, PhpType::Resource(_))
+        || crate::types::is_nullable_pointer_type(&raw_source_ty)
+    {
+        // A resource keeps its tag, and a `?ptr<T>` its null member (address 0 boxes as null).
         raw_source_ty
     } else {
         source_ty

@@ -288,6 +288,10 @@ fn materialize_value_as_mixed(
         }
         _ => {
             ctx.load_value_to_result(value)?;
+            // The declared type, so a `?ptr<T>` operand boxes address 0 as PHP null.
+            let box_ty = ctx.mixed_box_type(value)?;
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+            return Ok(());
         }
     }
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &ty);

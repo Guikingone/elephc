@@ -84,7 +84,7 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
     // Mixed-typed static local is boxed here, a null address as PHP null; the fresh box is the
     // slot's only owner.
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed) && matches!(loaded_ty, PhpType::Pointer(_)) {
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &ctx.mixed_box_type(value)?);
     } else if loaded_ty.is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
     }

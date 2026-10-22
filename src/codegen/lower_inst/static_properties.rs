@@ -932,7 +932,8 @@ fn load_static_property_store_value_to_result(
         return Ok(());
     }
     ctx.load_value_to_result(value)?;
-    box_static_property_value_if_needed(ctx, slot_ty, &value_ty);
+    let box_ty = ctx.mixed_box_type(value)?;
+    box_static_property_value_if_needed(ctx, slot_ty, &box_ty);
     Ok(())
 }
 
@@ -962,7 +963,7 @@ fn box_static_property_value_if_needed(
     if matches!(slot_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && !matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+        emit_box_current_value_as_mixed(ctx.emitter, value_ty);
     }
 }
 

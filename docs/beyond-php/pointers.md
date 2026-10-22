@@ -169,7 +169,8 @@ comparison with `==` (use `===`; a `?ptr<T>` compares with `==` like the PHP val
 stands for, `null` or its integer address). The conversion applies to values the compiler
 knows to be pointers: a pointer stored in a `mixed` or union-typed value, for
 example `$v = $flag ? $p : "none"`, is held as its integer address there and
-prints in decimal, and a null pointer stored there is PHP `null`. `settype($p, "string")` needs that same mixed storage, so it
+prints in decimal (a null `ptr` is the integer `0` there, not PHP `null`; a null
+`?ptr<T>` is PHP `null`). `settype($p, "string")` needs that same mixed storage, so it
 does not compile yet for a pointer variable; assign `(string)$p` to another
 variable instead. Code running inside `eval()` also sees pointers as plain
 integers, so `echo ptr_null()` there prints `0`.

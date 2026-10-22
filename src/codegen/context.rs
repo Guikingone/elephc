@@ -383,6 +383,20 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
+    /// Returns the type a value is boxed into `mixed` as.
+    ///
+    /// That is its codegen type, except for a `?ptr<T>`: its codegen form is the bare pointer,
+    /// and only the declared union tells the boxer that address 0 is PHP null (a plain `ptr`
+    /// boxes 0 as the integer it is).
+    pub(super) fn mixed_box_type(&self, value: ValueId) -> Result<PhpType> {
+        let raw = self.raw_value_php_type(value)?;
+        if crate::types::is_nullable_pointer_type(&raw) {
+            Ok(raw)
+        } else {
+            self.value_php_type(value)
+        }
+    }
+
     /// Returns a function value's source PHP metadata before codegen representation erasure.
     pub(super) fn raw_value_php_type(&self, value: ValueId) -> Result<PhpType> {
         self.function

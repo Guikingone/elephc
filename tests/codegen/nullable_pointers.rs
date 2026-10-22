@@ -285,8 +285,9 @@ echo "\n";
     assert_eq!(out, "eq0fe..set|q-null|p-default\n");
 }
 
-/// Verifies a null pointer stored into `mixed` storage (a static property, a by-reference
-/// parameter, a static local, a merge with a string) is PHP null, and a live one is not.
+/// Verifies a null `?ptr<T>` stored into `mixed` storage (a static property, a by-reference
+/// parameter, a static local) is PHP null and a live one is not, while a plain `ptr_null()`
+/// merged with a string stays the integer 0.
 #[test]
 fn test_nullable_pointer_null_boxes_as_null_in_mixed_storage() {
     let out = compile_and_run(
@@ -311,7 +312,8 @@ $y = $argc > 5 ? "none" : ptr_null();
 echo "[", $y, "]", $y === null ? "n" : "s", "\n";
 "#,
     );
-    assert_eq!(out, "ns|n|ns|[]n\n");
+    // A plain `ptr` is not nullable: its null address boxes as the integer 0.
+    assert_eq!(out, "ns|n|ns|[0]s\n");
 }
 
 /// Verifies builtins and casts read a `?ptr<T>` as the PHP value it stands for: `json_encode`,
