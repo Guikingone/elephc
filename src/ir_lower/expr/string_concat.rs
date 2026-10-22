@@ -13,9 +13,15 @@ use super::*;
 pub(super) fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right: &Expr, expr: &Expr) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
     let lhs = coerce_to_string(ctx, lhs, expr);
+    let original_lhs = lhs.value;
     let lhs = crate::ir_lower::ownership::persist_string_byte_view(ctx, lhs, Some(left.span));
+    let persisted_byte = lhs.value != original_lhs;
     let lhs = persist_concat_lhs_if_rhs_can_reset(ctx, lhs, right, expr.span);
-    let lhs_pins = pin_in_flight_owners(ctx, &[lhs.value], left.span);
+    let lhs_pins = if persisted_byte {
+        pin_in_flight_owners(ctx, &[lhs.value], left.span)
+    } else {
+        Vec::new()
+    };
     let rhs = lower_expr(ctx, right);
     let rhs = coerce_to_string(ctx, rhs, expr);
     unpin_in_flight_owners(ctx, lhs_pins, left.span);

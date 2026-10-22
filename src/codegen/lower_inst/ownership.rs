@@ -108,6 +108,7 @@ pub(super) fn stage_string_byte_view(
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- stage a present offset byte before string persistence --
             ctx.emitter.instruction(&format!("cmp {length_reg}, #1"));          // only a present offset has one byte to stage
             ctx.emitter.instruction(&format!("b.ne {ready}"));                  // preserve the original empty or missing string pair
             ctx.emitter.instruction(&format!("ldrb w9, [{pointer_reg}]"));      // read the selected byte before its receiver can be retired
@@ -115,9 +116,10 @@ pub(super) fn stage_string_byte_view(
             ctx.emitter.instruction(&format!("mov {pointer_reg}, sp"));         // persistence must duplicate stack storage instead of taking over a heap view
         }
         Arch::X86_64 => {
+            // -- stage a present offset byte before string persistence --
             ctx.emitter.instruction(&format!("cmp {length_reg}, 1"));           // only a present offset has one byte to stage
             ctx.emitter.instruction(&format!("jne {ready}"));                   // preserve the original empty or missing string pair
-            ctx.emitter.instruction(&format!("movzx r10d, BYTE PTR [{pointer_reg}]")); // read the selected byte before its receiver can be retired
+            ctx.emitter.instruction(&format!("movzx r10d, BYTE PTR [{pointer_reg}]"));// read the selected byte before its receiver can be retired
             ctx.emitter.instruction("mov BYTE PTR [rsp], r10b");                // stage the byte outside the managed heap
             ctx.emitter.instruction(&format!("mov {pointer_reg}, rsp"));        // persistence must duplicate stack storage instead of taking over a heap view
         }
@@ -163,7 +165,8 @@ pub(super) fn lower_release_unless_aliases(
     if !ownership.may_require_release() {
         return Ok(());
     }
-    if value_is_scratch_string(ctx, value)? {
+    let transient = value_is_transient_string(ctx, value)?;
+    if value_is_scratch_string(ctx, value)? && !transient {
         return Ok(());
     }
 
@@ -192,7 +195,8 @@ pub(super) fn lower_release_unless_aliases(
     }
     match ty {
         PhpType::Str => {
-            release_loaded_string(ctx);
+            if transient { release_transient_string(ctx, value)?; }
+            else { release_loaded_string(ctx); }
         }
         PhpType::Callable => {
             abi::emit_decref_if_refcounted(ctx.emitter, &ty);
@@ -251,6 +255,9 @@ pub(super) fn release_value_if_owned(ctx: &mut FunctionContext<'_>, value: Value
         abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
         return Ok(());
     }
+    if value_is_transient_string(ctx, value)? {
+        return release_transient_string(ctx, value);
+    }
     if value_is_scratch_string(ctx, value)? {
         return Ok(());
     }
@@ -282,8 +289,45 @@ pub(super) fn release_value_if_owned(ctx: &mut FunctionContext<'_>, value: Value
     Ok(())
 }
 
-/// Returns whether a value is a transient string: concat scratch, or a heap block stamped
-/// `CONCAT_TEMP_HEAP_KIND` that only an adopting consumer takes over, so a release is a no-op.
+/// Returns whether a producer can return scratch or an unadopted transient heap block.
+fn value_is_transient_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    if ctx.value_php_type(value)? != PhpType::Str { return Ok(false); }
+    Ok(ctx.function.value(value).and_then(|value| match value.def {
+        ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
+        _ => None,
+    }).is_some_and(Instruction::creates_transient_string))
+}
+
+/// Frees only an unadopted transient block, preserving scratch and already adopted strings.
+fn release_transient_string(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    let skip = ctx.next_label("release_transient_skip");
+    let (pointer, _) = abi::string_result_regs(ctx.emitter);
+    let result = abi::int_result_reg(ctx.emitter);
+    // -- classify the producer's exact base before releasing an unadopted temporary --
+    if pointer != result {
+        ctx.emitter.instruction(&format!("mov {result}, {pointer}"));           // pass the produced string pointer to the heap classifier
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    let kind = crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result}, #{kind}"));         // does the producer still own an unadopted heap temporary?
+            ctx.emitter.instruction(&format!("b.ne {skip}"));                   // scratch and adopted full-string stores must remain untouched
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result}, {kind}"));          // does the producer still own an unadopted heap temporary?
+            ctx.emitter.instruction(&format!("jne {skip}"));                    // scratch and adopted full-string stores must remain untouched
+        }
+    }
+    ctx.load_value_to_result(value)?;
+    release_loaded_string(ctx);
+    ctx.emitter.label(&skip);
+    Ok(())
+}
+
+/// Returns whether the producer's ordinary string release is skipped.
+/// Transient heap producers additionally require the conditional retirement above.
 fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
     if ctx.value_php_type(value)? != PhpType::Str {
         return Ok(false);

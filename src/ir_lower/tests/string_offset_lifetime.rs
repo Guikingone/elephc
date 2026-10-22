@@ -7,6 +7,32 @@
 //! Key details:
 //! - Exercises the shared lowering and assembly generation for every supported target.
 
+/// Review regressions preserve transient receiver releases and retire keys before suspension.
+#[test]
+fn string_offset_review_boundaries_on_all_targets() {
+    use crate::ir::{Op, Ownership};
+    let source = r#"<?php
+function reviewConcatByte(int $index): string { return (str_repeat("a", 70000) . "b")[$index]; }
+function reviewKey(array<mixed> &$items, string $bytes): void { $items[$bytes[0]] = 1; }
+function reviewYield(string $bytes) { yield $bytes[0] => 1; }
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let yielded = module.functions.iter().find(|function| function.name == "reviewYield").unwrap();
+        let suspend = yielded.instructions.iter().position(|inst| inst.op == Op::GeneratorYield).unwrap();
+        let key = yielded.instructions[suspend].operands[0];
+        assert_eq!(yielded.values[key.as_raw() as usize].ownership, Ownership::Owned, "{target}");
+        assert!(yielded.instructions[..suspend].iter().any(|inst| inst.op == Op::MixedBox), "{target}");
+        assert!(yielded.instructions[..suspend].iter().any(|inst| inst.op == Op::PopCallOperandOwner), "{target}");
+        assert!(yielded.instructions[..suspend].iter().any(|inst| inst.op == Op::ReleaseLocalSlot), "{target}");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("release_transient_skip"), "{target}: release unadopted concat storage");
+    }
+}
+
 /// An offset view is copied before an owned receiver can be released on every target.
 #[test]
 fn string_offset_lifetime_stabilizes_views_on_all_targets() {

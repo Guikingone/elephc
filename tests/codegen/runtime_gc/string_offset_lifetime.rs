@@ -453,6 +453,7 @@ function offsetAliasOrThrow(string $byte): string {
     if (strlen($byte) === 1) { throw new Exception("alias"); }
     return $byte;
 }
+
 function offsetThrowString(): string { throw new Exception("string"); }
 function offsetThrowInt(): int { throw new Exception("int"); }
 function offsetWriteOrThrow(array &$items, string $payload): void {
@@ -471,5 +472,65 @@ runOffsetThrows();
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "ACEW|0\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Byte copies retire large concat receivers, including offsets beyond their first byte.
+#[test]
+fn test_string_offset_lifetime_large_concat_receivers() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function concatOffsetByte(int $offset): string {
+    return (str_repeat("a", 70000) . "b")[$offset];
+}
+function runConcatOffsetBytes(): void {
+    for ($i = 0; $i < 4; $i++) { echo concatOffsetByte(0), concatOffsetByte(8); }
+    $full = str_repeat("q", 70000) . "Z";
+    echo "|", strlen($full), ":", $full[70000], "\n";
+}
+runConcatOffsetBytes();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "aaaaaaaa|70001:Z\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Boxing a persisted reference-bound key consumes its source exactly once.
+#[test]
+fn test_string_offset_lifetime_reference_bound_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function writeOffsetKey(array<mixed> &$items, string $bytes): void {
+    $items[$bytes[0]] = 1;
+}
+function runReferenceOffsetKey(): void {
+    $items = [0, "mixed"];
+    writeOffsetKey($items, str_repeat("Z", 40));
+    echo $items["Z"], "\n";
+}
+runReferenceOffsetKey();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Discarding a suspended generator releases its boxed byte key without retaining a copy.
+#[test]
+fn test_string_offset_lifetime_suspended_generator_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function stoppedOffsetKey(string $bytes) { yield $bytes[0] => 1; }
+function runStoppedOffsetKeys(): void {
+    $bytes = str_repeat("Z", 40);
+    for ($i = 0; $i < 4; $i++) {
+        $generator = stoppedOffsetKey($bytes);
+        $generator->rewind();
+        echo $generator->key(), ":", $generator->current(), "|";
+        unset($generator);
+    }
+    echo "\n";
+}
+runStoppedOffsetKeys();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Z:1|Z:1|Z:1|Z:1|\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

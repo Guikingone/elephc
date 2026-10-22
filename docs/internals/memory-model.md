@@ -326,6 +326,11 @@ When acquiring or persisting a present byte view, the backend stages that byte o
 before calling the string helper. This prevents preceding payload bytes from masquerading as
 a transferable concat allocation header. Empty and missing views bypass byte staging so the
 string helper preserves its sentinel behavior.
+For a byte selected from a heap-backed concat temporary, acquisition copies that byte
+independently and the receiver release frees the concat block only while it still carries
+`CONCAT_TEMP_HEAP_KIND`. A full-string store that already adopted and retagged the block
+keeps its owner. Explicit yielded keys are boxed before their temporary byte owner retires;
+the resulting single-use Mixed box transfers into the generator before suspension.
 Silent `empty()` string probes use PHP string truthiness, including the one-byte string `"0"`.
 
 ## The string buffer (scratch pad)
