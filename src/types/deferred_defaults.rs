@@ -25,6 +25,15 @@ pub(crate) fn source_constant_name(default: &Expr) -> Option<String> {
     Some(format!("{receiver}::{name}"))
 }
 
+/// Returns whether any node of a SOURCE expression is a `throw`.
+///
+/// PHP forbids `throw` in a constant expression. The checker builds its deferred lexical
+/// `Error` as a `Throw` too, but only into a normalized copy: callers that still hold the
+/// source expression use this query to reject a source-written throw on its own.
+pub(crate) fn contains_throw(expr: &Expr) -> bool {
+    contains_deferred_error(expr)
+}
+
 /// Returns whether any normalized default node can raise a deferred lexical Error.
 pub(crate) fn contains_deferred_error(expr: &Expr) -> bool {
     match &expr.kind {

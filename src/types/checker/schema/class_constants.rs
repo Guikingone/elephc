@@ -75,6 +75,17 @@ fn validate_constant_declaration(
     constant: &ClassConst,
     errors: &mut Vec<CompileError>,
 ) {
+    // PHP forbids `throw` in a constant expression, typed or not. The checker's deferred
+    // lexical `Error` is inserted only into the normalized value, while `ClassConst::value`
+    // keeps the source expression, so a source-written throw is rejected before the type
+    // check and cannot be mistaken for a deferred one (#1827 review).
+    if crate::types::deferred_defaults::contains_throw(&constant.value) {
+        errors.push(CompileError::new(
+            constant.span,
+            "Constant expression contains invalid operations",
+        ));
+        return;
+    }
     let Some(type_expr) = &constant.type_expr else {
         return;
     };

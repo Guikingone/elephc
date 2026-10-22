@@ -1019,3 +1019,19 @@ fn test_error_cannot_override_final_error_methods() {
         "Cannot override final method Error::getPrevious",
     );
 }
+
+/// PHP forbids `throw` in a constant expression. A source-written throw must be rejected even
+/// though the checker uses a deferred `Throw` internally for a missing `parent`/`self`
+/// receiver; the compiler-generated one stays lazy (#1827 review).
+#[test]
+fn test_error_source_throw_in_class_constant_initializer() {
+    for source in [
+        "<?php class Probe { const int X = throw new Exception(); }",
+        "<?php class Probe { const X = throw new Exception(); }",
+        "<?php class Probe { const int X = 1 + throw new Exception(); }",
+        "<?php interface Probe { const int X = throw new Exception(); }",
+        "<?php trait Probe { const int X = throw new Exception(); }",
+    ] {
+        expect_error(source, "Constant expression contains invalid operations");
+    }
+}
