@@ -16,6 +16,7 @@ use crate::ir::{print_module, Terminator};
 
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
+mod borrowed_string_reads;
 mod arrays;
 mod append_writes;
 mod array_reference_outputs;
