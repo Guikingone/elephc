@@ -74,7 +74,7 @@ fn emit_transient_base_probe(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: str_transient_base ---");
-    emitter.label("__rt_str_transient_base");
+    emitter.label_shared("__rt_str_transient_base");
     emitter.instruction("cbz x0, __rt_str_transient_base_zero");                // null pointers cannot name a managed payload base
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("add x13, x9, #16");                                    // compute the first possible payload base
