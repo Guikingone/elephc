@@ -22,6 +22,25 @@
 
 use super::*;
 
+/// Returned snapshots outlive inline reflectors and remain independent when their bytes change.
+#[test]
+fn test_reflection_dump_copies_do_not_mutate_shared_snapshots() {
+    let out = compile_and_run(r#"<?php
+function snapshot(int $value = 1): void {}
+class Snapshot { public function run(int $value = 1): void {} }
+$function = (string) new ReflectionFunction('snapshot');
+$method = (string) new ReflectionMethod('Snapshot', 'run');
+$parameter = (string) new ReflectionParameter('snapshot', 0);
+$originalFunction = $function; $originalMethod = $method; $originalParameter = $parameter;
+$function .= '!'; $method .= '?'; $parameter .= '#';
+echo substr($function, -1), "|", substr($method, -1), "|", substr($parameter, -1), "|";
+echo $originalFunction === (string) new ReflectionFunction('snapshot') ? 'F' : 'bad';
+echo $originalMethod === (string) new ReflectionMethod('Snapshot', 'run') ? 'M' : 'bad';
+echo $originalParameter === (string) new ReflectionParameter('snapshot', 0) ? 'P' : 'bad';
+"#);
+    assert_eq!(out, "!|?|#|FMP");
+}
+
 /// The reported shape: a method with parameters, defaults and a return type.
 #[test]
 fn test_reflection_method_to_string_renders_the_php_dump() {
@@ -518,15 +537,9 @@ echo (string) new ReflectionFunction('nonFinite');
     );
 }
 
-/// Verifies a global constant this evaluator cannot fold does not fail the COMPILE.
-///
-/// `ReflectionConstantValue` has no array variant, so routing global constants through the
-/// fallible evaluator made `const ITEMS = [1, 2]; function f($items = ITEMS) {}` a compile error
-/// for the whole program. The metadata is still missing, PHP reports the array, but the program
-/// builds, and the predicates then behave exactly as they do for a parameter with no default,
-/// which is what PHP does in that state too.
+/// Global array and scalar constant defaults retain their availability, names and values.
 #[test]
-fn test_an_unfoldable_global_constant_default_still_compiles() {
+fn test_global_array_constant_defaults_keep_their_value() {
     let out = compile_and_run(
         r#"<?php
 const ITEMS = [1, 2];
@@ -539,15 +552,16 @@ $s = new ReflectionParameter('withScalar', 0);
 echo $a->isDefaultValueAvailable() ? "y" : "n";
 echo $s->isDefaultValueAvailable() ? "y" : "n";
 echo $s->isDefaultValueConstant() ? "y" : "n";
+echo $a->isDefaultValueConstant() ? "y" : "n";
+echo $a->getDefaultValueConstantName(), ":";
+echo implode(",", $a->getDefaultValue()), ":";
 echo $s->getDefaultValue();
 "#,
     );
-    assert_eq!(out, "nyy7");
+    assert_eq!(out, "yyyyITEMS:1,2:7");
 }
 
-/// The same array constant one level down, as an object default's argument, must not fail the
-/// build either. The dump still prints the default as written (`new \Box(ITEMS)`, as PHP does);
-/// only the folded value is missing, as it is at the top level.
+/// An array constant used as an object default argument keeps its written name in the dump.
 #[test]
 fn test_an_unfoldable_global_constant_in_an_object_default_still_compiles() {
     let out = compile_and_run(

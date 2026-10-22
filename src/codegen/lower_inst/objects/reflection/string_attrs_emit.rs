@@ -66,7 +66,11 @@ pub(super) fn emit_reflection_owner_string_property_by_name(
     Ok(())
 }
 
-/// Decodes a callable dump's literal-byte representation when storing its cast snapshot.
+/// Stores an immutable callable dump in program-lifetime literal storage.
+///
+/// Snapshot bytes never change. As with string property defaults, static storage needs no
+/// heap owner and remains valid after the reflector dies. Copying every nested dump into the
+/// heap amplified the existing eager metadata graph and exhausted ARM64's default heap.
 pub(super) fn emit_reflection_owner_dump_property(
     ctx: &mut FunctionContext<'_>, class_name: &str, value: &str,
 ) -> Result<()> {
@@ -74,7 +78,18 @@ pub(super) fn emit_reflection_owner_dump_property(
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, "__string")?;
     let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
-    emit_reflection_bytes_property(ctx, &bytes, low_offset, low_offset + 8);
+    let (label, len) = ctx.data.add_string(&bytes);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, ptr_reg, object_reg, low_offset);
+    abi::emit_store_to_address(ctx.emitter, len_reg, object_reg, low_offset + 8);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
 }
 
