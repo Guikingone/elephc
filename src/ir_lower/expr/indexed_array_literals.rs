@@ -836,6 +836,10 @@ pub(super) fn builtin_call_result_type_for_ir(
         return None;
     }
     let checked = ctx.builtin_call_types.get(&span).cloned()?;
+    // A `?ptr<T>` result (`array_pop` of pointers) is unboxed to its word after the call.
+    if crate::types::is_nullable_pointer_type(&checked) {
+        return Some(checked.codegen_repr());
+    }
     match materializable_array_element_type(checked)? {
         scalar @ (PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str) => Some(scalar),
         _ => Some(PhpType::Mixed),

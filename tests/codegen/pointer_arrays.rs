@@ -154,3 +154,79 @@ echo $points[0]->x, "|", $points[1]->x, "|", $points[2]->x, "\n";
     );
     assert_eq!(out, "1|0|1\n");
 }
+
+/// Verifies a missing hash key of a pointer hash reads as the null pointer word: `=== null`
+/// holds, a guarded field read is skipped, and `??` takes its default.
+#[test]
+fn test_pointer_hash_missing_key_reads_as_null() {
+    let out = compile_and_run(&format!(
+        "{PRELUDE}{}",
+        r#"$h = ["k" => $v[0]];
+$miss = @$h["nope"];
+echo $miss === null ? "null" : "wild", "|";
+if ($miss !== null) { echo $miss->x; }
+$d = $h["nope"] ?? $v[1];
+echo $d->x, "\n";
+"#
+    ));
+    assert_eq!(out, "null|11\n");
+}
+
+/// Verifies `array_pop()` and `array_shift()` of pointers give the pointer word back: field
+/// access, a `?ptr<T>` parameter, an empty pop as null, and a literal element of the result.
+#[test]
+fn test_pointer_array_pop_and_shift_return_the_pointer() {
+    let out = compile_and_run(&format!(
+        "{PRELUDE}{}",
+        r#"function show(?ptr<Vec2> $p): void { echo $p === null ? "null" : $p->x, "|"; }
+$a = [at($v, 0), at($v, 1), at($v, 2)];
+show(array_pop($a));
+$first = array_shift($a);
+echo $first->x, "|";
+$last = array_pop($a);
+echo $last->x, "|";
+$none = array_pop($a);
+echo $none === null ? "null" : "set", "|";
+$b = [at($v, 2)];
+$c = [array_pop($b)];
+echo $c[0]->x, "\n";
+"#
+    ));
+    assert_eq!(out, "12|10|11|null|12\n");
+}
+
+/// Verifies appending a pointer with another target keeps raw pointer storage (an untyped
+/// `ptr` element) instead of boxing the array, so the stored addresses stay identical.
+#[test]
+fn test_pointer_array_of_mixed_targets_keeps_raw_addresses() {
+    let out = compile_and_run(
+        r#"<?php
+packed class A { public int $x; }
+packed class B { public int $y; }
+$a = buffer_new<A>(1);
+$b = buffer_new<B>(1);
+$ptrs = [$a[0]];
+$ptrs[] = $b[0];
+function id(?ptr $p): ?ptr { return $p; }
+echo id($ptrs[0]) === $a[0] ? "same" : "diff", "|", id($ptrs[1]) === $b[0] ? "same" : "diff";
+echo "|", count($ptrs), "\n";
+"#,
+    );
+    assert_eq!(out, "same|same|2\n");
+}
+
+/// Verifies `isset()` treats a stored null pointer element (indexed or hash) as unset and a
+/// live one as set.
+#[test]
+fn test_pointer_array_isset_of_stored_null_is_false() {
+    let out = compile_and_run(&format!(
+        "{PRELUDE}{}",
+        r#"$b = [$v[0], null];
+echo isset($b[1]) ? "isset" : "unset", "|", isset($b[0]) ? "isset" : "unset", "|";
+$h = ["a" => $v[0]];
+$h["b"] = null;
+echo isset($h["b"]) ? "isset" : "unset", "|", isset($h["a"]) ? "isset" : "unset", "\n";
+"#
+    ));
+    assert_eq!(out, "unset|isset|unset|isset\n");
+}

@@ -1882,6 +1882,10 @@ fn emit_hash_get_miss(ctx: &mut FunctionContext<'_>, value_ty: &PhpType, miss_re
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             }
         },
+        // A missing pointer value reads as the null pointer word, which is PHP null there.
+        PhpType::Pointer(_) => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
         _ => {
             abi::emit_load_int_immediate(
                 ctx.emitter,

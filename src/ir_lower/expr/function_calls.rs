@@ -262,7 +262,33 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    call
+    unbox_nullable_pointer_builtin_result(ctx, call, expr.span)
+}
+
+/// Returns a boxed builtin result as the `?ptr<T>` word the checker typed the call as.
+///
+/// `array_pop()` and `array_shift()` hand every element out boxed, a pointer element as an
+/// integer-like cell and the null word (or an empty array) as PHP null, while the checker types
+/// a pointer element as `?ptr<T>`. The box is cast back to the word (null casts to 0) so field
+/// access, comparisons and `?ptr<T>` parameters see the pointer.
+fn unbox_nullable_pointer_builtin_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    call: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if span.line == 0 {
+        return call;
+    }
+    let Some(checked) = ctx.builtin_call_types.get(&span).cloned() else {
+        return call;
+    };
+    if !crate::types::is_nullable_pointer_type(&checked)
+        || ctx.builder.value_php_type(call.value).codegen_repr() != PhpType::Mixed
+    {
+        return call;
+    }
+    let word = coerce_to_int_at_span(ctx, call, Some(span));
+    ctx.emit_value(Op::Move, vec![word.value], None, checked, Op::Move.default_effects(), Some(span))
 }
 
 

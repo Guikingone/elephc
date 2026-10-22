@@ -343,6 +343,9 @@ fn emit_isset_hash_found_null_check_aarch64(
         ctx.emitter.label(&concrete_non_null);
         return Ok(());
     }
+    if matches!(value_ty.codegen_repr(), PhpType::Pointer(_)) {
+        ctx.emitter.instruction(&format!("cbz x1, {}", missing));               // a stored null pointer word is PHP null for isset
+    }
     ctx.emitter.instruction("cmp x3, #8");                                      // runtime tag 8 means the found hash value is PHP null
     ctx.emitter.instruction(&format!("b.eq {}", missing));                      // null hash values make isset return false
     Ok(())
@@ -366,6 +369,10 @@ fn emit_isset_hash_found_null_check_x86_64(
         ctx.emitter.instruction(&format!("je {}", missing));                    // null hash values make isset return false
         ctx.emitter.label(&concrete_non_null);
         return Ok(());
+    }
+    if matches!(value_ty.codegen_repr(), PhpType::Pointer(_)) {
+        ctx.emitter.instruction("test rdi, rdi");                               // a stored null pointer word is PHP null for isset
+        ctx.emitter.instruction(&format!("jz {}", missing));                    // treat the null pointer entry as missing
     }
     ctx.emitter.instruction("cmp rcx, 8");                                      // runtime tag 8 means the found hash value is PHP null
     ctx.emitter.instruction(&format!("je {}", missing));                        // null hash values make isset return false
@@ -551,6 +558,16 @@ fn emit_isset_array_in_bounds_missing_aarch64(
             ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the indexed-array element is PHP null
             ctx.emitter.instruction("cset x0, eq");                             // return missing when the in-bounds Mixed element is null
         }
+        PhpType::Pointer(_) => {
+            ctx.emitter.instruction(
+                &format!("add {}, {}, #24", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach the pointer words
+            ctx.emitter.instruction(
+                &format!("ldr x0, [{}, {}, lsl #3]", array_reg, index_reg)
+            );                                                                  // load the pointer element for its null check
+            ctx.emitter.instruction("cmp x0, #0");                              // a null pointer word is PHP null for isset
+            ctx.emitter.instruction("cset x0, eq");                             // return missing when the in-bounds pointer element is null
+        }
         _ => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
@@ -580,6 +597,17 @@ fn emit_isset_array_in_bounds_missing_x86_64(
             ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the indexed-array element is PHP null
             ctx.emitter.instruction("sete al");                                 // return missing when the in-bounds Mixed element is null
             ctx.emitter.instruction("movzx rax, al");                           // widen the Mixed null-check result into the integer result register
+        }
+        PhpType::Pointer(_) => {
+            ctx.emitter.instruction(
+                &format!("lea {}, [{} + 24]", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach the pointer words
+            ctx.emitter.instruction(
+                &format!("mov rax, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
+            );                                                                  // load the pointer element for its null check
+            ctx.emitter.instruction("test rax, rax");                           // a null pointer word is PHP null for isset
+            ctx.emitter.instruction("sete al");                                 // return missing when the in-bounds pointer element is null
+            ctx.emitter.instruction("movzx rax, al");                           // widen the pointer null-check result into the integer result register
         }
         _ => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
