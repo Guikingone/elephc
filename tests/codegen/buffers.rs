@@ -177,6 +177,31 @@ show(new S(), $argc);
     assert_eq!(out, "1.5|1.5\n");
 }
 
+/// Regression for task b4024b9a: a buffer property read through an assignment receiver
+/// (`($t = $s)->buf[0]`) keeps the element type in a ternary and an array literal.
+#[test]
+fn test_buffer_property_through_assignment_receiver_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+class S { public buffer<float> $buf; public buffer<bool> $flags; }
+function show(int $argc): void {
+    $s = new S();
+    $s->buf = buffer_new<float>(1);
+    $s->buf[0] = 1.5;
+    $s->flags = buffer_new<bool>(1);
+    $s->flags[0] = false;
+    echo ($argc > 0) ? ($t = $s)->buf[0] : 0, "|";
+    $row = [($t = $s)->buf[0]];
+    echo $row[0], "|";
+    $flag = ($argc > 0) ? ($t = $s)->flags[0] : 0;
+    echo $flag, ":", gettype($flag), "\n";
+}
+show($argc);
+"#,
+    );
+    assert_eq!(out, "1.5|1.5|:boolean\n");
+}
+
 /// Verifies declared buffer properties accept both literal and runtime integer index writes.
 #[test]
 fn test_buffer_property_declared_literal_and_runtime_index_writes() {
