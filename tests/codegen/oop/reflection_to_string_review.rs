@@ -189,6 +189,42 @@ echo new ReflectionMethod('E', '__construct');
         Method [ <user, inherits Q, prototype P, ctor> public method __construct ] {\n}\n");
 }
 
+/// Constructor overrides preserve inherited contracts in both the prototype API and dump.
+#[test]
+fn test_reflection_constructor_overrides_keep_inherited_contracts() {
+    let out = compile_and_run(r#"<?php
+interface Contract { public function __construct(); }
+class ParentCtor implements Contract { public function __construct() {} }
+class ChildCtor extends ParentCtor { public function __construct() {} }
+class GrandchildCtor extends ChildCtor { public function __construct() {} }
+abstract class AbstractContract implements Contract { abstract public function __construct(); }
+class ImplementsAbstract extends AbstractContract { public function __construct() {} }
+abstract class AbstractCtor { abstract public function __construct(); }
+class ConcreteCtor extends AbstractCtor { public function __construct() {} }
+class ReplacedCtor extends ConcreteCtor { public function __construct() {} }
+$method = new ReflectionMethod('ChildCtor', '__construct');
+echo $method->hasPrototype() ? 'yes:' : 'no:';
+if ($method->hasPrototype()) { echo $method->getPrototype()->getDeclaringClass()->getName(); }
+echo "|", $method;
+$method = new ReflectionMethod('GrandchildCtor', '__construct');
+echo $method->hasPrototype() ? 'yes:' : 'no:';
+if ($method->hasPrototype()) { echo $method->getPrototype()->getDeclaringClass()->getName(); }
+echo "|", $method;
+$method = new ReflectionMethod('ImplementsAbstract', '__construct');
+echo $method->hasPrototype() ? 'yes:' : 'no:';
+if ($method->hasPrototype()) { echo $method->getPrototype()->getDeclaringClass()->getName(); }
+echo "|", $method;
+$method = new ReflectionMethod('ReplacedCtor', '__construct');
+echo $method->hasPrototype() ? 'yes:' : 'no:';
+if ($method->hasPrototype()) { echo $method->getPrototype()->getDeclaringClass()->getName(); }
+echo "|", $method;
+"#);
+    assert_eq!(out, "yes:Contract|Method [ <user, overwrites ParentCtor, prototype Contract, ctor> public method __construct ] {\n}\n\
+        yes:Contract|Method [ <user, overwrites ChildCtor, prototype Contract, ctor> public method __construct ] {\n}\n\
+        yes:Contract|Method [ <user, overwrites AbstractContract, prototype Contract, ctor> public method __construct ] {\n}\n\
+        yes:AbstractCtor|Method [ <user, overwrites ConcreteCtor, prototype AbstractCtor, ctor> public method __construct ] {\n}\n");
+}
+
 /// AST-exported object arguments use double-quoted escapes for control characters.
 #[test]
 fn test_reflection_dump_object_string_escapes() {

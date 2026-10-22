@@ -121,9 +121,16 @@ pub(super) fn reflection_parent_method_prototype_member(
             if let Some(member) =
                 reflection_class_method_member(ctx, resolved_parent_name, parent_info, method_key)?
             {
-                if !member.flags.is_private && member.flags.is_static == is_static
-                    && (!method_key.eq_ignore_ascii_case("__construct") || member.flags.is_abstract)
-                {
+                if !member.flags.is_private && member.flags.is_static == is_static {
+                    if method_key.eq_ignore_ascii_case("__construct") {
+                        // Constructors keep inherited contracts, rather than concrete replacements.
+                        if member.prototype_member.is_some() {
+                            return Ok(member.prototype_member.map(|prototype| *prototype));
+                        }
+                        if !member.flags.is_abstract {
+                            return Ok(None);
+                        }
+                    }
                     return Ok(Some(member));
                 }
             }
