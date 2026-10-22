@@ -129,9 +129,11 @@ pub(super) fn layout_for_function(
     }
     let mut numeric_cell_offsets = HashMap::new();
     let numeric = super::stack_numeric::plan(function);
-    for value in numeric.cells {
+    for group in numeric.cell_groups {
         offset += 24;
-        numeric_cell_offsets.insert(value, offset);
+        for value in group {
+            numeric_cell_offsets.insert(value, offset);
+        }
     }
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();

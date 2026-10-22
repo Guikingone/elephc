@@ -5,8 +5,9 @@
 //! - Frame layout before any generated instruction is emitted.
 //!
 //! Key details:
-//! - Only numeric casts, proven numeric observations and one ordinary local may observe the cell.
+//! - Numeric consumers copy payloads; one local or owned operand slot may retain the pointer.
 //! - Pointer reads cannot survive another execution of the producing instruction.
+//! - Independent producers may intervene, but owning-slot replacements invalidate borrowed reads.
 //! - References, eval, suspension, unknown consumers and escaping values fail closed.
 
 use crate::ir::{
@@ -19,12 +20,15 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
 mod tests;
+mod placement;
 use crate::ir_passes::numeric_domain as domain;
 
 /// Stack cells and the exclusively numeric locals proven while selecting them.
 #[derive(Default)]
 pub(super) struct NumericFrame {
+    #[cfg(test)]
     pub(super) cells: Vec<ValueId>,
+    pub(super) cell_groups: Vec<Vec<ValueId>>,
     pub(super) locals: HashSet<LocalSlotId>,
     pub(super) proven_values: HashSet<ValueId>,
 }
@@ -55,13 +59,9 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
     let mut locations = HashMap::new();
     let mut accesses: HashMap<LocalSlotId, Vec<InstId>> = HashMap::new();
     for block in &function.blocks {
-        let mut epoch = 0;
         for (index, &id) in block.instructions.iter().enumerate() {
             let inst = &function.instructions[id.as_raw() as usize];
-            if producer_op(inst) {
-                epoch += 1;
-            }
-            locations.insert(id, (block.id, index, epoch));
+            locations.insert(id, (block.id, index));
             match &inst.immediate {
                 Some(Immediate::LocalSlot(slot)) => accesses.entry(*slot).or_default().push(id),
                 Some(Immediate::LocalSlotPair { first, second }) => {
@@ -91,16 +91,20 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
         locations,
         accesses,
         slots: HashMap::new(),
+        invalidations: RefCell::new(HashMap::new()),
     };
-    let cells = function
+    let cells: Vec<_> = function
         .instructions
         .iter()
         .filter(|inst| producer_op(inst))
         .filter_map(|inst| inst.result)
         .filter(|&value| proof.producer(value))
         .collect();
+    let cell_groups = placement::storage_groups(&proof, &cells);
     NumericFrame {
+        #[cfg(test)]
         cells,
+        cell_groups,
         proven_values: proof.domain.into_inner().into_proven_values(),
         locals: proof
             .slots
@@ -117,8 +121,9 @@ struct Proof<'a> {
     uses: HashMap<ValueId, Vec<InstId>>,
     terminator_uses: HashSet<ValueId>,
     slots: HashMap<LocalSlotId, bool>,
-    locations: HashMap<InstId, (crate::ir::BlockId, usize, usize)>,
+    locations: HashMap<InstId, (crate::ir::BlockId, usize)>,
     accesses: HashMap<LocalSlotId, Vec<InstId>>,
+    invalidations: RefCell<HashMap<LocalSlotId, HashMap<crate::ir::BlockId, Vec<usize>>>>,
 }
 
 impl Proof<'_> {
@@ -153,7 +158,7 @@ impl Proof<'_> {
         stores.into_iter().all(|slot| self.slot(slot))
     }
 
-    /// Allows only same-block numeric observations, transparent retains and one destination.
+    /// Allows only same-block numeric observations, transparent retains/borrows and one destination.
     fn value_uses(
         &self,
         value: ValueId,
@@ -180,10 +185,11 @@ impl Proof<'_> {
                 let user = &self.function.instructions[id.as_raw() as usize];
                 match user.op {
                     Op::Release => true,
-                    Op::Acquire if user.immediate.is_none() => user
+                    Op::Acquire | Op::Borrow if user.immediate.is_none() => user
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
-                    Op::Cast => numeric_cast(user),
+                    Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
+                    _ if tagged_producer(user) && self.numeric_inputs(&user.operands) => true,
                     Op::StoreLocal => match user.immediate {
                         Some(Immediate::LocalSlot(slot)) => {
                             stores.insert(slot);
@@ -205,8 +211,10 @@ impl Proof<'_> {
         let Some(local) = self.function.locals.get(slot.as_raw() as usize) else {
             return false;
         };
+        let scoped = matches!(local.kind, LocalKind::OwnedTemp | LocalKind::HiddenTemp)
+            && self.scoped_operand(slot);
         if (slot.as_raw() as usize) < self.function.params.len()
-            || local.kind != LocalKind::PhpLocal
+            || (local.kind != LocalKind::PhpLocal && !scoped)
             || self.function.no_epilogue_cleanup_slots.contains(&slot)
             || local.php_type.codegen_repr() != PhpType::Mixed
             || local.ir_type != IrType::Heap(IrHeapKind::Mixed)
@@ -234,12 +242,47 @@ impl Proof<'_> {
                         self.load_uses(id, value)
                     }),
                     Op::ReleaseLocalSlot => true,
+                    Op::PushCallOperandOwner | Op::PopCallOperandOwner => {
+                        scoped && inst.operands.is_empty()
+                    }
                     _ => false,
                 }
             })
         });
         self.slots.insert(slot, safe);
         safe
+    }
+
+    /// Requires one same-block stored operand with balanced publication and final retirement.
+    fn scoped_operand(&self, slot: LocalSlotId) -> bool {
+        let Some(accesses) = self.accesses.get(&slot) else { return false; };
+        let mut block = None;
+        let (mut depth, mut stored, mut published, mut retired) = (0usize, false, false, false);
+        for &id in accesses {
+            let Some(&(current, _)) = self.locations.get(&id) else { return false; };
+            if block.is_some_and(|block| block != current) { return false; }
+            block = Some(current);
+            match self.function.instructions[id.as_raw() as usize].op {
+                Op::StoreLocal => {
+                    if stored { return false; }
+                    stored = true;
+                }
+                Op::PushCallOperandOwner => {
+                    if !stored || retired { return false; }
+                    depth += 1; published = true;
+                }
+                Op::PopCallOperandOwner => {
+                    let Some(next) = depth.checked_sub(1) else { return false; };
+                    depth = next;
+                }
+                Op::ReleaseLocalSlot if stored => {
+                    if depth != 0 { return false; }
+                    retired = true;
+                }
+                _ => {}
+            }
+        }
+        stored && published && retired && depth == 0
     }
 
     /// Allows fresh numeric seed cells and producers that cannot feed any other local.
@@ -297,20 +340,59 @@ impl Proof<'_> {
                 if inst.op == Op::Release {
                     return true;
                 }
-                let arithmetic = tagged_producer(inst);
+                let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
                 let comparison = domain::comparison(inst) && self.numeric_inputs(&inst.operands);
-                if !numeric_cast(inst) && !arithmetic && !comparison {
+                if !scalar_observation(inst) && !arithmetic && !comparison {
                     return false;
                 }
-                self.locations
-                    .get(&load)
-                    .zip(self.locations.get(&user))
-                    .is_some_and(|(load, user)| {
-                        load.0 == user.0 && load.1 < user.1
-                            && load.2 + usize::from(arithmetic) == user.2
-                    })
+                self.stable_read(load, user)
             })
         })
+    }
+
+    /// Allows intervening independent cells while rejecting any possible overwrite of this read.
+    fn stable_read(&self, load: InstId, user: InstId) -> bool {
+        let Some(Immediate::LocalSlot(slot)) = self.function.instructions[load.as_raw() as usize].immediate else {
+            return false;
+        };
+        let Some((start, end)) = self.locations.get(&load).zip(self.locations.get(&user)) else {
+            return false;
+        };
+        if start.0 != end.0 || start.1 >= end.1 { return false; }
+        let mut cache = self.invalidations.borrow_mut();
+        let writes = cache.entry(slot).or_insert_with(|| self.slot_invalidations(slot));
+        writes.get(&start.0).is_none_or(|positions| {
+            let next = positions.partition_point(|position| *position <= start.1);
+            positions.get(next).is_none_or(|position| *position >= end.1)
+        })
+    }
+
+    /// Indexes slot retirement/stores and every producer that can back the slot on any path.
+    fn slot_invalidations(&self, slot: LocalSlotId) -> HashMap<crate::ir::BlockId, Vec<usize>> {
+        let mut invalidating = HashSet::new();
+        for &id in self.accesses.get(&slot).into_iter().flatten() {
+            let inst = &self.function.instructions[id.as_raw() as usize];
+            if !matches!(inst.op, Op::StoreLocal | Op::ReleaseLocalSlot) { continue; }
+            invalidating.insert(id);
+            if inst.op != Op::StoreLocal { continue; }
+            let Some(&source) = inst.operands.first() else { continue; };
+            let mut source = source;
+            for _ in 0..self.function.values.len() {
+                let Some((producer, writer)) = definition(self.function, source) else { break; };
+                if producer_op(writer) { invalidating.insert(producer); break; }
+                if writer.op != Op::Acquire || writer.immediate.is_some() { break; }
+                let Some(&input) = writer.operands.first() else { break; };
+                source = input;
+            }
+        }
+        let mut writes: HashMap<_, Vec<_>> = HashMap::new();
+        for id in invalidating {
+            if let Some(&(block, position)) = self.locations.get(&id) {
+                writes.entry(block).or_default().push(position);
+            }
+        }
+        for positions in writes.values_mut() { positions.sort_unstable(); positions.dedup(); }
+        writes
     }
 }
 
@@ -341,14 +423,17 @@ pub(super) fn numeric_value(function: &Function, proven: &HashSet<ValueId>, valu
     proven.contains(&value) || domain::inputs(function, &[value])
 }
 
-/// Accepts only scalar casts that copy the value rather than expose its address.
-fn numeric_cast(inst: &crate::ir::Instruction) -> bool {
-    inst.op == Op::Cast
+/// Copies a scalar payload without exposing its address; declared returns retain their checks.
+fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
+    (inst.op == Op::ReturnBoundaryMixedToInt
+        && inst.operands.len() == 1
+        && inst.result_type == IrType::I64 && inst.result_php_type == PhpType::Int)
+        || (inst.op == Op::Cast
         && matches!(
             (&inst.immediate, &inst.result_php_type),
             (Some(Immediate::CastTarget(IrType::I64)), PhpType::Int)
                 | (Some(Immediate::CastTarget(IrType::F64)), PhpType::Float)
-        )
+        ))
 }
 
 /// Finds the defining instruction for a non-parameter SSA value.
@@ -372,7 +457,7 @@ pub(super) fn is_stack_value(
         let Some((_, inst)) = definition(function, value) else {
             return false;
         };
-        if inst.op != Op::Acquire || inst.immediate.is_some() {
+        if !matches!(inst.op, Op::Acquire | Op::Borrow) || inst.immediate.is_some() {
             return false;
         }
         let Some(&source) = inst.operands.first() else {
