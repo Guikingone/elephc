@@ -11,7 +11,8 @@
 //! - Loose equality mirrors the legacy scalar paths for int/bool/null/string
 //!   combinations and delegates string numeric parsing to shared runtime helpers.
 //! - Mixed/int equality compares integer-tagged payloads without floating-point promotion.
-//! - Mixed ordering delegates to the shared PHP comparison table so floats retain
+//! - Proven integer/float ordering uses direct tag dispatch; all other Mixed ordering
+//!   delegates to the shared PHP comparison table so floats retain
 //!   their fractional payload, boolean operands keep PHP truthiness semantics, and
 //!   relational operators can reject unordered NaN results independently of spaceship.
 
@@ -86,11 +87,16 @@ pub(super) fn lower_strict_eq(
         emit_array_deep_eq_call(ctx, lhs, rhs, is_equal)?;
         return store_if_result(ctx, inst);
     }
+    // A packed record address (a buffer element or a nested record read) is a raw pointer word
+    // like a `ptr<T>`, so both compare by address identity in either combination.
     if matches!(
         (&lhs_ty, &rhs_ty),
         (PhpType::Object(_), PhpType::Object(_))
             | (PhpType::Iterable, PhpType::Iterable)
-            | (PhpType::Pointer(_), PhpType::Pointer(_))
+            | (
+                PhpType::Pointer(_) | PhpType::Packed(_),
+                PhpType::Pointer(_) | PhpType::Packed(_)
+            )
     ) {
         emit_pointer_compare(ctx, lhs, rhs, is_equal)?;
         return store_if_result(ctx, inst);
@@ -902,6 +908,9 @@ pub(super) fn lower_php_rel_cmp(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if crate::codegen::stack_numeric::numeric_comparison(ctx.function, &ctx.numeric_values, inst) {
+        return super::numeric_comparisons::lower(ctx, inst);
+    }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
@@ -1171,7 +1180,7 @@ fn move_float_result_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) {
             ctx.emitter.instruction(&format!("fmov {}, {}", reg, result_reg));  // preserve the normalized mixed float comparison operand
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movapd {}, {}", reg, result_reg));// preserve the normalized mixed float comparison operand
+            ctx.emitter.instruction(&format!("movapd {}, {}", reg, result_reg)); // preserve the normalized mixed float comparison operand
         }
     }
 }

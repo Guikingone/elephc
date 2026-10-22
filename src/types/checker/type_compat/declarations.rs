@@ -419,10 +419,24 @@ impl Checker {
         context: &str,
     ) -> Result<(), CompileError> {
         if let Some(default_expr) = default_expr {
-            let default_ty = infer_expr_type_syntactic(default_expr);
+            let default_ty = self.declaration_default_type(default_expr);
             self.require_compatible_arg_type(expected_ty, &default_ty, span, context)?;
         }
         Ok(())
+    }
+
+    /// Preserves known global constant types before a declaration is specialized by a call.
+    fn declaration_default_type(&self, expression: &Expr) -> PhpType {
+        if crate::types::deferred_defaults::deferred_error_message(expression).is_some() {
+            // A normalized lexical Error has no result to constrain an untyped parameter.
+            return PhpType::Mixed;
+        }
+        if let ExprKind::ConstRef(name) = &expression.kind {
+            if let Some(ty) = self.constants.get(name.as_str()) {
+                return ty.clone();
+            }
+        }
+        infer_expr_type_syntactic(expression)
     }
 
     /// Semantically resolves a declaration default when it is a scoped constant access, then
@@ -438,11 +452,16 @@ impl Checker {
         let Some(default_expr) = default_expr else {
             return Ok(());
         };
+        // PHP permits even a scalar-typed parameter to use an unbound object factory.
+        // An explicit argument bypasses it; omission raises the scope Error before type binding.
+        if crate::types::deferred_defaults::deferred_error_message(default_expr).is_some() {
+            return Ok(());
+        }
         let default_ty = match &default_expr.kind {
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, default_expr)?
             }
-            _ => infer_expr_type_syntactic(default_expr),
+            _ => self.declaration_default_type(default_expr),
         };
         self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
     }
@@ -473,7 +492,7 @@ impl Checker {
             return Ok(());
         }
         if let Some(default_expr) = default_expr {
-            let default_ty = infer_expr_type_syntactic(default_expr);
+            let default_ty = self.declaration_default_type(default_expr);
             if matches!(expected_ty, PhpType::Object(_)) && matches!(default_ty, PhpType::Object(_))
             {
                 return Ok(());
@@ -526,7 +545,7 @@ impl Checker {
             } else if decl.ref_params.get(idx).copied().unwrap_or(false) {
                 param_types.push((param_name.clone(), PhpType::Mixed));
             } else if let Some(default_expr) = decl.defaults.get(idx).and_then(|d| d.as_ref()) {
-                param_types.push((param_name.clone(), infer_expr_type_syntactic(default_expr)));
+                param_types.push((param_name.clone(), self.declaration_default_type(default_expr)));
             } else {
                 param_types.push((param_name.clone(), PhpType::Int));
             }

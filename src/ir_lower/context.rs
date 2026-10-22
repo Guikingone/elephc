@@ -24,7 +24,7 @@ use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{
     array_storage_conversion, join_array_storage_conversion, ClassInfo, EnumInfo,
-    ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
+    ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
     ReturnAliasSummaries, ReturnArgAlias, ThrowAccessInfo, TypeEnv,
 };
 
@@ -98,6 +98,8 @@ pub(crate) enum StaticCallableBinding {
         return_alias: ReturnArgAlias,
         /// Requires scalar/nonthrowing call gates for newly preserved loop facts.
         loop_guarded: bool,
+        /// Allows direct calls only at spans admitted by the numeric loop proof.
+        numeric_loop_guarded: bool,
     },
     StaticMethod {
         receiver: StaticReceiver,
@@ -161,6 +163,7 @@ pub(crate) struct ReferenceCallContext {
 }
 
 /// Rollback point for a speculative statement lowering.
+#[derive(Clone)]
 pub(crate) struct LoweringSnapshot {
     function: Function,
     insertion_block: Option<BlockId>,
@@ -192,6 +195,7 @@ pub(crate) struct LoweringSnapshot {
     reference_call_context: Option<ReferenceCallContext>,
     refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    append_update_cell_aliases: HashSet<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -206,9 +210,14 @@ pub(crate) struct LoweringSnapshot {
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
+    numeric_closure_sites: std::collections::HashSet<Span>,
+    numeric_tracked_locals: std::collections::HashSet<String>,
+    final_mixed_locals: std::collections::HashMap<String, std::collections::HashSet<usize>>,
+    numeric_proof_sealed: bool,
 }
 
 /// Lengths of append-only intern pools captured for speculative rollback.
+#[derive(Clone)]
 struct DataPoolLengths {
     strings: usize,
     float_literals: usize,
@@ -270,6 +279,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) reference_call_context: Option<ReferenceCallContext>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    pub(crate) append_update_cell_aliases: HashSet<String>,
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
@@ -285,6 +295,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
         &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
     pub declared_trait_properties: &'m HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     pub packed_classes: &'m HashMap<String, PackedClassInfo>,
+    /// C struct layouts of the declared extern classes, read by `ptr<Class>` field accesses.
+    pub extern_classes: &'m HashMap<String, ExternClassInfo>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
@@ -416,6 +428,22 @@ pub(crate) struct LoweringContext<'m, 'f> {
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
+    /// Call spans whose arguments were proved `int|float` for a known closure.
+    ///
+    /// The proof is per span. A later call of the same local with an unproved
+    /// argument does not inherit it.
+    pub(crate) numeric_closure_sites: HashSet<Span>,
+    /// Locals read or written by an admitted numeric proof.
+    pub(crate) numeric_tracked_locals: HashSet<String>,
+    /// Named storage epochs whose frame slot must be Mixed from the first store.
+    ///
+    /// Set on replay when a closure proof or numeric backedge requires stable runtime tags.
+    /// Ordinals keep an unset/rebound variable independent from its old storage.
+    /// This map fixes storage only; fast arithmetic needs its own numeric-domain proof.
+    pub(crate) final_mixed_locals: HashMap<String, HashSet<usize>>,
+    /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
+    /// another proof from the now-Mixed slots.
+    pub(crate) numeric_proof_sealed: bool,
     source_path: Option<String>,
 }
 
@@ -438,6 +466,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         declared_trait_methods: &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
         declared_trait_properties: &'m HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
+        extern_classes: &'m HashMap<String, ExternClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
@@ -503,6 +532,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             declared_trait_methods,
             declared_trait_properties,
             packed_classes,
+            extern_classes,
             throw_access_sites,
             builtin_call_types,
             boxed_reference_promotion_sites,
@@ -553,6 +583,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             expression_depth: 0,
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
+            append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
             write_operand_is_borrowed: false,
@@ -563,6 +594,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_scope_read_names: HashSet::new(),
             eval_scope_write_names: HashSet::new(),
             eval_scope_flush_names: BTreeSet::new(),
+            numeric_closure_sites: HashSet::new(),
+            numeric_tracked_locals: HashSet::new(),
+            final_mixed_locals: HashMap::new(),
+            numeric_proof_sealed: false,
             source_path,
         }
     }
@@ -605,6 +640,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // always lowered again for real, and that pass records its refusals again.
             refusals: crate::ir_lower::diagnostics::mark(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
+            append_update_cell_aliases: self.append_update_cell_aliases.clone(),
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
@@ -614,6 +650,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_scope_read_names: self.eval_scope_read_names.clone(),
             eval_scope_write_names: self.eval_scope_write_names.clone(),
             eval_scope_flush_names: self.eval_scope_flush_names.clone(),
+            numeric_closure_sites: self.numeric_closure_sites.clone(),
+            numeric_tracked_locals: self.numeric_tracked_locals.clone(),
+            final_mixed_locals: self.final_mixed_locals.clone(),
+            numeric_proof_sealed: self.numeric_proof_sealed,
         }
     }
 
@@ -676,6 +716,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reference_call_context = snapshot.reference_call_context;
         crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
+        self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
@@ -685,6 +726,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.eval_scope_read_names = snapshot.eval_scope_read_names;
         self.eval_scope_write_names = snapshot.eval_scope_write_names;
         self.eval_scope_flush_names = snapshot.eval_scope_flush_names;
+        self.numeric_closure_sites = snapshot.numeric_closure_sites;
+        self.numeric_tracked_locals = snapshot.numeric_tracked_locals;
+        self.final_mixed_locals = snapshot.final_mixed_locals;
+        self.numeric_proof_sealed = snapshot.numeric_proof_sealed;
     }
 
     /// Returns the canonical PHP source path associated with this lowered body, if known.
@@ -781,6 +826,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         result
     }
 
+    /// Classifies a receiver lease independently of the borrowed RHS of a container write.
+    pub(crate) fn with_independent_write_receiver<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = self.write_operand_is_borrowed;
+        self.write_operand_is_borrowed = false;
+        let result = f(self);
+        self.write_operand_is_borrowed = previous;
+        result
+    }
+
+    /// Makes a borrowed write operand explicit so backend consumers cannot adopt its temp slot.
+    pub(crate) fn borrow_write_operand_if_needed(&mut self, value: LoweredValue, span: Span) -> LoweredValue {
+        let ty = self.builder.value_php_type(value.value);
+        if !self.write_operand_is_borrowed || !Ownership::php_type_needs_lifetime_tracking(&ty) {
+            return value;
+        }
+        let borrowed = self.emit_value(Op::Borrow, vec![value.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        self.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    }
+
     /// Returns the storage type for a `global` alias name.
     ///
     /// Under `--web`, request superglobals resolve to their fixed
@@ -804,7 +870,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn constant_value(&self, name: &str) -> Option<(ExprKind, PhpType)> {
         self.constants
             .get(name)
-            .or_else(|| self.constants.get(name.trim_start_matches('\\')))
+            .or_else(|| self.constants.get(elephc_builtin_contract::canonical_constant_name(name)))
             .cloned()
     }
 
@@ -923,6 +989,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
     }
 
+    /// Counts earlier storage bindings of one PHP name, independently of unrelated hidden slots.
+    /// Parameter COW shadows are separate storage epochs and retain their generated suffix.
+    pub(crate) fn local_binding_ordinal(&self, name: &str, slot: Option<LocalSlotId>) -> usize {
+        let locals = &self.builder.function().locals;
+        let limit = slot.map_or(locals.len(), |slot| slot.as_raw() as usize);
+        locals.iter().take(limit).filter(|local| local.name.as_deref().is_some_and(|stored| {
+            stored == name || stored.strip_suffix("#cow") == Some(name)
+        })).count()
+    }
+
+    /// Applies a replay constraint only to its original binding, including before the first store.
+    pub(crate) fn is_final_mixed_local(&self, name: &str) -> bool {
+        self.final_mixed_locals.get(name).is_some_and(|bindings| {
+            bindings.contains(&self.local_binding_ordinal(name, self.local_slots.get(name).copied()))
+        })
+    }
+
     /// Returns the frame storage type a local must use, boxing the locals PHP's `++`/`--`
     /// can retype.
     ///
@@ -941,6 +1024,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// slot back to `I64` wherever no access can observe the float, which is what keeps an
     /// ordinary counter loop as fast as it was.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+        if self.is_final_mixed_local(name) {
+            return PhpType::Mixed;
+        }
         if !matches!(php_type.codegen_repr(), PhpType::Str) {
             return php_type;
         }
@@ -1292,7 +1378,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// The single spelling site for both place temporaries, so the marker cannot be applied to
     /// one and forgotten on the other.
-    fn next_synthetic_place_local_name(&mut self) -> String {
+    pub(crate) fn next_synthetic_place_local_name(&mut self) -> String {
         let name = crate::names::synthetic_place_local_name(self.hidden_temp_counter);
         self.hidden_temp_counter += 1;
         name
@@ -1647,7 +1733,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns the reusable hidden owner slot for a promoted local, declaring it if needed.
-    fn declare_ref_cell_owner(&mut self, variable: &str, php_type: PhpType) -> LocalSlotId {
+    pub(crate) fn declare_ref_cell_owner(&mut self, variable: &str, php_type: PhpType) -> LocalSlotId {
         if let Some(slot) = self.ref_cell_owner_locals.get(variable).copied() {
             self.builder.widen_local_storage_type(slot, php_type);
             return slot;
@@ -1742,6 +1828,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // in every scope. Ordinary globals remain boxed Mixed cells.
         let php_type = if uses_global {
             self.global_alias_type(name)
+        } else if self.is_final_mixed_local(name) && !self.is_ref_bound_local(name) {
+            // Replay fixed the final representation. Preserve its actual runtime tag
+            // instead of truncating a promoted float to the entry integer type.
+            PhpType::Mixed
         } else {
             self.local_type(name)
         };
@@ -2047,6 +2137,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
         reset_array_cursor: bool,
     ) -> LoweredValue {
+        if self.append_update_cell_aliases.contains(name) {
+            return crate::ir_lower::expr::store_append_update_cell(self, name, value, span);
+        }
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
         self.clear_reflection_function_local(name);
@@ -3337,6 +3430,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(value.value),
                 Some(
                     Op::Acquire
+                    | Op::EnsureOwned
                     | Op::IToStr
                     | Op::FToStr
                     | Op::BoolToStr
@@ -3698,11 +3792,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.value_needs_release_after_use(value)
     }
 
-    /// Includes provisional string unboxes in cleanup without claiming their ownership can move.
+    /// Includes provisional string and callable unboxes without claiming their ownership can move.
     ///
-    /// A later store can widen a string local to Mixed after a consumer is lowered. Reading
-    /// that slot then allocates a detached string. Emit its release provisionally and let
-    /// builder finalization prune it when the final slot still lends a concrete string.
+    /// A later store or eval barrier can widen a local to Mixed after a consumer is lowered.
+    /// Reading it then allocates a detached string or retains its callable payload. Emit a
+    /// provisional release and let finalization prune it when storage still lends the value.
     pub(crate) fn value_needs_release_after_use(&self, value: LoweredValue) -> bool {
         if self.write_operand_is_borrowed {
             return false;
@@ -3710,7 +3804,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_temporary(value) {
             return true;
         }
-        if self.builder.value_php_type(value.value).codegen_repr() != PhpType::Str {
+        if !matches!(self.builder.value_php_type(value.value).codegen_repr(), PhpType::Str | PhpType::Callable) {
             return false;
         }
         let Some(inst) = self.builder.value_defining_instruction(value.value) else {
@@ -3795,7 +3889,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 })
             }
             Some(Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
+                crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+                    | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+                    | crate::ir::RuntimeCallTarget::PendingAppendFetchForWrite
+                    | crate::ir::RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,
             )) => matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)),
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
                 matches!(
@@ -4512,6 +4609,36 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Retypes a packed record address only when a pointer sink consumes it.
+    ///
+    /// Packed producers keep their record-shaped metadata so field-access optimization still
+    /// recognizes them and does not insert pointer null checks. `Move` is the existing pure
+    /// forwarding operation, so this changes only the sink-facing PHP and EIR types while
+    /// preserving the raw address payload. The sink's pointer type wins even when it names
+    /// another class: the checker accepts any pointer for any pointer, and the payload is the
+    /// same address either way.
+    pub(crate) fn retype_packed_address_for_pointer_sink(
+        &mut self,
+        value: LoweredValue,
+        expected: &PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        if !matches!(self.builder.value_php_type(value.value).codegen_repr(), PhpType::Packed(_)) {
+            return value;
+        }
+        let PhpType::Pointer(target) = expected.codegen_repr() else {
+            return value;
+        };
+        self.emit_value(
+            Op::Move,
+            vec![value.value],
+            None,
+            PhpType::Pointer(target),
+            Op::Move.default_effects(),
+            span,
+        )
+    }
+
     /// Emits a value-producing opcode whose result is an unconditional owned reference.
     ///
     /// This is reserved for runtime transfers such as `CatchBind`, where the opcode clears
@@ -4545,6 +4672,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits an `is_truthy` conversion when a value is not already I64.
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+        if let Some(value) = super::expr::object_operators::lower_object_truthy(self, input, span) {
+            return value;
+        }
         if input.ir_type == IrType::I64 {
             return input;
         }
@@ -4690,6 +4820,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                     crate::ir::RuntimeFnId::FunctionExists
                         | crate::ir::RuntimeFnId::IsCallable
                         | crate::ir::RuntimeFnId::ObStart
+                        | crate::ir::RuntimeFnId::StripTags
                 ) || target.string_callback_operand_index().is_some()
                     || target.uses_mbstring_runtime() =>
             {
@@ -5032,7 +5163,10 @@ fn runtime_call_may_invoke_implicit_user_code(
         return false;
     };
     match target {
-        crate::ir::RuntimeCallTarget::ArrayFetchForWrite => true,
+        crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+            | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+            | crate::ir::RuntimeCallTarget::PendingAppendFetchForWrite
+            | crate::ir::RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => true,
         crate::ir::RuntimeCallTarget::Pcntl(
             crate::ir::PcntlRuntime::Signal | crate::ir::PcntlRuntime::SignalDispatch,
         ) => true,

@@ -27,6 +27,8 @@ pub mod compiler_stack;
 pub mod conditional;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
 pub mod curl_prelude;
+/// Termwind-facing DOM HTML subset (`DOMDocument::loadHTML` and node walk).
+pub mod dom_html_prelude;
 /// Error and warning reporting.
 pub mod errors;
 mod eval_aot;
@@ -41,8 +43,13 @@ pub mod generics;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 mod progress;
-/// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
+/// Immutable BCMath Number standard-library prelude injection.
+pub mod bcmath_prelude;
+/// Incremental hashing standard-library prelude injection.
 pub mod hash_prelude;
+/// Core attribute and sensitive-value class declarations.
+pub mod core_prelude;
+/// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod image_prelude;
 /// Intrinsic call handling.
 pub mod intrinsics;
@@ -107,6 +114,7 @@ pub mod superglobals;
 pub mod synthetic_class;
 /// Termination and exit handling.
 pub mod termination;
+pub mod testing_prelude;
 /// Type system and checking.
 pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).

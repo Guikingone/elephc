@@ -35,7 +35,8 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
     op_name: &str,
 ) -> Result<()> {
     match ctx.raw_value_php_type(value)? {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
+        // A packed record address (buffer element or nested record) is one pointer word.
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) | PhpType::Packed(_) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_nonzero_bool(ctx);
         }

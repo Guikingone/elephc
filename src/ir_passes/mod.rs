@@ -14,7 +14,9 @@
 
 mod allocation;
 mod boxed_narrowing;
+mod bounded_mixed_counter;
 mod branch_simplify;
+mod buffer_access;
 mod by_ref_alias;
 mod checked_int_sink;
 mod checked_numeric_chain;
@@ -30,6 +32,7 @@ mod driver;
 mod fresh_mixed_transfer;
 mod identity_arith;
 mod inline;
+mod numeric_closure_calls;
 mod induction;
 mod loop_optimize;
 mod loop_cfg;
@@ -41,10 +44,12 @@ mod local_scope;
 mod liveness;
 mod loops;
 mod mem2reg;
+pub(crate) mod numeric_domain;
 mod peephole;
 mod regalloc;
 pub(crate) mod rematerialize;
 mod rewrite;
+mod tail_call;
 
 #[cfg(test)]
 mod tests;
@@ -55,6 +60,8 @@ pub use driver::optimize_module;
 pub use intervals::{build_intervals, LiveInterval};
 pub use liveness::{compute_liveness, LivenessInfo};
 pub(crate) use cfg::successors;
+pub(crate) use bounded_mixed_counter::proven_integer_slots;
+pub(crate) use by_ref_alias::address_escaping_slots;
 pub(crate) use liveness::terminator_uses;
 pub use loops::{compute_loops, LoopInfo, NaturalLoop};
 pub use regalloc::allocate_registers;

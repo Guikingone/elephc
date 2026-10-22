@@ -9,6 +9,7 @@
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::objects::mixed_array_get`'s object paths.
+//! - The Mixed setter's callable rejection, through the class-name entry.
 //! - `__rt_serialize_object`, through a denied class's `_class_serialize_ptrs` entry, and
 //!   `__rt_serialize_value` for a Closure (runtime tag 10), through the `_name` entry.
 //! - `__rt_unser_refuse_class`, from the unserialize preflight.
@@ -22,7 +23,7 @@
 //!   the message carries php-src's wording verbatim.
 //! - `__rt_concat` reads its LEFT operand from the string-result pair and its RIGHT one from a
 //!   different pair per target; both are spelled out below rather than assumed, because the
-//!   two are not the same registers and only one architecture is exercised by CI.
+//!   two are not the same registers on AArch64 and x86_64.
 //! - Control never returns. `__rt_throw_current` unwinds to the nearest handler, or reports the
 //!   uncaught Throwable and exits like PHP when there is none.
 
@@ -31,7 +32,7 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{
     OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX, SERIALIZATION_DENIED_PREFIX,
-    SERIALIZATION_DENIED_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
+    SERIALIZATION_DENIED_SUFFIX, SERIALIZABLE_RESULT_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
 };
 use crate::codegen_support::sentinels::{
     emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
@@ -60,7 +61,7 @@ struct ClassNamedThrow {
 
 const OBJECT_NOT_ARRAY: ClassNamedThrow = ClassNamedThrow {
     label: Some("__rt_throw_object_not_array"),
-    name_label: None,
+    name_label: Some("__rt_throw_object_not_array_name"),
     local: "__rt_object_not_array",
     prefix_symbol: "_object_not_array_prefix",
     prefix_len: OBJECT_NOT_ARRAY_PREFIX.len(),
@@ -94,7 +95,19 @@ const UNSERIALIZATION_DENIED: ClassNamedThrow = ClassNamedThrow {
     what: "unserialization-denied Exception",
 };
 
-/// Emits `__rt_throw_object_not_array`. Input: the unboxed object pointer (`x0` / `rdi`).
+const SERIALIZABLE_RESULT: ClassNamedThrow = ClassNamedThrow {
+    label: Some("__rt_throw_serializable_result"),
+    name_label: None,
+    local: "__rt_serializable_result",
+    prefix_symbol: "_serialization_denied_prefix",
+    prefix_len: 0,
+    suffix_symbol: "_serializable_result_suffix",
+    suffix_len: SERIALIZABLE_RESULT_SUFFIX.len(),
+    class_id_symbol: "_spl_exception_class_id",
+    what: "invalid Serializable result Exception",
+};
+
+/// Emits the object-pointer and class-name entries for a catchable non-ArrayAccess Error.
 pub fn emit_throw_object_not_array(emitter: &mut Emitter) {
     emit_class_named_throw(emitter, &OBJECT_NOT_ARRAY);
 }
@@ -102,8 +115,10 @@ pub fn emit_throw_object_not_array(emitter: &mut Emitter) {
 /// Emits `__rt_throw_serialization_denied`. Input: the object pointer (`x0` / `rdi`), which is
 /// how `__rt_serialize_object` calls a class's `__serialize` entry. Also emits
 /// `__rt_throw_serialization_denied_name`, which takes the class name pair instead.
+/// Also emits the class-named Exception for an invalid legacy serializer result.
 pub fn emit_throw_serialization_denied(emitter: &mut Emitter) {
     emit_class_named_throw(emitter, &SERIALIZATION_DENIED);
+    emit_class_named_throw(emitter, &SERIALIZABLE_RESULT);
 }
 
 /// Emits `__rt_throw_unserialization_denied_name`. Input: the class name pair (AArch64 `x1`/`x2`,

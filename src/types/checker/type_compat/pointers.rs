@@ -9,9 +9,11 @@
 //! - Rules here define accepted programs, so PHP covariance, inheritance, and extension-specific constraints must stay explicit.
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::types::{packed_type_size, PhpType};
 
 use super::object_types::canonical_builtin_iterable_interface_name;
+use super::super::builtin_enums::is_builtin_enum_name;
 use super::super::Checker;
 
 impl Checker {
@@ -37,14 +39,30 @@ impl Checker {
             "bool" | "boolean" => Some("bool".to_string()),
             "string" => Some("string".to_string()),
             "ptr" | "pointer" => Some("ptr".to_string()),
-            class_name if self.classes.contains_key(class_name) => Some(class_name.to_string()),
+            // `declared_classes` covers classes whose schema is not built yet: member signatures
+            // and packed class fields resolve `ptr<T>` while the class schema pass is still
+            // registering the classes they name. Builtin enums are injected after that pass and
+            // after the packed and extern prescan, so they are recognized by name.
+            class_name
+                if self.classes.contains_key(class_name)
+                    || self.declared_classes.contains(class_name)
+                    || is_builtin_enum_name(self, class_name) =>
+            {
+                Some(class_name.to_string())
+            }
             class_name if self.packed_classes.contains_key(class_name) => {
                 Some(class_name.to_string())
             }
             class_name if self.extern_classes.contains_key(class_name) => {
                 Some(class_name.to_string())
             }
-            _ => None,
+            class_name => {
+                let key = php_symbol_key(class_name);
+                self.declared_native_records
+                    .iter()
+                    .find(|declared| php_symbol_key(declared) == key)
+                    .cloned()
+            }
         }
     }
 

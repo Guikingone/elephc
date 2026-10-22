@@ -17,36 +17,79 @@ pub(super) fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    // A statically-decided readonly-property write outside the declaring
-    // constructor raises a catchable `Error` in PHP rather than a compile-time
-    // error, but the object and RHS expressions must still be evaluated first.
-    let throw_access_message = ctx.throw_access_sites.get(&span).and_then(|info| {
-        if let ThrowAccessKind::ReadonlyProperty { class_name, property } = &info.kind {
-            Some(format!("Cannot modify readonly property {}::${}", class_name, property))
+    // Readonly errors depend on runtime initialization, after receiver and RHS effects.
+    let readonly_write = ctx.throw_access_sites.get(&span).and_then(|info| {
+        if let ThrowAccessKind::ReadonlyProperty { class_name, property, initialization_error } = &info.kind {
+            Some((format!("Cannot modify readonly property {}::${}", class_name, property),
+                initialization_error.clone()))
         } else {
             None
         }
     });
-    let object = lower_expr(ctx, object);
-    let value_expr = value;
-    let lowered_value = lower_expr(ctx, value_expr);
-    if let Some(message) = throw_access_message {
-        if ctx.value_is_owning_temporary(object) {
-            crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    if readonly_write.is_some() {
+        if let ExprKind::NullCoalesce { value: read, default } = &value.kind {
+            if let ExprKind::PropertyAccess { object: read_object, property: read_property } = &read.kind {
+                if read_object.as_ref() == object && read_property == property {
+                    // The readonly Error belongs only to the fallback write, never to the
+                    // read-only keep branch of an already initialized property.
+                    lower_readonly_coalesce_update(ctx, object, property, default, span);
+                    return;
+                }
+            }
         }
-        if ctx.value_is_owning_temporary(lowered_value) {
-            crate::ir_lower::ownership::release_if_owned(ctx, lowered_value, Some(span));
-        }
-        lower_throw_access_error(ctx, &message, span);
-        return;
     }
+    let value_expr = value;
+    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+        let rhs = lower_expr(ctx, value_expr);
+        let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
+        (receiver, rhs)
+    } else {
+        let object = lower_expr(ctx, object);
+        let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        let rhs = lower_expr(ctx, value_expr);
+        (receiver, rhs)
+    };
+    let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
+    // Preserve the original PHP tag until the initialization probe has chosen its branch.
+    // Only an authorized first write reaches the backend's weak typed-property guard.
+    // Native buffers, pointers, and packed record addresses keep their exact storage type;
+    // they have no PHP weak coercion or runtime tag for that guard to preserve.
+    let lowered_value = if readonly_write.is_some()
+        && !matches!(ctx.builder.value_php_type(lowered_value.value).codegen_repr(),
+            PhpType::Mixed | PhpType::Buffer(_) | PhpType::Pointer(_) | PhpType::Packed(_))
+    {
+        ctx.box_value_as_mixed(lowered_value, PhpType::Mixed, Some(span))
+    } else { lowered_value };
+    if let Some((overwrite_message, initialization_error)) = readonly_write {
+        super::readonly_receiver_guard::guard_readonly_write_receiver(
+            ctx, &receiver, lowered_value, property, span,
+        );
+        let data = ctx.intern_string(property);
+        let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value.value],
+            Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
+        let overwrite = ctx.builder.create_named_block("readonly.write.initialized", Vec::new());
+        let initialize = ctx.builder.create_named_block("readonly.write.uninitialized", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: initialized.value, then_target: overwrite, then_args: Vec::new(),
+            else_target: initialize, else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(overwrite);
+        lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &overwrite_message, span);
+        ctx.builder.position_at_end(initialize);
+        if let Some(message) = initialization_error {
+            lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &message, span);
+            return;
+        }
+    }
+    receiver.narrow_for_assignment(ctx, property, lowered_value, span);
+    let object = receiver.value;
     // A runtime SUBCLASS can declare `__set` where the receiver's STATIC class does not, and php
     // calls the accessor on such an instance. Only the runtime class can answer that, so the guard
     // asks it. Receiver and value are already lowered, once each and in source order, so the
     // guard adds no evaluation and both branches see exactly the same two values.
     let magic_classes = magic_accessor_subclasses(ctx, object.value, property, "__set");
     if !magic_classes.is_empty() {
-        return lower_property_assign_guarding_magic_subclasses(
+        lower_property_assign_guarding_magic_subclasses(
             ctx,
             object,
             property,
@@ -55,8 +98,77 @@ pub(super) fn lower_property_assign(
             &magic_classes,
             span,
         );
+    } else {
+        lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
-    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span)
+    receiver.finish(ctx, span);
+}
+
+/// Releases independent evaluated operands before a readonly write throws its catchable Error.
+pub(super) fn lower_readonly_write_error(
+    ctx: &mut LoweringContext<'_, '_>, receiver: property_write_receiver::PropertyWriteReceiver,
+    value: LoweredValue,
+    message: &str, span: Span,
+) {
+    receiver.finish(ctx, span);
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    lower_throw_access_error(ctx, message, span);
+}
+
+/// Fuses the parser's readonly coalesce receiver temporary into a scoped EIR owner.
+pub(super) fn lower_synthetic_readonly_coalesce(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+) -> bool {
+    let [capture, write] = body else { return false; };
+    let StmtKind::Assign { name, value: receiver } = &capture.kind else { return false; };
+    if !crate::names::is_generated_local_name(name) { return false; }
+    let StmtKind::PropertyAssign { object, property, value } = &write.kind else { return false; };
+    let ExprKind::Variable(object_name) = &object.kind else { return false; };
+    let ExprKind::NullCoalesce { value: read, default } = &value.kind else { return false; };
+    let ExprKind::PropertyAccess { object: read_object, property: read_property } = &read.kind else {
+        return false;
+    };
+    if object_name != name || read_object != object || read_property != property
+        || !ctx.throw_access_sites.get(&write.span).is_some_and(|info| {
+            matches!(info.kind, ThrowAccessKind::ReadonlyProperty { .. })
+        })
+    {
+        return false;
+    }
+    lower_readonly_coalesce_update(ctx, receiver, property, default, write.span);
+    true
+}
+
+/// Evaluates and pins the receiver once across the probe and the lazy fallback write.
+fn lower_readonly_coalesce_update(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    default: &Expr,
+    span: Span,
+) {
+    let receiver = lower_expr(ctx, object);
+    let ty = ctx.builder.value_php_type(receiver.value);
+    let name = ctx.declare_hidden_temp(ty.clone());
+    let pinned = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+        ctx, receiver, Some(span),
+    );
+    ctx.store_local(&name, pinned, ty, Some(span));
+    crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
+    let slot = ctx.local_slots[&name];
+    ctx.emit_void(
+        Op::PushCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::PushCallOperandOwner.default_effects(), Some(span),
+    );
+    let target = Expr::new(ExprKind::PropertyAccess {
+        object: Box::new(Expr::new(ExprKind::Variable(name), object.span)),
+        property: property.to_string(),
+    }, span);
+    crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, &target, default, span);
+    crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
 }
 
 /// Emits the `instanceof` chain that hands a runtime subclass's `__set` its own call.
@@ -128,7 +240,21 @@ fn lower_property_assign_value(
     );
     // Property slots use their declared/inferred storage representation. In particular, an
     // untyped property widened to Mixed needs a boxed cell even when this assignment is scalar.
-    let property_ty = object_property_type(ctx, object.value, property);
+    let property_ty = object_property_type(ctx, object.value, property).or_else(|| {
+        let object_ty = ctx.builder.value_php_type(object.value);
+        if let Some(class_name) = crate::ir_lower::expr::packed_receiver_class(ctx, &object_ty) {
+            return ctx
+                .packed_classes
+                .get(class_name.trim_start_matches('\\'))
+                .and_then(|info| info.fields.iter().find(|field| field.name == property))
+                .map(|field| field.php_type.clone());
+        }
+        let class_name = crate::ir_lower::expr::extern_receiver_class(ctx, &object_ty)?;
+        ctx.extern_classes
+            .get(class_name.trim_start_matches('\\'))
+            .and_then(|info| info.fields.iter().find(|field| field.name == property))
+            .map(|field| field.php_type.clone())
+    });
     let value = match property_ty {
         // A runtime-shaped value assigned to a class-typed property stays BOXED here. Unboxing
         // it now would promote whatever the cell holds to an object pointer sight unseen, and
@@ -140,7 +266,11 @@ fn lower_property_assign_value(
         {
             value
         }
-        Some(ty) => coerce_typed_assign_value(ctx, value, &ty, span),
+        Some(ty) => {
+            let value =
+                ctx.retype_packed_address_for_pointer_sink(value, &ty, Some(span));
+            coerce_typed_assign_value(ctx, value, &ty, span)
+        }
         None => value,
     };
     // A packed `int` field accepts a boxed Mixed value only through a strict runtime
@@ -148,7 +278,20 @@ fn lower_property_assign_value(
     // store would write the box POINTER into fixed field storage; with a coercion it would
     // silently truncate the overflow promotion the box exists to carry.
     let value = narrow_mixed_value_for_packed_int_field(ctx, object.value, property, value, span);
+    // An extern struct's integer field (any C width) takes the same strict narrowing: the
+    // store writes raw bits, so the box pointer must never reach it.
+    let value = narrow_mixed_value_for_extern_int_field(ctx, object.value, property, value, span);
+    let retained_abstract_setter = receiver_retains_abstract_setter(ctx, object.value, property);
     let value = box_value_for_runtime_shaped_receiver(ctx, object, value, span);
+    // The backing slot may be wider than its inherited setter. Preserve the runtime value's
+    // tag through storage coercion so the backend can validate the setter contract itself.
+    let value = if retained_abstract_setter
+        && !matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed)
+    {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
+    } else {
+        value
+    };
     if magic_set_receiver_has_method(ctx, object.value, property) {
         lower_magic_property_set(ctx, object.value, property, value, span);
         return;
@@ -167,15 +310,18 @@ fn lower_property_assign_value(
     // jump to __rt_throw_current with the assigned temporary still pure SSA, so pin it in the
     // unwind chain for the store and retire the pin without releasing once the store returns.
     //
-    // Only a store that keeps an INDEPENDENT owner is pinned, which is exactly the condition
-    // `release_property_assignment_source_after_retaining_store` releases under. A store that
-    // instead transfers the temporary into the slot owes no release afterwards, and pinning it
-    // would leave one reference nothing retires.
-    let stored_property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
-    let pins = if property_store_keeps_independent_ref(
-        &stored_property_ty,
-        &ctx.builder.value_php_type(value.value),
-    ) {
+    // `PropertyWriteReceiver` already keeps every independent receiver lease visible to unwind.
+    // Do not publish a second pin for the same SSA owner here: pins acquire no reference, so two
+    // records would both release that one lease if the store throws. An unknown runtime slot can
+    // also reject a value before adopting its box, so protect that source independently. Keep the
+    // outer receiver lease until source cleanup completes because retiring a fresh Stringable
+    // source can invoke a destructor that throws after publication.
+    let stored_property_ty = object_property_type(ctx, object.value, property);
+    let source_pins = if value.value != object.value
+        && (retained_abstract_setter || stored_property_ty.as_ref().is_none_or(|property_ty| {
+            property_store_keeps_independent_ref(property_ty, &ctx.builder.value_php_type(value.value))
+        }))
+    {
         crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span)
     } else {
         Vec::new()
@@ -205,11 +351,38 @@ fn lower_property_assign_value(
             Some(span),
         );
     }
-    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    // The source is about to be released, so its unwind record must no longer own it.
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, source_pins, span);
     // Undeclared dynamic properties store boxed Mixed values. Boxing retains a
     // concrete temporary payload just like a declared property store does.
     let property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
-    release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    if retained_abstract_setter {
+        release_magic_set_value_after_call(ctx, value, span);
+    } else if stored_property_ty.is_none() && ctx.value_is_owning_temporary(value) {
+        // Runtime slots may copy a payload or retain its box; EIR owns the source in either arm.
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    } else {
+        release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    }
+    // `PropertyWriteReceiver` owns every independent receiver lease, including a narrowed
+    // object extracted from a boxed nullable static property. Its caller retires those leases
+    // after this store returns. Releasing `object` here as well would free that narrowed object
+    // twice and leave any freshly published property payload dangling.
+}
+
+/// Returns whether this receiver can dispatch the write through an inherited abstract setter.
+fn receiver_retains_abstract_setter(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    match ctx.builder.value_php_type(object).codegen_repr() {
+        PhpType::Object(class) => ctx.classes.get(class.trim_start_matches('\\'))
+            .is_some_and(|info| info.retained_abstract_setter(property).is_some()),
+        PhpType::Mixed | PhpType::Union(_) => ctx.classes.values()
+            .any(|info| info.retained_abstract_setter(property).is_some()),
+        _ => false,
+    }
 }
 
 /// Boxes a concrete value assigned through a receiver whose CLASS is only known at run time.
@@ -258,7 +431,8 @@ fn narrow_mixed_value_for_packed_int_field(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    let PhpType::Packed(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some(class_name) = crate::ir_lower::expr::packed_receiver_class(ctx, &object_ty) else {
         return value;
     };
     if !matches!(
@@ -283,6 +457,53 @@ fn narrow_mixed_value_for_packed_int_field(
         "Packed field {}::${} must be of type int, ",
         normalized, property
     );
+    let data = ctx.intern_string(&message);
+    let narrowed = ctx.emit_value(
+        Op::PackedFieldMixedToInt,
+        vec![value.value],
+        Some(Immediate::Data(data)),
+        PhpType::Int,
+        Op::PackedFieldMixedToInt.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    narrowed
+}
+
+/// Narrows a boxed Mixed value assigned to an integer field of a `ptr<ExternClass>` receiver.
+///
+/// Integer arithmetic is typed for its overflow-to-float promotion, so `$rect->w = $w * 2`
+/// reaches the store as a box. The same strict `Op::PackedFieldMixedToInt` narrowing packed
+/// fields use turns the int tag into the raw payload the C field stores and throws a catchable
+/// `TypeError` for any other runtime type. Other receivers and field types pass through.
+fn narrow_mixed_value_for_extern_int_field(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some(normalized) = crate::ir_lower::expr::extern_receiver_class(ctx, &object_ty) else {
+        return value;
+    };
+    if !matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed
+    ) {
+        return value;
+    }
+    let field_is_int = ctx
+        .extern_classes
+        .get(&normalized)
+        .and_then(|info| info.fields.iter().find(|field| field.name == property))
+        .is_some_and(|field| field.php_type == PhpType::Int);
+    if !field_is_int {
+        return value;
+    }
+    let message = format!("Extern field {}::${} must be of type int, ", normalized, property);
     let data = ctx.intern_string(&message);
     let narrowed = ctx.emit_value(
         Op::PackedFieldMixedToInt,
@@ -463,9 +684,12 @@ pub(super) fn lower_magic_property_set(
         Op::ConstStr.default_effects(),
         Some(span),
     );
+    // The caller's `PropertyWriteReceiver` already publishes any independent receiver lease.
+    // Only the additional call operands need records here; a duplicate object record would
+    // release the same lease twice when `__set` throws.
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,
-        &[object, property_name.value, value.value],
+        &[property_name.value, value.value],
         span,
     );
     ctx.emit_void(

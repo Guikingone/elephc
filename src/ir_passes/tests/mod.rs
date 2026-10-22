@@ -10,8 +10,11 @@
 
 mod branch_simplify_test;
 mod boxed_narrowing_test;
+mod bounded_mixed_counter_test;
+mod buffer_access_test;
 mod checked_int_sink_test;
 mod checked_numeric_chain_test;
+mod clobber_test;
 mod concat_reset_test;
 mod const_fold_test;
 mod cse_test;
@@ -22,6 +25,7 @@ mod driver_test;
 mod fresh_mixed_transfer_test;
 mod identity_arith_test;
 mod inline_test;
+mod numeric_closure_calls_test;
 mod integer_range_test;
 mod integer_range_regression_test;
 mod immutable_local_loads_test;
@@ -35,3 +39,5 @@ mod peephole_test;
 mod regalloc_edges_test;
 mod regalloc_test;
 mod rematerialize_test;
+
+mod tail_call_test;

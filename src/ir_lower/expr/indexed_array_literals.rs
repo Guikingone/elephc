@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - An `(array)` cast used as an element is typed by the shared `ArrayCast` classification
+//!   from the type lowering attaches to the source, so the literal stores that array.
 
 use super::*;
 use crate::parser::ast::ArrayEntry;
@@ -67,7 +69,7 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
 }
 
 /// Roots owned literal items across later evaluation and lends their stable slot value to insertion.
-fn root_array_literal_item(
+pub(super) fn root_array_literal_item(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
@@ -131,6 +133,7 @@ pub(super) fn lower_array_literal_without_spread(
     array_ty: PhpType,
 ) -> LoweredValue {
     let elem_ty = indexed_array_literal_element_type(&array_ty);
+    let result_ty = array_ty.clone();
     let array = ctx.emit_value(
         Op::ArrayNew,
         Vec::new(),
@@ -139,9 +142,13 @@ pub(super) fn lower_array_literal_without_spread(
         Op::ArrayNew.default_effects(),
         Some(expr.span),
     );
+    let owner = crate::ir_lower::function::contains_deferred_error(expr)
+        .then(|| publish_constructed_container(ctx, array, expr.span));
     for item in items {
         let value = lower_expr(ctx, item);
         let value = coerce_array_literal_element_to_storage_type(ctx, value, elem_ty.as_ref(), item);
+        let array = owner.map(|slot| load_published_container(ctx, slot, result_ty.clone(), item.span))
+            .unwrap_or(array);
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -151,7 +158,7 @@ pub(super) fn lower_array_literal_without_spread(
         );
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
-    array
+    owner.map(|slot| take_published_container(ctx, slot, result_ty, expr.span)).unwrap_or(array)
 }
 
 /// Coerces an array literal element to the contextual storage type when needed.
@@ -174,9 +181,10 @@ pub(super) fn coerce_array_literal_element_to_storage_type(
     };
     // The scalar coercers release owning heap-repr sources internally (see
     // `release_coerced_source_if_owned`); releasing those here again would
-    // double-free the element box. This caller-side release only covers the
-    // remaining reprs (e.g. an owned string temp narrowed through `StrToI`).
+    // double-free the element box. Integer string conversions also retire their
+    // source, while an identity string conversion keeps the same value below.
     if coerced.value != value.value
+        && !(value.ir_type == IrType::Str && coerced.ir_type == IrType::I64)
         && !coerced_source_repr_is_releasable(&ctx.builder.value_php_type(value.value))
         && ctx.value_is_owning_temporary(value)
     {
@@ -581,6 +589,20 @@ pub(crate) fn array_literal_type_for_ir(
     PhpType::Array(Box::new(elem_ty))
 }
 
+/// Returns the EIR storage type of an `(array)` cast used as a literal element.
+///
+/// Classification goes through `ArrayCast`, using the source type `lower_array_cast` reads
+/// off the lowered inner value. A syntactic `Int` guess stamps the literal `array<int>` and
+/// either stores a property hash in that slot or refuses to compile the associative form.
+pub(super) fn array_cast_literal_element_type(
+    ctx: &LoweringContext<'_, '_>,
+    inner: &Expr,
+) -> PhpType {
+    ir_array_storage_type(crate::types::array_cast_result_type(
+        &super::array_cast_source::array_cast_source_type_for_ir(ctx, inner),
+    ))
+}
+
 /// Returns the best EIR storage element type for one indexed-array literal item.
 pub(super) fn array_literal_element_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
@@ -590,7 +612,11 @@ pub(super) fn array_literal_element_type_for_ir(
         return storage;
     }
     match &item.kind {
-        ExprKind::Null => PhpType::Mixed,
+        ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
+        ExprKind::Cast {
+            target: CastType::Array,
+            expr: inner,
+        } => array_cast_literal_element_type(ctx, inner),
         ExprKind::Ternary { .. } => {
             // Keep array element ownership consistent with the lowered branch result.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, item))

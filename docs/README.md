@@ -56,6 +56,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
+- [Core classes and constants](php/core-symbols.md) - weak references and maps, attributes, enum interfaces, exceptions, and predefined constants
 - [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
 - [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
 - [Sessions](php/sessions.md) — `session_start()`, `$_SESSION`, session ID and cookie management, file-based storage under `--web`
@@ -69,6 +70,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Calendar](php/calendar.md) — `ext/calendar`: Julian Day conversions for the Gregorian, Julian, French Republican and Jewish calendars, Easter, day/month names, `cal_*` dispatch
 - [Images](php/image.md) — GD image creation, I/O, color, drawing, text, transforms/filters, Exif/IPTC metadata, the Imagick (`Imagick`/`ImagickDraw`/`ImagickPixel`/`ImagickPixelIterator`/`ImagickKernel`) and Gmagick (`Gmagick`/`GmagickDraw`/`GmagickPixel`) object APIs, and Cairo 2D vector drawing (`CairoImageSurface`/`CairoContext`/`CairoMatrix`/patterns/gradients), plus `getimagesize`/`image_type_to_*`, backed by a pure-Rust codec/raster bridge (no system GD/ImageMagick/GraphicsMagick/cairo/libpng/libjpeg/libexif)
 - [cURL](php/curl.md) — `ext/curl`'s complete function, class, and constant surface (easy, multi, share, `CURLFile`/`CURLStringFile` uploads, six libcurl callbacks) on a statically pinned libcurl 8.21.0 with OpenSSL 3.5.8 as its TLS backend and native Apple SecTrust verification on iOS, plus the protocol matrix, the option-rejection table, and every documented difference from PHP
+- [DOM HTML (Termwind subset)](php/dom-html.md) — `DOMDocument::loadHTML()` and the node walk Termwind's `HtmlRenderer` needs; not full PHP DOM (see PR #654)
 
 ## Beyond PHP
 
@@ -83,6 +85,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone HTTP server with worker, pool, or per-request process isolation
+- [Testing](beyond-php/testing.md) — the native test runtime: `Elephc\Testing\TestCase`, the PHPUnit-compatible assertion subset, the `Runner` report and exit code, and the `PHPUnit\Framework\TestCase` alias
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
 - [Profiling](beyond-php/profiling.md) - PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database and outgoing-network wait, SQL queries, network operations and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, automatic curl trace propagation, W3C distributed traces, and a self-contained interactive call-graph page
 

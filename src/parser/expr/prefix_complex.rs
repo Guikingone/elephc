@@ -310,7 +310,7 @@ fn infer_arrow_captures(
 /// the one shared predicate, rather than through an `__elephc` spelling. The prefix is forgeable
 /// from source: `$__elephc_tag` is a perfectly legal PHP variable, and filtering on the prefix
 /// silently dropped it from an arrow function's capture list, so the body read an unset variable.
-fn push_arrow_capture(
+pub(super) fn push_arrow_capture(
     name: &str,
     bound: &HashSet<String>,
     seen: &mut HashSet<String>,
@@ -325,7 +325,7 @@ fn push_arrow_capture(
 }
 
 /// Recursively collects variables that an arrow function body reads from its enclosing scope.
-fn collect_arrow_expr_captures(
+pub(super) fn collect_arrow_expr_captures(
     expr: &Expr,
     bound: &HashSet<String>,
     seen: &mut HashSet<String>,
@@ -370,11 +370,17 @@ fn collect_arrow_expr_captures(
             collect_arrow_expr_captures(value, bound, seen, captures);
             collect_arrow_expr_captures(callable, bound, seen, captures);
         }
-        ExprKind::Assignment { target, value, .. } => {
+        ExprKind::Assignment { target, value, prelude, result_target, .. } => {
+            for statement in prelude {
+                super::arrow_preludes::collect(statement, bound, seen, captures);
+            }
             if !matches!(target.kind, ExprKind::Variable(_)) {
                 collect_arrow_expr_captures(target, bound, seen, captures);
             }
             collect_arrow_expr_captures(value, bound, seen, captures);
+            if let Some(result) = result_target {
+                collect_arrow_expr_captures(result, bound, seen, captures);
+            }
         }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::NewObject { args, .. }
@@ -776,8 +782,14 @@ pub(super) fn parse_named_expr(
         && tokens[*pos].0 == Token::Less
     {
         *pos += 1;
-        let target_type = parse_name(tokens, pos, span, "Expected type name after 'ptr_cast<'")?
-            .as_canonical();
+        let target_name = parse_name(tokens, pos, span, "Expected type name after 'ptr_cast<'")?;
+        // Keep the leading `\` of a fully qualified target: the name resolver applies the current
+        // namespace to every other spelling, so `ptr_cast<\Pair>` must stay distinguishable.
+        let target_type = if target_name.is_fully_qualified() {
+            format!("\\{}", target_name.as_canonical())
+        } else {
+            target_name.as_canonical()
+        };
         if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
             return Err(CompileError::new(span, "Expected '>' after ptr_cast<T"));
         }

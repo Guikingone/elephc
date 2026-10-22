@@ -17,6 +17,7 @@ use crate::ir::{print_module, Terminator};
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
 mod arrays;
+mod append_writes;
 mod nullable_array_merges;
 mod array_reference_outputs;
 mod array_implode;
@@ -32,20 +33,31 @@ mod debug_info;
 mod descriptor_ownership;
 mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
+mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
+mod enum_argument_boundaries;
+mod enum_review;
+mod enum_result_owners;
 mod string_append;
 mod eval_ownership;
 mod eval_default_helpers;
+mod default_review_boundaries;
 mod exhaustive;
 mod ownership;
+mod transient_string_claims;
+mod strip_tags_review;
+mod weak_map_places;
+mod backtrace_labels;
 mod preg_match_all_review;
 mod object_mixed_return_owners;
+mod packed_record_addresses;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
 mod boxed_array_multisort;
 mod builtin_datetime_methods;
+mod eval_demand;
 mod instanceof_operand_owners;
 mod iter_start_origin;
 mod iterator_cleanup;
@@ -54,6 +66,7 @@ mod boxed_array_predicates;
 mod boxed_array_set_comparators;
 mod reference_loop_cleanup;
 mod static_callable_string_owners;
+mod static_nested_updates;
 mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;
@@ -61,6 +74,10 @@ mod reference_return_boundaries;
 mod callable_operand_owners;
 mod capture_view_owners;
 mod static_properties;
+mod nested_append_review;
+mod property_default_scope;
+mod asymmetric_properties;
+mod static_receiver_writes;
 mod synthetic_arrays;
 mod throwable_constructors;
 mod mixed_throw_errors;
@@ -152,8 +169,12 @@ fn try_lower_source_at_for_target(
     );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(
         ast,
         crate::php_version::PhpVersion::default(),
@@ -167,6 +188,8 @@ fn try_lower_source_at_for_target(
         &defines,
     )
     .expect("autoload failed");
+    let ast = crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory)
+        .expect("autoload DOM prelude injection failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.

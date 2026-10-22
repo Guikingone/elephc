@@ -81,6 +81,7 @@ mod ip2long;
 mod long2ip;
 mod htmlspecialchars;
 mod html_entity_decode;
+mod strip_tags;
 mod urlencode;
 mod urldecode;
 mod rawurlencode;
@@ -141,6 +142,8 @@ pub use atoi::emit_atoi;
 pub use strcopy::emit_strcopy;
 /// Emit string copy helper.
 pub use concat_scratch::emit_concat_scratch;
+/// Fixed capacity shared by emitters that prove a result fits the concat scratch buffer.
+pub(crate) use concat_scratch::CONCAT_BUF_CAPACITY;
 pub use str_persist::emit_str_persist;
 /// Emit string persistence helper.
 pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};
@@ -250,6 +253,8 @@ pub use long2ip::emit_long2ip;
 pub use htmlspecialchars::emit_htmlspecialchars;
 /// Emit HTML special characters escaping.
 pub use html_entity_decode::emit_html_entity_decode;
+/// Emit PHP `strip_tags()` helper.
+pub use strip_tags::emit_strip_tags;
 /// Emit HTML entity decode helper.
 pub use urlencode::emit_urlencode;
 /// Emit URL encoding helper.

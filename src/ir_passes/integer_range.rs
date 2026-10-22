@@ -840,7 +840,7 @@ fn value_def_block(function: &Function, value: ValueId) -> Option<BlockId> {
 }
 
 /// Finds a loop header comparison and whether its true edge continues the loop.
-fn loop_condition(
+pub(super) fn loop_condition(
     function: &Function,
     lp: &super::loops::NaturalLoop,
 ) -> Option<(ValueId, bool)> {
@@ -861,7 +861,7 @@ fn loop_condition(
 }
 
 /// Normalizes a loop continuation comparison to `param predicate bound`.
-fn induction_condition(
+pub(super) fn induction_condition(
     function: &Function,
     condition: ValueId,
     continue_when_true: bool,

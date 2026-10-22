@@ -15,16 +15,21 @@ use crate::support::*;
 mod array_read_match;
 #[path = "optimizer/switch_fallthrough.rs"]
 mod switch_fallthrough;
+#[path = "optimizer/bcmath_number.rs"]
+mod bcmath_number;
 
 #[path = "optimizer/boxed_array_snapshots.rs"]
 mod boxed_array_snapshots;
 mod implode_effects;
 mod spread_effects;
+mod strip_tags_effects;
 
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
 #[path = "optimizer/call_result_alias.rs"]
 mod call_result_alias;
+#[path = "optimizer/numeric_closure_calls.rs"]
+mod numeric_closure_calls;
 #[path = "optimizer/constant_folding.rs"]
 mod constant_folding;
 #[path = "optimizer/constant_propagation.rs"]
@@ -33,6 +38,8 @@ mod constant_propagation;
 mod control_flow_normalization;
 #[path = "optimizer/checked_int_sink.rs"]
 mod checked_int_sink;
+#[path = "optimizer/bounded_mixed_counter.rs"]
+mod bounded_mixed_counter;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
 #[path = "optimizer/concat_reset.rs"]
@@ -77,6 +84,7 @@ mod integer_range;
 mod memory_model_propagation;
 #[path = "optimizer/mem2reg.rs"]
 mod mem2reg;
+mod buffer_access;
 #[path = "optimizer/warning_globals.rs"]
 mod warning_globals;
 
@@ -84,3 +92,11 @@ mod warning_globals;
 mod loop_optimization;
 mod rematerialization;
 mod machine_peepholes;
+
+#[path = "optimizer/tail_call.rs"]
+mod tail_call;
+
+#[path = "optimizer/stack_numeric.rs"]
+mod stack_numeric;
+#[path = "optimizer/numeric_continuation.rs"]
+mod numeric_continuation;

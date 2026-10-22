@@ -150,6 +150,65 @@ Magician history explains each case's intended path.
 
 ## Internal measurements
 
+For an isolated numeric accumulator, compile `benchmark/diagnostics/numeric_local.php`
+and pass the iteration count at runtime. Run the same source and arguments with
+`php -n`, with CLI OPcache and JIT disabled. Output is `checksum|body_ns`; argument
+parsing and process startup precede the body clock. Measure several iteration
+counts with alternating compiler/PHP executions and report dispersion. Collect
+`--gc-stats` in separate diagnostic binaries so timings use ordinary code generation.
+
+For controlled revision comparisons of the mixed workload, select each compiler
+explicitly and supply its source revision. This diagnostic runner is separate
+from the historical process-only suites:
+
+```bash
+python3 benchmark/compare.py --compiler main=/path/to/main/elephc \
+  --revision main=FULL_COMMIT_SHA --bridge-dir main=/path/to/main/archives \
+  --compiler release=/path/to/release/elephc --revision release=v0.27.3 \
+  --bridge-dir release=/path/to/release/archives --require-idle --json mixed-results.json
+```
+
+Each compiler builds the same PHP fixture once with the selected PHP semantic
+profile, optimizer setting and heap size. Supply matching release-built Magician
+archives using `--bridge-dir` when they are not adjacent to that compiler. Opaque
+eval can also link callbacks from other bridges, so supply their matching
+archives in the same directory. Every supplied archive is fingerprinted and its
+library-directory override replaces inherited overrides from other builds.
+Compilation happens before timing. PHP is required and runs with `-n`, OPcache
+and JIT disabled. Two warmups precede 21 measured rounds with rotating variant
+order. On Linux, `--cpu N` pins every measured child to an available CPU.
+
+The output separates arithmetic, closure, append, dynamic eval, JSON decode with
+function teardown, total workload body and whole-process wall time. JSON input
+is prepared before timing, and the eval phase includes its first activation.
+Use `--size`, `--rows`, `--columns` and `--eval-count` to investigate scaling;
+changes to these parameters describe different workloads. Compiler/binary/input
+hashes, supplied revisions, the exact PHP version and all raw samples are saved.
+Every compiler label requires a matching `--revision`; missing revisions are
+rejected before compilation because a compiler can come from another checkout.
+SHA-256 fingerprints use streaming reads without Python 3.11-only hashing APIs.
+
+Every warmup and measured run must produce the expected checksum and consistent
+phase clocks. A phase whose median absolute deviation exceeds 5% of its median
+marks the comparison noisy, preserves the results and exits nonzero. Run on a
+quiet machine with no concurrent builds. `--require-idle` additionally checks
+`ps` before and after each execution and rejects visible compiler/linker processes;
+measurement start/end timestamps are saved. Neither this guard nor the noise
+gate can detect all systematic contention or make different architectures comparable. These samples are not
+appended to the historical dashboard. Startup-sensitive whole-process ratios and
+body ratios must be reported separately, and isolated speedups must not be multiplied.
+
+To separate JSON decode from explicit value release, compile
+`benchmark/diagnostics/json_lifecycle.php` and pass `INPUT_JSON REPEATS DRAIN_CACHES`.
+The last argument is `0` or `1`. Run the same source with `php -n` and the same
+arguments. Its output is `outer_count_sum|decode_ns:release_ns:drain_ns`; input
+loading is outside all three clocks. With cache draining disabled, the last
+clock only measures stopwatch overhead. `unset` includes any collector work
+triggered by the normal lowering. Repeat counts and explicit cache draining
+change allocation reuse, so report them alongside the heap size and keep them
+identical across compiler revisions. Cache-drain timings are separate from the
+mixed fixture, which does not call `gc_mem_caches()`.
+
 Rust stopwatches that require private compiler/interpreter APIs retain their
 owning test modules, with commands exposed through the same entry point:
 
@@ -157,6 +216,16 @@ owning test modules, with commands exposed through the same entry point:
 python3 benchmark/run.py --internal script-cache
 python3 benchmark/run.py --internal null-representation
 ```
+
+For an mbstring bridge footprint probe, compile
+`benchmark/diagnostics/mbstring.php` with matching release-built archives and
+compare its output with real PHP with mbstring enabled. It exercises encoding
+enumeration, lookup and multiple codec consumers in one executable. Compare
+executable bytes and ELF/Mach-O section sizes separately from execution time;
+`--keep-symbols` and the default stripped mode are different measurements.
+Use a separate `CARGO_TARGET_DIR` for each revision when building bridge archives.
+An older worktree sharing a target directory can otherwise reuse another
+revision's artifacts based on their timestamps.
 
 These manual measurements have different scopes (including parse/deserialize or
 compile/link time). They do not join the process-execution histories or run in

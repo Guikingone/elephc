@@ -7,9 +7,7 @@
 //! Key details:
 //! - Preserves PHP array widening, nullability, match joins, and string-offset validation.
 
-use super::{
-    is_valid_string_offset_index, merge_match_arm_result_type, Checker,
-};
+use super::{merge_match_arm_result_type, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
 use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv};
@@ -34,6 +32,9 @@ impl Checker {
             ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
+                if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
+                    return Ok(ty);
+                }
                 match ty {
                     PhpType::Int => {
                         if matches!(&inner.kind, ExprKind::IntLiteral(_)) {
@@ -66,6 +67,7 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
+                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
                 Some(PhpType::Int) => Ok(PhpType::Mixed),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 // PHP's string increment can change the value's type (`"9"++` is
@@ -95,6 +97,7 @@ impl Checker {
                 )),
             },
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
+                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
                 | Some(PhpType::False)
@@ -240,145 +243,7 @@ impl Checker {
                 }
                 Ok(PhpType::Array(Box::new(elem_ty)))
             }
-            ExprKind::ArrayAccess { array, index } => {
-                let arr_ty = self.infer_type(array, env)?;
-                let idx_ty = self.infer_type(index, env)?;
-                let buffer = matches!(arr_ty, PhpType::Buffer(_));
-                self.buffer_read_observations.entry(expr.span)
-                    .and_modify(|previous| *previous &= buffer)
-                    .or_insert(buffer);
-                let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
-                match &arr_ty {
-                    PhpType::Str => {
-                        if !is_valid_string_offset_index(index, &idx_ty) {
-                            return Err(CompileError::new(
-                                expr.span,
-                                "String index must be integer",
-                            ));
-                        }
-                        Ok(PhpType::Str)
-                    }
-                    PhpType::Array(elem_ty) => {
-                        if normalized_idx_ty != PhpType::Int {
-                            // PHP allows string keys on indexed arrays: the array
-                            // promotes to hash at runtime. Return the element type
-                            // widened to Mixed so ?? / isset / reads type-check.
-                            Ok(PhpType::Mixed)
-                        } else {
-                            Ok(*elem_ty.clone())
-                        }
-                    }
-                    PhpType::AssocArray { value, .. } => {
-                        // Assoc arrays accept string or int keys
-                        Ok(*value.clone())
-                    }
-                    PhpType::Object(class_name) => {
-                        if self.object_type_implements_interface(class_name, "ArrayAccess") {
-                            Ok(self.array_access_offset_get_type(class_name))
-                        } else {
-                            Err(CompileError::new(expr.span, "Cannot index non-array"))
-                        }
-                    }
-                    PhpType::Union(members) => {
-                        let mut result_members = Vec::new();
-                        let mut saw_indexable_member = false;
-                        let mut first_index_error = None;
-                        for member in members {
-                            match member {
-                                PhpType::Void => result_members.push(PhpType::Void),
-                                PhpType::Str => {
-                                    saw_indexable_member = true;
-                                    if !is_valid_string_offset_index(index, &idx_ty) {
-                                        first_index_error =
-                                            first_index_error.or(Some("String index must be integer"));
-                                        continue;
-                                    }
-                                    result_members.push(PhpType::Str);
-                                }
-                                PhpType::Array(elem_ty) => {
-                                    saw_indexable_member = true;
-                                    if normalized_idx_ty != PhpType::Int {
-                                        // String key on indexed array: PHP promotes
-                                        // to hash at runtime; element may be Mixed.
-                                        result_members.push(PhpType::Mixed);
-                                    } else {
-                                        result_members.push(*elem_ty.clone());
-                                    }
-                                }
-                                PhpType::AssocArray { value, .. } => {
-                                    saw_indexable_member = true;
-                                    result_members.push(*value.clone());
-                                }
-                                PhpType::Object(class_name) => {
-                                    if self.object_type_implements_interface(
-                                        class_name,
-                                        "ArrayAccess",
-                                    ) {
-                                        saw_indexable_member = true;
-                                        result_members
-                                            .push(self.array_access_offset_get_type(class_name));
-                                    }
-                                }
-                                PhpType::Buffer(elem_ty) => {
-                                    saw_indexable_member = true;
-                                    if !matches!(idx_ty, PhpType::Int | PhpType::Mixed)
-                                        && !idx_ty.is_int_float_union()
-                                    {
-                                        first_index_error =
-                                            first_index_error.or(Some("Buffer index must be integer"));
-                                        continue;
-                                    }
-                                    match elem_ty.as_ref() {
-                                        PhpType::Packed(name) => {
-                                            result_members.push(PhpType::Pointer(Some(name.clone())))
-                                        }
-                                        _ => result_members.push(*elem_ty.clone()),
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        let has_concrete_result =
-                            result_members.iter().any(|member| *member != PhpType::Void);
-                        if !has_concrete_result && saw_indexable_member {
-                            Err(CompileError::new(
-                                expr.span,
-                                first_index_error.unwrap_or("Cannot index non-array"),
-                            ))
-                        } else if result_members.is_empty() {
-                            Err(CompileError::new(expr.span, "Cannot index non-array"))
-                        } else {
-                            Ok(self.normalize_union_type(result_members))
-                        }
-                    }
-                    PhpType::Buffer(elem_ty) => {
-                        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed)
-                            && !idx_ty.is_int_float_union()
-                        {
-                            return Err(CompileError::new(
-                                expr.span,
-                                "Buffer index must be integer",
-                            ));
-                        }
-                        match elem_ty.as_ref() {
-                            PhpType::Packed(name) => Ok(PhpType::Pointer(Some(name.clone()))),
-                            _ => Ok(*elem_ty.clone()),
-                        }
-                    }
-                    // Mixed receivers fall through to runtime dispatch. The
-                    // boxed payload may carry an indexed array, an assoc
-                    // hash, or a stdClass; codegen unboxes and routes to
-                    // the right runtime helper. Missing keys decode to
-                    // `Mixed(null)` at runtime, mirroring PHP's silent
-                    // "undefined index" warning behavior for this very
-                    // common idiom (e.g. `json_decode($json, true)["k"]`).
-                    PhpType::Mixed => Ok(PhpType::Mixed),
-                    // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and
-                    // answer `false` / the default; only a probe context may do so.
-                    PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
-                    _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
-                }
-            }
+            ExprKind::ArrayAccess { .. } => self.infer_array_access_type(expr, env),
             ExprKind::Ternary {
                 condition,
                 then_expr,
@@ -443,18 +308,9 @@ impl Checker {
                     CastType::Float => PhpType::Float,
                     CastType::String => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
-                    CastType::Array
-                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
-                    PhpType::AssocArray {
-                        key: Box::new(PhpType::Str),
-                        value: Box::new(PhpType::Mixed),
-                    },
-                    CastType::Array
-                        if matches!(
-                            source_ty.codegen_repr(),
-                            PhpType::Mixed | PhpType::Union(_)
-                        ) => PhpType::Mixed,
-                    CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+                    // Shared with EIR lowering so the static type always names the storage
+                    // the lowered conversion produces.
+                    CastType::Array => crate::types::array_cast_result_type(&source_ty),
                     // `(object)` is the identity on an object, so the static class survives the
                     // cast; a runtime-typed source may already hold an unrelated class, which
                     // only `mixed` can describe. Every other source becomes a fresh stdClass.

@@ -37,6 +37,7 @@ pub(crate) use params::{
     type_arguments_end,
 };
 pub(crate) use assign::{
+    assignment_target_store_stmt, lower_nested_append_assignment,
     can_replay_assignment_target, lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
@@ -64,6 +65,25 @@ pub(crate) fn push_parsed_stmt(stmts: &mut Vec<Stmt>, stmt: Stmt) {
         StmtKind::Synthetic(body) if is_const_list => stmts.extend(body),
         kind => stmts.push(Stmt { kind, ..stmt }),
     }
+}
+
+/// Parses and appends one item allowed directly in a file or braced namespace.
+///
+/// Extern library blocks can expand to several declarations, while every ordinary statement
+/// produces one item that still passes through the shared const-list expansion.
+pub(crate) fn parse_file_or_namespace_scope_item(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    stmts: &mut Vec<Stmt>,
+) -> Result<(), CompileError> {
+    if tokens.get(*pos).is_some_and(|(token, _)| token == &Token::Extern) {
+        let mut extern_stmts = parse_extern_stmts(tokens, pos)?;
+        stmts.append(&mut extern_stmts);
+    } else {
+        let stmt = parse_stmt(tokens, pos)?;
+        push_parsed_stmt(stmts, stmt);
+    }
+    Ok(())
 }
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.

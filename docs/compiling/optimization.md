@@ -169,9 +169,22 @@ The same proof removes numeric local-slot retirement immediately before an
 overwrite. Retirement remains intact when a read, reference alias, or a value
 with a possible destructor prevents proving that the clear is unobservable.
 
+### Bounded mixed counters
+
+The sixth registered pass replaces a boxed function-local counter with a scalar
+integer only when every update is proven to fit in the signed 64-bit range. It
+first rewrites a private trial, requires complete SSA promotion, and commits the
+change only after integer range analysis removes every new overflow check.
+
+Integer seeds, increments/decrements, comparisons and eligible by-value `mixed`
+call parameters can participate. References, escaping values, dynamic `eval`,
+suspension, exception handlers, uncertain type changes and unproven overflow
+keep their existing representation. Call targets and ABIs are unchanged. See
+`examples/bounded-closure-counter/main.php`.
+
 ### Canonical loop optimization
 
-The sixth registered pass replaces self-carried scalar loop parameters with their
+The seventh registered pass replaces self-carried scalar loop parameters with their
 preheader values, exposing invariant bounds. It also shares equivalent integer
 induction variables: every back edge must use the same constant step and the
 initial values must agree. Checked recurrences must have identical overflow modes,
@@ -187,7 +200,7 @@ generators are conservatively excluded. See `examples/loop-optimization/main.php
 
 ### Integer range and induction-variable analysis
 
-The seventh registered pass propagates signed 64-bit integer intervals through
+The eighth registered pass propagates signed 64-bit integer intervals through
 constants, branch comparisons, block parameters, and arithmetic. Constant-step
 loop counters can inherit bounds from their initial values and loop conditions.
 When every possible result stays within the integer range, checked addition,
@@ -202,7 +215,7 @@ registered pass. See [The Optimizer](../internals/the-optimizer.md).
 
 ### Checked numeric-chain fusion
 
-The eighth registered pass fuses a left-associated chain of boxed checked
+The ninth registered pass fuses a left-associated chain of boxed checked
 addition, subtraction, or multiplication when its only observable result is an
 integer cast. The chain must stay within one basic block, and every boxed
 intermediate may be used only by the next arithmetic operation plus removable
@@ -213,7 +226,7 @@ remaining suffix in order, and applies the normal float-to-int conversion once.
 
 ### Constant folding
 
-The ninth registered pass folds operations whose operands are all compile-time
+The tenth registered pass folds operations whose operands are all compile-time
 constants into a single constant, in place. It covers integer arithmetic
 (`iadd`, `isub`, `imul`), bitwise ops, in-range shifts, unary `ineg`/`ibit_not`,
 float `fadd`/`fsub`/`fmul`/`fneg`, signed integer comparisons (`icmp`), and the
@@ -237,7 +250,7 @@ the three `imul`s eliminated.
 
 ### Common subexpression elimination
 
-The tenth registered pass removes a pure computation when an identical one is
+The eleventh registered pass removes a pure computation when an identical one is
 already available on every path to it, redirecting its uses to the earlier
 value. It does both per-block and cross-block elimination in one dominator-tree
 value-numbering traversal: a scoped table maps each pure instruction's
@@ -263,7 +276,7 @@ dead operands that dead-instruction elimination then removes.
 
 ### Loop-invariant code motion
 
-The eleventh registered pass moves a pure computation whose operands do not change
+The twelfth registered pass moves a pure computation whose operands do not change
 across a loop out of the loop body and into the loop's preheader, so it runs once
 instead of every iteration. It builds the loop forest on the dominator tree, then
 for each loop grows an invariant set to a fixed point: an instruction is invariant
@@ -296,7 +309,7 @@ integer range analysis removes their checks.
 
 ### Dead instruction elimination
 
-The twelfth registered pass computes CFG liveness and neutralizes unused
+The thirteenth registered pass computes CFG liveness and neutralizes unused
 result-producing instructions whose effect metadata says they are pure. This
 cleans up dead values exposed by earlier EIR rewrites. For example, identity
 folding can turn `$argc + 0` into `$argc`; dead-instruction elimination then
@@ -317,7 +330,7 @@ elephc --emit-ir --no-ir-opt app.php
 
 ### Dead store elimination
 
-The thirteenth registered pass removes `store_local` writes whose value is never read
+The fourteenth registered pass removes `store_local` writes whose value is never read
 before the slot is overwritten or the function exits. It computes backward,
 CFG-aware liveness over local slots (a `load_local` makes a slot live, a
 `store_local` kills it) so a dead store is dropped even when the overwrite is in a
@@ -333,7 +346,7 @@ left untouched to keep reference counting and aliasing semantics intact.
 
 ### Branch simplification
 
-The fourteenth registered pass simplifies the control-flow graph:
+The fifteenth registered pass simplifies the control-flow graph:
 
 - **Constant-condition folding** — a `cond_br` whose condition is a constant
   (`const_bool`, non-zero `const_i64`, or `const_null`) becomes an unconditional
@@ -356,7 +369,7 @@ are reachable through implicit edges that the terminator graph does not show.
 
 ### Concat scratch-state optimization
 
-The fifteenth registered pass (`src/ir_passes/concat_reset.rs`) removes or
+The sixteenth registered pass (`src/ir_passes/concat_reset.rs`) removes or
 coalesces statement-boundary `concat_reset` operations when dataflow proves no
 scratch string can be live or consumed between resets. A forward analysis drops
 a reset that already finds `_concat_off` at the frame's `concat_base_offset`.
@@ -402,6 +415,86 @@ parameters (which alias caller storage) are therefore excluded, because a value-
 splice cannot reproduce their cleanup timing or aliasing. As with all EIR passes,
 inlining is gated by `--ir-opt` and changes only performance, never observable behavior.
 
+### Tail recursion
+
+With `--ir-opt` enabled, direct tail calls in recursive free functions can reuse
+one native stack frame. Self recursion branches back to a body entry with new
+parameter values. Mutually recursive functions share cloned EIR bodies within
+each original ABI entry, and their tail transitions become ordinary branches.
+
+```php
+function gcd(int $a, int $b): int {
+    if ($b === 0) { return $a; }
+    return gcd($b, $a % $b);
+}
+```
+
+Arguments keep their source evaluation order. Rebinding uses simultaneous block
+argument moves, so swapping parameters is safe. Named and default arguments use
+the normal call planner before the tail pass. `void` calls immediately followed
+by a return can also qualify. Arithmetic or output after a recursive call keeps
+an ordinary call and its stack frame.
+
+Eligibility is conservative: parameters, return types and local storage must be
+`int`, `bool` or `float` (`void` is also allowed for returns). Temporary boxed
+numeric arguments qualify only when their roots have a balanced cleanup on every
+normal return path; their ordinary ABI integer conversion runs before those roots retire.
+Owning strings, arrays, objects and arbitrary `mixed` frame storage, reference
+or variadic parameters, methods, closures, generators, static/global aliases,
+exception handlers and unresolved dispatch retain ordinary calls. Eval or
+backtrace argument snapshots anywhere in the module disable this optimization.
+Mutual components are limited to 16 functions and 4096 total EIR instructions
+per entry to bound code duplication; self recursion has no cloning limit.
+
+The pass runs after the normal module fixed point and before ownership
+finalization. The scalar passes run again on the new loops. It uses the same EIR
+branch lowering on every supported target and is disabled by `--no-ir-opt`.
+See `examples/tail-recursion/main.php` for Euclid and a deep mutual countdown.
+
+### Buffer loops
+
+With `--ir-opt` enabled, a loop over `buffer<T>` elements resolves the buffer
+handle once in front of the loop instead of at every `$b[$i]`, and the packed
+field accesses of one iteration share a single bounds-checked record address:
+
+```php
+function step(buffer<Particle> $p, int $count, float $dt): void {
+    for ($i = 0; $i < $count; $i++) {
+        $p[$i]->x = $p[$i]->x + $p[$i]->vx * $dt;
+    }
+}
+```
+
+Diagnostics are unchanged. A stale handle still dies with `use of buffer after
+buffer_free()` at the first access, an out-of-range index still dies with
+`buffer index out of bounds`, and a loop that never runs its body reports
+nothing. The ordinary bounds check uses one unsigned comparison, which rejects
+negative indexes as well as indexes at or above the logical length. A zero-based,
+unit-step loop guarded by strict `< buffer_len($b)` can omit that comparison for
+the exact `$b[$i]` access in a distinct body block dominated by the continuation
+guard. An access in the loop header itself keeps the comparison because it may
+execute before a header-local guard. The length may be read directly in the
+condition or cached before the loop, but it must come from the same stable buffer
+handle. A cached length and an in-loop access may use separate loads of one local
+handle only when that local cannot escape by reference and is never assigned
+anywhere in the function.
+Inclusive bounds, unrelated or other-buffer lengths, negative starts, decreasing
+or non-unit steps, and adjusted indexes such as `$b[$i + 1]` keep the check.
+
+The loop must not be able to free, allocate or rebind a buffer: a
+`buffer_free()`, an assignment to the buffer variable, output, a warning, a
+throw, or a call to anything that may do one of those inside it keeps the
+ordinary per-access resolution, because user code could free the buffer through
+another handle. A call to a user function or method whose whole effect summary
+only reads state (or ends in a fatal error) does not block the rewrite.
+Generators, functions with `try`, dynamic `eval`, and programs that call
+`pcntl_async_signals()` are left alone.
+
+Packed field reads and writes are also known to be plain loads and stores, so
+the loop index and locals stored into packed fields stay in registers and no
+`concat_reset` is kept between statements. The rewrite is target-independent and
+disabled by `--no-ir-opt`. See `examples/buffer-loops/main.php`.
+
 ### Fresh Mixed assignment transfer
 
 `FreshMixedTransfer` (`src/ir_passes/fresh_mixed_transfer.rs`) is registered with
@@ -414,11 +507,13 @@ repetition stays inside the finalizer. The inliner and
 [checked-integer sinking](#checked-integer-sinking) have already finished.
 
 The finalizer removes a `MixedClone` of a fresh owned `ICheckedAdd`,
-`ICheckedSub`, or `ICheckedMul` result when that result is used only by the
+`ICheckedSub`, `ICheckedMul`, or dynamic `MixedNumericBinop` add/sub/mul result
+when that result is used only by the
 clone and by the next non-`nop` instruction in the same block, which must be
 the `Release` of the source. Uses of the clone result are redirected to the
 source, and the clone and that release become `nop`. The checked operation
-stays in place, including overflow-to-float promotion. Borrowed, acquired,
+stays in place, including overflow-to-float promotion and dynamic int/float
+representation. Dynamic power and other producers remain excluded. Borrowed, acquired,
 shared, and otherwise observed sources, and a release in another block, keep
 the copy.
 
@@ -433,13 +528,31 @@ the original copy remains. The proof and the adjacency rules are in
 
 Later releases extend this driver with further EIR passes.
 
+## Frame-local checked numeric cells
+
+During frame layout, the backend can place addition, subtraction or multiplication
+results from checked integer or proven numeric Mixed operations, plus numeric
+increments or decrements, in a reusable stack cell instead of a heap allocation.
+The cell retains the normal `mixed` integer/float tag and payload, including the
+operation's overflow-to-float result.
+
+This requires a proof that all observations are numeric and the cell cannot
+escape or be read after its producer runs again. Private slots in the executable
+main frame use the same lifetime proof. Parameters, globals, statics, references,
+`eval`, suspension and unknown consumers keep ordinary storage.
+This backend storage choice applies with EIR optimization both on and off and
+uses the same layout on every supported target. See
+`examples/numeric-local/main.php` and
+[the codegen description](../internals/the-codegen.md#frame-local-checked-numeric-cells).
+
 ## Late machine optimizations
 
 After the EIR passes, the backend makes a final round of target-aware choices
 while it emits assembly: constant multiplies become shift/add/`lea` sequences
 when that is cheaper on the target (`x * 31` becomes `(x << 5) - x`), loop and
-`if` tests branch directly on compare flags instead of materializing a boolean,
-jumps to the next block and redundant register moves are removed, and the
+`if` tests branch directly on integer and ordered relational float compare flags
+instead of materializing a boolean, jumps to the next block and redundant
+register moves are removed, and the
 overflow paths of checked integer arithmetic are moved after the function's last
 block so hot loops fall straight through. These choices never change program
 behavior and apply with `--ir-opt` on or off. Inspect them with `--emit-asm`; see
