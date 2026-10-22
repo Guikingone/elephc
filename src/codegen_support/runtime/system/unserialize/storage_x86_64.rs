@@ -167,6 +167,20 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // NULL_SENTINEL is not a Mixed cell pointer, and every reader of the slot
     // (`=== null`, var_dump, json_encode) dereferenced it.
     emitter.label("__rt_obj_store_prop_mixed");
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                       // current property metadata word
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp r11, r9");                                        // is this Mixed property still uninitialized?
+    emitter.instruction("je __rt_obj_store_prop_mixed_new");                   // a fresh slot takes the parsed box directly
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                           // existing Mixed value or in-band null sentinel
+    emitter.instruction("test rdi, rdi");                                      // does the slot already own a value?
+    emitter.instruction("jz __rt_obj_store_prop_mixed_new");                   // a zero slot takes the parsed box directly
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", crate::codegen_support::sentinels::NULL_SENTINEL);
+    emitter.instruction("cmp rdi, r9");                                        // is the slot holding the canonical null sentinel?
+    emitter.instruction("je __rt_obj_store_prop_mixed_new");                   // sentinels have no box to reuse
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // parsed replacement box for the in-place reuse
+    emitter.instruction("call __rt_unser_reuse_box");                          // keep the earlier reference slot tied to the new value
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored in the reused box
+    emitter.label("__rt_obj_store_prop_mixed_new");
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // store the boxed Mixed cell pointer
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored

@@ -145,6 +145,23 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // NULL_SENTINEL is not a Mixed cell pointer, and every reader of the slot
     // (`=== null`, var_dump, json_encode) dereferenced it.
     emitter.label("__rt_obj_store_prop_mixed");
+    emitter.instruction("ldr x9, [x8, #8]");                                    // current property metadata word
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x9, x10");                                        // is this Mixed property still uninitialized?
+    emitter.instruction("b.eq __rt_obj_store_prop_mixed_new");                 // a fresh slot takes the parsed box directly
+    emitter.instruction("ldr x0, [x8]");                                       // existing Mixed value or in-band null sentinel
+    emitter.instruction("cbz x0, __rt_obj_store_prop_mixed_new");              // a zero slot takes the parsed box directly
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", crate::codegen_support::sentinels::NULL_SENTINEL);
+    emitter.instruction("cmp x0, x10");                                        // is the slot holding the canonical null sentinel?
+    emitter.instruction("b.eq __rt_obj_store_prop_mixed_new");                 // sentinels have no box to reuse
+    emitter.instruction("sub sp, sp, #32");                                    // reserve slot and return-address spills
+    emitter.instruction("stp x8, x30, [sp, #16]");                              // save the slot address and return address
+    emitter.instruction("mov x1, x3");                                         // parsed replacement box for the in-place reuse
+    emitter.instruction("bl __rt_unser_reuse_box");                            // keep the earlier reference slot tied to the new value
+    emitter.instruction("ldp x8, x30, [sp, #16]");                             // restore the slot address and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the reuse spills
+    emitter.instruction("ret");                                                 // property stored in the reused box
+    emitter.label("__rt_obj_store_prop_mixed_new");
     emitter.instruction("str x3, [x8]");                                        // store the boxed Mixed cell pointer
     emitter.instruction("str xzr, [x8, #8]");                                   // the high word marks the typed property initialized
     emitter.instruction("ret");                                                 // property stored

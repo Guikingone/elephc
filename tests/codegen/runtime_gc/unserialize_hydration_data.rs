@@ -127,13 +127,11 @@ fn test_unserialize_overwritten_mixed_property_keeps_reference_slots_alive() {
 class RefA { }
 class RefHolder { public mixed $m = null; public mixed $n = null; }
 $value = unserialize('O:9:"RefHolder":3:{s:1:"m";O:4:"RefA":0:{}s:1:"m";i:5;s:1:"n";R:2;}');
-echo $value->m, "|";
-$keep = $value->n;
-echo "done";
+echo $value->m, ":", $value->n, "|done";
 unset($value, $keep);
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "5|done", "{}", out.stderr);
+    assert_eq!(out.stdout, "5:5|done", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
