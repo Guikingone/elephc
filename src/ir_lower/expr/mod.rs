@@ -218,7 +218,7 @@ pub(crate) use callable_tracking::{
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
 pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment};
 pub(crate) use indexed_array_literals::{
-    array_literal_type_for_ir, lower_array_literal_with_expected_type,
+    array_literal_type_for_ir, lower_array_literal_with_expected_type, lower_expr_for_destination,
 };
 pub(crate) use array_access::{
     array_access_element_result_type, index_expr_key_type,

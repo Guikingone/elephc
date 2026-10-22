@@ -120,6 +120,37 @@ pub(crate) fn lower_array_literal_with_expected_type(
     lower_array_literal_without_spread(ctx, items, expr, array_ty)
 }
 
+/// Lowers an expression bound to a typed destination (a property, a parameter, a default).
+///
+/// A literal of only `null`s (`[null]`, `["k" => null]`) has no pointer of its own to choose
+/// pointer storage from and is built with boxed `mixed` slots, which a later pointer append
+/// and read misinterpret. When the destination's element or value type is a pointer, the
+/// literal takes that type instead, so each `null` is the null pointer word. Every other
+/// expression lowers as usual.
+pub(crate) fn lower_expr_for_destination(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    destination: &PhpType,
+) -> LoweredValue {
+    match (destination.codegen_repr(), &expr.kind) {
+        (PhpType::Array(elem), ExprKind::ArrayLiteral(_))
+            if matches!(elem.codegen_repr(), PhpType::Pointer(_)) =>
+        {
+            lower_array_literal_with_expected_type(ctx, expr, *elem)
+        }
+        (PhpType::AssocArray { key, value }, ExprKind::ArrayLiteralAssoc(pairs))
+            if matches!(value.codegen_repr(), PhpType::Pointer(_)) =>
+        {
+            let hash_ty = PhpType::AssocArray {
+                key,
+                value: Box::new(value.codegen_repr()),
+            };
+            lower_assoc_array_literal_as(ctx, pairs, expr, false, hash_ty)
+        }
+        _ => lower_expr(ctx, expr),
+    }
+}
+
 /// Returns an indexed-array type for contextual literal lowering.
 pub(super) fn expected_indexed_array_literal_type(elem_ty: PhpType) -> PhpType {
     PhpType::Array(Box::new(elem_ty.codegen_repr()))

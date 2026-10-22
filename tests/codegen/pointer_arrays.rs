@@ -270,3 +270,41 @@ echo count($b->items), "|", $b->items[0]->x, "|", $b->items[1] === null ? "null"
     );
     assert_eq!(out, "2|5|null\n");
 }
+
+/// Verifies a null-only literal bound to an `array<ptr<T>|null>` destination (a property
+/// default, a static default, a parameter, a property or static assignment, a hash literal)
+/// keeps pointer storage, so a later pointer append and both reads see the right words.
+#[test]
+fn test_pointer_arrays_from_null_only_literals() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+class Bag {
+    public array<ptr<Vec2>|null> $items = [null];
+    public static array<ptr<Vec2>|null> $shared = [null];
+    public array<string, ptr<Vec2>|null> $named = ["a" => null];
+}
+function fill(array<ptr<Vec2>|null> $items): void {
+    $v = buffer_new<Vec2>(1);
+    $v[0]->x = 7;
+    $items[] = $v[0];
+    echo $items[0] === null ? "null" : "set", ":", $items[1]->x, "|";
+}
+$b = new Bag();
+fill($b->items);
+fill([null]);
+$b->items = [null];
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 8;
+$b->items[] = $v[0];
+echo $b->items[1]->x, "|";
+Bag::$shared[] = $v[0];
+echo Bag::$shared[0] === null ? "null" : "set", ":", Bag::$shared[1]->x, "|";
+Bag::$shared = [null];
+echo count(Bag::$shared), "|";
+$b->named["b"] = $v[0];
+echo $b->named["a"] === null ? "null" : "set", ":", $b->named["b"]->x, "\n";
+"#,
+    );
+    assert_eq!(out, "null:7|null:7|8|null:8|1|null:8\n");
+}

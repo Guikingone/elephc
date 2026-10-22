@@ -803,11 +803,13 @@ fn ensure_static_property_value_supported(
         return Ok(());
     }
     // A `?ptr<T>` slot is one raw pointer word (null is address 0), and any pointer fits any
-    // pointer slot once the checker has accepted the assignment.
+    // pointer slot once the checker has accepted the assignment. Arrays and hashes of pointer
+    // words share one storage whatever their element's target or nullability.
     if matches!(
         (value_ty.codegen_repr(), slot.php_type.codegen_repr()),
         (PhpType::Pointer(_), PhpType::Pointer(_))
-    ) {
+    ) || pointer_word_containers(value_ty, &slot.php_type)
+    {
         return Ok(());
     }
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
@@ -832,6 +834,20 @@ fn ensure_static_property_value_supported(
         slot.property,
         slot.php_type
     )))
+}
+
+/// Returns true when both types are arrays (or both hashes) whose elements are pointer words.
+fn pointer_word_containers(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    let is_pointer = |ty: &PhpType| matches!(ty.codegen_repr(), PhpType::Pointer(_));
+    match (value_ty.codegen_repr(), slot_ty.codegen_repr()) {
+        (PhpType::Array(value_elem), PhpType::Array(slot_elem)) => {
+            is_pointer(&value_elem) && is_pointer(&slot_elem)
+        }
+        (PhpType::AssocArray { value: value_elem, .. }, PhpType::AssocArray { value: slot_elem, .. }) => {
+            is_pointer(&value_elem) && is_pointer(&slot_elem)
+        }
+        _ => false,
+    }
 }
 
 /// Returns true when an empty array literal initializes a typed static array property.

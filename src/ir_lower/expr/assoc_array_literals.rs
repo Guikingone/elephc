@@ -20,6 +20,20 @@ pub(super) fn lower_assoc_array_literal_with_guard(
     ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr, guarded: bool,
 ) -> LoweredValue {
     let hash_ty = assoc_array_literal_type_for_ir(ctx, pairs, expr);
+    lower_assoc_array_literal_as(ctx, pairs, expr, guarded, hash_ty)
+}
+
+/// Lowers an associative literal into an explicitly chosen hash storage type.
+///
+/// The storage type drives the per-value pointer retype, so a destination of pointer values
+/// (`["k" => null]` bound to `array<string, ?ptr<T>>`) stores each `null` as the word 0.
+pub(super) fn lower_assoc_array_literal_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    pairs: &[(Expr, Expr)],
+    expr: &Expr,
+    guarded: bool,
+    hash_ty: PhpType,
+) -> LoweredValue {
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),

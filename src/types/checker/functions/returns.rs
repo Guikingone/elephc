@@ -692,7 +692,9 @@ impl Checker {
         }
         match (left, right) {
             (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
-            _ => PhpType::Mixed,
+            // Pointers and `null` share the pointer word, so `[null]` passed to an
+            // `array<?ptr<T>>` keeps pointer storage instead of boxing every element.
+            _ => crate::types::merge_pointer_elements(left, right).unwrap_or(PhpType::Mixed),
         }
     }
 }

@@ -42,7 +42,10 @@ pub(super) fn lower_static_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    let source = lower_expr(ctx, value);
+    let source = match static_property_type(ctx, receiver, property) {
+        Some(slot_ty) => crate::ir_lower::expr::lower_expr_for_destination(ctx, value, &slot_ty),
+        None => lower_expr(ctx, value),
+    };
     if has_deferred_default_error(ctx, receiver) {
         raise_deferred_default_error(ctx, receiver, &[source], span);
         return;

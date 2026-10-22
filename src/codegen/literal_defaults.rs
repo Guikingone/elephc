@@ -651,6 +651,11 @@ fn literal_array_element(
             ExprKind::StringLiteral(value) => Ok(LiteralArrayElement::Str(value.clone())),
             _ => Err(unsupported_literal_default(context, elem_type, op_name)),
         },
+        // A pointer element's only literal is `null`, the null pointer word 0.
+        PhpType::Pointer(_) => match expr {
+            ExprKind::Null => Ok(LiteralArrayElement::Int(0)),
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        },
         _ => Err(unsupported_literal_default(context, elem_type, op_name)),
     }
 }
@@ -809,7 +814,7 @@ fn append_array_literal_element(
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             append_refcounted_array_literal_element(ctx, value_type);
         }
-        PhpType::Int | PhpType::Bool => append_scalar_array_literal_element(ctx),
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) => append_scalar_array_literal_element(ctx),
         PhpType::Float => append_float_array_literal_element(ctx),
         PhpType::Str => append_string_array_literal_element(ctx),
         other => {

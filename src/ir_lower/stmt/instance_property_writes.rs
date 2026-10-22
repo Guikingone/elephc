@@ -46,7 +46,12 @@ pub(super) fn lower_property_assign(
     } else {
         let object = lower_expr(ctx, object);
         let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-        let rhs = lower_expr(ctx, value_expr);
+        let rhs = match object_property_type(ctx, object.value, property) {
+            Some(property_ty) => {
+                crate::ir_lower::expr::lower_expr_for_destination(ctx, value_expr, &property_ty)
+            }
+            None => lower_expr(ctx, value_expr),
+        };
         (receiver, rhs)
     };
     let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
