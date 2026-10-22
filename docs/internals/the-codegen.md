@@ -166,8 +166,15 @@ Property access may still throw while such an index is staged. The
 ordinary unwinding dispatcher ignores frame addresses and retains heap-seed
 cleanup; neither the catch boundary nor the cleanup records are removed.
 
-Each selected producer reserves a 24-byte `mixed` cell in the frame, without a
-heap header. `src/codegen/lower_inst/arithmetic/stack_cell.rs` writes its runtime
+Selected values use 24-byte `mixed` cells in the frame, without heap headers.
+`stack_numeric::placement` shares storage only between same-block temporaries
+whose payload observations do not overlap, following transparent retains/borrows.
+The last numeric consumer reads both inputs before writing, so its output may
+reuse an input cell at that boundary. Any value stored in a local, including a
+scoped operand owner, keeps dedicated storage. Groups never share across blocks.
+This bounds transient chain storage by live values instead of expression length,
+preserving room for recursion on the fixed Fiber stack.
+`src/codegen/lower_inst/arithmetic/stack_cell.rs` writes its runtime
 tag and payload directly, using the original operands for overflow-to-float
 conversion. Selected local stores retain the cell address, scalar observations
 copy its payload, and ownership operations skip heap retirement for these cells.

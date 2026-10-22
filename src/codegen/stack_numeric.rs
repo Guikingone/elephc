@@ -20,12 +20,15 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
 mod tests;
+mod placement;
 use crate::ir_passes::numeric_domain as domain;
 
 /// Stack cells and the exclusively numeric locals proven while selecting them.
 #[derive(Default)]
 pub(super) struct NumericFrame {
+    #[cfg(test)]
     pub(super) cells: Vec<ValueId>,
+    pub(super) cell_groups: Vec<Vec<ValueId>>,
     pub(super) locals: HashSet<LocalSlotId>,
     pub(super) proven_values: HashSet<ValueId>,
 }
@@ -90,15 +93,18 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
         slots: HashMap::new(),
         invalidations: RefCell::new(HashMap::new()),
     };
-    let cells = function
+    let cells: Vec<_> = function
         .instructions
         .iter()
         .filter(|inst| producer_op(inst))
         .filter_map(|inst| inst.result)
         .filter(|&value| proof.producer(value))
         .collect();
+    let cell_groups = placement::storage_groups(&proof, &cells);
     NumericFrame {
+        #[cfg(test)]
         cells,
+        cell_groups,
         proven_values: proof.domain.into_inner().into_proven_values(),
         locals: proof
             .slots

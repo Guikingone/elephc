@@ -343,8 +343,9 @@ echo gettype(floatChain($n,PHP_INT_MAX,1)),'|',gettype(floatChain($n,0,PHP_INT_M
 /// Every target uses its checked numeric frame path for products followed by typed reductions.
 #[test]
 fn test_stack_numeric_typed_chain_emits_on_all_supported_targets() {
-    let source = format!("{}\n{}", TYPED_CHAIN,
-        INDEX_CHAIN.strip_prefix("<?php").unwrap().replace("]++;", "]=$k;"));
+    let source = format!("{}\n{}\n{}", TYPED_CHAIN,
+        INDEX_CHAIN.strip_prefix("<?php").unwrap().replace("]++;", "]=$k;"),
+        "function transientTarget(int $seed,int $step):float{return ($seed+$step)+($seed+$step);}\necho transientTarget($argc,2);");
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         for optimized in [false, true] {
             let dir = make_cli_test_dir("elephc_typed_numeric_chain_target");
@@ -420,6 +421,7 @@ final class MissingNumericCells {
         $this->cells[$row*$this->columns+$column]=3;
     }
 }
+
 $grid=new MissingNumericCells();
 try { $grid->write($argc,$argc+1); }
 catch (Error $error) { echo 'caught'; }
@@ -430,5 +432,28 @@ unset($grid);
     let oracle = source.replace("public buffer<int>", "public ArrayObject");
     for optimized in [false, true] {
         assert_eq!(run_with_oracle(source, &oracle, optimized).0, "caught");
+    }
+}
+
+/// Reused transient cells preserve both input payloads and float continuation in either IR mode.
+#[test]
+fn test_stack_numeric_transient_cell_reuse_keeps_numeric_payloads() {
+    let source = r#"<?php
+function transientChain(int $seed, int $step): float {
+    return (($seed+$step)+$step)+$step;
+}
+function repeatedInputs(int $seed, int $step): float {
+    return ($seed+$step)+($seed+$step);
+}
+$value=transientChain(3,$argc); echo gettype($value),':',(int)$value;
+$value=transientChain(PHP_INT_MAX,$argc);
+echo '|',gettype($value),':',($value===(float)PHP_INT_MAX?'high':'bad');
+$value=transientChain(PHP_INT_MIN,-4096);
+echo '|',gettype($value),':',($value<(float)PHP_INT_MIN?'low':'bad');
+echo '|',(int)repeatedInputs(3,$argc);
+echo '|',(repeatedInputs(PHP_INT_MAX,$argc)===(float)PHP_INT_MAX*2.0?'double-high':'bad');
+"#;
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized).0, "double:6|double:high|double:low|8|double-high");
     }
 }

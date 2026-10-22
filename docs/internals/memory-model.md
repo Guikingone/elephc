@@ -147,6 +147,13 @@ words. Overflow converts both original integers to double and writes a float tag
 the optimization does not narrow the arithmetic domain or replace promotion with
 a fatal error. Frame sizing and instruction emission support all five targets.
 
+Transient producers in one block may reuse a cell after its last payload read,
+including reads through transparent ownership copies. A numeric emitter reads
+both inputs before writing its result, allowing reuse at that boundary. Values
+stored in any local retain dedicated cells, and different blocks do not share.
+This limits additional stack use to simultaneously live transient values instead
+of the total number of operations in a long expression.
+
 `src/codegen/stack_numeric.rs` proves the complete use graph before frame layout.
 Only same-block scalar observations, closed numeric producers, ownership
 scaffolding and one ordinary local or owned operand slot may consume a selected
