@@ -7,6 +7,7 @@
 //! Key details:
 //! - Receiver/index side effects and warnings run once, including under `@`.
 //! - Explicit casts and string offsets retain their ordinary conversion rules.
+//! - A read ending a `?->` chain is left to the chain lowering, which owns its short-circuit.
 
 use super::*;
 
@@ -20,7 +21,7 @@ pub(super) fn lower_array_value_for_merge(
         // the ordinary lowering path, including casts that intentionally consume null.
         let mut read = inner.as_ref();
         while let ExprKind::ErrorSuppress(nested) = &read.kind { read = nested; }
-        if !matches!(read.kind, ExprKind::ArrayAccess { .. }) { return None; }
+        if !is_split_array_read(read) { return None; }
         ctx.emit_void(Op::ErrorSuppressBegin, Vec::new(), None,
             Op::ErrorSuppressBegin.default_effects(), Some(expr.span));
         let value = lower_array_value_for_merge(ctx, inner).expect("array-read suppression");
@@ -28,6 +29,7 @@ pub(super) fn lower_array_value_for_merge(
             Op::ErrorSuppressEnd.default_effects(), Some(expr.span));
         return Some(value);
     }
+    if !is_split_array_read(expr) { return None; }
     let ExprKind::ArrayAccess { array, index } = &expr.kind else { return None; };
     let receiver = lower_expr(ctx, array);
     if matches!(receiver.ir_type, IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash))
@@ -38,4 +40,14 @@ pub(super) fn lower_array_value_for_merge(
         ));
     }
     Some(lower_array_access_from_receiver(ctx, receiver, index, expr, true))
+}
+
+/// Returns true for an array read whose receiver this module may lower on its own.
+///
+/// A read ending a `?->` chain (`$o?->items[0]`) is excluded: the chain lowers as one unit,
+/// and splitting its last index off would index the boxed chain result (a boxed buffer reads
+/// back null) and evaluate the index even when PHP short-circuits the whole chain.
+fn is_split_array_read(expr: &Expr) -> bool {
+    matches!(expr.kind, ExprKind::ArrayAccess { .. })
+        && super::nullsafe_chain::result_storage_type(expr).is_none()
 }

@@ -132,6 +132,29 @@ echo $list[0], "\n";
     assert_eq!(out, "1.5|1.5\n");
 }
 
+/// Regression: a `?:` arm or an `@`-suppressed ternary arm reading a `?->` chain element is
+/// lowered as one chain, so the buffer element survives and a null receiver short-circuits
+/// before the index expression runs.
+#[test]
+fn test_nullsafe_buffer_element_in_merge_arms_stays_one_chain() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class S { public buffer<float> $floats; }
+function idx(): int { echo "idx|"; return 0; }
+$store = new S();
+$store->floats = buffer_new<float>(1);
+$store->floats[0] = 1.5;
+echo $store?->floats[0] ?: 0, "|";
+echo ($argc > 0) ? @$store?->floats[0] : 0, "|";
+$none = $argc > 5 ? $store : null;
+echo $none?->floats[idx()] ?: "none", "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1.5|1.5|none\n");
+    assert_eq!(out.stderr, "");
+}
+
 /// Regression for task b4024b9a: a buffer element read through a `??` or assignment receiver
 /// keeps the buffer's element type in merges and array literals instead of the syntactic `int`.
 #[test]
