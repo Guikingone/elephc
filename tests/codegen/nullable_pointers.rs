@@ -655,3 +655,33 @@ echo f(1, false), "|", f(2, true), "|", f(3, false), "\n";
     );
     assert_eq!(out, "null|null|2\n");
 }
+
+/// Verifies a null `?ptr<T>` is PHP null, and a live one an integer, wherever it is boxed into
+/// `mixed` storage outside a call: a `global` variable, a yielded value, an append to and an
+/// element write of a mixed array, a hash write and append, a dynamic property, and array
+/// literals.
+#[test]
+fn test_nullable_pointer_values_box_as_null_in_mixed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function none(): ?ptr { return null; }
+function first(buffer<Vec2> $v): ?ptr<Vec2> { return $v[0]; }
+function g(?ptr $p): string { global $gm; $gm = $p; return json_encode($gm) . ($gm === null ? "N" : "S"); }
+function gen(?ptr $p): iterable { yield $p; }
+$v = buffer_new<Vec2>(1);
+$p = none();
+$l = first($v);
+echo g($p), "|";
+foreach (gen($p) as $y) { echo json_encode($y), "|"; }
+$a = [1, "x"]; $a[] = $p; $a[0] = $p; echo json_encode($a), "|";
+$h = ["k" => "x"]; $h["p"] = $p; $h[] = $p; $h["l"] = gettype($l); echo json_encode($h), "|";
+$o = new stdClass(); $o->q = $p; $o->r = $l; echo json_encode($o->q), gettype($o->r), "|";
+echo json_encode(["p" => $p, "s" => "x"]), json_encode([$p, "x"]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "nullN|null|[null,\"x\",null]|{\"k\":\"x\",\"p\":null,\"0\":null,\"l\":\"integer\"}|nullinteger|{\"p\":null,\"s\":\"x\"}[null,\"x\"]\n"
+    );
+}

@@ -36,12 +36,14 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
     } else {
         let source_ty = ty.codegen_repr();
         if source_ty != PhpType::Mixed {
+            // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
+            let box_ty = ctx.mixed_box_type(value)?;
             if ctx.value_can_transfer_ownership_to_consumer(value)?
                 || global_store_owns_persisted_string(ctx, value, &source_ty)
             {
-                emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
             } else {
-                emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+                emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
             }
         }
         PhpType::Mixed

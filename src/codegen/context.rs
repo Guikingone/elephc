@@ -1023,10 +1023,12 @@ impl<'a> FunctionContext<'a> {
         if target_ty.codegen_repr() == PhpType::Mixed
             && source_ty.codegen_repr() != PhpType::Mixed
         {
+            // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
+            let box_ty = self.mixed_box_type(value)?;
             if self.value_can_own_mixed_box_source(value)? {
-                emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+                emit_box_current_owned_value_as_mixed(self.emitter, &box_ty);
             } else {
-                emit_box_current_value_as_mixed(self.emitter, &source_ty);
+                emit_box_current_value_as_mixed(self.emitter, &box_ty);
             }
         }
         // Narrow Mixed to Int when the local slot is typed Int but the value
@@ -1094,7 +1096,8 @@ impl<'a> FunctionContext<'a> {
         if target_ty.codegen_repr() == PhpType::Mixed
             && source_ty.codegen_repr() != PhpType::Mixed
         {
-            emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
+            emit_box_current_value_as_mixed(self.emitter, &self.mixed_box_type(value)?);
         }
         coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
         let offset = self.local_offset(slot)?;
