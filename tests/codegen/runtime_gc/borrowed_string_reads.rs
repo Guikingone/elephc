@@ -66,6 +66,26 @@ run();
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Persisting a borrowed slice cannot adopt user bytes that resemble a transient heap header.
+#[test]
+fn test_borrowed_string_reads_reject_interior_concat_markers() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function probeInteriorMarker(string $prefix): void {
+    $subject = $prefix . str_repeat("Z", 32);
+    $before = $subject;
+    $slice = substr($subject, 8, 3);
+    echo bin2hex($slice), "|", ($subject === $before ? "same" : "changed"), "|";
+    $subject = str_repeat("q", 32);
+    echo bin2hex($slice), "\n";
+}
+probeInteriorMarker(str_repeat("\x07", 8));
+probeInteriorMarker("\x07\x00\x00\x00HPLE");
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5a5a5a|same|5a5a5a\n".repeat(2), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A later mutating argument still snapshots the original string in PHP evaluation order.
 #[test]
 fn test_borrowed_string_reads_mutating_argument_fallback() {

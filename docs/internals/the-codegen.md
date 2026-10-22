@@ -299,6 +299,8 @@ parameter order and defaults. Property reads keep the receiver rooted through th
 substring result is persisted before that receiver is retired. Calls with side effects,
 coercions, or spreads use ordinary operand ownership. Final local storage is checked
 after lowering; widening a participating string local retries the body with ordinary argument roots.
+Persistence adopts a transient concat allocation only when the pointer is the exact base of a
+live heap block; substring views and other interior pointers are always duplicated.
 
 ## Builtin Boundary
 
