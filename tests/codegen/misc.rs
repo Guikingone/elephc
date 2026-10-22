@@ -237,6 +237,29 @@ echo "|", $w["k"], ":", gettype($w["k"]), "\n";
     );
 }
 
+/// Regression for task b4024b9a: a `!` arm merged with an int (ternary, match, `?:`) and a bare
+/// `!` literal element keep the boolean.
+#[test]
+fn test_negation_keeps_bool_in_merges_and_literals() {
+    let out = compile_and_run(
+        r#"<?php
+function show(bool $flag): void {
+    $v = $flag ? !$flag : 0;
+    echo $v, ":", gettype($v), "|";
+    $m = match (true) { true => !$flag, default => 0 };
+    echo $m, ":", gettype($m), "|";
+    $list = [!$flag];
+    echo gettype($list[0]), "|";
+    $s = !$flag ?: 0;
+    echo $s, ":", gettype($s), "\n";
+}
+show(true);
+show(false);
+"#,
+    );
+    assert_eq!(out, ":boolean|:boolean|boolean|0:integer\n0:integer|1:boolean|boolean|1:boolean\n");
+}
+
 /// Regression for task b4024b9a: an assignment expression used as a ternary arm or an array
 /// literal element is typed from the value it evaluates to, so `($tmp = false)` merged with an
 /// int stays `false`, and `[$x = "a", "k" => $y = 2.5]` stores the string and the float instead
