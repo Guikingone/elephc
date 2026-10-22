@@ -425,6 +425,24 @@ the ABI `(descriptor, argument array) -> Mixed`. The invoker saves and restores
 the caller's callee-saved registers it scratches — `x19`-`x26` on AArch64 and
 `r12`, `rbx`, `r13`-`r15` on x86_64 — in a dedicated frame save area.
 
+The EIR module fixed point can specialize an already-direct numeric closure
+call when every actual argument, including captures, is exactly `int` or
+`float`. `src/ir_passes/numeric_closure_calls.rs` recognizes bounded
+straight-line numeric bodies and emits private scalar-argument variants with
+the original owned Mixed return ABI. This avoids argument boxing and the
+callee's private Mixed shadow. It does not establish closure identity or admit
+new call sites: lowering's existing per-site proofs remain authoritative.
+Bool, null, references, variadics, attributes, unknown calls and nonnumeric
+storage reject specialization. The original Mixed closure and descriptor stay
+available, and every specialized signature uses the shared target-aware ABI.
+Each expression node is emitted once, and every independent owned intermediate
+is released after the final result is ready. A private variant retains its PHP
+source name, lexical scope and instruction spans. Monitoring entries share the
+source identity: instrumentation ids and counter slots aggregate the original
+and specialized entries, and probe/source/backtrace metadata keeps the original
+PHP name with the physical native symbol. The initial scalar family excludes the
+generated Array argument collector used for func-args/backtrace support.
+
 ### Inline wrappers and branch reach
 
 Some lowerings emit a wrapper or invoker in the middle of the enclosing

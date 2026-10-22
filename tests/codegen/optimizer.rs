@@ -26,6 +26,8 @@ mod strip_tags_effects;
 mod branch_simplification;
 #[path = "optimizer/call_result_alias.rs"]
 mod call_result_alias;
+#[path = "optimizer/numeric_closure_calls.rs"]
+mod numeric_closure_calls;
 #[path = "optimizer/constant_folding.rs"]
 mod constant_folding;
 #[path = "optimizer/constant_propagation.rs"]

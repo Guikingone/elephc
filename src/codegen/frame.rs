@@ -2126,16 +2126,17 @@ fn emit_registered_instr_enter(ctx: &mut FunctionContext<'_>) {
 
 /// Emits the `--instrument` entry hook at the end of a user function's prologue:
 /// registers the function (assigning its id), records the id on the context for
-/// the epilogue, and calls `elephc_instr_enter(id)`. Synthetic bodies are not
-/// user code and stay uninstrumented; `{main}` is registered by its dedicated
+/// the epilogue, and calls `elephc_instr_enter(id)`. Private PHP implementation
+/// variants reuse their source identity; synthetic scaffolding stays uninstrumented.
+/// `{main}` is registered by its dedicated
 /// process/web prologue before the name table is initialized.
 fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
-    // Synthetic bodies are not user code. Beyond that, a selective set hooks
-    // only the functions it names — the rest run at full speed.
-    if ctx.function.flags.is_synthetic || !ctx.shared.instrument.covers(&ctx.function.name) {
+    // Source implementation variants share the PHP identity. A selective set hooks
+    // only the source functions it names — the rest run at full speed.
+    if !ctx.function.has_source_identity() || !ctx.shared.instrument.covers(ctx.function.display_name()) {
         return;
     }
-    let id = ctx.shared.register_instr(ctx.function.name.clone());
+    let id = ctx.shared.register_instr(ctx.function.display_name().to_owned());
     ctx.instr_id = Some(id);
     emit_registered_instr_enter(ctx);
 }
@@ -2315,17 +2316,22 @@ fn emit_instr_dump(ctx: &mut FunctionContext<'_>) {
 ///
 /// Placed with the stack guard, before the parameter spill: only scratch
 /// registers are touched (AArch64 x9/x10, x86_64 r10), so the incoming ABI
-/// arguments are undisturbed. The count is a plain load/add/store — a lost
-/// update under threads costs a tick of precision, never correctness. Synthetic
-/// bodies are not user code and stay uncounted; `main` never reaches this
-/// prologue (it has its own), which keeps the dump to functions the user wrote.
+/// arguments are undisturbed. The count is a plain load/add/store; a lost
+/// update under threads costs a tick of precision, never correctness. Private
+/// PHP variants share their source counter, while synthetic scaffolding stays
+/// uncounted. Main has its own prologue and does not register an extra entry.
 fn emit_call_counter_increment(ctx: &mut FunctionContext<'_>, entry_label: &str) {
-    if !ctx.shared.counters || ctx.function.flags.is_synthetic {
+    if !ctx.shared.counters || !ctx.function.has_source_identity() {
         return;
     }
-    let slot = ctx.data.add_comm(format!("_elephc_cnt{}", entry_label), 8);
-    ctx.shared
-        .register_counter(ctx.function.name.clone(), slot.clone());
+    let name = ctx.function.display_name().to_owned();
+    let slot = if let Some((_, slot)) = ctx.shared.counter_registry().iter().find(|(registered, _)| *registered == name) {
+        slot.clone()
+    } else {
+        let slot = ctx.data.add_comm(format!("_elephc_cnt{}", entry_label), 8);
+        ctx.shared.register_counter(name, slot.clone());
+        slot
+    };
     ctx.emitter.comment("call counter (--counters)");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
