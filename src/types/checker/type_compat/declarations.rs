@@ -351,6 +351,22 @@ impl Checker {
                 ),
             ));
         }
+        // A pointer by-reference parameter reads and writes the caller's raw pointer word, so the
+        // caller's variable must already hold one: a `null` or boxed variable would be read as
+        // an address. A `?ptr<T>` local holds address 0 for null.
+        if matches!(expected_ty.codegen_repr(), PhpType::Pointer(_))
+            && !matches!(actual_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_))
+        {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects {}, got {}: a pointer by-reference parameter writes back \
+                     through the caller's variable, which must already hold a pointer. Declare \
+                     the variable as `{}` (for example `?ptr<T> $p = null;`)",
+                    context, expected_ty, actual_ty, expected_ty
+                ),
+            ));
+        }
         if *actual_ty == PhpType::Void && !Self::declared_type_accepts_null(expected_ty) {
             return Err(CompileError::new(
                 arg.span,

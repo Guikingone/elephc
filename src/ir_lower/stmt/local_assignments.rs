@@ -188,6 +188,27 @@ pub(super) fn contextualize_local_assignment(
         ctx.local_type(name)
     };
     let contextual_repr = contextual_ty.codegen_repr();
+    // `null` stored into a local that already holds a pointer word is the null pointer word, and
+    // the local stays a `?ptr<T>`: the raw-word slot must not hold the null sentinel, which a
+    // later `=== null` or by-reference binding would read as a live address.
+    if ctx.has_local_slot(name)
+        && matches!(contextual_repr, PhpType::Pointer(_))
+        && matches!(source_repr, PhpType::Void | PhpType::Never)
+    {
+        let retyped = ctx.retype_packed_address_for_pointer_sink(lowered, &contextual_ty, Some(span));
+        let nullable_ty = if crate::types::is_nullable_pointer_type(&contextual_ty) {
+            contextual_ty
+        } else {
+            PhpType::Union(vec![contextual_repr, PhpType::Void])
+        };
+        return (retyped, nullable_ty);
+    }
+    // A packed record address stored into a pointer-typed local is that pointer word, so the
+    // slot keeps one raw-word representation instead of widening to a boxed `mixed`.
+    if matches!(contextual_repr, PhpType::Pointer(_)) && matches!(source_repr, PhpType::Packed(_)) {
+        let retyped = ctx.retype_packed_address_for_pointer_sink(lowered, &contextual_ty, Some(span));
+        return (retyped, contextual_ty);
+    }
     if contextual_ty.is_php_array() {
         let converted = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
         return (converted, contextual_ty);

@@ -438,3 +438,66 @@ echo $n === null ? "null" : "set", "|", $p === null ? "null" : $p->x, "\n";
     );
     assert_eq!(out, "null|3\n");
 }
+
+/// Verifies `?ptr<T>` locals hold address 0 for null (a typed `= null` declaration and a later
+/// `$x = null`), so `=== null`, `is_null()` and `?ptr<T>` by-reference parameters (reading and
+/// clearing) all see PHP null, while a live address stays set.
+#[test]
+fn test_nullable_pointer_locals_and_by_ref_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function take(?ptr<Vec2> &$p): string { $r = $p === null ? "null" : "set"; return $r; }
+function clear(?ptr<Vec2> &$p): void { $p = null; }
+$v = buffer_new<Vec2>(1);
+?ptr<Vec2> $x = null;
+echo $x === null ? "null" : "set", is_null($x) ? "null" : "set", "|", take($x), "|";
+$y = $v[0];
+echo take($y), "|";
+?ptr<Vec2> $z = $v[0];
+$z = null;
+echo $z === null ? "null" : "set", "|", take($z), "|";
+?ptr<Vec2> $w = $v[0];
+clear($w);
+echo $w === null ? "null" : "set", "\n";
+"#,
+    );
+    assert_eq!(out, "nullnull|null|set|null|null|null\n");
+}
+
+/// Verifies a field write through a `?ptr<T>` local that was declared `= null` and is still
+/// null at run time reports the null-pointer dereference fatal.
+#[test]
+fn test_nullable_pointer_typed_null_local_dereference_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+$v = buffer_new<Vec2>(1);
+?ptr<Vec2> $x = null;
+if ($argc > 5) { $x = $v[0]; }
+$x->x = 1;
+"#,
+    );
+    assert!(err.contains("Fatal error: null pointer dereference"));
+}
+
+/// Verifies a `?ptr<T>` result of a function called through `call_user_func` with a runtime
+/// name (the boxed descriptor invoker path) is PHP null for a null pointer and an integer for a
+/// live one, like a direct call.
+#[test]
+fn test_nullable_pointer_result_through_runtime_named_callable() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(u64 $size): ptr;
+extern function free(ptr $p): void;
+function none(): ?ptr { return null; }
+function some(): ?ptr { return malloc(8); }
+$n = $argc > 5 ? "some" : "none";
+$s = $argc > 5 ? "none" : "some";
+$a = call_user_func($n);
+$b = call_user_func($s);
+echo $a === null ? "null" : "set", "|", json_encode($a), "|", $b === null ? "null" : gettype($b), "\n";
+"#,
+    );
+    assert_eq!(out, "null|null|integer\n");
+}
