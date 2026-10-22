@@ -174,7 +174,7 @@ pub(super) fn lower_hash_reindexing_sort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }
@@ -219,7 +219,7 @@ pub(super) fn lower_indexed_array_sort(
         abi::emit_load_int_immediate(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
-            0x7fff_ffff_ffff_fffe,
+            1,
         );
         return store_if_result(ctx, inst);
     }
@@ -232,7 +232,7 @@ pub(super) fn lower_indexed_array_sort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }
@@ -259,7 +259,7 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }
@@ -325,7 +325,7 @@ pub(super) fn lower_user_sort_static_callback(
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
+                1,
             );
             store_if_result(ctx, inst)?;
             return Ok(());
@@ -356,7 +356,7 @@ pub(super) fn lower_user_sort_static_callback(
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
+                1,
             );
             store_if_result(ctx, inst)?;
             return Ok(());
@@ -412,7 +412,7 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }

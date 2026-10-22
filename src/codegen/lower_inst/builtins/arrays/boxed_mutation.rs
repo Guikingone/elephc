@@ -113,7 +113,7 @@ pub(super) fn lower_boxed_array_sort(
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, 0);
     super::sort_dispatch::emit_mixed_slot_sort(ctx, name)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    abi::emit_load_int_immediate(ctx.emitter, result, 0x7fff_ffff_ffff_fffe);
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
     store_if_result(ctx, inst)
 }
 

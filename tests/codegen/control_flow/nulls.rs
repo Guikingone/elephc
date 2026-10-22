@@ -392,3 +392,47 @@ echo $total, " ", $tail, "\n";
     assert_eq!(out.stdout, "1500 null7dfltcbnullkept\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// The value of an assignment expression stays a raw PHP null; a null condition is falsy, not
+/// the nonzero null sentinel (#1990). Covers `&&`, `if`, `!`, `?:`, `while`, a mixed-returning
+/// closure and an assignment forwarded through another local.
+#[test]
+fn test_assignment_expression_null_is_falsy_in_conditions() {
+    let out = compile_and_run(
+        r#"<?php
+function f1(mixed $x): string { return ($x = null) && true ? "T" : "F"; }
+function f2(mixed $x): string { if ($x = null) { return "T"; } return "F"; }
+function f3(mixed $x): string { return !($x = null) ? "T" : "F"; }
+function f4(mixed $x): string { return ($x = null) ?: "D"; }
+function f5(mixed $x): string { while ($x = null) { return "T"; } return "F"; }
+function f6(): string { $h = function (): mixed { return null; }; return ($h()) ? "T" : "F"; }
+function f7(mixed $x): string { $y = ($x = null); return $y ? "T" : "F"; }
+echo f1(5), f2(5), f3(5), f4(5), f5(5), f6(), f7(5), "\n";
+"#,
+    );
+    assert_eq!(out, "FFTDFFF\n");
+}
+
+/// A builtin whose result PHP answers as `true` stays truthy: the raw-null exclusion only
+/// applies to values whose PHP type really is null, and the sort family's contract is `bool`
+/// now (#1990 review). `var_dump` and `clearstatcache` answer null, so they stay falsy.
+#[test]
+fn test_sort_family_results_are_truthy_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 1];
+echo usort($a, function ($p, $q) { return $p <=> $q; }) ? "T" : "F";
+$b = [3, 1];
+echo sort($b) ? "T" : "F";
+$c = [1, 2];
+echo shuffle($c) ? "T" : "F";
+echo natsort($c) ? "T" : "F";
+$d = [1];
+echo array_walk($d, function (&$v) { $v = $v + 1; }) ? "T" : "F";
+echo var_dump(1) ? "T" : "F";
+echo clearstatcache() ? "T" : "F";
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "TTTTTint(1)\nFF\n");
+}
