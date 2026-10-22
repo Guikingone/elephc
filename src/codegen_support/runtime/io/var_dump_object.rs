@@ -930,11 +930,12 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_obj_exit_x86");                            // skip the incomplete-object projection
 
     emitter.label("__rt_vd_obj_incomplete_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
-    emitter.instruction("xor esi, esi");                                        // get_object_vars-style visibility mode
-    emitter.instruction("mov rdx, -1");                                         // global lexical scope
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // object pointer for the x86_64 projection ABI
+    emitter.instruction("xor edx, edx");                                        // get_object_vars-style visibility mode
+    emitter.instruction("mov rcx, -1");                                         // global lexical scope
     emitter.instruction("call __rt_object_to_hash");                            // project the synthetic name and opaque properties
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the projected hash for release
+    emitter.instruction("mov rdi, rax");                                        // pass the projected hash to the walker
     emitter.instruction("call __rt_var_dump_hash");                             // dump the projected rows
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the projected hash
     emitter.instruction("call __rt_hash_free_deep");                            // release the throwaway projection
