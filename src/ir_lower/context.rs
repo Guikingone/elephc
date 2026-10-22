@@ -755,9 +755,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     php_type
                 }
             }
-            TypeExpr::Buffer(inner) => {
-                PhpType::Buffer(Box::new(self.type_expr_to_php_type_for_value(inner)))
-            }
+            TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(
+                crate::types::width_type_from_type_expr(inner)
+                    .unwrap_or_else(|| self.type_expr_to_php_type_for_value(inner)),
+            )),
             TypeExpr::Array(inner) => {
                 PhpType::Array(Box::new(self.type_expr_to_php_type_for_value(inner)))
             }
@@ -5261,7 +5262,10 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Ptr(name) => {
             PhpType::Pointer(name.as_ref().map(|name| name.as_str().to_string()))
         }
-        TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(type_expr_to_php_type(inner))),
+        TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(
+            crate::types::width_type_from_type_expr(inner)
+                .unwrap_or_else(|| type_expr_to_php_type(inner)),
+        )),
         TypeExpr::Named(name) => named_type_expr_to_php_type(name.as_str()),
         // Lowering only ever sees instantiated classes, which are `Named`. Should one
         // arrive uninstantiated, its head is the class it denotes — conservative metadata,

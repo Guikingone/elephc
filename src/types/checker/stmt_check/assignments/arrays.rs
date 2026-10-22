@@ -169,6 +169,9 @@ pub(super) fn check_array_assign(
 }
 
 /// Validates the index and value types for a whole-element buffer write.
+///
+/// A width-declared element (`buffer<u8>`, `buffer<f32>`) takes exactly what an `int` or
+/// `float` element takes; the store narrows the value to the element width.
 pub(super) fn validate_buffer_element_write(
     elem_ty: &PhpType,
     idx_ty: &PhpType,
@@ -178,7 +181,7 @@ pub(super) fn validate_buffer_element_write(
     if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) && !idx_ty.is_int_float_union() {
         return Err(CompileError::new(span, "Buffer index must be integer"));
     }
-    match elem_ty {
+    match &elem_ty.storage_value_type() {
         PhpType::Packed(_) => Err(CompileError::new(
             span,
             "Assign packed buffer elements through field access like $buf[$i]->field",

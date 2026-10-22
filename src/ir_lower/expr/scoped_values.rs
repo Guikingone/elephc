@@ -70,7 +70,10 @@ pub(super) fn lower_buffer_new(
     expr: &Expr,
 ) -> LoweredValue {
     let len_value = lower_expr(ctx, len);
-    let php_type = PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)));
+    // `buffer_new<u8>()`: a C width name is the element's storage format, not a class.
+    let element_php_type = crate::types::width_type_from_type_expr(element_type)
+        .unwrap_or_else(|| ctx.type_expr_to_php_type_for_value(element_type));
+    let php_type = PhpType::Buffer(Box::new(element_php_type));
     ctx.emit_value(
         Op::BufferNew,
         vec![len_value.value],

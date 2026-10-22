@@ -396,7 +396,7 @@ pub(super) fn coerce_buffer_set_value(
     span: Option<Span>,
 ) -> LoweredValue {
     let coerced = match buffer_ty.codegen_repr() {
-        PhpType::Buffer(elem_ty) => match elem_ty.codegen_repr() {
+        PhpType::Buffer(elem_ty) => match elem_ty.storage_value_type().codegen_repr() {
             PhpType::Float => coerce_to_float(ctx, value, span),
             PhpType::Int | PhpType::Bool => coerce_to_int(ctx, value, span),
             _ => value,

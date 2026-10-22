@@ -80,7 +80,8 @@ impl Checker {
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
-                | PhpType::Packed(_) => {
+                | PhpType::Packed(_)
+                | PhpType::Narrow(_) => {
                     return Err(CompileError::new(
                         span,
                         &format!("Unsupported extern parameter type in {}()", name),

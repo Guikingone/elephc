@@ -16,7 +16,7 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 
-use super::{ExternAbiType, FunctionSig, PhpType};
+use super::{ExternAbiType, FunctionSig, PhpType, ScalarWidth};
 
 mod abstract_setters;
 
@@ -876,17 +876,26 @@ pub struct ExternFieldInfo {
 
 /// Packed (non-nullable) class metadata with fields, total size, and per-field
 /// offsets for codegen to emit a packed struct layout.
+///
+/// `total_size` is the record's stride (padded to `align`, the alignment of its widest
+/// field), so an array of records and an embedded record keep every field naturally aligned.
 #[derive(Debug, Clone)]
 pub struct PackedClassInfo {
     pub fields: Vec<PackedFieldInfo>,
     pub total_size: usize,
+    pub align: usize,
 }
 
 /// Packed field metadata with name, PHP type, and offset into the containing
 /// packed class struct for codegen layout.
+///
+/// `php_type` is the type the field reads as and is written from (`int` for every integer
+/// width, `float` for `f32`); `width` is the narrower storage format a field declared with a
+/// C width name keeps in memory, `None` for the 8-byte word types and embedded records.
 #[derive(Debug, Clone)]
 pub struct PackedFieldInfo {
     pub name: String,
     pub php_type: PhpType,
     pub offset: usize,
+    pub width: Option<ScalarWidth>,
 }

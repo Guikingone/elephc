@@ -273,6 +273,7 @@ fn collect_builtin_reflection_class_from_type(
         | PhpType::Packed(_)
         | PhpType::Pointer(None)
         | PhpType::Resource(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => {}
     }
 }
