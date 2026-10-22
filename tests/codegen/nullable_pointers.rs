@@ -516,6 +516,7 @@ $v = buffer_new<Vec2>(1);
         "$x = null; fill($x, $v);",
         "$x = null; $x = first($v); fill($x, $v);",
         "if (count($argv) > 5) { $x = null; } else { $x = first($v); } fill($x, $v);",
+        "$x = null; fill(p: $x, v: $v);",
     ] {
         let error = compile_cli_file_with_flags_expect_failure(&format!("{prelude}{body}"), &[]);
         assert!(
@@ -618,4 +619,39 @@ show(none());
 "#,
     );
     assert_eq!(out, "null|null|");
+}
+
+/// Verifies `===` between a `?ptr<T>` and a value of another type compares the PHP value the
+/// pointer boxes to: a live pointer equals its own `(int)` address, a null one does not equal a
+/// plain `ptr_null()` (whose 0 is not PHP null), and a packed record address or another
+/// `?ptr<T>` still compares by address.
+#[test]
+fn test_nullable_pointer_strict_comparisons_with_other_values() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> { return $ok ? $v[0] : null; }
+function same(?ptr<Vec2> $p): string { return $p === (int)$p ? "same" : "diff"; }
+$v = buffer_new<Vec2>(1);
+$n = first($v, false);
+$l = first($v, true);
+echo same($l), "|", same($n), "|", $n === ptr_null() ? "eq" : "ne", "|", $l === $v[0] ? "eq" : "ne", "|";
+echo $n === first($v, false) ? "eq" : "ne", "|", $l !== 5 ? "ne" : "eq", "|", $l === first($v, true) ? "eq" : "ne", "\n";
+"#,
+    );
+    assert_eq!(out, "same|diff|ne|eq|eq|ne|eq\n");
+}
+
+/// Verifies a `mixed` static local initialized from a null `?ptr<T>` holds PHP null, not the
+/// integer 0, until it is reassigned.
+#[test]
+fn test_nullable_pointer_null_initializer_of_a_mixed_static_local() {
+    let out = compile_and_run(
+        r#"<?php
+function none(): ?ptr { return null; }
+function f(mixed $m, bool $set): string { static $x = none(); $r = json_encode($x); if ($set) { $x = $m; } return $r; }
+echo f(1, false), "|", f(2, true), "|", f(3, false), "\n";
+"#,
+    );
+    assert_eq!(out, "null|null|2\n");
 }

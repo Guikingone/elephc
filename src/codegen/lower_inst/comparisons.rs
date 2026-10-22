@@ -90,7 +90,17 @@ pub(super) fn lower_strict_eq(
             return store_if_result(ctx, inst);
         }
     }
-    if needs_mixed_strict_compare(&lhs_ty) || needs_mixed_strict_compare(&rhs_ty) {
+    // A `?ptr<T>` against any other value (but a packed record address) compares as the PHP
+    // value it boxes to, null for address 0 and the integer address otherwise: a live pointer
+    // is `=== (int)$p`, and a null one is not a plain `ptr_null()`, whose 0 is no PHP null.
+    // Two `?ptr<T>` words compare directly below.
+    let lhs_nullable_pointer = crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(lhs)?);
+    let rhs_nullable_pointer = crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(rhs)?);
+    let other_ty = if lhs_nullable_pointer { &rhs_ty } else { &lhs_ty };
+    if (lhs_nullable_pointer != rhs_nullable_pointer && !matches!(other_ty, PhpType::Packed(_)))
+        || needs_mixed_strict_compare(&lhs_ty)
+        || needs_mixed_strict_compare(&rhs_ty)
+    {
         emit_mixed_strict_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
         return store_if_result(ctx, inst);
     }

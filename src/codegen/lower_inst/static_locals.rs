@@ -148,11 +148,17 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         loaded_ty = PhpType::Int;
     }
-    // Box Int/Float/Bool/Void as Mixed when the static local slot is Mixed-typed.
+    // Box Int/Float/Bool/Void as Mixed when the static local slot is Mixed-typed. A pointer
+    // word boxes by its declared type, so a null `?ptr<T>` initializer is PHP null.
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed)
         && !matches!(loaded_ty, PhpType::Mixed)
     {
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
+        let box_ty = if matches!(loaded_ty, PhpType::Pointer(_)) {
+            ctx.mixed_box_type(value)?
+        } else {
+            loaded_ty.clone()
+        };
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
     let store_ty = slot.php_type.codegen_repr();
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &store_ty, false);

@@ -88,8 +88,13 @@ fn record_pointer_reference_argument(
     if !matches!(param_ty.codegen_repr(), PhpType::Pointer(_)) {
         return;
     }
-    if let ExprKind::Variable(name) = &arg.kind {
-        ctx.record_pointer_reference_binding(name, arg.span, param_ty);
+    // `@$x` and `p: $x` still bind `$x`'s own storage.
+    let mut place = arg;
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind {
+        place = value;
+    }
+    if let ExprKind::Variable(name) = &place.kind {
+        ctx.record_pointer_reference_binding(name, place.span, param_ty);
     }
 }
 
