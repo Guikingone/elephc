@@ -389,3 +389,27 @@ echo call_user_func($name, null), "\n";
     );
     assert_eq!(out, "nullnullset|null|null|null|nullset|null\n");
 }
+
+/// Verifies a `null` bound by a method call to a `?ptr<T>` parameter that the body later
+/// reassigns (which widens its slot to `mixed`) still reads as null, while a real address in
+/// the same function stays set.
+#[test]
+fn test_nullable_pointer_parameter_reassigned_in_body_keeps_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+final class Box {
+    public function take(?ptr<Vec2> $p): string {
+        $seen = $p === null ? "null" : "set:" . $p->x;
+        $p = null;
+        return $seen;
+    }
+}
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 4;
+$b = new Box();
+echo $b->take(null), "|", $b->take($v[0]), "\n";
+"#,
+    );
+    assert_eq!(out, "null|set:4\n");
+}

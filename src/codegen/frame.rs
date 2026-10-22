@@ -503,6 +503,11 @@ pub(super) fn emit_function_prologue_with_label(
         let converted_to_owned_mixed = !param.by_ref
             && local_ty.codegen_repr() == PhpType::Mixed
             && param.php_type.codegen_repr() != PhpType::Mixed;
+        // Before any widening box: a `?ptr<T>` slot later widened to `mixed` boxes the
+        // normalized word, so a null bound by the caller becomes a PHP null cell.
+        if !param.by_ref && crate::types::is_nullable_pointer_type(&param.php_type) {
+            normalize_nullable_pointer_param(ctx, offset);
+        }
         if converted_to_owned_mixed {
             abi::emit_load(ctx.emitter, &param.php_type.codegen_repr(), offset);
             emit_box_current_value_as_mixed(ctx.emitter, &param.php_type.codegen_repr());
@@ -510,12 +515,6 @@ pub(super) fn emit_function_prologue_with_label(
         }
         if !param.by_ref && ctx.owns_parameter_slot(slot) && !converted_to_owned_mixed {
             retain_owned_parameter_local(ctx.emitter, offset, &local_ty);
-        }
-        if !param.by_ref
-            && crate::types::is_nullable_pointer_type(&param.php_type)
-            && matches!(local_ty.codegen_repr(), PhpType::Pointer(_))
-        {
-            normalize_nullable_pointer_param(ctx, offset);
         }
     }
     zero_initialize_function_cleanup_locals(ctx);
