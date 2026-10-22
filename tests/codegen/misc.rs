@@ -188,6 +188,55 @@ echo "\n";
     assert_eq!(out, "0|2|1||0|1|\n0:integer|:boolean|\n");
 }
 
+/// Regression for task b4024b9a: an int/bool `??`, `?:` or `match` nested in an outer ternary,
+/// match or array literal keeps its boxed result, so `false` is not cast to integer 0 by an
+/// enclosing temp or element stamp predicted from the syntactic `int`.
+#[test]
+fn test_nested_and_literal_merges_keep_int_and_bool_apart() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(bool $take, ?int $n, bool $flag): void {
+    $v = $take ? ($n ?? $flag) : 0;
+    echo $v, ":", gettype($v), "|";
+    $m = match ($take) { true => ($n ?? $flag), default => 0 };
+    echo $m, ":", gettype($m), "|";
+}
+pick(true, null, false);
+pick(true, 5, false);
+echo "\n";
+function rows(?int $n, bool $flag): void {
+    $list = [$n ?? $flag];
+    echo $list[0], ":", gettype($list[0]), "|";
+    $map = ["k" => $n ?? $flag];
+    echo $map["k"], ":", gettype($map["k"]), "|";
+}
+rows(null, false);
+rows(4, false);
+echo "\n";
+function short(int $n, bool $flag): void {
+    $list = [$n ?: $flag];
+    echo $list[0], ":", gettype($list[0]), "|";
+    $map = ["k" => $n ?: $flag];
+    echo $map["k"], ":", gettype($map["k"]), "|";
+}
+short(0, false);
+short(7, false);
+echo "\n";
+$v = [match ($argc) { 1 => 42, default => true }];
+echo $v[0], ":", gettype($v[0]);
+$w = ["k" => match ($argc) { 1 => 42, default => true }];
+echo "|", $w["k"], ":", gettype($w["k"]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        ":boolean|:boolean|5:integer|5:integer|\n\
+         :boolean|:boolean|4:integer|4:integer|\n\
+         :boolean|:boolean|7:integer|7:integer|\n\
+         42:integer|42:integer\n"
+    );
+}
+
 /// Verifies null-coalescing a null variable with a string literal default allocates the string
 /// and does not evaluate the default eagerly.
 #[test]

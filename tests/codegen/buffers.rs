@@ -114,6 +114,24 @@ echo "\n";
     assert_eq!(out, "1.5|1.5|1.5|1.5|3|\n0|2||\n");
 }
 
+/// Regression for task b4024b9a: a nullsafe read of a `buffer<float>` property element merges
+/// as the boxed chain result, so a ternary with an int arm does not truncate `1.5` to `1`.
+#[test]
+fn test_nullsafe_buffer_float_element_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+class S { public buffer<float> $floats; }
+$store = new S();
+$store->floats = buffer_new<float>(1);
+$store->floats[0] = 1.5;
+echo ($argc > 0) ? $store?->floats[0] : 0, "|";
+$list = [$store?->floats[0]];
+echo $list[0], "\n";
+"#,
+    );
+    assert_eq!(out, "1.5|1.5\n");
+}
+
 /// Verifies declared buffer properties accept both literal and runtime integer index writes.
 #[test]
 fn test_buffer_property_declared_literal_and_runtime_index_writes() {

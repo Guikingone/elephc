@@ -136,6 +136,11 @@ pub(super) fn php_type_allows_null(php_type: &PhpType) -> bool {
 
 /// Estimates the value type an expression will materialize during branch lowering.
 pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    // A nullsafe postfix chain lowers to its boxed chain temp whatever its last segment reads,
+    // so `$o?->floats[0]` must not be predicted as the syntactic `int` and cast back.
+    if let Some(storage) = super::nullsafe_chain::result_storage_type(expr) {
+        return storage;
+    }
     match &expr.kind {
         ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name).codegen_repr()),
         ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
@@ -160,6 +165,9 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         ExprKind::ShortTernary { value, default } => {
             short_ternary_merge_result_type(ctx, value, default)
+        }
+        ExprKind::NullCoalesce { value, default } => {
+            null_coalesce_merge_type(ctx, null_coalesce_value_type_for_merge(ctx, value), default)
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),
@@ -186,6 +194,18 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
         ExprKind::ExprCall { .. } => PhpType::Mixed,
         _ => fallback_expr_type(expr),
+    }
+}
+
+/// Estimates the type the value side of `??` materializes before its null arm is removed.
+///
+/// A local keeps its declared PHP type here: `?int` stays `int|null`, so stripping the null
+/// leaves `int`, the same answer `null_coalesce_result_type` reads from the lowered load. The
+/// codegen representation (`TaggedScalar`) would hide the int behind the nullable carrier.
+fn null_coalesce_value_type_for_merge(ctx: &LoweringContext<'_, '_>, value: &Expr) -> PhpType {
+    match &value.kind {
+        ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name)),
+        _ => materialized_expr_type_for_merge(ctx, value),
     }
 }
 

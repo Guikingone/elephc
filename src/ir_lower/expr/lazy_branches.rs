@@ -116,7 +116,21 @@ pub(super) fn null_coalesce_result_type(
     value: ValueId,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = strip_void_from_union(ctx.builder.value_php_type(value)).codegen_repr();
+    null_coalesce_merge_type(ctx, ctx.builder.value_php_type(value), default)
+}
+
+/// Merges the type of the value side of `??` with the materialized type of its default.
+///
+/// Shared by the lowering, which knows the lowered value's type, and by the merge prediction
+/// of an enclosing ternary, match or array literal, which estimates it from the expression.
+/// Both must agree, or the outer temp is typed from a narrower guess and casts the boxed
+/// `??` result back (an int/bool pair boxed here would be read back as integer 0).
+pub(super) fn null_coalesce_merge_type(
+    ctx: &LoweringContext<'_, '_>,
+    value_ty: PhpType,
+    default: &Expr,
+) -> PhpType {
+    let value_ty = strip_void_from_union(value_ty).codegen_repr();
     let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
     // `$o ?? null` can still be null. An object or callable slot has no null of its own, so a
     // default that may be null keeps the merge nullable (boxed) instead of letting the non-null

@@ -124,7 +124,10 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             target: CastType::Array,
             expr: inner,
         } => array_cast_literal_element_type(ctx, inner),
-        ExprKind::Ternary { .. } => {
+        ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::Match { .. }
+        | ExprKind::NullCoalesce { .. } => {
             // Use the actual branch-merge representation before choosing hash storage.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
         }
