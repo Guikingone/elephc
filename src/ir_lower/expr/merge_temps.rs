@@ -180,6 +180,11 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ),
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),
+        // Typed the way `lower_buffer_new` stamps the allocation, so `buffer_new<float>(1)[0]`
+        // is read as a float element rather than the syntactic `int`.
+        ExprKind::BufferNew { element_type, .. } => {
+            PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)))
+        }
         ExprKind::PropertyAccess { object, property } => {
             property_access_expr_type_for_ir(ctx, object, property)
                 .unwrap_or_else(|| fallback_expr_type(expr))

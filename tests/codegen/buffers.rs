@@ -177,6 +177,20 @@ show(new S(), $argc);
     assert_eq!(out, "1.5|1.5\n");
 }
 
+/// Regression for task b4024b9a: an element read straight from `buffer_new<T>(n)` keeps the
+/// buffer's element type in a ternary with an int arm and in an array literal.
+#[test]
+fn test_buffer_new_element_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+echo ($argc > 0) ? buffer_new<bool>(1)[0] : 1, ":", gettype(($argc > 0) ? buffer_new<bool>(1)[0] : 1);
+$list = [buffer_new<float>(1)[0]];
+echo "|", gettype($list[0]), "\n";
+"#,
+    );
+    assert_eq!(out, ":boolean|double\n");
+}
+
 /// Regression for task b4024b9a: a buffer property read through an assignment receiver
 /// (`($t = $s)->buf[0]`) keeps the element type in a ternary and an array literal.
 #[test]
