@@ -272,7 +272,9 @@ pub(super) fn eval_reflection_parameter_type_metadata(
     // inside `eval()` and from compiled code must not answer `int|string` and `string|int`
     // (issues #1118, #1117). The table is shared rather than copied for the same reason.
     let mut types = types;
-    types.sort_by_key(|member| elephc_builtin_contract::union_member_rank(&member.name));
+    types.sort_by_key(|member| {
+        elephc_builtin_contract::reflection_format::union_member_rank(&member.name)
+    });
     Some(EvalReflectionParameterTypeMetadata {
         kind: EvalReflectionParameterTypeKind::Union(EvalReflectionUnionTypeMetadata {
             types,

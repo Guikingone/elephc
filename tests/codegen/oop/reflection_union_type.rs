@@ -8,16 +8,15 @@
 //! Key details:
 //! - PHP renders a union from its internal type mask, which has a fixed order, so `int|string`
 //!   prints as `string|int`. #1080 gave `ReflectionMethod::__toString()` that order through
-//!   a rank table (now shared as `elephc_builtin_contract::union_member_rank`); the type object
+//!   a rank table (shared as `elephc_builtin_contract::reflection_format::union_member_rank`); the type object
 //!   returned by `getType()` kept the declared one, so the same program disagreed with itself.
 //! - Two members were worse than mis-ordered. `false` fell through the `PhpType` mapper's
 //!   catch-all to `None`, which made the whole union unrepresentable and rendered it as the
 //!   EMPTY string; a bare `object` hint resolves to `PhpType::Object` with no name, and copying
 //!   that name printed nothing, leaving `array||string`.
-//! - Not fixed here, and unchanged by this work: `true` prints as `bool` and `iterable` is not
-//!   expanded to `Traversable|array`. Both are member NAMING, both predate this issue, and both
-//!   affect the dump and the type object alike — so the two surfaces still agree with each
-//!   other, which is what #1118 was about.
+//! - Not fixed here, and unchanged by this work: `true` prints as `bool`. That is member NAMING,
+//!   it predates this issue, and it affects the dump and the type object alike, so the two
+//!   surfaces still agree with each other, which is what #1118 was about.
 
 use crate::support::compile_and_run;
 

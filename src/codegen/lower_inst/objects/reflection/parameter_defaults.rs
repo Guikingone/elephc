@@ -468,6 +468,6 @@ pub(super) fn reflection_named_type_metadata_from_type_expr(
 /// they all share rank 0.
 fn sort_union_members_like_php(types: &mut [ReflectionNamedTypeMetadata]) {
     types.sort_by_key(|member| {
-        elephc_builtin_contract::union_member_rank(&member.name)
+        elephc_builtin_contract::reflection_format::union_member_rank(&member.name)
     });
 }
