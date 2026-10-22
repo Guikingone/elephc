@@ -190,6 +190,13 @@ pub(super) fn lower_static_callable_value_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
+            let sig = call_signature(
+                ctx,
+                &function_name,
+                source_prefers_extension_builtin(&function_name),
+            );
+            let mut operands = operands;
+            box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);
             let php_type = static_callable_builtin_result_type(
                 ctx,
                 &function_name,

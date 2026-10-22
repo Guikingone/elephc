@@ -156,12 +156,13 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
+    if !is_extern && !is_user_function {
+        box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);
+    }
     // A packed record address or a `null` passed where the signature (extern, builtin or user)
     // declares a pointer parameter becomes that pointer word; for `?ptr<T>` a null is the word
     // 0. The declared parameter type decides, never the name. By-reference parameters receive
-    // the caller's storage instead. A `?ptr<T>` passed to a builtin's `mixed` parameter is
-    // boxed (address 0 as PHP null), the shape `json_encode`, `var_dump`, `serialize`,
-    // `is_numeric` and `intval` read it in.
+    // the caller's storage instead.
     if let Some(signature) = sig.as_ref() {
         for (index, (operand, (_, expected))) in
             operands.iter_mut().zip(&signature.params).enumerate()
@@ -170,15 +171,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
                 continue;
             }
             let value = lowered_value_from_id(ctx, *operand);
-            let boxes_nullable_pointer = !is_extern
-                && !is_user_function
-                && expected.codegen_repr() == PhpType::Mixed
-                && crate::types::is_nullable_pointer_type(&ctx.builder.value_php_type(value.value));
-            *operand = if boxes_nullable_pointer {
-                ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span)).value
-            } else {
-                ctx.retype_packed_address_for_pointer_sink(value, expected, Some(expr.span)).value
-            };
+            *operand = ctx
+                .retype_packed_address_for_pointer_sink(value, expected, Some(expr.span))
+                .value;
         }
     }
     let php_type = if is_extern || is_user_function {
@@ -270,6 +265,45 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     call
 }
 
+
+/// Boxes each `?ptr<T>` operand a builtin binds to a by-value `mixed` parameter.
+///
+/// The boxer stores address 0 as PHP null and a live address as an integer, the Mixed shape
+/// `json_encode`, `var_dump`, `serialize`, `is_numeric` and `intval` read a nullable value in.
+/// Every route to a builtin (a direct call, a static callable such as `call_user_func`, a
+/// variable function or a pipe) runs this, so they agree; the declared parameter type decides,
+/// never the builtin's name. Operands past the declared parameters take a variadic last
+/// parameter's type.
+pub(super) fn box_nullable_pointer_builtin_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    operands: &mut [crate::ir::ValueId],
+    span: Span,
+) {
+    let Some(signature) = sig else {
+        return;
+    };
+    for (index, operand) in operands.iter_mut().enumerate() {
+        if signature.ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let expected = match signature.params.get(index) {
+            Some((_, expected)) => expected,
+            None if signature.variadic.is_some() => match signature.params.last() {
+                Some((_, expected)) => expected,
+                None => continue,
+            },
+            None => continue,
+        };
+        if expected.codegen_repr() != PhpType::Mixed {
+            continue;
+        }
+        let value = lowered_value_from_id(ctx, *operand);
+        if crate::types::is_nullable_pointer_type(&ctx.builder.value_php_type(value.value)) {
+            *operand = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)).value;
+        }
+    }
+}
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 pub(super) fn emit_builtin_call_value(

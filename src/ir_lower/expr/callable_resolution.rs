@@ -154,6 +154,7 @@ pub(super) fn lower_static_callable_call(
             begin_call_argument_evaluation(ctx);
             let mut operands =
                 lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
+            box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);
             let php_type = static_callable_builtin_result_type(
                 ctx,
                 &function_name,

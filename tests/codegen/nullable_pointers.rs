@@ -336,3 +336,29 @@ echo "|", serialize($q), "|", serialize($p) === "N;" ? "N" : "i", "\n";
     );
     assert_eq!(out, "null|int|0|0|0|0|addr|notnum|NULL\n|N;|i\n");
 }
+
+/// Verifies builtins reached through `call_user_func`, a variable function, a first-class
+/// callable and a pipe see a `?ptr<T>` the way a direct call does (boxed: null or an integer).
+#[test]
+fn test_nullable_pointer_builtins_through_static_callables() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> { return $ok ? $v[0] : null; }
+$v = buffer_new<Vec2>(1);
+$q = first($v, false);
+$p = first($v, true);
+echo call_user_func('json_encode', $p) === "null" ? "null" : "int", "|";
+call_user_func('var_dump', $q);
+echo call_user_func('serialize', $q), "|", call_user_func('is_numeric', $p) ? "num" : "not", "|";
+call_user_func('print_r', $q);
+echo "|", call_user_func('intval', $q, 10), "|";
+$f = 'json_encode';
+echo $f($q), "|";
+$g = json_encode(...);
+echo $g($q), "|", $q |> $g, "\n";
+var_dump($q, $q);
+"#,
+    );
+    assert_eq!(out, "int|NULL\nN;|num||0|null|null|null\nNULL\nNULL\n");
+}
