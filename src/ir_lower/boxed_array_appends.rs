@@ -1,5 +1,5 @@
 //! Purpose:
-//! Normalizes append receivers after the complete function has determined local storage.
+//! Normalizes array mutations after the complete function has determined local storage.
 //!
 //! Called from:
 //! - Module lowering before effect refinement and EIR validation.
@@ -7,9 +7,13 @@
 //! Key details:
 //! - A later reference argument can widen an earlier native array local to boxed storage.
 //! - Append mutates that box directly instead of leaking an owned unbox and its replaced box.
+//! - Hoisted element-layout conversions release the old box before storing their replacement.
 //! - The receiver is fetched after RHS evaluation, so RHS replacement of the local is observed.
 
-use crate::ir::{Function, Immediate, IrHeapKind, IrType, LocalKind, Module, Op, Ownership, ValueDef};
+use crate::ir::{
+    Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind, Module, Op,
+    Ownership, ValueDef,
+};
 use crate::types::PhpType;
 
 /// Repairs every function's append receivers using final local storage contracts.
@@ -19,6 +23,7 @@ pub(super) fn normalize_module(module: &mut Module) {
         .chain(module.closures.iter_mut())
     {
         normalize_function(function);
+        release_boxed_conversion_sources(function);
     }
 }
 
@@ -76,6 +81,88 @@ fn normalize_function(function: &mut Function) {
                         block: block.id, index: index as u32, inst: id,
                     };
                 }
+            }
+        }
+    }
+}
+
+/// Releases a final Mixed local's old box before an in-place element-layout conversion.
+///
+/// Statement fixed-point lowering can hoist `ArrayToMixed` before a loop while a later reference
+/// call widens the same frame slot only after that statement has been lowered. The conversion load
+/// then owns the unboxed array, but the following `StoreLocal` would overwrite the old Mixed box
+/// without retiring it. Insert the cleanup once the function's final slot type is authoritative.
+fn release_boxed_conversion_sources(function: &mut Function) {
+    let mut insertions = Vec::new();
+    for (block_index, block) in function.blocks.iter().enumerate() {
+        for (store_position, store_id) in block.instructions.iter().copied().enumerate() {
+            let store = &function.instructions[store_id.as_raw() as usize];
+            if store.op != Op::StoreLocal { continue; }
+            let Some(Immediate::LocalSlot(slot)) = store.immediate else { continue; };
+            if !matches!(
+                function.locals[slot.as_raw() as usize].php_type.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_),
+            ) { continue; }
+            let Some(&stored) = store.operands.first() else { continue; };
+            let ValueDef::Instruction {
+                block: conversion_block,
+                index: conversion_position,
+                inst: conversion_id,
+            } = function.values[stored.as_raw() as usize].def else { continue; };
+            if conversion_block != block.id || conversion_position as usize >= store_position {
+                continue;
+            }
+            let conversion = &function.instructions[conversion_id.as_raw() as usize];
+            if conversion.op != Op::ArrayToMixed { continue; }
+            let Some(&source) = conversion.operands.first() else { continue; };
+            let ValueDef::Instruction {
+                block: load_block,
+                index: load_position,
+                inst: load_id,
+            } = function.values[source.as_raw() as usize].def else { continue; };
+            if load_block != block.id || load_position >= conversion_position { continue; }
+            let load = &function.instructions[load_id.as_raw() as usize];
+            if load.op != Op::LoadLocal
+                || load.immediate != Some(Immediate::LocalSlot(slot))
+            {
+                continue;
+            }
+            let already_released = block.instructions
+                [load_position as usize + 1..conversion_position as usize]
+                .iter()
+                .any(|id| {
+                    let inst = &function.instructions[id.as_raw() as usize];
+                    inst.op == Op::ReleaseLocalSlot
+                        && inst.immediate == Some(Immediate::LocalSlot(slot))
+                });
+            if !already_released {
+                insertions.push((block_index, conversion_position as usize, slot, conversion.span));
+            }
+        }
+    }
+    for (block_index, position, slot, span) in insertions.into_iter().rev() {
+        let id = InstId::from_raw(function.instructions.len() as u32);
+        function.instructions.push(Instruction::new(
+            Op::ReleaseLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::ReleaseLocalSlot.default_effects(),
+            span,
+        ));
+        function.blocks[block_index].instructions.insert(position, id);
+    }
+    for block in &function.blocks {
+        for (index, id) in block.instructions.iter().copied().enumerate() {
+            if let Some(result) = function.instructions[id.as_raw() as usize].result {
+                function.values[result.as_raw() as usize].def = ValueDef::Instruction {
+                    block: block.id,
+                    index: index as u32,
+                    inst: id,
+                };
             }
         }
     }

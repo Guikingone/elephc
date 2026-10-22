@@ -54,7 +54,9 @@ class AppendTarget {
     public function build(int $n): void {
         $items = [];
         for ($i = 0; $i < $n; $i++) { $items[] = $i; }
-        $this->touch($items); echo count($items);
+        $this->touch($items);
+        for ($i = $n; $i < $n + 1; $i++) { $items[] = $i; }
+        echo count($items);
     }
     public function touch(&$items): void { $items[0] = 9; }
 }
@@ -76,6 +78,32 @@ touchUnknown($items); echo count($items);
             .chain(module.class_methods.iter())
             .chain(module.closures.iter())
         {
+            if function.name == "AppendTarget::build" {
+                assert!(!function.instructions.iter().any(|inst| inst.op == Op::MixedClone),
+                    "{target}: appending after reference promotion must not clone the boxed array");
+                let conversion = function.instructions.iter().find(|inst| {
+                    inst.op == Op::ArrayToMixed
+                }).expect("the reused loop counter widens the array element layout");
+                let source = function.value(conversion.operands[0]).unwrap();
+                let crate::ir::ValueDef::Instruction { block, index, inst } = source.def else {
+                    panic!("{target}: conversion source must load the local");
+                };
+                let load = function.instruction(inst).unwrap();
+                let Some(Immediate::LocalSlot(slot)) = load.immediate else {
+                    panic!("{target}: conversion source must identify the local slot");
+                };
+                let conversion_index = function.value(conversion.result.unwrap()).unwrap().def;
+                let crate::ir::ValueDef::Instruction { index: conversion_index, .. } = conversion_index else {
+                    panic!("{target}: conversion must define a value");
+                };
+                assert!(function.block(block).unwrap().instructions
+                    [index as usize + 1..conversion_index as usize]
+                    .iter().any(|id| {
+                        let inst = function.instruction(*id).unwrap();
+                        inst.op == Op::ReleaseLocalSlot
+                            && inst.immediate == Some(Immediate::LocalSlot(slot))
+                    }), "{target}: release the old boxed array before converting its owned unbox");
+            }
             if function.name == "appendReplaced" {
                 assert!(function.instructions.iter().any(|inst| inst.op == Op::TypePredicate),
                     "{target}: RHS replacement must retain the scalar/string parent guards");
