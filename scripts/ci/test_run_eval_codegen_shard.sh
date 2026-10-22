@@ -8,8 +8,10 @@ fixture_dir=$(mktemp -d "$PWD/.eval-shard-test.XXXXXX")
 trap 'rm -rf "$fixture_dir"' EXIT HUP INT TERM
 
 # The fake test binary lists two eval tests. In run mode FAKE_MODE picks the behaviour:
-#   slow_exit    both pass, then the process lingers holding stdout (the CI failure shape)
-#   crash_after  both pass, then the process exits 3
+#   exit_late    both pass, and the process exits 0 after 3s: past the 2s budget but inside
+#                the watchdog's 5s sleep (the CI failure shape)
+#   crash_after  both pass, and the process exits 3 after 3s
+#   slow_exit    both pass, then the process lingers holding stdout
 #   stall_before only the first passes, then the process lingers
 cat > "$fixture_dir/codegen_tests" <<'EOF'
 #!/bin/sh
@@ -23,6 +25,12 @@ fi
 echo "running 2 tests"
 echo "test codegen::eval::first ... ok"
 case "$FAKE_MODE" in
+    exit_late)
+        echo "test codegen::eval::second ... ok"
+        echo "test result: ok. 2 passed; 0 failed"
+        sleep 3
+        exit 0
+        ;;
     slow_exit)
         echo "test codegen::eval::second ... ok"
         echo "test result: ok. 2 passed; 0 failed"
@@ -31,6 +39,7 @@ case "$FAKE_MODE" in
     crash_after)
         echo "test codegen::eval::second ... ok"
         echo "test result: ok. 2 passed; 0 failed"
+        sleep 3
         exit 3
         ;;
     stall_before)
@@ -59,8 +68,23 @@ run_shard() {
     echo "$status"
 }
 
-# Every selected test passed before the budget watchdog stopped the process: a warning, not
-# a failure, and pass 2 never runs.
+# A pass that exits by itself while the watchdog sleeps keeps its own status: no watchdog
+# stop, no warning, and pass 2 never runs.
+status=$(run_shard exit_late)
+if [ "$status" -ne 0 ]; then
+    echo "a pass that exited during the watchdog's sleep exited $status, expected 0" >&2
+    cat "$fixture_dir/out" >&2
+    exit 1
+fi
+if grep -q 'watchdog' "$fixture_dir/out"; then
+    echo "the watchdog judged a pass that had already exited" >&2
+    cat "$fixture_dir/out" >&2
+    exit 1
+fi
+test ! -e "$fixture_dir/nextest-args"
+
+# Every selected test passed but the process never exited: the watchdog stops it, which is a
+# warning, not a failure, and pass 2 never runs.
 status=$(run_shard slow_exit)
 if [ "$status" -ne 0 ]; then
     echo "watchdog stop after every test passed exited $status, expected 0" >&2

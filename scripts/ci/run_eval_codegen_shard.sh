@@ -128,6 +128,10 @@ last_completed=$(completed_count)
 watchdog_reason=""
 while kill -0 "$tee_pid" 2>/dev/null; do
     sleep 5
+    # The pass may have exited on its own during the sleep. Judging the budget then would stop
+    # a process that already finished and replace its real status with 124: macOS shards
+    # reported "75 passed ... finished in 1797.91s" and failed with 124 exactly that way.
+    kill -0 "$tee_pid" 2>/dev/null || break
     now=$(date +%s)
     completed=$(completed_count)
     if [[ $completed -ne $last_completed ]]; then
@@ -213,11 +217,10 @@ for test_name in "${selected[@]}"; do
 done
 
 if [[ ${#remaining[@]} -eq 0 ]]; then
-    # The watchdog samples every 5s, so a shard whose last test passes just before the total
-    # budget can still be stopped while libtest is printing its summary and exiting: macOS
-    # shards reported "75 passed ... finished in 1797.91s" and then failed with 124. Once
-    # every selected test has reported ok, a watchdog stop is not a test failure. Any other
-    # non-zero status (a crash after the last test, for one) still fails the shard.
+    # The watchdog stopped a pass that had already reported every selected test ok but did not
+    # exit, e.g. because something it started still holds its output open. No test failed, so
+    # report the stop as a warning instead of failing the shard. A non-zero status the pass
+    # returned on its own (a crash after the last test, for one) still fails the shard.
     if [[ -n $watchdog_reason ]]; then
         echo "::warning::eval shard $shard/$shard_count: every selected test passed before the watchdog stopped the single-process pass ($watchdog_reason)"
         exit 0
