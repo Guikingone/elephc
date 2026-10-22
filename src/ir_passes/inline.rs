@@ -135,6 +135,7 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
         | PhpType::Void
         | PhpType::Never
         | PhpType::Pointer(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => true,
         PhpType::Array(element) => is_destructor_free(element),
         PhpType::AssocArray { value, .. } => is_destructor_free(value),

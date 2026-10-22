@@ -32,7 +32,7 @@ sidebar:
 | `void`           | Return only      | Valid as a function, method, closure, arrow, or extern return type. Internally, `null` is represented as `Void`.        |
 | `never`          | Return only      | Marks a function, method, closure, or interface method that **never returns** — it must always `throw`, call `exit()`/`die()`, or loop forever. Returning is rejected at type-check time. |
 | `ptr` / `ptr<T>` | elephc extension | Raw 64-bit pointer, optionally carrying a checked compile-time pointee tag. See [Pointers](../beyond-php/pointers.md). |
-| `buffer<T>`      | elephc extension | Fixed-size contiguous storage for POD scalars, pointers, or packed records. See [Buffers](../beyond-php/buffers.md).   |
+| `buffer<T>`      | elephc extension | Fixed-size contiguous storage for POD scalars, C widths (`buffer<u8>`, `buffer<f32>`), pointers, or packed records. See [Buffers](../beyond-php/buffers.md). |
 | `packed class`   | elephc extension | Flat POD record type with compile-time field offsets. See [Packed Classes](../beyond-php/packed-classes.md).           |
 
 Integer-form numeric literals keep the `int` type only while they fit in PHP's signed 64-bit range. Larger decimal, hexadecimal, octal, or binary literals are promoted to `float`, matching PHP on 64-bit builds.

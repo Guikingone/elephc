@@ -61,6 +61,7 @@ mod iterators;
 mod objects;
 mod ownership;
 mod pointers;
+mod scalar_widths;
 mod predicates;
 mod property_values;
 mod receiver_place;

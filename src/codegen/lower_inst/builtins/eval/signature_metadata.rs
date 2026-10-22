@@ -224,6 +224,7 @@ pub(super) fn eval_native_php_type_spec(php_type: &PhpType, allow_return_atoms: 
         | PhpType::Packed(_)
         | PhpType::Pointer(_)
         | PhpType::Resource(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => None,
     }
 }

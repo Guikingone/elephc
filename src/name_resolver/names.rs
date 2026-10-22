@@ -151,6 +151,7 @@ pub(super) fn resolve_type_expr_with_type_params(
             let raw = name.as_str();
             if matches!(raw, "array" | "mixed" | "callable" | "void" | "null")
                 || raw.eq_ignore_ascii_case("object")
+                || is_unshadowed_width_name(name, current_namespace, imports, symbols)
             {
                 TypeExpr::Named(name.clone())
             } else {
@@ -163,6 +164,34 @@ pub(super) fn resolve_type_expr_with_type_params(
             }
         }
     }
+}
+
+/// Returns whether an unqualified C width name (`u8`, `i32`, `f32`, ...) keeps its bare spelling
+/// in a type position.
+///
+/// The width names are storage formats for packed class fields and `buffer<T>` elements, not
+/// classes, so they are not canonicalized into the current namespace. A program that really
+/// declares a class with such a name, or imports one under it with `use ... as u8`, shadows the
+/// width wherever that class is visible, and the name then resolves exactly like any PHP class
+/// name (`new u8()` and a `u8` type hint agree).
+fn is_unshadowed_width_name(
+    name: &Name,
+    current_namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> bool {
+    let raw = name.as_str();
+    if !name.is_unqualified() || !crate::parser::ast::is_c_width_type_name(raw) {
+        return false;
+    }
+    if imports.classes.contains_key(&php_symbol_key(raw)) {
+        return false;
+    }
+    let candidate = match current_namespace {
+        Some(namespace) if !namespace.is_empty() => format!("{}\\{}", namespace, raw),
+        _ => raw.to_string(),
+    };
+    !symbols.declares_class_like(&candidate)
 }
 
 /// Registers use-item aliases (class, function, const) into the imports map by kind.

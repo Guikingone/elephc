@@ -21,13 +21,13 @@ packed class Enemy {
 ```
 
 ## Constraints
-- Fields must be `int`, `float`, `bool`, `ptr`, or another `packed class`
+- Fields must be `int`, `float`, `bool`, `ptr`, a C width (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `f32`, `f64`; see [Field widths](#field-widths)), or another `packed class`
 - No union or nullable types
 - No strings, arrays, objects, or mixed values
 - No methods, constructors, inheritance, traits, or interfaces
 - Only `public` visibility (optional and redundant)
 - No default values
-- Layout is sequential: each `int`, `float`, `bool`, or `ptr` field takes 8 bytes, and a nested packed field takes the full size of its record, so in `Body` below `$pos` is at offset 0, `$vel` at 16 and `$id` at 32 (40 bytes in total)
+- Layout is the natural C layout: each `int`, `float`, `bool`, or `ptr` field takes 8 bytes, a width-declared field takes its own size at the next multiple of that size, a nested packed field takes the full size of its record at the record's alignment, and the record is padded to its widest field. A class of 8-byte fields is therefore sequential: in `Body` below `$pos` is at offset 0, `$vel` at 16 and `$id` at 32 (40 bytes in total)
 
 ## Usage with buffers
 ```php
@@ -49,6 +49,67 @@ A packed class name is a type wherever a type is accepted: a `buffer<Vertex>`
 or `ptr<Vertex>` can be a class property, a method parameter or return type, a
 promoted constructor parameter, or a generic type argument. See
 [buffers in class members](buffers.md#buffers-in-class-members).
+
+## Field widths
+
+A field declared with one of the C width names keeps that width in memory, so a packed class
+can mirror a C struct byte for byte and a buffer of records carries only the bytes the data
+needs:
+
+| Field type | C type | Size and alignment | Reads as |
+|---|---|---|---|
+| `int` / `i64`, `u64` | `int64_t`, `uint64_t` | 8 | `int` |
+| `i32`, `u32` | `int32_t`, `uint32_t` | 4 | `int` |
+| `i16`, `u16` | `int16_t`, `uint16_t` | 2 | `int` |
+| `i8`, `u8` | `int8_t`, `uint8_t` | 1 | `int` |
+| `float` / `f64` | `double` | 8 | `float` |
+| `f32` | `float` | 4 | `float` |
+| `bool` | | 8 | `bool` |
+| `ptr`, `ptr<T>` | `void*`, `T*` | 8 | pointer |
+
+The widths are a storage format, not new types: a field of any integer width reads as `int`
+and an `f32` reads as `float`, and `i32 + int` is plain integer arithmetic. A write keeps the
+declared width with the rules [extern class fields](extern.md#extern-classes-c-structs) have:
+signed widths sign-extend and unsigned widths zero-extend on a read, an out-of-range integer
+keeps its low bits like a C conversion (`300` in a `u8` is `44`, `-1` in a `u32` is
+`4294967295`), and a float written to an `f32` field rounds to single precision. Integer
+arithmetic results and compound assignments (`$v->count = $i * 2`, `$v->flags++`) narrow the
+same way. A packed `bool` keeps its 8-byte slot; declare a one-byte C flag as `u8`.
+
+```php
+<?php
+// SDL2's SDL_Vertex: SDL_FPoint position, SDL_Color color, SDL_FPoint tex_coord.
+packed class Vertex {
+    public f32 $x;
+    public f32 $y;
+    public u8 $r;
+    public u8 $g;
+    public u8 $b;
+    public u8 $a;
+    public f32 $u;
+    public f32 $v;
+}
+
+$verts = buffer_new<Vertex>(4);   // 20 bytes per element, the C sizeof
+$verts[0]->x = 0.1;               // stored as the nearest single: 0.10000000149012
+$verts[0]->g = 300;               // stored as 44
+echo ptr_sizeof("Vertex");        // 20
+```
+
+Fields are laid out like a C compiler does on every supported target: each field starts at
+the next multiple of its own size, a nested record at its own alignment, and the record is
+padded to its widest field (`Vertex` above is 20 bytes; a class of one `u8` is 1 byte). Declare
+the fields in the header's order with the header's widths and a `ptr<Vertex>` cast over
+memory a C library owns (`ptr_cast<Vertex>(...)`, see [Typed pointers](#typed-pointers))
+reads and writes the C struct in place. Scalar buffers take the same width names:
+`buffer<u16>` index data, `buffer<u8>` pixels, `buffer<f32>` vertex streams; see
+[Buffers](buffers.md#element-widths).
+
+The width names are not reserved words: in a packed field type or inside `buffer<...>` they
+name the width, and everywhere else they resolve like class names. A program that declares
+or imports a class under one of these names (`class u8`, `use Lib\Byte as i32`) shadows the
+width wherever that class is visible, exactly as PHP resolves the name. A misspelled width
+(`I32`, `uint8_t`, `double`) is reported with the accepted spellings.
 
 ## Nested records
 
@@ -75,9 +136,10 @@ no finite size.
 
 Reading a nested record (`$bodies[0]->pos`) yields the record's address, like reading a
 buffer element: a local holding it writes through to the buffer. Assigning a whole record
-to a nested field copies its bytes, and the source must be a record of the same packed
-class: a buffer element, another nested field, or a `ptr<T>` typed pointer. Like C struct
-assignment, the copy assumes the source and the destination do not partially overlap.
+to a nested field copies its bytes (including the odd tail of a record of width-declared
+fields), and the source must be a record of the same packed class: a buffer element, another
+nested field, or a `ptr<T>` typed pointer. Like C struct assignment, the copy assumes the
+source and the destination do not partially overlap.
 
 ```php
 <?php

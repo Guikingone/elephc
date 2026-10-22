@@ -116,7 +116,11 @@ var_dump(sqrtf(2.0));   // float(1.4142135381698608): the single-precision root,
 Like the integer widths, `f32` is accepted on `extern function` parameters and
 returns and on `extern class` fields, so a C struct that holds `float` fields
 (`SDL_FRect`, `SDL_Vertex`) is declared with `f32` fields and read and written
-by name; see [Extern classes](#extern-classes-c-structs). Raw memory without a
+by name; see [Extern classes](#extern-classes-c-structs). Packed classes and
+`buffer<T>` elements take the same width names for data elephc owns: a
+`buffer<Vertex>` of `f32` fields hands its elements to C as `ptr<Vertex>`, and
+`buffer<u16>` index data keeps its width in memory; see
+[Packed classes](packed-classes.md#field-widths). Raw memory without a
 declared struct uses `ptr_read_f32()` and `ptr_write_f32()`; see
 [Pointers](pointers.md).
 
