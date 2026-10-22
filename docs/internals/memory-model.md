@@ -333,6 +333,12 @@ keeps its owner. Explicit yielded keys are boxed before their temporary byte own
 the resulting single-use Mixed box transfers into the generator before suspension.
 Silent `empty()` string probes use PHP string truthiness, including the one-byte string `"0"`.
 
+Pending concat operands and computed array keys are published across an operand window when
+its EIR effects include a catchable throw or it contains a direct throw terminator. Lowering
+first discovers those effects, then persists fresh transient strings and places the owner
+records before the window, retiring them after the consumer. This covers whole strings as well as persisted byte views;
+non-throwing scalar windows introduce no owner slots that could inhibit integer sinking or CSE.
+
 ## The string buffer (scratch pad)
 
 ```asm

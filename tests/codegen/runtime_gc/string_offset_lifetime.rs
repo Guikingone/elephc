@@ -534,3 +534,34 @@ runStoppedOffsetKeys();
     assert_eq!(out.stdout, "Z:1|Z:1|Z:1|Z:1|\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Pending whole-string concat operands and keys are visible to caught-exception cleanup.
+#[test]
+fn test_string_offset_lifetime_non_byte_pending_operands() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function failPendingString(): string { throw new Exception("pending"); }
+function failPendingValue(): int { throw new Exception("pending"); }
+function ownedPendingKey(int $i): string { return str_repeat("key", 300) . $i; }
+function pendingWholeOperands(bool $flag): void {
+    $a = str_repeat("a", 70000); $b = "b";
+    $error = new Exception("direct");
+    $items = ["seed" => 0];
+    for ($i = 0; $i < 8; $i++) {
+        try { echo ($a . $b) . failPendingString(); } catch (Exception $e) {}
+        try { $items[ownedPendingKey($i)] = failPendingValue(); } catch (Exception $e) {}
+        try { echo ($a . $b) . (throw $error); } catch (Exception $e) {}
+        try { echo ($a . $b) . ($flag ? throw $error : ""); } catch (Exception $e) {}
+    }
+}
+pendingWholeOperands($argc > 0); echo "done\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "done\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Pending whole-string owners stay balanced when optional EIR optimization is disabled.
+#[test]
+fn test_string_offset_lifetime_non_byte_pending_operands_without_ir_opt() {
+    crate::support::without_ir_opt(test_string_offset_lifetime_non_byte_pending_operands);
+}

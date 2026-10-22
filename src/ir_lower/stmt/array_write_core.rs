@@ -89,18 +89,16 @@ pub(super) fn lower_write_key_and_value(
         return (lower_expr(ctx, index), value_value, Vec::new());
     }
     let index_value = lower_expr(ctx, index);
-    let original_index = index_value.value;
     let index_value = crate::ir_lower::ownership::persist_string_byte_view(
         ctx,
         index_value,
         Some(index.span),
     );
-    let index_pins = if index_value.value != original_index {
-        crate::ir_lower::expr::pin_in_flight_owners(ctx, &[index_value.value], index.span)
-    } else {
-        Vec::new()
-    };
-    (index_value, lower_expr(ctx, value), index_pins)
+    let mut pending = [index_value];
+    let (value_value, index_pins) = crate::ir_lower::expr::lower_with_pending_owners(
+        ctx, &mut pending, index.span, |ctx| lower_expr(ctx, value),
+    );
+    (pending[0], value_value, index_pins)
 }
 
 /// Lowers an indexed array assignment.

@@ -348,3 +348,41 @@ offsetBoundaries("\x07aaaaaaaZ");
             "{target}: copy every persisted byte to unmanaged stack storage");
     }
 }
+
+/// Non-byte pending strings are published before throwing calls and direct throw expressions.
+#[test]
+fn string_offset_pending_whole_owners_on_all_targets() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+function failpending(): string { throw new Exception("pending"); }
+function pendingconcat(string $a, string $b): void { echo ($a . $b) . failpending(); }
+function pendingkey(): void { $items = ["seed" => 0]; $items[str_repeat("k", 1000)] = failpending(); }
+function pendingdirect(string $a, string $b, Exception $error, bool $flag): void {
+    echo ($a . $b) . ($flag ? throw $error : "");
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["pendingconcat", "pendingkey", "pendingdirect"] {
+            let function = module.functions.iter().find(|f| f.name.eq_ignore_ascii_case(name)).unwrap();
+            let mut protected = 0;
+            for block in &function.blocks {
+                for (position, id) in block.instructions.iter().enumerate() {
+                    let call = function.instruction(*id).unwrap();
+                    let Some(Immediate::Data(callee)) = call.immediate else { continue; };
+                    if call.op != Op::Call || !module.data.function_names[callee.as_raw() as usize].eq_ignore_ascii_case("failpending") { continue; }
+                    assert!(block.instructions[..position].iter().any(|id| function.instruction(*id).unwrap().op == Op::PushCallOperandOwner), "{target}: {name}");
+                    protected += 1;
+                }
+            }
+            if name == "pendingdirect" {
+                assert!(function.instructions.iter().any(|inst| inst.op == Op::ThrowException), "{target}: direct throw expression");
+                assert!(function.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner), "{target}: direct throw owner");
+            } else { assert_eq!(protected, 1, "{target}: {name}"); }
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
