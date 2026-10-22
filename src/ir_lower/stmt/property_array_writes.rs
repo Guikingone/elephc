@@ -50,6 +50,7 @@ fn lower_property_array_push_value(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -274,6 +275,7 @@ fn lower_property_array_assign_value(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -318,6 +320,7 @@ fn lower_property_array_assign_value(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_assoc_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,

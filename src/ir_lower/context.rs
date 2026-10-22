@@ -4732,6 +4732,39 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
+    /// Retypes a value written into an array or hash element for pointer storage.
+    ///
+    /// A packed record address is stored as the `ptr<T>` word the checker types it as, whatever
+    /// the container's current element type: an empty local array takes its element type from
+    /// the first write, and a `Packed` value there would widen it to boxed `mixed`. `null`
+    /// becomes the word 0 only when the container already stores pointers; anywhere else it
+    /// stays PHP null.
+    pub(crate) fn retype_value_for_container_element(
+        &mut self,
+        container_ty: &PhpType,
+        value: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let element = match container_ty.codegen_repr() {
+            PhpType::Array(element) => Some(*element),
+            PhpType::AssocArray { value, .. } => Some(*value),
+            _ => None,
+        };
+        if let Some(element) =
+            element.filter(|element| matches!(element.codegen_repr(), PhpType::Pointer(_)))
+        {
+            return self.retype_packed_address_for_pointer_sink(value, &element, span);
+        }
+        match self.builder.value_php_type(value.value).codegen_repr() {
+            PhpType::Packed(class_name) => self.retype_packed_address_for_pointer_sink(
+                value,
+                &PhpType::Pointer(Some(class_name)),
+                span,
+            ),
+            _ => value,
+        }
+    }
+
     /// Emits a value-producing opcode whose result is an unconditional owned reference.
     ///
     /// This is reserved for runtime transfers such as `CatchBind`, where the opcode clears

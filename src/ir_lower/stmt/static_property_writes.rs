@@ -193,6 +193,7 @@ pub(super) fn lower_static_property_array_push(
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
         ctx.emit_void(
             Op::ArrayPush,
@@ -386,6 +387,7 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let array_ty = property_ty.clone();
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so

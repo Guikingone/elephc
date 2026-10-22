@@ -177,6 +177,8 @@ pub(super) fn coerce_array_literal_element_to_storage_type(
         }
         PhpType::Float if value.ir_type != IrType::F64 => coerce_to_float(ctx, value, expr),
         PhpType::Str if value.ir_type != IrType::Str => coerce_to_string(ctx, value, expr),
+        // A packed record address or `null` stored as a pointer element is the pointer word.
+        PhpType::Pointer(_) => ctx.retype_packed_address_for_pointer_sink(value, elem_ty, Some(expr.span)),
         _ => value,
     };
     // The scalar coercers release owning heap-repr sources internally (see
@@ -583,6 +585,9 @@ pub(crate) fn array_literal_type_for_ir(
     }) {
         return assoc_array_literal_type_from_spreads(ctx, items, expr);
     }
+    if let Some(pointer) = pointer_literal_element_type(ctx, items) {
+        return PhpType::Array(Box::new(pointer));
+    }
     let mut elem_ty = array_literal_element_type_for_ir(ctx, &items[0]);
     for item in items.iter().skip(1) {
         elem_ty = merge_ir_indexed_element_type(
@@ -591,6 +596,35 @@ pub(crate) fn array_literal_type_for_ir(
         );
     }
     PhpType::Array(Box::new(elem_ty))
+}
+
+/// Returns the pointer element type of literal values that are pointers and `null`s, if any.
+///
+/// A `null` beside pointers is stored as the null pointer word, and a pointer element read is
+/// `?ptr<T>`, so `[$p, null]` keeps raw pointer storage instead of widening every element to a
+/// boxed `mixed` (where `$a[0]->x` could no longer reach the record). Literals without a `null`
+/// return `None` and keep the ordinary merge.
+pub(super) fn pointer_literal_element_type<'e>(
+    ctx: &LoweringContext<'_, '_>,
+    values: impl IntoIterator<Item = &'e Expr>,
+) -> Option<PhpType> {
+    let mut has_null = false;
+    let mut pointer: Option<PhpType> = None;
+    for value in values {
+        if matches!(value.kind, ExprKind::Null) {
+            has_null = true;
+            continue;
+        }
+        let elem_ty = array_literal_element_type_for_ir(ctx, value);
+        if !matches!(elem_ty, PhpType::Pointer(_)) {
+            return None;
+        }
+        pointer = Some(match pointer {
+            Some(merged) => merge_ir_indexed_element_type(merged, elem_ty),
+            None => elem_ty,
+        });
+    }
+    pointer.filter(|merged| has_null && matches!(merged, PhpType::Pointer(_)))
 }
 
 /// Returns the EIR storage type of an `(array)` cast used as a literal element.

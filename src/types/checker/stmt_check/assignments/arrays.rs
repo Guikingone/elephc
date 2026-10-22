@@ -139,7 +139,8 @@ pub(super) fn check_array_assign(
         let merged_value = if **existing_value == val_ty {
             *existing_value.clone()
         } else {
-            PhpType::Mixed
+            // Pointers and `null` share the pointer word (`?ptr<T>` values).
+            crate::types::merge_pointer_elements(existing_value, &val_ty).unwrap_or(PhpType::Mixed)
         };
         // Same contract as the indexed form, and guarded the same way — on the MERGE RESULT,
         // so a declared `array<string, mixed>` stays writable with anything while

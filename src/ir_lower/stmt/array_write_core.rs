@@ -208,6 +208,8 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     }
     let (mut index_value, mut value_value, mut index_pins) =
         lower_write_key_and_value(ctx, index, value);
+    let container_ty = ctx.builder.value_php_type(array_value.value);
+    value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
     // Concrete string keys normally select associative storage. Ref-bound Mixed-slot
     // arrays instead use the shared writer, preserving invoker markers and keeping numeric
     // strings indexed. A boxed Mixed/Union index may hold either
