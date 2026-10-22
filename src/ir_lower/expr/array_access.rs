@@ -221,8 +221,20 @@ pub(super) fn lower_array_access_from_value(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    lower_array_access_from_value_with_null_preservation(ctx, array_value, index, expr, warn_on_missing, false)
+}
+
+/// Keeps scalar misses boxed at merge boundaries while ordinary typed reads retain their ABI.
+pub(super) fn lower_array_access_from_value_with_null_preservation(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+    preserve_null: bool,
+) -> LoweredValue {
     let index_value = lower_expr(ctx, index);
-    lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing)
+    lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing, preserve_null)
 }
 
 /// Reads an already evaluated receiver and key, preserving their normal read cleanup.
@@ -233,6 +245,7 @@ pub(crate) fn lower_array_access_from_values(
     index: &Expr,
     expr: &Expr,
     warn_on_missing: bool,
+    preserve_null: bool,
 ) -> LoweredValue {
     // Key coercion and missing-key warnings can invoke a throwing user handler. Keep an
     // owning intermediate receiver reachable until the read finishes; the normal release
@@ -308,7 +321,16 @@ pub(crate) fn lower_array_access_from_values(
         }
         _ => Op::RuntimeCall,
     };
-    let result_type = array_access_result_type(ctx, array_value.value, op, expr);
+    let mut result_type = array_access_result_type(ctx, array_value.value, op, expr);
+    if preserve_null
+        && matches!(op, Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent)
+        && matches!(result_type.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str | PhpType::Callable)
+    {
+        // The boxed getter distinguishes a miss before scalar conversion destroys its marker.
+        // Object/container getters already preserve null and retain their typed fast paths.
+        result_type = PhpType::Mixed;
+    }
     let index_owner = if op == Op::RuntimeCall
         && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Callable
     {
@@ -372,7 +394,7 @@ fn coerce_string_offset_to_int(
     }
 }
 
-/// Lowers nullable receiver indexing without evaluating the index on a null receiver.
+/// Lowers nullable indexing while preserving offset evaluation and ordinary warning behavior.
 pub(super) fn lower_nullable_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
@@ -408,10 +430,20 @@ pub(super) fn lower_nullable_array_access(
     });
 
     ctx.builder.position_at_end(null_block);
-    // The read arm releases an owning call result after indexing it. The null arm
-    // has no read to consume that result, so retire it before storing boxed null.
+    // Undefined roots and native nullable containers may carry a raw null word, not a Mixed
+    // cell. The getter's dynamic ABI requires a real boxed null while evaluating the offset
+    // and delivering its ordinary/silent warning. A proven-null source has no destructor,
+    // so retire its owner first and protect the canonical receiver across throwing user code.
     release_owning_receiver_temporary(ctx, array_value, expr.span);
-    let null_value = lower_boxed_null(ctx, expr);
+    let null_receiver = lower_boxed_null(ctx, expr);
+    // This pin covers only offset evaluation: the shared read publishes its own receiver
+    // record, and two live records over one reference would release it twice on a throw.
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[null_receiver.value], expr.span);
+    let index_value = lower_expr(ctx, index);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, expr.span);
+    let null_value = lower_array_access_from_values(
+        ctx, null_receiver, index_value, index, expr, warn_on_missing, false,
+    );
     store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
     branch_to(ctx, merge);
 
