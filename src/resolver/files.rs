@@ -53,6 +53,14 @@ pub(super) fn parse_file(
     let tokens = lexer::tokenize_with_mode_and_source_id(&source, mode, source_id)
         .map_err(|e| e.with_file(file.clone()))?;
 
-    let parsed = parser::parse_with_mode(&tokens, mode).map_err(|e| e.with_file(file))?;
+    // Both resolver passes parse this file; naming its anonymous classes after the file keeps the
+    // declaration discovery found and the body resolution inlines referring to one class. The
+    // canonical path names them, as discovery merges includes by it: two spellings of one path
+    // must agree too.
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let parsed = parser::with_anonymous_class_scope(&canonical.to_string_lossy(), || {
+        parser::parse_with_mode(&tokens, mode)
+    })
+    .map_err(|e| e.with_file(file))?;
     crate::source::finalize_physical_program(parsed, &source, path, mode, defines)
 }

@@ -242,7 +242,8 @@ pub(in crate::codegen::lower_inst) fn lower_empty(ctx: &mut FunctionContext<'_>,
     ensure_arg_count(inst, "empty", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.raw_value_php_type(value)? {
-        PhpType::Int | PhpType::Pointer(_) => {
+        // A packed record address (buffer element or nested record) is one pointer word.
+        PhpType::Int | PhpType::Pointer(_) | PhpType::Packed(_) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_zero_bool(ctx);
         }

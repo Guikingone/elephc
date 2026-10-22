@@ -816,7 +816,8 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_array_push_str` | Persist string + append to array (grows if needed) | `x0` = array, `x1`/`x2` = str | `x0` = array |
 | `__rt_sort_int` / `__rt_rsort_int` | In-place sort ascending or descending | `x0` = array | — |
 | `__rt_mixed_sort_require_scalars` | Guard `sort()` / `rsort()` on a runtime-typed (`Array(Mixed)`) array: walks every element first and terminates with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported` for a nested array, object, resource, or boxed callable, so an unsupported container is refused instead of ordered wrongly | `x0` = array | — |
-| `__rt_str_persist` | Copy string from concat_buf to heap (skips .data/heap) | `x1`/`x2` = str | `x1`/`x2` = heap str |
+| `__rt_str_persist` | Copy string from concat_buf to heap; a heap block stamped `CONCAT_TEMP_HEAP_KIND` is adopted in place instead of copied | `x1`/`x2` = str | `x1`/`x2` = heap str |
+| `__rt_str_claim` | Give a possibly transient string one owner without copying: retag a `CONCAT_TEMP_HEAP_KIND` block as heap kind 1 in place, return every other payload unchanged (lowering of `EnsureOwned`) | `x1`/`x2` = str | `x1`/`x2` = same str |
 
 Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_splice`, `array_diff`, `array_intersect`, `array_fill`, `array_combine`, and `array_fill_keys`. Filtering uses the storage-neutral boxed predicate runtime instead, preserving logical keys and PHP value types in an independently owned result.
 
@@ -1465,6 +1466,7 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type. Publ
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_buffer_resolve` | Validate handle index, non-zero generation, active state, and exact descriptor generation | `x0` = opaque buffer handle | `x0` = static descriptor address |
+| `__rt_buffer_try_resolve` | Apply the same validation without reporting a fatal error, so loop preheaders can resolve speculatively and the actual access retains the diagnostic | `x0` = opaque buffer handle | `x0` = descriptor address, or zero for an invalid or stale handle |
 | `__rt_buffer_new` | Reuse or claim a descriptor, allocate and exactly zero `length * stride` payload bytes, then publish the new handle | `x0` = element count, `x1` = element stride | `x0` = opaque buffer handle |
 | `__rt_buffer_free` | Invalidate a resolved descriptor, recycle it unless its u32 generation is saturated, then release the detached payload | `x0` = opaque buffer handle | — |
 | `__rt_buffer_len` | Resolve the handle and read the logical element count from descriptor offset 8 | `x0` = opaque buffer handle | `x0` = length |

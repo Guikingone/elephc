@@ -67,6 +67,25 @@ pub(crate) fn push_parsed_stmt(stmts: &mut Vec<Stmt>, stmt: Stmt) {
     }
 }
 
+/// Parses and appends one item allowed directly in a file or braced namespace.
+///
+/// Extern library blocks can expand to several declarations, while every ordinary statement
+/// produces one item that still passes through the shared const-list expansion.
+pub(crate) fn parse_file_or_namespace_scope_item(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    stmts: &mut Vec<Stmt>,
+) -> Result<(), CompileError> {
+    if tokens.get(*pos).is_some_and(|(token, _)| token == &Token::Extern) {
+        let mut extern_stmts = parse_extern_stmts(tokens, pos)?;
+        stmts.append(&mut extern_stmts);
+    } else {
+        let stmt = parse_stmt(tokens, pos)?;
+        push_parsed_stmt(stmts, stmt);
+    }
+    Ok(())
+}
+
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, CompileError> {
     // PHP attribute groups (`#[...]`) may decorate any statement-level

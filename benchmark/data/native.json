@@ -3,7 +3,7 @@
   "suite": "native",
   "branch": "main",
   "sampling": "latest-per-UTC-day-and-platform",
-  "points": 156,
+  "points": 157,
   "series": [
     {
       "date": "2026-04-24",
@@ -21277,6 +21277,140 @@
                 3.054832999964674,
                 2.6728330000196365,
                 3.211916000054771
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-21",
+      "timestamp": "2026-10-21T18:01:44Z",
+      "measurement_timestamp": "2026-10-21T17:58:36Z",
+      "commit": "e2db603f8732c1ab2fc789adc0c8e7b4a7f19a1e",
+      "run_id": 39643663056,
+      "run_attempt": 1,
+      "artifact_id": 12367459186,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "array_sum",
+          "fixture_sha256": "cd5f78e52ebe065976e53310982085e4ac0a2e8ca6dbaedf48bde4a6ff258ec3",
+          "metadata": {},
+          "variants": {
+            "elephc": {
+              "median_ms": 9.883291999926769,
+              "samples_ms": [
+                8.34566600008202,
+                10.31104100002267,
+                9.883291999926769
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php": {
+              "median_ms": 74.00158399991597,
+              "samples_ms": [
+                61.40420799999902,
+                74.00158399991597,
+                85.80520800001068
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "c": {
+              "median_ms": 4.359291000014309,
+              "samples_ms": [
+                7.146583000007922,
+                4.185582999980397,
+                4.359291000014309
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "string_concat",
+          "fixture_sha256": "8eefa2984accdf0bdfb8f70f0feb7f18e1b1015dc42d175b7cea52e5c4abdfaf",
+          "metadata": {},
+          "variants": {
+            "elephc": {
+              "median_ms": 4.099582999970153,
+              "samples_ms": [
+                3.9928749999944557,
+                4.211999999938598,
+                4.099582999970153
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php": {
+              "median_ms": 63.41308300000037,
+              "samples_ms": [
+                63.41308300000037,
+                59.251042000028065,
+                70.91133300002639
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "c": {
+              "median_ms": 5.246457999987797,
+              "samples_ms": [
+                4.648125000016989,
+                5.246457999987797,
+                7.728417000066656
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "sum_loop",
+          "fixture_sha256": "f86fcb87f6a1fdbe99506038a7d8d3507d1fa7cfc8f9721311907ecc917a9986",
+          "metadata": {},
+          "variants": {
+            "elephc": {
+              "median_ms": 12.001584000017829,
+              "samples_ms": [
+                12.599625000007109,
+                12.001584000017829,
+                11.468250000007174
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php": {
+              "median_ms": 71.01587500005735,
+              "samples_ms": [
+                83.01399999993464,
+                71.01587500005735,
+                60.00770899993313
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "c": {
+              "median_ms": 2.9766669999844453,
+              "samples_ms": [
+                3.029082999887578,
+                2.5523340000290773,
+                2.9766669999844453
               ],
               "skipped": false,
               "detail": "3 runs"

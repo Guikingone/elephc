@@ -15,9 +15,12 @@ use super::driver::IrPass;
 use super::rewrite::{defining_instruction, neutralize_to_nop, replace_all_uses, resolve_chains};
 use crate::ir::{
     DataPool, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind, LocalSlotId,
-    Module, Op, Ownership, Value, ValueDef, ValueId,
+    MixedNumericOp, Module, Op, Ownership, Value, ValueDef, ValueId,
 };
 use crate::types::PhpType;
+
+mod storage;
+pub(crate) use storage::proven_integer_slots;
 
 /// Narrows only counters for which the existing range analysis proves all updates safe.
 #[derive(Default)]
@@ -168,6 +171,7 @@ struct CounterProof {
     updates: HashSet<InstId>,
     comparisons: HashSet<InstId>,
     releases: HashSet<InstId>,
+    copy_readonly_calls: bool,
 }
 
 impl CounterProof {
@@ -178,11 +182,34 @@ impl CounterProof {
         pass: &BoundedMixedCounter,
         data: &DataPool,
     ) -> Option<Self> {
+        Self::with_readonly_calls(function, slot, pass, data, None)
+    }
+
+    /// Allows extra by-value observations only in a discarded storage-analysis trial.
+    fn with_readonly_calls(
+        function: &Function,
+        slot: LocalSlotId,
+        pass: &BoundedMixedCounter,
+        data: &DataPool,
+        readonly_calls: Option<&HashMap<InstId, HashSet<usize>>>,
+    ) -> Option<Self> {
+        Self::for_slots(function, &HashSet::from([slot]), pass, data, readonly_calls)
+    }
+
+    /// Checks mutually observed counters together; every seed and update must remain integer.
+    fn for_slots(
+        function: &Function,
+        slots: &HashSet<LocalSlotId>,
+        pass: &BoundedMixedCounter,
+        data: &DataPool,
+        readonly_calls: Option<&HashMap<InstId, HashSet<usize>>>,
+    ) -> Option<Self> {
         let mut proof = Self {
             scalar_values: HashSet::new(),
             updates: HashSet::new(),
             comparisons: HashSet::new(),
             releases: HashSet::new(),
+            copy_readonly_calls: readonly_calls.is_some(),
         };
         let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::new();
         let mut stores = Vec::new();
@@ -194,7 +221,7 @@ impl CounterProof {
                     uses.entry(operand).or_default().push(id);
                 }
                 match inst.immediate {
-                    Some(Immediate::LocalSlot(candidate)) if candidate == slot => match inst.op {
+                    Some(Immediate::LocalSlot(candidate)) if slots.contains(&candidate) => match inst.op {
                         Op::LoadLocal => {
                             let result = inst.result?;
                             let value = function.value(result)?;
@@ -214,12 +241,12 @@ impl CounterProof {
                         _ => return None,
                     },
                     Some(Immediate::LocalSlotPair { first, second })
-                        if first == slot || second == slot =>
+                        if slots.contains(&first) || slots.contains(&second) =>
                     {
                         return None
                     }
                     Some(Immediate::IterStart(ref iter))
-                        if iter.local_slots().any(|s| s == slot) =>
+                        if iter.local_slots().any(|slot| slots.contains(&slot)) =>
                     {
                         return None
                     }
@@ -250,7 +277,8 @@ impl CounterProof {
                     Op::Release => {
                         proof.releases.insert(id);
                     }
-                    Op::StoreLocal if inst.immediate == Some(Immediate::LocalSlot(slot)) => {}
+                    Op::StoreLocal if matches!(inst.immediate,
+                        Some(Immediate::LocalSlot(slot)) if slots.contains(&slot)) => {}
                     Op::StrIncDec if matches!(inst.immediate, Some(Immediate::I64(1 | -1))) => {
                         proof.updates.insert(id);
                         pending.push(inst.result?);
@@ -258,9 +286,28 @@ impl CounterProof {
                     Op::PhpRelCmp => {
                         proof.comparisons.insert(id);
                     }
+                    // Numeric helpers borrow their inputs. The unchanged opcode accepts
+                    // a raw integer after the recurrence's complete range proof succeeds.
+                    Op::MixedNumericBinop if matches!(inst.immediate,
+                        Some(Immediate::MixedNumericOp(MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul))) => {}
                     // Lowering already fixed the physical call signature and any by-ref storage.
                     // Re-materialization boxes a proven integer for an unchanged Mixed parameter.
                     Op::Call if pass.safe_call_use(inst, value, data) => {}
+                    _ if readonly_calls.is_some_and(|calls| {
+                        calls.get(&id).is_some_and(|positions| {
+                            inst.operands.iter().enumerate()
+                                .filter(|(_, operand)| **operand == value)
+                                .all(|(index, _)| positions.contains(&index))
+                        })
+                    }) => {}
+                    _ if readonly_calls.is_some()
+                        && (super::by_ref_alias::op_is_value_only_consumer(inst.op)
+                            || function.is_packed_field_access(inst))
+                        && !matches!(inst.op, Op::StoreLocal | Op::StoreGlobal
+                            | Op::StoreStaticLocal | Op::InitStaticLocal | Op::StoreRefCell
+                            | Op::ExternGlobalStore) => {}
+                    Op::ArrayPush if readonly_calls.is_some()
+                        && inst.operands.first().is_some_and(|operand| *operand != value) => {}
                     _ => return None,
                 }
             }
@@ -298,8 +345,15 @@ impl CounterProof {
 
     /// Rewrites the private trial while keeping original instruction identifiers stable.
     fn scalarize(&self, function: &mut Function, slot: LocalSlotId) {
-        function.locals[slot.as_raw() as usize].ir_type = IrType::I64;
-        function.locals[slot.as_raw() as usize].php_type = PhpType::Int;
+        self.scalarize_slots(function, &HashSet::from([slot]));
+    }
+
+    /// Rewrites a jointly proved trial once, preserving each original update identifier.
+    fn scalarize_slots(&self, function: &mut Function, slots: &HashSet<LocalSlotId>) {
+        for slot in slots {
+            function.locals[slot.as_raw() as usize].ir_type = IrType::I64;
+            function.locals[slot.as_raw() as usize].php_type = PhpType::Int;
+        }
         for &value in &self.scalar_values {
             let metadata = &mut function.values[value.as_raw() as usize];
             metadata.ir_type = IrType::I64;
@@ -356,7 +410,11 @@ impl CounterProof {
                 // A proven by-value Mixed argument receives copied scalar bits. Preserve
                 // that explicit boundary until Mem2Reg has removed the source slot, rather
                 // than relaxing the shared default-deny by-reference escape analysis.
-                if function.instructions[id.as_raw() as usize].op == Op::Call {
+                if function.instructions[id.as_raw() as usize].op == Op::Call
+                    || (self.copy_readonly_calls
+                        && matches!(function.instructions[id.as_raw() as usize].op,
+                            Op::RuntimeCall | Op::ArrayPush))
+                {
                     let operands = function.instructions[id.as_raw() as usize].operands.clone();
                     for (position, source) in operands.into_iter().enumerate() {
                         if !self.scalar_values.contains(&source) {

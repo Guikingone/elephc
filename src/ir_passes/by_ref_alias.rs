@@ -29,12 +29,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{Function, Immediate, LocalSlotId, Op, ValueId};
+use crate::ir::{
+    Function, Immediate, LocalSlotId, Op, RuntimeCallTarget, RuntimeFnId, ValueId,
+};
 
 /// Returns every local slot whose `load_local` result escapes to an instruction that may
 /// take its address, i.e. every slot a callee may be able to write through a
 /// by-reference alias.
-pub(super) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
+pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
     let mut load_result_slot: HashMap<ValueId, LocalSlotId> = HashMap::new();
     for inst in &function.instructions {
         if inst.op != Op::LoadLocal {
@@ -54,7 +56,19 @@ pub(super) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
     for inst in &function.instructions {
         // A packed field store copies a scalar into the record; unlike an object property store
         // it can never bind a promoted by-reference parameter, so the operand stays a value.
-        if op_is_value_only_consumer(inst.op) || function.is_packed_field_access(inst) {
+        // `buffer_len` likewise observes a buffer handle by value through its typed runtime target;
+        // keep every other runtime call on the default-deny path.
+        let is_buffer_len = inst.op == Op::RuntimeCall
+            && matches!(
+                inst.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::BufferLen
+                )))
+            );
+        if op_is_value_only_consumer(inst.op)
+            || function.is_packed_field_access(inst)
+            || is_buffer_len
+        {
             continue;
         }
         for operand in &inst.operands {
@@ -92,9 +106,9 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             // Numeric/string/mixed conversions.
             | IToF | FToI | IToStr | FToStr | BoolToStr | StrToI | StrToF | StrToNumber
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
-            | MixedCastFloat | MixedCastString
+            | MixedCastFloat | MixedCastString | ReturnBoundaryMixedToInt
             // String value operations.
-            | StrConcat | StrAppend | StrLen | StrPersist | StrCharAt | StrInterpolate
+            | StrConcat | StrAppend | StrLen | StrPersist | StrCharAt | StrInterpolate | StrIncDec
             // Output operations consume their operand by value.
             | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | Warn
             // Stores copy the value into other storage; they never alias the source slot.
@@ -104,6 +118,95 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | Acquire | Release | Move | Borrow | EnsureOwned
             // Buffer element access reads its handle and index operands by value; the stored
             // element is a scalar copied into the payload, never an alias of a local slot.
-            | BufferGet | BufferSet | BufferResolve | BufferGetResolved | BufferSetResolved
+            | BufferLen | BufferGet | BufferSet | BufferResolve | BufferGetResolved
+            | BufferSetResolved
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{Builder, IrHeapKind, IrType, LocalKind, Ownership, Terminator};
+    use crate::types::PhpType;
+
+    /// Both buffer-length forms consume their loaded handles by value while an unclassified
+    /// runtime call remains conservatively address-escaping.
+    #[test]
+    fn buffer_len_runtime_call_does_not_escape_its_slot() {
+        let mut function = Function::new("runtime_calls".into(), IrType::Void, PhpType::Void);
+        let buffer_type = PhpType::Buffer(Box::new(PhpType::Int));
+        let len_slot = function.add_local(
+            Some("len_buffer".into()),
+            IrType::Heap(IrHeapKind::Buffer),
+            buffer_type.clone(),
+            LocalKind::PhpLocal,
+        );
+        let other_slot = function.add_local(
+            Some("other_buffer".into()),
+            IrType::Heap(IrHeapKind::Buffer),
+            buffer_type.clone(),
+            LocalKind::PhpLocal,
+        );
+        let eir_len_slot = function.add_local(
+            Some("eir_len_buffer".into()),
+            IrType::Heap(IrHeapKind::Buffer),
+            buffer_type.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let len_handle = builder.emit_load_local(
+                len_slot,
+                IrType::Heap(IrHeapKind::Buffer),
+                buffer_type.clone(),
+            );
+            builder.emit(
+                Op::RuntimeCall,
+                vec![len_handle],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::BufferLen,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let eir_len_handle = builder.emit_load_local(
+                eir_len_slot,
+                IrType::Heap(IrHeapKind::Buffer),
+                buffer_type.clone(),
+            );
+            builder.emit(
+                Op::BufferLen,
+                vec![eir_len_handle],
+                None,
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let other_handle = builder.emit_load_local(
+                other_slot,
+                IrType::Heap(IrHeapKind::Buffer),
+                buffer_type,
+            );
+            builder.emit(
+                Op::RuntimeCall,
+                vec![other_handle],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::BufferFree,
+                ))),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let escaping = address_escaping_slots(&function);
+        assert!(!escaping.contains(&len_slot));
+        assert!(!escaping.contains(&eir_len_slot));
+        assert!(escaping.contains(&other_slot));
+    }
 }

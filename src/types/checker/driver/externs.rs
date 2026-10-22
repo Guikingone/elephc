@@ -33,6 +33,14 @@ impl Checker {
         program: &Program,
         errors: &mut Vec<CompileError>,
     ) {
+        self.declared_native_records = program
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::PackedClassDecl { name, .. }
+                | StmtKind::ExternClassDecl { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
         let packed_decl_names: HashSet<&str> = program
             .iter()
             .filter_map(|stmt| match &stmt.kind {

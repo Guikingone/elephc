@@ -86,12 +86,24 @@ pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &c_param_types, 0);
     let overflow_bytes = abi::materialize_outgoing_c_abi_args(ctx.emitter, &assignments);
-    let symbol = ctx.emitter.target.extern_symbol(&decl.name);
+    let symbol = ctx.emitter.target.extern_symbol(extern_c_symbol(&decl.name));
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     normalize_extern_return(ctx, &decl.return_php_type, decl.return_abi)?;
     release_borrowed_cstr_temps(ctx, string_arg_count, cleanup_bytes, &decl.return_php_type);
     store_if_result(ctx, inst)
+}
+
+/// Returns the unqualified C symbol behind a PHP-visible extern function name.
+///
+/// PHP namespaces select the declaration at compile time, but C linkers expose the declared
+/// function name without PHP's namespace prefix.
+fn extern_c_symbol(php_name: &str) -> &str {
+    php_name
+        .trim_start_matches('\\')
+        .rsplit('\\')
+        .next()
+        .unwrap_or(php_name)
 }
 
 /// Returns the extern declaration addressed by the instruction's function-name immediate.

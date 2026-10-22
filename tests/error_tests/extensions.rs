@@ -124,6 +124,50 @@ fn test_error_buffer_packed_element_requires_field_assignment() {
     );
 }
 
+/// Verifies packed buffer elements cannot be assigned whole through an object property.
+#[test]
+fn test_error_buffer_property_packed_element_requires_field_assignment() {
+    expect_error(
+        r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+class Points { public buffer<Vec2> $values; }
+$points = new Points();
+$points->values = buffer_new<Vec2>(1);
+$points->values[0] = 1;
+"#,
+        "Assign packed buffer elements through field access like $buf[$i]->field",
+    );
+}
+
+/// Verifies a buffer property uses the same element mismatch diagnostic as a local buffer.
+#[test]
+fn test_error_buffer_property_scalar_assign_type_mismatch() {
+    expect_error(
+        r#"<?php
+class IntBufferStore { public buffer<int> $values; }
+$store = new IntBufferStore();
+$store->values = buffer_new<int>(1);
+$store->values[0] = "wrong";
+"#,
+        "Buffer element type mismatch: expected int, got string",
+    );
+}
+
+/// Verifies a statically known string index is rejected for a buffer property write.
+#[test]
+fn test_error_buffer_property_write_rejects_static_string_index() {
+    expect_error(
+        r#"<?php
+class IndexedBufferStore { public buffer<int> $values; }
+$store = new IndexedBufferStore();
+$store->values = buffer_new<int>(1);
+string $index = "0";
+$store->values[$index] = 1;
+"#,
+        "Buffer index must be integer",
+    );
+}
+
 /// Verifies a nested packed field rejects a scalar where a whole record is expected.
 #[test]
 fn test_error_nested_packed_field_rejects_scalar_record_assignment() {
@@ -157,6 +201,15 @@ fn test_error_packed_classes_embedding_each_other_are_rejected() {
     expect_error(
         "<?php packed class A { public B $b; } packed class B { public A $a; }",
         "Packed class A embeds itself through its packed class fields",
+    );
+}
+
+/// Verifies predeclared native record names do not make an actually missing pointer target valid.
+#[test]
+fn test_error_packed_pointer_field_rejects_unknown_target() {
+    expect_error(
+        "<?php packed class Holder { public ptr<Missing> $value; }",
+        "Unknown pointer target type: Missing",
     );
 }
 
@@ -344,6 +397,26 @@ fn test_error_extern_global_rejects_int_width() {
 #[test]
 fn test_error_extern_block_empty() {
     expect_error("<?php extern \"lib\" { }", "Empty extern block");
+}
+
+/// Verifies a malformed extern inside a braced namespace keeps the extern-specific diagnostic
+/// and recovers far enough to collect the following malformed statement too.
+#[test]
+fn test_error_braced_namespace_extern_uses_extern_recovery() {
+    let tokens = tokenize("<?php namespace App { extern badkw; echo ; }").unwrap();
+    let errors = parse_with_recovery(&tokens).unwrap_err();
+    assert!(
+        errors.iter().any(|error| error.message.contains(
+            "Expected 'function', string literal, 'class', or 'global' after 'extern'"
+        )),
+        "expected extern-specific error, got {:?}",
+        errors,
+    );
+    assert!(
+        errors.len() >= 2,
+        "expected namespace recovery to collect both errors, got {:?}",
+        errors,
+    );
 }
 
 /// Verifies that calling an extern function with too few arguments is rejected.

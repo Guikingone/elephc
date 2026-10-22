@@ -14,7 +14,7 @@ Source (.php or .lfc)
 ┌─────────┐
 │  Lexer   │  src/lexer/
 │          │  scan.rs, literals.rs, cursor.rs, token.rs
-│          │  Source text → Vec<(Token, Span)>
+│          │  Source text -> Vec<SpannedToken> (Token + TokenMetadata)
 └────┬─────┘
      │
      ▼
@@ -170,7 +170,8 @@ Source (.php or .lfc)
 │             │  small-function inliner interleaved with the per-function
 │             │  pass driver (identity folding, peephole rewrites, scalar
 │             │  local promotion, immutable local classification, checked-
-│             │  integer sinking, integer range analysis (IntegerRange),
+│             │  integer sinking, bounded mixed-counter promotion,
+│             │  integer range analysis (IntegerRange),
 │             │  boxed numeric-chain fusion, constant folding,
 │             │  common-subexpression elimination, loop-invariant code motion,
 │             │  dead-instruction elimination, dead-store elimination, branch
@@ -357,7 +358,7 @@ src/
 ├── superglobals.rs            Canonical --web request-superglobal set shared by checker, IR lowering, and runtime reset
 │
 ├── lexer/
-│   ├── mod.rs                 tokenize() → Vec<(Token, Span)>
+│   ├── mod.rs                 tokenize() -> Vec<SpannedToken> (Token + TokenMetadata)
 │   ├── token.rs               Token enum
 │   ├── cursor.rs              Byte-level source reader
 │   ├── scan.rs                Main scanning loop, operators
@@ -417,6 +418,8 @@ src/
 │   ├── local_analysis.rs      Precomputed local-slot facts (explicit stores, ref-cell representation, owned parameters)
 │   ├── frame.rs               EIR frame layout and local/temporary slots
 │   ├── frame/                 Frame-layout unit tests
+│   ├── stack_numeric.rs       Escape/lifetime proofs for frame-local checked numeric cells
+│   ├── stack_numeric/         Numeric frame-cell proof unit tests
 │   ├── block_emit.rs          Basic-block scheduling and emission
 │   ├── block_layout.rs        Hot/cold block order and compare-and-branch fusion
 │   ├── parallel_moves.rs      Direct scalar moves for integer, boolean, and float block arguments

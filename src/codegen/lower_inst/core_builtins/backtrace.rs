@@ -1130,7 +1130,7 @@ fn load_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
 
 /// Returns class, function, and call-type strings for the current frame.
 fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &'static str) {
-    match ctx.function.name.rsplit_once("::") {
+    match ctx.function.display_name().rsplit_once("::") {
         Some((class, function)) => (
             Some(class.trim_start_matches('\\').to_string()),
             function.to_string(),
@@ -1138,7 +1138,7 @@ fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &
         ),
         None => (
             None,
-            ctx.function.name.trim_start_matches('\\').to_string(),
+            ctx.function.display_name().trim_start_matches('\\').to_string(),
             "",
         ),
     }

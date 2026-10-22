@@ -52,8 +52,11 @@ pub(super) fn lower_property_assign(
     let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     // Preserve the original PHP tag until the initialization probe has chosen its branch.
     // Only an authorized first write reaches the backend's weak typed-property guard.
+    // Native buffers, pointers, and packed record addresses keep their exact storage type;
+    // they have no PHP weak coercion or runtime tag for that guard to preserve.
     let lowered_value = if readonly_write.is_some()
-        && !matches!(ctx.builder.value_php_type(lowered_value.value).codegen_repr(), PhpType::Mixed)
+        && !matches!(ctx.builder.value_php_type(lowered_value.value).codegen_repr(),
+            PhpType::Mixed | PhpType::Buffer(_) | PhpType::Pointer(_) | PhpType::Packed(_))
     {
         ctx.box_value_as_mixed(lowered_value, PhpType::Mixed, Some(span))
     } else { lowered_value };
@@ -237,7 +240,21 @@ fn lower_property_assign_value(
     );
     // Property slots use their declared/inferred storage representation. In particular, an
     // untyped property widened to Mixed needs a boxed cell even when this assignment is scalar.
-    let property_ty = object_property_type(ctx, object.value, property);
+    let property_ty = object_property_type(ctx, object.value, property).or_else(|| {
+        let object_ty = ctx.builder.value_php_type(object.value);
+        if let Some(class_name) = crate::ir_lower::expr::packed_receiver_class(ctx, &object_ty) {
+            return ctx
+                .packed_classes
+                .get(class_name.trim_start_matches('\\'))
+                .and_then(|info| info.fields.iter().find(|field| field.name == property))
+                .map(|field| field.php_type.clone());
+        }
+        let class_name = crate::ir_lower::expr::extern_receiver_class(ctx, &object_ty)?;
+        ctx.extern_classes
+            .get(class_name.trim_start_matches('\\'))
+            .and_then(|info| info.fields.iter().find(|field| field.name == property))
+            .map(|field| field.php_type.clone())
+    });
     let value = match property_ty {
         // A runtime-shaped value assigned to a class-typed property stays BOXED here. Unboxing
         // it now would promote whatever the cell holds to an object pointer sight unseen, and
@@ -249,7 +266,11 @@ fn lower_property_assign_value(
         {
             value
         }
-        Some(ty) => coerce_typed_assign_value(ctx, value, &ty, span),
+        Some(ty) => {
+            let value =
+                ctx.retype_packed_address_for_pointer_sink(value, &ty, Some(span));
+            coerce_typed_assign_value(ctx, value, &ty, span)
+        }
         None => value,
     };
     // A packed `int` field accepts a boxed Mixed value only through a strict runtime

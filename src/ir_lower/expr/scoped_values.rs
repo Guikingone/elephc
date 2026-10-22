@@ -49,6 +49,8 @@ pub(super) fn callable_profile_immediate() -> Option<Immediate> {
 /// Lowers a pointer cast.
 pub(super) fn lower_ptr_cast(ctx: &mut LoweringContext<'_, '_>, target_type: &str, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    // A packed record address reaches the cast as a raw pointer word.
+    let value = ctx.retype_packed_address_for_pointer_sink(value, &PhpType::Pointer(None), Some(inner.span));
     let data = ctx.intern_string(target_type);
     ctx.emit_value(
         Op::PtrCast,
