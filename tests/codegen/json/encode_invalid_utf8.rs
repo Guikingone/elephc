@@ -318,3 +318,28 @@ echo json_encode($s, JSON_INVALID_UTF8_SUBSTITUTE);
     assert_eq!(out, "\"\\ufffdAB\"");
 }
 
+
+/// A truncated three-byte lead followed by a valid ASCII letter must keep
+/// that letter when JSON_INVALID_UTF8_SUBSTITUTE recovers.
+#[test]
+fn test_json_encode_substitute_keeps_ascii_after_truncated_three_byte_lead() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(chr(0xE0) . "A", JSON_INVALID_UTF8_SUBSTITUTE);
+"#,
+    );
+    assert_eq!(out, "\"\\ufffdA\"");
+}
+
+/// A truncated four-byte lead followed by two valid ASCII letters must keep
+/// both letters under JSON_INVALID_UTF8_SUBSTITUTE and JSON_INVALID_UTF8_IGNORE.
+#[test]
+fn test_json_encode_short_four_byte_lead_keeps_ascii_tail() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(chr(0xF0) . "AB", JSON_INVALID_UTF8_SUBSTITUTE), "\n";
+echo json_encode(chr(0xF0) . "AB", JSON_INVALID_UTF8_IGNORE), "\n";
+"#,
+    );
+    assert_eq!(out, "\"\\ufffdAB\"\n\"AB\"\n");
+}
