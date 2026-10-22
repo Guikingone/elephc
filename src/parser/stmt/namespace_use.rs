@@ -15,8 +15,8 @@ use crate::parser::ast::{Stmt, StmtKind, UseItem, UseKind};
 use crate::span::Span;
 
 use super::{
-    expect_semicolon, expect_token, name_part_from_token, parse_name, parse_stmt,
-    recover_to_statement_boundary,
+    expect_semicolon, expect_token, name_part_from_token, parse_file_or_namespace_scope_item,
+    parse_name, recover_to_statement_boundary,
 };
 
 /// Parses a `namespace` declaration or block.
@@ -81,8 +81,8 @@ pub(super) fn parse_namespace_stmt(
     let mut body = Vec::new();
     let mut errors = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
-        match parse_stmt(tokens, pos) {
-            Ok(stmt) => body.push(stmt),
+        match parse_file_or_namespace_scope_item(tokens, pos, &mut body) {
+            Ok(()) => {}
             Err(error) => {
                 errors.extend(error.flatten());
                 recover_to_statement_boundary(tokens, pos);

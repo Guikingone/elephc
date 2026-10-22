@@ -17,6 +17,15 @@ sidebar:
 | `**` | `$a ** $b` | Exponentiation (right-associative). Int-preserving like PHP: two `int` operands with a non-negative exponent give an `int` while the result fits (`2 ** 3` is `int(8)`), and promote to `double` at the multiplication that overflows (`2 ** 63`). A negative exponent or a `float` operand always gives a `float`. |
 | `-$x` | `-$x` | Unary negation |
 
+### Internal decimal objects
+
+[`BcMath\Number`](bcmath.md#immutable-number-objects) provides exact decimal
+arithmetic and value comparisons through typed internal class handlers. The
+operator forms use the corresponding method's automatic scale. Compound
+assignments and `++`/`--` replace immutable objects, and strict equality retains
+object identity. Ordinary userland classes cannot define arithmetic operator
+magic methods.
+
 ### Numeric strings in arithmetic
 
 The arithmetic operators (`+ - * / % **`) accept numeric and leading-numeric strings and coerce
@@ -69,7 +78,7 @@ to string operands either — see
 | `<=>` | `$a <=> $b` | Spaceship: returns -1, 0, or 1 |
 | `instanceof` | `$obj instanceof User` | Runtime class/interface check; returns bool |
 
-`instanceof` supports named class/interface targets plus `self`, `parent`, and `static`. It also supports dynamic targets such as `$obj instanceof $className`, `$obj instanceof $otherObject`, and parenthesized target expressions like `$obj instanceof ($prefix . $suffix)`.
+`instanceof` supports named class/interface targets plus `self`, `parent`, and `static`. It also supports dynamic targets such as `$obj instanceof $className`, `$obj instanceof $otherObject`, and parenthesized target expressions like `$obj instanceof ($prefix . $suffix)`. As in PHP, a call is only accepted inside parentheses: `$obj instanceof (Foo::$method())` works, while an unparenthesized `$obj instanceof Foo::$method()` or `$obj instanceof $this->name()` is a syntax error.
 
 Direct object values and boxed `mixed` / nullable / union values are checked at runtime; scalar, array, and null payloads return `false` after the dynamic target has been validated. Dynamic string targets are matched case-insensitively against class/interface names; unknown class strings return `false`. Dynamic object targets use the target object's runtime class. If a dynamic target is neither a string nor an object, the program exits with a fatal runtime diagnostic.
 

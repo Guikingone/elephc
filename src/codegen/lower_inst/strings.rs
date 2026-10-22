@@ -8,11 +8,12 @@
 //! Key details:
 //! - PHP string coercion treats `false` and `null` as empty strings, while
 //!   integer true and ordinary ints use the existing `__rt_itoa` helper.
+//! - Raw pointers stringify through `__rt_ptoa`, the same "0x..." formatter `echo` uses.
 //! - Constant string values register lazy interned origins before native copies can create aliases.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction};
+use crate::ir::{Immediate, Instruction, Op};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -219,7 +220,7 @@ pub(super) fn lower_load_called_class_id(ctx: &mut FunctionContext<'_>, inst: &I
     store_if_result(ctx, inst)
 }
 
-/// Lowers a string concatenation by loading both string pairs into `__rt_concat`'s ABI.
+/// Lowers ordinary concat or a consuming append through their shared string-pair ABI.
 pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
@@ -235,7 +236,8 @@ pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction
             ctx.load_string_value_to_regs(rhs, "rdi", "rsi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    let helper = if inst.op == Op::StrAppend { "__rt_str_append" } else { "__rt_concat" };
+    abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
 }
 
@@ -367,6 +369,9 @@ pub(super) fn lower_resource_to_string(
 }
 
 /// Lowers an integer-like-to-string conversion, including PHP bool/null string rules.
+///
+/// Raw pointers (`ptr` and `ptr<T>`) share the integer register shape and format as the same
+/// lowercase "0x..." text `echo` prints, so concatenation, interpolation and casts agree with it.
 pub(super) fn lower_int_like_to_string(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -379,6 +384,11 @@ pub(super) fn lower_int_like_to_string(
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            store_if_result(ctx, inst)
+        }
+        // A packed record address prints like the `ptr<T>` the checker types it as.
+        PhpType::Pointer(_) | PhpType::Packed(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_ptoa");
             store_if_result(ctx, inst)
         }
         PhpType::TaggedScalar => {
@@ -443,13 +453,19 @@ fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// Lowers `Op::StrIncDec`: PHP's `++` / `--` applied to a string value.
 ///
 /// The operand is either a concrete `Str` payload or a boxed `Mixed` cell, and the result is
-/// ALWAYS a freshly allocated boxed `Mixed` cell because the operator can change the value's
+/// an owned boxed `Mixed` value because the operator can change the value's
 /// type (`"9"++` is `int(10)`, `"az"++` is `"ba"`). A concrete string goes straight to
 /// `__rt_str_inc_dec`; a boxed value goes through `__rt_mixed_inc_dec`, which routes a string
 /// payload to the same helper and keeps every other payload on the existing numeric path.
 ///
+/// A proven nonescaping numeric update may instead use a frame cell; string or unknown
+/// tags retain the runtime path. Both paths preserve overflow promotion to float.
+///
 /// The `i64` immediate carries the delta and is `+1` for `++` and `-1` for `--`.
 pub(super) fn lower_str_inc_dec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return super::arithmetic::stack_cell::lower_increment(ctx, inst, offset);
+    }
     let value = expect_operand(inst, 0)?;
     let delta = super::expect_i64(inst)?;
     let operand_ty = ctx.value_php_type(value)?.codegen_repr();

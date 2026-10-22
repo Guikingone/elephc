@@ -20,7 +20,7 @@ pub mod expr;
 mod keyword_name;
 /// Resolves relative `namespace\name` references against the namespace being parsed.
 mod relative_names;
-mod stmt;
+pub(crate) mod stmt;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
 pub(crate) use relative_names::{
@@ -38,6 +38,14 @@ use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::Stmt;
 use crate::span::Span;
 
+/// Shares class-like name token grammar with source attribution tools.
+///
+/// The compiler binary uses this library API, not its parallel private parser module.
+#[allow(dead_code)]
+pub fn name_part_from_token(token: &Token, metadata: &crate::lexer::TokenMetadata) -> Option<String> {
+    stmt::name_part_from_token(token, metadata)
+}
+
 /// Caps syntactic delimiter nesting before recursive expression parsing can
 /// consume the compiler process stack.
 const MAX_COMPILER_NESTING: usize = 1024;
@@ -49,18 +57,55 @@ thread_local! {
     /// Monotonic counter producing unique synthetic class names. Never reset within a process so
     /// that anonymous classes from different files (e.g. includes) cannot collide once merged.
     static ANONYMOUS_CLASS_COUNTER: Cell<usize> = const { Cell::new(0) };
+    /// While an included file parses: a stable key for that file and the anonymous classes it has
+    /// declared so far. Set by `with_anonymous_class_scope`.
+    static ANONYMOUS_CLASS_SCOPE: RefCell<Option<(u64, usize)>> = const { RefCell::new(None) };
 }
 
-/// Returns a fresh, globally-unique synthetic class name for an anonymous class. The `@`/`#`
-/// characters cannot appear in a PHP identifier, so the name never collides with a user class,
-/// and `mangle_fqn` hex-encodes them when generating assembly symbols.
+/// Returns a fresh synthetic class name for an anonymous class. The `@`/`#` characters cannot
+/// appear in a PHP identifier, so the name never collides with a user class, and `mangle_fqn`
+/// hex-encodes them when generating assembly symbols.
+///
+/// Inside `with_anonymous_class_scope` the name is derived from the file and the class's position
+/// in it, so every parse of one included file names its anonymous classes alike: the resolver
+/// parses an included file once to discover its declarations and again to inline its body, and
+/// the two must agree. Elsewhere a process-wide counter keeps the names unique.
 pub(crate) fn next_anonymous_class_name() -> String {
+    let scoped = ANONYMOUS_CLASS_SCOPE.with(|scope| {
+        scope.borrow_mut().as_mut().map(|(file, position)| {
+            let name = format!("class@anonymous#{:016x}x{}", file, position);
+            *position += 1;
+            name
+        })
+    });
+    if let Some(name) = scoped {
+        return name;
+    }
     let id = ANONYMOUS_CLASS_COUNTER.with(|counter| {
         let id = counter.get();
         counter.set(id + 1);
         id
     });
     format!("class@anonymous#{}", id)
+}
+
+/// Returns whether `name` is a synthetic anonymous-class name from `next_anonymous_class_name`.
+pub(crate) fn is_anonymous_class_name(name: &str) -> bool {
+    name.trim_start_matches('\\').starts_with("class@anonymous#")
+}
+
+/// Runs `parse` with anonymous classes named after `file` and their position in it (see
+/// `next_anonymous_class_name`), restoring the previous naming afterwards, so a nested include
+/// keeps its own count.
+pub(crate) fn with_anonymous_class_scope<T>(file: &str, parse: impl FnOnce() -> T) -> T {
+    // FNV-1a over the file path: stable for a path within and across runs.
+    let key = file.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    let previous = ANONYMOUS_CLASS_SCOPE.with(|scope| scope.replace(Some((key, 0))));
+    let result = parse();
+    ANONYMOUS_CLASS_SCOPE.with(|scope| scope.replace(previous));
+    result
 }
 
 /// Records a hoisted anonymous-class `ClassDecl` so the current parse appends it to the program.
@@ -154,24 +199,11 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
         if tokens[pos].0 == Token::Eof {
             break;
         }
-        // Extern blocks can produce multiple stmts. Attributes on declarations
-        // flow through parse_stmt below — extern is an elephc-specific block
-        // that does not interact with PHP attributes.
-        if tokens[pos].0 == Token::Extern {
-            match stmt::parse_extern_stmts(tokens, &mut pos) {
-                Ok(mut extern_stmts) => stmts.append(&mut extern_stmts),
-                Err(error) => {
-                    errors.extend(error.flatten());
-                    stmt::recover_to_statement_boundary(tokens, &mut pos);
-                }
-            }
-        } else {
-            match stmt::parse_stmt(tokens, &mut pos) {
-                Ok(stmt) => stmts.push(stmt),
-                Err(error) => {
-                    errors.extend(error.flatten());
-                    stmt::recover_to_statement_boundary(tokens, &mut pos);
-                }
+        match stmt::parse_file_or_namespace_scope_item(tokens, &mut pos, &mut stmts) {
+            Ok(()) => {}
+            Err(error) => {
+                errors.extend(error.flatten());
+                stmt::recover_to_statement_boundary(tokens, &mut pos);
             }
         }
     }

@@ -96,7 +96,8 @@ every request and readable inside any function scope (no `global` needed):
 - **`$_FILES`** — `multipart/form-data` file uploads, each as
   `['name' => …, 'type' => …, 'tmp_name' => …, 'error' => 0, 'size' => …]`. The
   upload is written to a temp file at `tmp_name`; read it with
-  `file_get_contents()` (or `move_uploaded_file()`).
+  `file_get_contents()`, or move it with `rename()` after validating the upload.
+  `move_uploaded_file()` and `is_uploaded_file()` are currently unavailable.
 - **`$_COOKIE`** — the `Cookie` request header parsed into a string-keyed array
   (values percent-decoded).
 - **`$_REQUEST`** — `$_GET` overlaid with `$_POST` (POST wins on key collision),
@@ -179,6 +180,15 @@ request N+1 sees the same PHP environment request N did:
   initializers re-run on first call.
 - **Static class properties** — released; their initializers re-run at the
   start of the handler body.
+- **Output buffers and `print_r(..., true)` capture** — discarded, so a request
+  that ends with an open buffer cannot route the next request's output into
+  reclaimed request memory.
+- **Request-scoped extension state** — stream context options and notification
+  callbacks, user wrapper/filter registrations and instances, per-descriptor
+  stream tables, and abandoned JSON/serialize/exception parser state are cleared
+  before the request heap is reclaimed. The clears are repeated after the
+  cleanup destructors run, so a destructor cannot republish request memory into
+  the next request.
 
 This matches PHP-FPM for PHP globals and statics in all three models. Native
 bridge state that intentionally lives outside the PHP heap follows the selected

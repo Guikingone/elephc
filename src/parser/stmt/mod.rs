@@ -31,15 +31,60 @@ use crate::span::Span;
 pub use ffi::parse_extern_stmts;
 pub use blocks::{parse_block, parse_body};
 pub(crate) use oop::parse_anonymous_class;
-pub(crate) use params::{looks_like_typed_param, parse_type_expr};
+pub(crate) use params::{
+    looks_like_typed_param, parse_inherited_name, parse_inherited_name_at, parse_type_arguments_only,
+    parse_type_expr,
+    type_arguments_end,
+};
 pub(crate) use assign::{
-    can_replay_assignment_target, lower_postfix_incdec_assignment, update_index_needs_snapshot,
+    assignment_target_store_stmt, lower_nested_append_assignment,
+    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
 pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};
 pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
 pub(crate) use namespace_use::token_as_import_name;
 pub(crate) use recovery::recover_to_statement_boundary;
+
+/// Appends one parsed statement to a file- or namespace-scope statement list.
+///
+/// `const A = 1, B = 2;` parses to one `Synthetic` holding a `ConstDecl` per name (see
+/// `simple::parse_const_decl`). At the two scopes where PHP allows `const`, that group is spliced
+/// into the enclosing list, so every later pass sees exactly what separate `const` statements
+/// produce: the passes that collect top-level declarations, namespace symbol collection among
+/// them, only look at that level. Every other statement is appended unchanged.
+pub(crate) fn push_parsed_stmt(stmts: &mut Vec<Stmt>, stmt: Stmt) {
+    let is_const_list = matches!(
+        &stmt.kind,
+        StmtKind::Synthetic(body)
+            if !body.is_empty()
+                && body.iter().all(|inner| matches!(inner.kind, StmtKind::ConstDecl { .. }))
+    );
+    match stmt.kind {
+        StmtKind::Synthetic(body) if is_const_list => stmts.extend(body),
+        kind => stmts.push(Stmt { kind, ..stmt }),
+    }
+}
+
+/// Parses and appends one item allowed directly in a file or braced namespace.
+///
+/// Extern library blocks can expand to several declarations, while every ordinary statement
+/// produces one item that still passes through the shared const-list expansion.
+pub(crate) fn parse_file_or_namespace_scope_item(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    stmts: &mut Vec<Stmt>,
+) -> Result<(), CompileError> {
+    if tokens.get(*pos).is_some_and(|(token, _)| token == &Token::Extern) {
+        let mut extern_stmts = parse_extern_stmts(tokens, pos)?;
+        stmts.append(&mut extern_stmts);
+    } else {
+        let stmt = parse_stmt(tokens, pos)?;
+        push_parsed_stmt(stmts, stmt);
+    }
+    Ok(())
+}
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, CompileError> {

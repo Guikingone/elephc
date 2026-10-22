@@ -11,15 +11,14 @@ use super::*;
 
 /// Lowers first-class callable creation.
 pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
-    let operands = if let CallableTarget::Method { object, .. } = target {
-        vec![lower_expr(ctx, object).value]
-    } else {
-        Vec::new()
-    };
+    if let CallableTarget::Method { object, method } = target {
+        let object = lower_expr(ctx, object);
+        return lower_instance_callable_from_receiver(ctx, object, method, expr.span);
+    }
     let data = ctx.intern_string(&callable_target_name(target));
     ctx.emit_value(
         Op::FirstClassCallableNew,
-        operands,
+        Vec::new(),
         Some(Immediate::ProfiledData {
             data,
             strict_php: crate::strict_php::is_enabled(),
@@ -27,6 +26,18 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
         PhpType::Callable,
         Op::FirstClassCallableNew.default_effects(),
         Some(expr.span),
+    )
+}
+
+/// Captures an already evaluated method receiver without replaying its source expression.
+pub(super) fn lower_instance_callable_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, method: &str, span: crate::span::Span,
+) -> LoweredValue {
+    let data = ctx.intern_string(&format!("object::{method}"));
+    ctx.emit_value(
+        Op::FirstClassCallableNew, vec![receiver.value],
+        Some(Immediate::ProfiledData { data, strict_php: crate::strict_php::is_enabled() }),
+        PhpType::Callable, Op::FirstClassCallableNew.default_effects(), Some(span),
     )
 }
 
@@ -38,6 +49,8 @@ pub(super) fn callable_profile_immediate() -> Option<Immediate> {
 /// Lowers a pointer cast.
 pub(super) fn lower_ptr_cast(ctx: &mut LoweringContext<'_, '_>, target_type: &str, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    // A packed record address reaches the cast as a raw pointer word.
+    let value = ctx.retype_packed_address_for_pointer_sink(value, &PhpType::Pointer(None), Some(inner.span));
     let data = ctx.intern_string(target_type);
     ctx.emit_value(
         Op::PtrCast,
@@ -448,6 +461,12 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
     if matches!(receiver, StaticReceiver::Static) {
         let fallback_class = ctx.current_class.clone().unwrap_or_else(|| receiver_name(receiver));
         let class_name = lower_class_constant(ctx, receiver, expr);
+        crate::ir_lower::property_default_errors::for_dynamic_class(ctx, class_name, expr.span);
+        if let Some(value) = super::object_construction::lower_planned_collector_new(
+            ctx, class_name, &fallback_class, args, expr,
+        ) {
+            return value;
+        }
         for (arg_index, arg) in args.iter().enumerate() {
             let place = match &arg.kind {
                 ExprKind::NamedArg { value, .. } => value.as_ref(),
