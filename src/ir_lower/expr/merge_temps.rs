@@ -109,7 +109,7 @@ pub(super) fn short_ternary_merge_result_type(
 ) -> PhpType {
     let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
     let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
-    wider_type_for_merge(&value_ty, &default_ty)
+    materialized_merge_type(&value_ty, &default_ty)
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.
@@ -120,7 +120,7 @@ pub(super) fn nullable_aware_branch_merge_type(left: &PhpType, right: &PhpType) 
         return normalize_union_members(vec![PhpType::Void, left_non_null, right_non_null])
             .unwrap_or(PhpType::Void);
     }
-    wider_type_for_merge(&left.codegen_repr(), &right.codegen_repr())
+    materialized_merge_type(left, right)
 }
 
 /// Returns true when a PHP type can materialize PHP null at runtime.

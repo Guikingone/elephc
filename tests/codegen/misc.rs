@@ -160,6 +160,34 @@ echo describe(200);
     assert_eq!(out, "big");
 }
 
+/// Regression for task b4024b9a: an int and a bool merged by `??`, `?:` or a ternary keep their
+/// own PHP types, so an int `0` still echoes `0` and `false` echoes nothing, also when the merge
+/// is the source of an `(array)` cast inside an array literal.
+#[test]
+fn test_merges_keep_int_and_bool_apart() {
+    let out = compile_and_run(
+        r#"<?php
+function coalesce(?int $n, bool $flag): void { echo $n ?? $flag, "|"; }
+function choose(bool $first, int $n, bool $flag): void { echo $first ? $n : $flag, "|"; }
+coalesce(0, false);
+coalesce(2, false);
+coalesce(null, true);
+coalesce(null, false);
+choose(true, 0, true);
+choose(false, 0, true);
+echo "\n";
+function cast_rows(?int $n, bool $flag): void {
+    $rows = [(array)($n ?? $flag)];
+    echo $rows[0][0], ":", gettype($rows[0][0]), "|";
+}
+cast_rows(0, false);
+cast_rows(null, false);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "0|2|1||0|1|\n0:integer|:boolean|\n");
+}
+
 /// Verifies null-coalescing a null variable with a string literal default allocates the string
 /// and does not evaluate the default eagerly.
 #[test]

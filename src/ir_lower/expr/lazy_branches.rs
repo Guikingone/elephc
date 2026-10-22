@@ -124,7 +124,24 @@ pub(super) fn null_coalesce_result_type(
     if matches!(value_ty, PhpType::Object(_) | PhpType::Callable) && php_type_allows_null(&default_ty) {
         return nullable_aware_branch_merge_type(&value_ty, &default_ty);
     }
-    wider_type_for_merge(&value_ty, &default_ty)
+    materialized_merge_type(&value_ty, &default_ty)
+}
+
+/// Merges the materialized types of two branches whose values are both known.
+///
+/// Unlike the syntactic fallback widening, an int and a bool stay apart in a boxed `Mixed`
+/// temp: storing an int in a bool slot (or the reverse) changes what PHP prints, so
+/// `0 ?? false` must echo `0` and `false` must echo nothing.
+pub(super) fn materialized_merge_type(left: &PhpType, right: &PhpType) -> PhpType {
+    let left = left.codegen_repr();
+    let right = right.codegen_repr();
+    if matches!(
+        (&left, &right),
+        (PhpType::Int, PhpType::Bool | PhpType::False) | (PhpType::Bool | PhpType::False, PhpType::Int)
+    ) {
+        return PhpType::Mixed;
+    }
+    wider_type_for_merge(&left, &right)
 }
 
 /// Chooses the wider materialized type for branch-local merge storage.
