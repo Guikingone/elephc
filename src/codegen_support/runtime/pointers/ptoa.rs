@@ -151,7 +151,8 @@ fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "_concat_buf");
     emitter.instruction("mov r11, rax");                                        // copy the reservation before deriving its scratch offset
     emitter.instruction("sub r11, r10");                                        // compute the candidate scratch offset of the reservation
-    emitter.instruction(&format!("cmp r11, {}", emitter.concat_capacity));      // is the reservation outside the shared scratch window?
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", emitter.concat_capacity as i64); // load the shared scratch capacity
+    emitter.instruction("cmp r11, r9");                                         // is the reservation outside the shared scratch window?
     emitter.instruction("jb __rt_ptoa_dest_ready_linux_x86_64");                // scratch reservations carry no heap header to stamp
     abi::emit_load_int_immediate(emitter, "r10",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND) as i64);
