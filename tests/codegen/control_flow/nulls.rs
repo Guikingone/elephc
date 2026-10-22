@@ -436,3 +436,28 @@ echo "\n";
     );
     assert_eq!(out, "TTTTTint(1)\nFF\n");
 }
+
+/// The sort family and `array_walk` return PHP's exact `true`, not merely a truthy integer, so
+/// `=== true` and `(int) ... === 1` both hold (#1990 review).
+#[test]
+fn test_sort_family_returns_exact_boolean_true() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 1];
+echo (usort($a, function ($p, $q) { return $p <=> $q; }) === true) ? "1" : "0";
+$b = [3, 1];
+echo (sort($b) === true) ? "1" : "0";
+echo ((int) sort($b) === 1) ? "1" : "0";
+$c = [1, 2];
+echo (natsort($c) === true) ? "1" : "0";
+$d = [1];
+echo (array_walk($d, function (&$v) { $v = $v + 1; }) === true) ? "1" : "0";
+$e = [1, 2, 3];
+echo (array_walk_recursive($e, function (&$v) { $v = $v + 1; }) === true) ? "1" : "0";
+$f = [3, 1];
+echo (rsort($f) === true) ? "1" : "0";
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "1111111\n");
+}
