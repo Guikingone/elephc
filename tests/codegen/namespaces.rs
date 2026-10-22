@@ -1050,3 +1050,31 @@ namespace {
         "a\nbool(true)\nApp NAN\n[\n]\nbool(true)\nNULL\nfloat(INF)\npi\n"
     );
 }
+
+/// Verifies relative and qualified names whose segment is a predefined-constant or keyword token
+/// name classes in class contexts (#825 review): `namespace\NAN::class`, a static call through it,
+/// and `instanceof` targets read from a static property of `namespace\NAN` or `namespace\enum`.
+#[test]
+fn test_relative_token_class_names_in_class_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+class NAN {
+    public static $cls = "Exception";
+    public static function make(): string { return "made"; }
+}
+class enum { public static $cls = "Error"; }
+$x = new \Exception();
+echo namespace\NAN::class, "\n";
+echo namespace\NAN::make(), "\n";
+var_dump($x instanceof namespace\NAN::$cls);
+var_dump($x instanceof namespace\enum::$cls);
+var_dump($x instanceof enum::$cls);
+var_dump($x instanceof \App\NAN::$cls);
+"#,
+    );
+    assert_eq!(
+        out,
+        "App\\NAN\nmade\nbool(true)\nbool(false)\nbool(false)\nbool(true)\n"
+    );
+}

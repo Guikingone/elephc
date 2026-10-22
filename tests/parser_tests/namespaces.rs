@@ -239,3 +239,64 @@ fn test_parse_relative_names_in_every_name_position() {
         );
     }
 }
+
+/// Verifies a relative name whose only segment is a predefined-constant token still names a class
+/// or a function when `::` or `(` follows (#825 review): inside `App`, `namespace\NAN::class` is
+/// the class `App\NAN`, not the constant `App\NAN` followed by a class-name fetch on its value.
+#[test]
+fn test_parse_relative_predefined_names_in_class_and_call_contexts() {
+    for source in [
+        r"<?php namespace App; namespace\NAN::class;",
+        r"<?php namespace App; namespace\NAN::make();",
+        r"<?php namespace App; namespace\NAN();",
+    ] {
+        let stmts = parse_source(source);
+        let StmtKind::ExprStmt(expr) = &stmts[1].kind else {
+            panic!("{source}: expected an expression statement, got {:?}", stmts[1].kind);
+        };
+        assert!(
+            matches!(
+                expr.kind,
+                ExprKind::ClassConstant { .. }
+                    | ExprKind::StaticMethodCall { .. }
+                    | ExprKind::FunctionCall { .. }
+            ),
+            "{source}: {:?}",
+            expr.kind
+        );
+        let dump = format!("{:?}", expr.kind);
+        assert!(dump.contains(r#"parts: ["App", "NAN"]"#), "{source}: {dump}");
+    }
+}
+
+/// Verifies `instanceof` reads a static property holding the class name when the class name is a
+/// keyword or predefined-constant token, relative or qualified (#825 review): `namespace\enum::$cls`
+/// and `\App\NAN::$cls` were read as the class name alone, leaving `::$cls` after `instanceof`.
+#[test]
+fn test_parse_instanceof_static_property_target_with_token_class_names() {
+    for (target, parts) in [
+        (r"namespace\enum", r#"parts: ["App", "enum"]"#),
+        (r"namespace\NAN", r#"parts: ["App", "NAN"]"#),
+        (r"enum", r#"parts: ["enum"]"#),
+        (r"\App\NAN", r#"parts: ["App", "NAN"]"#),
+    ] {
+        let source = format!("<?php namespace App; echo $x instanceof {target}::$cls;");
+        let stmts = parse_source(&source);
+        let StmtKind::Echo(expr) = &stmts[1].kind else {
+            panic!("{source}: expected echo, got {:?}", stmts[1].kind);
+        };
+        let ExprKind::InstanceOf {
+            target: elephc::parser::ast::InstanceOfTarget::Expr(target_expr),
+            ..
+        } = &expr.kind
+        else {
+            panic!("{source}: expected a dynamic instanceof target, got {:?}", expr.kind);
+        };
+        let ExprKind::StaticPropertyAccess { property, .. } = &target_expr.kind else {
+            panic!("{source}: expected a static property target, got {:?}", target_expr.kind);
+        };
+        assert_eq!(property, "cls", "{source}");
+        let dump = format!("{:?}", target_expr.kind);
+        assert!(dump.contains(parts), "{source}: {dump}");
+    }
+}

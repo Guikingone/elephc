@@ -327,7 +327,9 @@ pub(super) fn parse_prefix(
 /// global namespace the name is exactly the fully qualified `\PHP_EOL`, so it parses through
 /// that form and names the global constant. Inside a namespace it names the constant of that
 /// namespace (`Demo\NAN`, which a namespaced `const NAN` declares), never the global one, as in
-/// PHP. Returns `None`, consuming nothing, for any other relative name.
+/// PHP. Returns `None`, consuming nothing, for any other relative name, and when `\`, `::` or
+/// `(` follows the token: there it is a name segment (`namespace\NAN::class` is the class
+/// `Demo\NAN`), as in the fully qualified `\NAN::class` path above.
 fn parse_relative_constant_token(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -338,7 +340,11 @@ fn parse_relative_constant_token(
     };
     let constant_token = matches!(token, Token::True | Token::False | Token::Null)
         || crate::parser::stmt::token_as_import_name(token, metadata).is_some();
-    if !constant_token || matches!(tokens.get(*pos + 3), Some((Token::Backslash, _))) {
+    let continues_name = matches!(
+        tokens.get(*pos + 3),
+        Some((Token::Backslash | Token::DoubleColon | Token::LParen, _))
+    );
+    if !constant_token || continues_name {
         return Ok(None);
     }
     let mut parts = crate::parser::current_namespace_parts();

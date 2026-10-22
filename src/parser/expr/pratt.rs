@@ -951,7 +951,8 @@ fn called_instanceof_target_error(span: Span) -> CompileError {
 }
 
 /// Returns true when the tokens at `pos` are a class reference followed by `::$name`, the
-/// static-property form of an `instanceof` target.
+/// static-property form of an `instanceof` target. Name segments are the ones the shared name
+/// parser accepts, so classes named `enum` or after a predefined constant (`NAN`) qualify too.
 fn names_static_property(tokens: &[SpannedToken], pos: usize) -> bool {
     let mut cursor = pos;
     match tokens.get(cursor).map(|(token, _)| token) {
@@ -962,10 +963,10 @@ fn names_static_property(tokens: &[SpannedToken], pos: usize) -> bool {
             if crate::parser::relative_name_starts_at(tokens, cursor) {
                 cursor += 2;
             }
-            while matches!(
-                tokens.get(cursor).map(|(token, _)| token),
-                Some(Token::Identifier(_) | Token::Backslash)
-            ) {
+            while tokens.get(cursor).is_some_and(|(token, metadata)| {
+                matches!(token, Token::Backslash)
+                    || crate::parser::stmt::name_part_from_token(token, metadata).is_some()
+            }) {
                 cursor += 1;
             }
             if cursor == pos {
