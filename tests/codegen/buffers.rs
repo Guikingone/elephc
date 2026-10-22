@@ -132,6 +132,27 @@ echo $list[0], "\n";
     assert_eq!(out, "1.5|1.5\n");
 }
 
+/// Regression for task b4024b9a: a buffer element read through a `??` or assignment receiver
+/// keeps the buffer's element type in merges and array literals instead of the syntactic `int`.
+#[test]
+fn test_buffer_element_through_expression_receivers_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+function from_float(?int $n, buffer<float> $b): void { echo $n ?? ($b ?? $b)[0], "|"; }
+function from_bool(?int $n, buffer<bool> $b): void { echo $n ?? ($b ?? $b)[0], "|"; }
+$floats = buffer_new<float>(1);
+$floats[0] = 1.5;
+from_float(null, $floats);
+$flags = buffer_new<bool>(1);
+$flags[0] = false;
+from_bool(null, $flags);
+$list = [($alias = $floats)[0], ($floats ?? $floats)[0]];
+echo $list[0], "|", $list[1], "|", ($argc > 0) ? ($alias = $floats)[0] : 0, "\n";
+"#,
+    );
+    assert_eq!(out, "1.5||1.5|1.5|1.5\n");
+}
+
 /// Verifies declared buffer properties accept both literal and runtime integer index writes.
 #[test]
 fn test_buffer_property_declared_literal_and_runtime_index_writes() {

@@ -253,15 +253,9 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         }
         ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, array)),
         ExprKind::ArrayLiteralAssoc(pairs) => Some(assoc_array_literal_type_for_ir(ctx, pairs, array)),
-        // A call returning a buffer (`make()[0]`) is typed from the same return metadata merges
-        // use; calls returning anything else keep the previous syntactic answer.
-        ExprKind::FunctionCall { .. }
-        | ExprKind::MethodCall { .. }
-        | ExprKind::StaticMethodCall { .. } => {
-            let returned = super::merge_temps::materialized_expr_type_for_merge(ctx, array);
-            matches!(returned.codegen_repr(), PhpType::Buffer(_)).then_some(returned)
-        }
-        _ => None,
+        // Any other receiver that loads a buffer (`make()[0]`, `($b ?? $c)[0]`) is typed from
+        // what its own lowering loads; other receivers keep the previous syntactic answer.
+        _ => buffer_receiver_type_for_ir(ctx, array),
     }?
     .codegen_repr();
     match array_ty {
@@ -285,6 +279,25 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         },
         _ => None,
     }
+}
+
+/// Returns the buffer type a receiver expression loads, or `None` when it is not a buffer.
+///
+/// A call, `??`, ternary or match answers through the merge predictor, which agrees with the
+/// type their lowering materializes, and an assignment answers the type of the value it
+/// evaluates to. Only a buffer answer is returned: the syntactic fallback the caller keeps for
+/// everything else types an element read `int`, which truncated `buffer<float>` elements read
+/// through these receivers.
+fn buffer_receiver_type_for_ir(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -> Option<PhpType> {
+    let loaded = match &receiver.kind {
+        ExprKind::Assignment {
+            value,
+            result_target,
+            ..
+        } => return buffer_receiver_type_for_ir(ctx, result_target.as_deref().unwrap_or(value)),
+        _ => super::merge_temps::materialized_expr_type_for_merge(ctx, receiver),
+    };
+    matches!(loaded.codegen_repr(), PhpType::Buffer(_)).then_some(loaded)
 }
 
 /// Returns the packed class whose record an expression addresses, if the lowering knows it.
