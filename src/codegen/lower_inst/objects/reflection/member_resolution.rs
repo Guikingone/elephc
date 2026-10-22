@@ -100,7 +100,7 @@ pub(super) fn reflection_method_is_declared_on_class(
         .unwrap_or(false)
 }
 
-/// Finds the nearest parent-class method that is a valid PHP prototype.
+/// Finds the inherited root contract exposed by PHP's prototype API.
 pub(super) fn reflection_parent_method_prototype_member(
     ctx: &FunctionContext<'_>,
     info: &crate::types::ClassInfo,
@@ -122,14 +122,11 @@ pub(super) fn reflection_parent_method_prototype_member(
                 reflection_class_method_member(ctx, resolved_parent_name, parent_info, method_key)?
             {
                 if !member.flags.is_private && member.flags.is_static == is_static {
-                    if method_key.eq_ignore_ascii_case("__construct") {
-                        // Constructors keep inherited contracts, rather than concrete replacements.
-                        if member.prototype_member.is_some() {
-                            return Ok(member.prototype_member.map(|prototype| *prototype));
-                        }
-                        if !member.flags.is_abstract {
-                            return Ok(None);
-                        }
+                    if member.prototype_member.is_some() {
+                        return Ok(member.prototype_member.map(|prototype| *prototype));
+                    }
+                    if method_key.eq_ignore_ascii_case("__construct") && !member.flags.is_abstract {
+                        return Ok(None);
                     }
                     return Ok(Some(member));
                 }

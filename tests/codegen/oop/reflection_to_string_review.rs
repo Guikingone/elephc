@@ -225,6 +225,36 @@ echo "|", $method;
         yes:AbstractCtor|Method [ <user, overwrites ConcreteCtor, prototype AbstractCtor, ctor> public method __construct ] {\n}\n");
 }
 
+/// Multiple overrides expose the root contract directly, including inherited and static methods.
+#[test]
+fn test_reflection_method_prototypes_reach_the_root_contract() {
+    let out = compile_and_run(r#"<?php
+class A { public function run() {} public static function s() {} }
+class B extends A { public function run() {} public static function s() {} }
+class C extends B { public function run() {} public static function s() {} }
+class D extends C {}
+interface I { public function run(); }
+class P implements I { public function run() {} }
+class Q extends P { public function run() {} }
+class R extends Q {}
+$method = new ReflectionMethod('C', 'run'); $prototype = $method->getPrototype();
+echo $prototype->getDeclaringClass()->getName(), ":", $prototype->getName(), ":", $prototype->hasPrototype() ? 'Y' : 'N', "|", $method;
+$method = new ReflectionMethod('C', 's'); $prototype = $method->getPrototype();
+echo $prototype->getDeclaringClass()->getName(), ":", $prototype->getName(), ":", $prototype->hasPrototype() ? 'Y' : 'N', "|", $method;
+$method = new ReflectionMethod('D', 'run'); $prototype = $method->getPrototype();
+echo $prototype->getDeclaringClass()->getName(), ":", $prototype->getName(), ":", $prototype->hasPrototype() ? 'Y' : 'N', "|", $method;
+$method = new ReflectionMethod('Q', 'run'); $prototype = $method->getPrototype();
+echo $prototype->getDeclaringClass()->getName(), ":", $prototype->getName(), ":", $prototype->hasPrototype() ? 'Y' : 'N', "|", $method;
+$method = new ReflectionMethod('R', 'run'); $prototype = $method->getPrototype();
+echo $prototype->getDeclaringClass()->getName(), ":", $prototype->getName(), ":", $prototype->hasPrototype() ? 'Y' : 'N', "|", $method;
+"#);
+    assert_eq!(out, "A:run:N|Method [ <user, overwrites B, prototype A> public method run ] {\n}\n\
+        A:s:N|Method [ <user, overwrites B, prototype A> static public method s ] {\n}\n\
+        A:run:N|Method [ <user, inherits C, prototype A> public method run ] {\n}\n\
+        I:run:N|Method [ <user, overwrites P, prototype I> public method run ] {\n}\n\
+        I:run:N|Method [ <user, inherits Q, prototype I> public method run ] {\n}\n");
+}
+
 /// AST-exported object arguments use double-quoted escapes for control characters.
 #[test]
 fn test_reflection_dump_object_string_escapes() {
