@@ -460,8 +460,11 @@ echo $f(counter: $counter), ':', $counter, "\n";
 echo call_user_func_array('opcache_reset', ['counter' => &$counter]), ':', $counter, "\n";
 echo call_user_func('opcache_reset', counter: $counter), ':', $counter, "\n";
 "#;
+    // call_user_func passing a value to a by-reference parameter warns on the OUTPUT
+    // surface (display_errors=1, like php 8.5 measured) and falls back to by-value: 6:5.
     let expected = "own:direct\nown:variable\nown:array\nown:callback\nown:first-class\n\
-                    own:surplus\n2:2\n3:3\n4:4\n5:5\n6:5\n";
+                    own:surplus\n2:2\n3:3\n4:4\n5:5\n\
+                    opcache_reset(): Argument #1 ($counter) must be passed by reference, value given\n6:5\n";
     let source = format!("<?php\n{declarations}\n$code = getenv('REVIEW_CODE'); eval($code);");
     for ini in [&[][..], &["--ini", "opcache.enable_cli=1"][..]] {
         let binary = compile("eval_opcache_native_user", &source, ini);

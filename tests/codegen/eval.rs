@@ -25703,10 +25703,21 @@ echo $typed->getValue($object);
         "program unexpectedly succeeded: stdout={:?}",
         out.stdout
     );
-    assert_eq!(
-        out.stdout,
-        "Ada:\nFatal error: Uncaught Error: Typed property \
-EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization\n"
+    // The terminal report carries PHP's stack-trace block. The throw has no resolved
+    // source line (it comes from eval'd reflection plumbing), so the "thrown in" trailer
+    // names the file without a fabricated `on line 0`.
+    let prefix = "Ada:\nFatal error: Uncaught Error: Typed property \
+EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization\n\
+Stack trace:\n#0 {main}\n  thrown in ";
+    assert!(
+        out.stdout.starts_with(prefix),
+        "unexpected fatal report: {:?}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.ends_with("/test.php\n\n"),
+        "the trailer must name the source file and end with php's blank line: {:?}",
+        out.stdout
     );
     assert_eq!(out.stderr, "");
 }

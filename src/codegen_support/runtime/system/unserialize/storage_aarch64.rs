@@ -81,6 +81,11 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [x14, #16]");                                  // property byte offset
     emitter.instruction("ldr x7, [x14, #24]");                                  // property value tag
     emitter.instruction("add x8, x0, x6");                                      // address of the property slot
+    emitter.instruction("tst x7, #256");                                        // is this an owned reference property?
+    emitter.instruction("b.eq __rt_obj_store_prop_ref_ready");                  // an ordinary slot holds the value directly
+    emitter.instruction("ldr x8, [x8]");                                        // dereference the slot to its ref-cell (same layout)
+    emitter.instruction("and x7, x7, #255");                                    // recover the declared value tag
+    emitter.label("__rt_obj_store_prop_ref_ready");
     emitter.instruction("cmp x7, #7");                                          // is this a Mixed/untyped slot?
     emitter.instruction("b.eq __rt_obj_store_prop_mixed");                      // store the boxed cell directly
     emitter.instruction("cmp x7, #1");                                          // is this a string slot?

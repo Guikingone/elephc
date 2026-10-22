@@ -99,6 +99,11 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rax + 24]");                        // property value tag
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, r8");                                         // address of the property slot
+    emitter.instruction("test r9, 256");                                        // is this an owned reference property?
+    emitter.instruction("je __rt_obj_store_prop_ref_ready_x");                  // an ordinary slot holds the value directly
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // dereference the slot to its ref-cell (same layout)
+    emitter.instruction("and r9, 255");                                         // recover the declared value tag
+    emitter.label("__rt_obj_store_prop_ref_ready_x");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value box
     emitter.instruction("cmp r9, 7");                                           // is this a Mixed/untyped slot?
     emitter.instruction("je __rt_obj_store_prop_mixed");                        // store the boxed cell directly

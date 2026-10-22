@@ -58,6 +58,10 @@ const CURLM_OK: CURLMcode = 0;
 /// `CURLM_BAD_HANDLE` (1): the answer for an id this table does not know, so a
 /// caller can never read "nothing happened" as success.
 const CURLM_BAD_HANDLE: CURLMcode = 1;
+/// `CURLM_UNKNOWN_OPTION` (6): recorded when `curl_multi_setopt()` is handed an option that
+/// is not a cURL multi option at all — php-src leaves it behind for `curl_multi_errno()`
+/// even though the call itself throws.
+const CURLM_UNKNOWN_OPTION: CURLMcode = 6;
 
 extern "C" {
     /// Allocates a new multi handle, or returns null on failure.
@@ -155,6 +159,10 @@ pub(crate) struct MultiEntry {
     last_errno: CURLMcode,
     /// The most recently popped completion message (see this module's header).
     last_message: InfoMessage,
+    /// Bridge ids handed to server-push callbacks. libcurl owns the pushed handles; these
+    /// entries exist so the PHP side can address them during and after the callback, and
+    /// they are dropped when the multi is freed.
+    pushed: Vec<i64>,
 }
 
 // SAFETY: identical reasoning to `crate::handles::EasyEntry`'s `Send` impl — the
@@ -195,7 +203,7 @@ fn easy_ptr(id: i64) -> Option<*mut CURL> {
 /// Finds the bridge id of an easy handle from its raw pointer — the reverse
 /// lookup `curl_multi_info_read` needs, since libcurl reports the completed
 /// transfer by `*mut CURL` and PHP addresses handles by id.
-fn easy_id_of(ptr: *mut CURL) -> i64 {
+pub(crate) fn easy_id_of(ptr: *mut CURL) -> i64 {
     let guard = handles::lock_recover(handles::handles());
     guard
         .iter()
@@ -264,6 +272,9 @@ pub(crate) const INFO_FIELD_EASY_ID: i64 = 3;
 /// [`elephc_curl_multi_info_read`]'s `field`: how many messages were left queued.
 pub(crate) const INFO_FIELD_QUEUED: i64 = 4;
 
+/// libcurl's `CURLMSG_DONE`, the only `CURLMsg.msg` value it produces.
+const CURLMSG_DONE: i64 = 1;
+
 /// Allocates a libcurl multi handle and registers it under a fresh id, or
 /// returns `0` when libcurl could not allocate.
 #[no_mangle]
@@ -283,8 +294,12 @@ pub extern "C" fn elephc_curl_multi_init() -> i64 {
                 monitored_easy: HashSet::new(),
                 last_errno: CURLM_OK,
                 last_message: InfoMessage::default(),
+                pushed: Vec::new(),
             },
         );
+        // The push trampoline is installed on EVERY multi: whether a push is accepted is
+        // decided per parent handle by its push slot, which the prelude fills.
+        crate::callbacks::install_push_trampoline(multi, id);
         id
     })
 }
@@ -514,6 +529,28 @@ pub extern "C" fn elephc_curl_multi_info_read(multi_id: i64, field: i64) -> i64 
         // happens BEFORE the multi table is locked again below; taking them in
         // the other order anywhere would invite a lock-order inversion.
         let easy_id = easy_id_of(easy_ptr);
+        // The `CURLMSG_DONE` message carries the transfer's final `CURLcode`, and it is the
+        // only place that code is observable once the multi loop drains. php-src records it on
+        // the easy handle, so `curl_errno()`/`curl_error()` answer the completed transfer
+        // rather than a previous standalone `curl_exec()`. The EASY table is locked and
+        // released here, before the multi table below, so the lock order stays EASY then MULTI.
+        if msg == CURLMSG_DONE && easy_id != 0 {
+            if let Some(easy_entry) = handles::lock_recover(handles::handles()).get_mut(&easy_id) {
+                easy_entry.last_errno = result as i32;
+                // libcurl writes its DETAILED message into the handle's `CURLOPT_ERRORBUFFER`
+                // during the transfer (`curl_error()` reports it, not the terse
+                // `curl_easy_strerror` text); fall back to `strerror` only when the buffer is
+                // empty, which is what php-src's `ch->err.str` does.
+                let detailed = crate::abi::extract_error_message(&easy_entry.error_buf);
+                easy_entry.last_error = if result == 0 {
+                    Vec::new()
+                } else if detailed.is_empty() {
+                    easy::strerror(result as easy::CURLcode)
+                } else {
+                    detailed
+                };
+            }
+        }
         let mut guard = handles::lock_recover(multis());
         let Some(entry) = guard.get_mut(&multi_id) else {
             return 0;
@@ -545,6 +582,10 @@ pub extern "C" fn elephc_curl_multi_setopt(multi_id: i64, opt: i64, value: i64) 
     handles::ffi_guard(MULTI_SETOPT_UNSUPPORTED, || {
         let kind = multi_option_kind(opt);
         if kind == MULTI_OPTION_INVALID {
+            // php-src records CURLM_UNKNOWN_OPTION before raising its ValueError.
+            if let Some(entry) = handles::lock_recover(multis()).get_mut(&multi_id) {
+                entry.last_errno = CURLM_UNKNOWN_OPTION;
+            }
             return MULTI_SETOPT_INVALID;
         }
         if kind == MULTI_OPTION_UNSUPPORTED {
@@ -639,6 +680,14 @@ pub extern "C" fn elephc_curl_multi_free(multi_id: i64) {
         for easy_id in &entry.attached {
             if let Some(easy) = easy_ptr(*easy_id) {
                 unsafe { curl_multi_remove_handle(entry.multi, easy) };
+            }
+        }
+        // Pushed handles are owned by libcurl and die with the multi; drop the bridge
+        // entries that addressed them.
+        if !entry.pushed.is_empty() {
+            let mut handles = handles::lock_recover(handles::handles());
+            for pushed_id in &entry.pushed {
+                handles.remove(pushed_id);
             }
         }
         unsafe { curl_multi_cleanup(entry.multi) };

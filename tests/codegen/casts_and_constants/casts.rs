@@ -70,6 +70,27 @@ fn test_cast_int_from_bool() {
     assert_eq!(out, "1");
 }
 
+/// Casting an object to int yields its object handle, the same small dense id
+/// `spl_object_id()` returns. A fresh object is `1`, the next is `2`, and the id is reused
+/// after the second object is freed.
+#[test]
+fn test_cast_int_from_object_is_the_object_handle() {
+    let out = compile_and_run(
+        r#"<?php
+class Widget {}
+$a = new Widget();
+echo (int) $a, ":";
+$b = new Widget();
+echo (int) $b, ":";
+echo spl_object_id($b), ":";
+unset($b);
+$c = new Widget();
+echo (int) $c;
+"#,
+    );
+    assert_eq!(out, "1:2:2:2");
+}
+
 /// Compiles `<?php echo (float)42;` and asserts stdout is `"42"` — int widens to float without truncation.
 #[test]
 fn test_cast_float_from_int() {

@@ -2,7 +2,7 @@
 title: "curl_share_errno() - internals"
 description: "Compiler internals for curl_share_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 720
+  order: 722
 ---
 
 ## `curl_share_errno()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1821](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1821) (`curl_share_errno`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:2388](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L2388) (`curl_share_errno`)
 - **Function symbol**: `curl_share_errno()`
 
 

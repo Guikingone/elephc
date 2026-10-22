@@ -143,6 +143,7 @@ mod option_table {
             "CURLOPT_PROGRESSFUNCTION",
             "CURLOPT_XFERINFOFUNCTION",
             "CURLOPT_DEBUGFUNCTION",
+            "CURLOPT_PREREQFUNCTION",
         ];
 
         let surface = frozen_surface();
@@ -246,7 +247,6 @@ mod option_table {
             "CURLOPT_SSLKEY_BLOB",
             // Callbacks outside the six this build invokes.
             "CURLOPT_FNMATCH_FUNCTION",
-            "CURLOPT_PREREQFUNCTION",
             "CURLOPT_SSH_HOSTKEYFUNCTION",
             // NOTE: the five PHP-STREAM options (`CURLOPT_FILE`, `CURLOPT_INFILE`/
             // `CURLOPT_READDATA`, `CURLOPT_WRITEHEADER`, `CURLOPT_STDERR`) used to be
@@ -276,10 +276,10 @@ mod option_table {
              docs/php/curl.md to match before changing this test"
         );
 
-        // The headline the doc quotes: 271 PHP `CURLOPT_*` names, 11 rejected.
+        // The headline the doc quotes: 271 PHP `CURLOPT_*` names, 10 rejected.
         let total = constants.keys().filter(|n| n.starts_with("CURLOPT_")).count();
         assert_eq!(total, 271, "the frozen CURLOPT_* name count changed");
-        assert_eq!(rejected.len(), 11, "the rejected CURLOPT_* name count changed");
+        assert_eq!(rejected.len(), 10, "the rejected CURLOPT_* name count changed");
     }
 }
 
@@ -1539,7 +1539,38 @@ mod native_mime {
         elephc_curl_easy_free(id);
     }
 
-    /// A SECOND successful build replaces the first ATTACHED mime rather than leaking it or
+    /// A non-[`FIELD_DATA`] field carrying an embedded NUL is TRUNCATED at that NUL rather
+    /// than rejected: libcurl's C-string setters stop at the first NUL, and php-src hands the
+    /// same C string straight through, so
+    /// `curl_setopt($ch, CURLOPT_POSTFIELDS, ["file" => new CURLStringFile("x",
+    /// "foo.txt\0broken", "text/plain\0broken")])` returns true and posts `foo.txt` /
+    /// `text/plain`. The binary-safe [`FIELD_DATA`] path is covered by `happy_path...`.
+    #[test]
+    fn c_string_field_truncates_at_embedded_nul() {
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        assert_eq!(elephc_curl_mime_add_part(id), 1);
+
+        let filename = b"foo.txt\0broken";
+        assert_eq!(
+            unsafe {
+                elephc_curl_mime_part_field(id, FIELD_FILENAME, filename.as_ptr(), filename.len())
+            },
+            1
+        );
+        let mime = b"text/plain\0broken";
+        assert_eq!(
+            unsafe { elephc_curl_mime_part_field(id, FIELD_TYPE, mime.as_ptr(), mime.len()) },
+            1
+        );
+
+        assert_eq!(elephc_curl_mime_post(id), 1);
+        assert!(has_attached_mime(id));
+
+        elephc_curl_easy_free(id);
+    }
     /// leaving two live structures — the same "free the old one only after the new one is
     /// live" contract `elephc_curl_easy_setopt_slist` has for `CURLOPT_HTTPHEADER`. This is
     /// the shape `curl_setopt($ch, CURLOPT_POSTFIELDS, $array)` takes every time it runs

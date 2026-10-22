@@ -133,6 +133,13 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             predicates::emit_array_truthiness(ctx, value)?;
         }
+        // PHP casts an object to int as its object handle, the same small dense id
+        // `spl_object_id()` returns; `var_dump`'s `#N` reads the same pool, so the two can
+        // never disagree.
+        PhpType::Object(_) => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_object_handle_of");
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "int cast for PHP type {:?}",

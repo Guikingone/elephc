@@ -2,7 +2,7 @@
 title: "curl_multi_add_handle() - internals"
 description: "Compiler internals for curl_multi_add_handle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 703
+  order: 705
 ---
 
 ## `curl_multi_add_handle()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1529](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1529) (`curl_multi_add_handle`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:1985](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L1985) (`curl_multi_add_handle`)
 - **Function symbol**: `curl_multi_add_handle()`
 
 
