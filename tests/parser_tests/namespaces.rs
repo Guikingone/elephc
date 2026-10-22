@@ -154,3 +154,149 @@ fn test_fully_qualified_predefined_constant_span_starts_at_the_backslash() {
     // `<?php echo ` is eleven columns, so the `\` is at column 12.
     assert_eq!((expr.span.line, expr.span.col), (1, 12));
 }
+
+/// Returns the fully qualified class names of every `new X()` statement in `stmts`, in order,
+/// descending into braced namespace blocks. Each must be fully qualified.
+fn new_object_names(stmts: &[Stmt]) -> Vec<String> {
+    let mut names = Vec::new();
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } => names.extend(new_object_names(body)),
+            StmtKind::ExprStmt(Expr {
+                kind: ExprKind::NewObject { class_name, .. },
+                ..
+            }) => {
+                assert!(class_name.is_fully_qualified(), "{class_name:?} is not fully qualified");
+                names.push(class_name.as_canonical());
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+/// Verifies a relative name `namespace\Foo` resolves at parse time to the fully qualified name
+/// in the namespace being parsed (#825): the unbraced form, each braced block, the global
+/// namespace, and the global code the resolver sees after a braced block, whose `}` restores
+/// the namespace before it.
+#[test]
+fn test_parse_relative_names_resolve_in_the_current_namespace() {
+    let stmts = parse_source("<?php namespace App\\Core; new namespace\\Foo();");
+    assert_eq!(new_object_names(&stmts), vec!["App\\Core\\Foo"]);
+
+    let stmts = parse_source(
+        "<?php namespace A { new namespace\\Foo(); } namespace B\\C { new namespace\\Sub\\Foo(); } \
+         namespace { new namespace\\Foo(); }",
+    );
+    assert_eq!(new_object_names(&stmts), vec!["A\\Foo", "B\\C\\Sub\\Foo", "Foo"]);
+
+    let stmts = parse_source("<?php new namespace\\Foo();");
+    assert_eq!(new_object_names(&stmts), vec!["Foo"]);
+
+    let stmts = parse_source("<?php namespace A { new namespace\\Foo(); } new namespace\\Foo();");
+    assert_eq!(new_object_names(&stmts), vec!["A\\Foo", "Foo"]);
+}
+
+/// Verifies the word `namespace` used as an enum case, a method, a property or a class
+/// constant never changes the namespace relative names resolve against (#825). A token scan
+/// read `case namespace;` as the declaration `namespace;` and moved later names to the global
+/// namespace.
+#[test]
+fn test_parse_relative_names_ignore_namespace_used_as_a_member_name() {
+    let stmts = parse_source(
+        "<?php namespace App; \
+         enum Mode { case namespace; case other; } \
+         class K { const namespace = 1; public $namespace; public function namespace() {} } \
+         $o->namespace(); $o->namespace; K::namespace; Mode::namespace; \
+         new namespace\\Foo();",
+    );
+    assert_eq!(new_object_names(&stmts), vec!["App\\Foo"]);
+}
+
+/// Verifies a relative name resolves in every name position: `extends`, `implements`, trait
+/// `use`, parameter, return, property and intersection types, `catch`, `instanceof`,
+/// attributes, calls, constants and `::class`. None may keep a segment spelled `namespace`.
+#[test]
+fn test_parse_relative_names_in_every_name_position() {
+    let stmts = parse_source(
+        "<?php namespace App; \
+         #[namespace\\Tag] \
+         class B extends namespace\\Base implements namespace\\Shape { \
+             use namespace\\Greets; \
+             public namespace\\Box $box; \
+             public function f(namespace\\Box&namespace\\Shape $x): ?namespace\\Box { return null; } \
+         } \
+         try {} catch (namespace\\Failure $e) {} \
+         $ok = $x instanceof namespace\\Box; \
+         echo namespace\\helper(), namespace\\LIMIT, namespace\\Box::class;",
+    );
+    let dump = format!("{stmts:?}");
+    assert!(!dump.to_ascii_lowercase().contains("\"namespace\""), "{dump}");
+    for class in ["Tag", "Base", "Shape", "Greets", "Box", "Failure", "helper", "LIMIT"] {
+        assert!(
+            dump.contains(&format!("parts: [\"App\", \"{class}\"]")),
+            "`namespace\\{class}` did not resolve to `App\\{class}`: {dump}"
+        );
+    }
+}
+
+/// Verifies a relative name whose only segment is a predefined-constant token still names a class
+/// or a function when `::` or `(` follows (#825 review): inside `App`, `namespace\NAN::class` is
+/// the class `App\NAN`, not the constant `App\NAN` followed by a class-name fetch on its value.
+#[test]
+fn test_parse_relative_predefined_names_in_class_and_call_contexts() {
+    for source in [
+        r"<?php namespace App; namespace\NAN::class;",
+        r"<?php namespace App; namespace\NAN::make();",
+        r"<?php namespace App; namespace\NAN();",
+    ] {
+        let stmts = parse_source(source);
+        let StmtKind::ExprStmt(expr) = &stmts[1].kind else {
+            panic!("{source}: expected an expression statement, got {:?}", stmts[1].kind);
+        };
+        assert!(
+            matches!(
+                expr.kind,
+                ExprKind::ClassConstant { .. }
+                    | ExprKind::StaticMethodCall { .. }
+                    | ExprKind::FunctionCall { .. }
+            ),
+            "{source}: {:?}",
+            expr.kind
+        );
+        let dump = format!("{:?}", expr.kind);
+        assert!(dump.contains(r#"parts: ["App", "NAN"]"#), "{source}: {dump}");
+    }
+}
+
+/// Verifies `instanceof` reads a static property holding the class name when the class name is a
+/// keyword or predefined-constant token, relative or qualified (#825 review): `namespace\enum::$cls`
+/// and `\App\NAN::$cls` were read as the class name alone, leaving `::$cls` after `instanceof`.
+#[test]
+fn test_parse_instanceof_static_property_target_with_token_class_names() {
+    for (target, parts) in [
+        (r"namespace\enum", r#"parts: ["App", "enum"]"#),
+        (r"namespace\NAN", r#"parts: ["App", "NAN"]"#),
+        (r"enum", r#"parts: ["enum"]"#),
+        (r"\App\NAN", r#"parts: ["App", "NAN"]"#),
+    ] {
+        let source = format!("<?php namespace App; echo $x instanceof {target}::$cls;");
+        let stmts = parse_source(&source);
+        let StmtKind::Echo(expr) = &stmts[1].kind else {
+            panic!("{source}: expected echo, got {:?}", stmts[1].kind);
+        };
+        let ExprKind::InstanceOf {
+            target: elephc::parser::ast::InstanceOfTarget::Expr(target_expr),
+            ..
+        } = &expr.kind
+        else {
+            panic!("{source}: expected a dynamic instanceof target, got {:?}", expr.kind);
+        };
+        let ExprKind::StaticPropertyAccess { property, .. } = &target_expr.kind else {
+            panic!("{source}: expected a static property target, got {:?}", target_expr.kind);
+        };
+        assert_eq!(property, "cls", "{source}");
+        let dump = format!("{:?}", target_expr.kind);
+        assert!(dump.contains(parts), "{source}: {dump}");
+    }
+}
