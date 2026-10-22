@@ -140,8 +140,9 @@ pub(super) fn null_coalesce_merge_type(
     let default_nullable_pointer = crate::types::is_nullable_pointer_type(&declared_default_ty);
     let value_is_null = matches!(raw_value_ty, PhpType::Void | PhpType::Never);
     let default_is_null = matches!(declared_default_ty, PhpType::Void | PhpType::Never);
+    // A plain `ptr` left side is never null for `??`, so it keeps its own pointer type.
     if (value_nullable_pointer && (default_nullable_pointer || default_is_null))
-        || ((value_is_null || matches!(value_ty, PhpType::Pointer(_))) && default_nullable_pointer)
+        || (value_is_null && default_nullable_pointer)
     {
         return nullable_aware_branch_merge_type(&value_ty, &declared_default_ty);
     }

@@ -524,3 +524,61 @@ echo $a === null ? "null" : "set", "|", json_encode($a), "|", $b === null ? "nul
     );
     assert_eq!(out, "null|null|integer\n");
 }
+
+/// Verifies expression assignments of `null` into `?ptr<T>` locals (inside an expression, chained,
+/// and through a by-reference parameter) store address 0, so `=== null` and a later by-reference
+/// binding see PHP null.
+#[test]
+fn test_nullable_pointer_expression_assignments_of_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function clear(?ptr<Vec2> &$p): string {
+    $q = ($p = null);
+    return $p === null ? "null" : "set";
+}
+function take(?ptr<Vec2> &$p): string { return $p === null ? "null" : "set"; }
+$v = buffer_new<Vec2>(1);
+?ptr<Vec2> $c = $v[0];
+echo clear($c), "|", $c === null ? "null" : "set", "|";
+?ptr<Vec2> $b = $v[0];
+$a = $b = null;
+echo $b === null ? "null" : "set", "|", take($b), "\n";
+"#,
+    );
+    assert_eq!(out, "null|null|null|null\n");
+}
+
+/// Verifies `??` keeps a null plain `ptr` on its left side (a plain pointer is never PHP null),
+/// even when the default is a `?ptr<T>`.
+#[test]
+fn test_coalesce_keeps_a_null_plain_pointer_left_side() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function none(): ?ptr { return null; }
+$r = ptr_null() ?? none();
+echo $r === null ? "null" : "set", "|";
+ptr<Vec2> $p = ptr_null();
+?ptr<Vec2> $q = null;
+echo ($p ?? $q) === null ? "null" : "set", "\n";
+"#,
+    );
+    assert_eq!(out, "set|set\n");
+}
+
+/// Verifies a `?ptr<T>` piped into a runtime callable (a `callable` parameter) is boxed as PHP
+/// null for address 0, like a direct call.
+#[test]
+fn test_nullable_pointer_piped_into_runtime_callable() {
+    let out = compile_and_run(
+        r#"<?php
+function show(mixed $v): void { echo $v === null ? "null" : gettype($v), "|"; }
+function none(): ?ptr { return null; }
+function run(callable $fn): void { none() |> $fn; }
+run(show(...));
+show(none());
+"#,
+    );
+    assert_eq!(out, "null|null|");
+}

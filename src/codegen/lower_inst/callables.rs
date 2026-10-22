@@ -3067,13 +3067,15 @@ fn emit_new_invoker_arg_array(ctx: &mut FunctionContext<'_>, arg_count: usize) {
 /// Boxes or retains a visible descriptor-invoker argument as an owned Mixed cell.
 fn emit_box_invoker_arg(ctx: &mut FunctionContext<'_>, arg: ValueId) -> Result<()> {
     let arg_ty = ctx.value_php_type(arg)?.codegen_repr();
+    // The declared type, so a `?ptr<T>` argument boxes address 0 as PHP null.
+    let box_ty = ctx.mixed_box_type(arg)?;
     ctx.load_value_to_result(arg)?;
     if matches!(arg_ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_incref_if_refcounted(ctx.emitter, &arg_ty);
     } else if ctx.value_can_own_mixed_box_source(arg)? {
-        emit_box_current_owned_value_as_mixed(ctx.emitter, &arg_ty);
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
     } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &arg_ty);
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
     Ok(())
 }
