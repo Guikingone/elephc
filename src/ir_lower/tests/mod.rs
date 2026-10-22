@@ -44,6 +44,7 @@ mod eval_default_helpers;
 mod default_review_boundaries;
 mod exhaustive;
 mod ownership;
+mod transient_string_claims;
 mod strip_tags_review;
 mod weak_map_places;
 mod backtrace_labels;

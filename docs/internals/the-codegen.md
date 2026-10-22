@@ -66,6 +66,7 @@ and link the resulting user object against the cached runtime object.
 | `src/codegen/machine_peephole.rs` | Late per-function machine peepholes over emitted assembly text |
 | `src/codegen/context.rs` | EIR function emission state and value materialization helpers |
 | `src/codegen/frame.rs` | Stack-frame sizing, local slots, register allocation integration |
+| `src/codegen/stack_numeric.rs` | Escape and lifetime proofs for frame-local checked numeric results |
 | `src/codegen/value_placement.rs` | Stack/register placement for EIR values |
 | `src/codegen/runtime_callable_invoker.rs` | Generated uniform `(descriptor, argument array) -> Mixed` invoker trampolines |
 | `src/codegen_support/abi/` | Target ABI helpers for registers, calls, stack slots, symbols, and frame mechanics |
@@ -118,10 +119,46 @@ the same comparison selection. Checked integer-to-int arithmetic enters the cold
 overflow path with one not-taken conditional branch (`b.vs`, `b.ne` for AArch64
 multiply, or `jo` on x86_64); the in-range result falls through. The overflow
 path reconstructs an immediate operand only when conversion needs it. Boxed
-checked arithmetic still follows its runtime call ABI.
+checked arithmetic follows its runtime call ABI unless its entire lifetime is
+proven eligible for a frame-local cell.
+
+Loop-carried numeric locals must preserve an overflow-promoted float on later
+iterations. Lowering discovers integer reads of a final Mixed slot inside a
+cyclic region, then replays the body with Mixed storage from its first store.
+Constraints belong to individual storage bindings, so a name reused after
+`unset` retains its new representation. This decision is separate from the
+sealed per-call-site closure proof.
+`src/ir_passes/numeric_domain.rs` can prove an integer/float domain from a
+dominating numeric seed and every writer of a private local. A nonescaping
+add/subtract/multiply or numeric increment can reuse a 24-byte frame cell: two integer tags take
+checked integer arithmetic, while an existing float remains a float. Both input
+payloads are read before the output cell changes. Proven numeric relational
+comparisons avoid temporary boxes, compare integer pairs exactly and reject
+unordered NaN predicates. Unknown tags, calls, references
+and escaping pointers keep ordinary heap-backed operations.
 
 `examples/constant-rematerialization/main.php` demonstrates bounded sample
 accumulation with immediate masks, scaling, increments, and a fixed loop bound.
+
+## Frame-local checked numeric cells
+
+`src/codegen/stack_numeric.rs::plan()` runs before frame sizing and selects owned
+add/subtract/multiply results from checked integer or proven numeric Mixed
+operations, plus numeric increments or decrements, whose complete pointer lifetime
+remains in the current activation. Numeric observations and one ordinary local
+are permitted.
+Private slots in the executable main frame use the same lifetime proof; globals
+retain heap storage. Delayed reads, escaping consumers, aliases, references,
+`eval` and suspension fail the proof.
+
+Each selected producer reserves a 24-byte `mixed` cell in the frame, without a
+heap header. `src/codegen/lower_inst/arithmetic/stack_cell.rs` writes its runtime
+tag and payload directly, using the original operands for overflow-to-float
+conversion. Selected local stores copy scalar bits and ownership operations
+skip heap retirement for these cells. A cell must never escape, acquire heap
+children or reach the heap free path. AArch64 and x86_64 use the same layout
+through target-aware frame helpers. This storage plan also applies with
+`--no-ir-opt`; it is separate from the EIR bounded-counter pass.
 
 ## Late Instruction Selection and Machine Peepholes
 
@@ -434,6 +471,24 @@ a generated uniform adapter (`src/codegen/runtime_callable_invoker.rs`) with
 the ABI `(descriptor, argument array) -> Mixed`. The invoker saves and restores
 the caller's callee-saved registers it scratches — `x19`-`x26` on AArch64 and
 `r12`, `rbx`, `r13`-`r15` on x86_64 — in a dedicated frame save area.
+
+The EIR module fixed point can specialize an already-direct numeric closure
+call when every actual argument, including captures, is exactly `int` or
+`float`. `src/ir_passes/numeric_closure_calls.rs` recognizes bounded
+straight-line numeric bodies and emits private scalar-argument variants with
+the original owned Mixed return ABI. This avoids argument boxing and the
+callee's private Mixed shadow. It does not establish closure identity or admit
+new call sites: lowering's existing per-site proofs remain authoritative.
+Bool, null, references, variadics, attributes, unknown calls and nonnumeric
+storage reject specialization. The original Mixed closure and descriptor stay
+available, and every specialized signature uses the shared target-aware ABI.
+Each expression node is emitted once, and every independent owned intermediate
+is released after the final result is ready. A private variant retains its PHP
+source name, lexical scope and instruction spans. Monitoring entries share the
+source identity: instrumentation ids and counter slots aggregate the original
+and specialized entries, and probe/source/backtrace metadata keeps the original
+PHP name with the physical native symbol. The initial scalar family excludes the
+generated Array argument collector used for func-args/backtrace support.
 
 ### Inline wrappers and branch reach
 

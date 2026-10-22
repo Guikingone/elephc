@@ -180,6 +180,15 @@ request N+1 sees the same PHP environment request N did:
   initializers re-run on first call.
 - **Static class properties** — released; their initializers re-run at the
   start of the handler body.
+- **Output buffers and `print_r(..., true)` capture** — discarded, so a request
+  that ends with an open buffer cannot route the next request's output into
+  reclaimed request memory.
+- **Request-scoped extension state** — stream context options and notification
+  callbacks, user wrapper/filter registrations and instances, per-descriptor
+  stream tables, and abandoned JSON/serialize/exception parser state are cleared
+  before the request heap is reclaimed. The clears are repeated after the
+  cleanup destructors run, so a destructor cannot republish request memory into
+  the next request.
 
 This matches PHP-FPM for PHP globals and statics in all three models. Native
 bridge state that intentionally lives outside the PHP heap follows the selected

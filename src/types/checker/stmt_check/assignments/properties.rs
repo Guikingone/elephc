@@ -195,9 +195,9 @@ fn refuse_scope_dynamic_element_write(
 /// Type-checks an indexed property array assignment (`$obj->prop[$index] = value`).
 ///
 /// Infers object, index, and value types. Validates array key types and property mutability.
-/// For `PhpType::Object`, handles both `Array` and `AssocArray` storage, merging element types
-/// when the property lacks a declared type. For `PhpType::Pointer`, requires integer indexing
-/// and that the field is an array type.
+/// For `PhpType::Object`, handles array storage and buffer element validation, merging array
+/// element types when the property lacks a declared type. For `PhpType::Pointer`, requires
+/// integer indexing and that the field is an array type.
 pub(super) fn check_property_array_assign(
     checker: &mut Checker,
     object: &Expr,
@@ -230,6 +230,10 @@ pub(super) fn check_property_array_assign(
                 if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
                     return Ok(());
                 }
+            }
+            if let PhpType::Buffer(elem_ty) = &prop_ty {
+                super::arrays::validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
+                return Ok(());
             }
             if !is_php_array_key_type(&normalized_idx_ty) {
                 return Err(CompileError::new(span, "Array index must be integer"));

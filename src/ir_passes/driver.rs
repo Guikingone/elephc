@@ -194,13 +194,21 @@ fn optimize_module_to_fixed_point(module: &mut Module, passes: &[Box<dyn IrPass>
         let mut changed = false;
 
         // Module-level cross-function inliner.
+        let specialized = super::numeric_closure_calls::specialize(module);
+        #[cfg(debug_assertions)]
+        if specialized {
+            if let Err(error) = crate::ir::validate_module(module) {
+                panic!("numeric_closure_calls produced invalid module: {:?}", error);
+            }
+        }
         let inlined = super::inline::inline_small_functions(module);
+        changed |= specialized;
         changed |= inlined;
         #[cfg(debug_assertions)]
         if let Err(e) = crate::ir::validate_module(module) {
             panic!("inline_small_functions produced invalid module: {:?}", e);
         }
-        if round > 0 && !inlined {
+        if round > 0 && !inlined && !specialized {
             return; // module-level fixed point reached
         }
 

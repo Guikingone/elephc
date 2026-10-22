@@ -617,6 +617,13 @@ fn validate_instruction_immediate(
                 Err(ValidationError::UnexpectedImmediate(inst_id))
             }
         }
+        BufferGetResolved | BufferSetResolved => {
+            if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
         Nop => {
             if matches!(inst.immediate, None | Some(Imm::Data(_))) {
                 Ok(())

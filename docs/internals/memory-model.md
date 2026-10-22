@@ -98,9 +98,24 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
 
 On the EIR backend the frame also reserves one save slot per callee-saved register that the linear-scan register allocator uses. Eligible scalar PHP locals are promoted to SSA values, so their repeated loads and stores can disappear and loop-carried values can live in registers. The frame still reserves local slots, and address-taken, by-reference, global/static, refcounted, and volatile locals continue to use them. See [The IR](the-ir.md) for scalar promotion and register allocation.
 
+### Frame-local numeric cells
+
+Checked integer add/subtract/multiply results may use a 24-byte `mixed` cell in
+the current stack frame when codegen proves the entire lifetime cannot escape.
+The cell has the ordinary runtime tag and payload but no heap header, and it
+must never reach a heap release or outlive its producing activation. Its
+overflow branch computes the operation's float result from the original
+operands. References, `eval`, suspension, delayed reads and unknown consumers
+retain ordinary heap storage. See
+[Frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells).
+
 ### Variable allocation
 
-Variables are allocated stack slots when the [code generator](the-codegen.md) scans the function body (`collect_local_vars`). The allocation is determined at compile time — there's no dynamic stack growth.
+EIR lowering declares PHP locals and hidden temporary slots before codegen.
+`src/codegen/frame.rs::layout_for_function()` then assigns their fixed offsets
+from the EIR metadata, alongside SSA backing slots, frame-local numeric cells
+and saved registers. The allocation is determined at compile time; there is no
+dynamic stack growth for these slots.
 
 For heap-backed values, stack slots also carry compile-time ownership metadata in codegen: `Owned`, `Borrowed`, `MaybeOwned`, or `NonHeap`. This metadata is not stored in the generated binary; it only guides when codegen must retain a borrowed heap value before storing it into a new owner, and which local aliases must not be blindly decreffed yet.
 
@@ -139,7 +154,16 @@ storage contract. A borrowed pointer must be converted before another checked
 producer executes. Returns of the cell, pointer-valued block arguments, a second
 local, container stores and unknown consumers retain heap storage. Parameters,
 globals, statics, references, eval storage and suspended activations do not receive
-this local storage optimization. The executable main frame is also excluded.
+this local storage optimization. Private slots in the executable main frame use
+the same complete lifetime proof; global-visible values still retain heap storage.
+
+Loop-carried numeric slots are lowered with their final Mixed representation from
+entry, including arithmetic results copied through another local. Closed numeric
+add/subtract/multiply and increment inputs preserve an existing float tag on later
+iterations. Counters retain scalar lowering only after a discarded SSA/range trial
+proves every update safe; mutually observed counters are proved together, and nested
+loop invariants are simplified before the range check. Unknown aliases and dynamic
+scope access reject the proof.
 
 These frame cells have no heap header and cannot own children. Proven retains and
 releases of their SSA pointers emit no refcount calls. A selected local may still
@@ -324,6 +348,8 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 ### Outgrowing the buffer
 
 64KB is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
+
+A `.` result (and the `__rt_concat_grow` producers) that outgrows the buffer is stamped `CONCAT_TEMP_HEAP_KIND` instead of heap kind 1: like a scratch slice it has no owner that frees it, and the first consumer that persists it, a store or an `Acquire`, adopts the block in place by retagging it as an owned string rather than copying it, which is what keeps `$s .= ...` from duplicating a large accumulator on every append. That takeover is only safe while nothing else will release the same block. A user function that may return its argument hands the block back as its call result, an owning temporary the caller releases, so before such a call the caller claims a fresh transient argument (a `.`, interpolation or scalar-to-string result, never a builtin view such as `substr($s, 0)` or `$s[0]`, which points into a live string) with `EnsureOwned` (`__rt_str_claim`): the block is retagged as owned without a copy, every later persist duplicates it, and the argument is released after the call unless the callee returned it (`ReleaseUnlessAliases`). Without the claim, `$x = id($big . "b")` stored a block that the release of the call result then freed.
 
 This is a bounds check, not an optimization. A producer that skips it writes straight past `_concat_buf` into the adjacent BSS globals, which corrupts data silently in a CLI program and faults in a `--web` worker, at a size no `--heap-size` can change — `_concat_buf` is a fixed array. `implode()` was the last one still doing that (issue #515).
 

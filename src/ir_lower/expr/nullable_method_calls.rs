@@ -343,8 +343,20 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     for (parameter_index, value) in args.iter().enumerate() {
         ctx.unguard_call_argument(*value, span);
         if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
-            retire_owned_call_operand(ctx, *slot, span);
-            continue;
+            if ctx.builder.value_defining_op(*value) != Some(Op::EnsureOwned) {
+                retire_owned_call_operand(ctx, *slot, span);
+                continue;
+            }
+            // A claimed string is only PINNED for the call: retire the pin without releasing,
+            // then decide the release against the result below like any other argument.
+            unregister_owned_call_operand(ctx, *slot, span);
+            ctx.emit_void(
+                Op::UnsetLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(*slot)),
+                Op::UnsetLocal.default_effects(),
+                Some(span),
+            );
         }
         let reference_place_view_already_released = signature.is_some_and(|signature| {
             signature
@@ -438,9 +450,52 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 // pointer than the container itself, so comparing them would read "not aliased"
                 // for a value the result does own, and release it twice. Same restriction the
                 // ABI-side cleanup slots already apply via `call_result_can_alias_mixed_temp`.
+                // A string argument the caller owns outright (claimed with `EnsureOwned`, or an
+                // acquired copy) is decided the same way when a USER function produced the
+                // result. A `Str` result compares by payload pointer, the string's whole
+                // identity: a PHP function persists every builtin result it returns, so an equal
+                // pointer means the callee handed the block back and a different one means the
+                // caller still owns it. Any other result that can alias it is a boxed `Mixed`
+                // (`: mixed`, `?string`, `string|int`), whose return coercion persists the string
+                // into a cell of its own, so the argument is never the result's storage and is
+                // released outright. A builtin result is excluded: `ltrim`, `substr` and friends
+                // answer with a view INTO the argument, a different pointer that still borrows
+                // the argument's bytes.
                 if let Some(result) = result {
                     let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
                     let result_repr = ctx.builder.value_php_type(result).codegen_repr();
+                    let owned_string_arg = arg_repr == PhpType::Str
+                        && matches!(
+                            ctx.builder.value_defining_op(lowered.value),
+                            Some(Op::EnsureOwned | Op::Acquire)
+                        );
+                    let user_call_result = matches!(
+                        ctx.builder.value_defining_op(result),
+                        Some(
+                            Op::Call
+                                | Op::FunctionVariantCall
+                                | Op::MethodCall
+                                | Op::NullsafeMethodCall
+                                | Op::StaticMethodCall
+                                | Op::ClosureCall
+                                | Op::ExprCall
+                                | Op::CallableDescriptorInvoke
+                        )
+                    );
+                    if owned_string_arg && user_call_result {
+                        if result_repr == PhpType::Str {
+                            ctx.emit_void(
+                                Op::ReleaseUnlessAliases,
+                                vec![lowered.value, result],
+                                None,
+                                Op::ReleaseUnlessAliases.default_effects(),
+                                Some(span),
+                            );
+                        } else {
+                            crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+                        }
+                        continue;
+                    }
                     let comparable = matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
                         && matches!(result_repr, PhpType::Mixed | PhpType::Union(_));
                     if comparable {

@@ -156,27 +156,7 @@ pub(super) fn check_array_assign(
             },
         );
     } else if let PhpType::Buffer(elem_ty) = &arr_ty {
-        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) && !idx_ty.is_int_float_union() {
-            return Err(CompileError::new(span, "Buffer index must be integer"));
-        }
-        match elem_ty.as_ref() {
-            PhpType::Packed(_) => {
-                return Err(CompileError::new(
-                    span,
-                    "Assign packed buffer elements through field access like $buf[$i]->field",
-                ))
-            }
-            inner if !buffer_element_accepts_assignment(inner, &val_ty) => {
-                return Err(CompileError::new(
-                    span,
-                    &format!(
-                        "Buffer element type mismatch: expected {}, got {}",
-                        inner, val_ty
-                    ),
-                ));
-            }
-            _ => {}
-        }
+        validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
     } else if let PhpType::Object(class_name) = &arr_ty {
         if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
             return Err(CompileError::new(
@@ -186,6 +166,32 @@ pub(super) fn check_array_assign(
         }
     }
     Ok(())
+}
+
+/// Validates the index and value types for a whole-element buffer write.
+pub(super) fn validate_buffer_element_write(
+    elem_ty: &PhpType,
+    idx_ty: &PhpType,
+    val_ty: &PhpType,
+    span: Span,
+) -> Result<(), CompileError> {
+    if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) && !idx_ty.is_int_float_union() {
+        return Err(CompileError::new(span, "Buffer index must be integer"));
+    }
+    match elem_ty {
+        PhpType::Packed(_) => Err(CompileError::new(
+            span,
+            "Assign packed buffer elements through field access like $buf[$i]->field",
+        )),
+        inner if !buffer_element_accepts_assignment(inner, val_ty) => Err(CompileError::new(
+            span,
+            &format!(
+                "Buffer element type mismatch: expected {}, got {}",
+                inner, val_ty
+            ),
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Returns whether a buffer element accepts an assignment value after runtime coercion.

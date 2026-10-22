@@ -124,6 +124,50 @@ fn test_error_buffer_packed_element_requires_field_assignment() {
     );
 }
 
+/// Verifies packed buffer elements cannot be assigned whole through an object property.
+#[test]
+fn test_error_buffer_property_packed_element_requires_field_assignment() {
+    expect_error(
+        r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+class Points { public buffer<Vec2> $values; }
+$points = new Points();
+$points->values = buffer_new<Vec2>(1);
+$points->values[0] = 1;
+"#,
+        "Assign packed buffer elements through field access like $buf[$i]->field",
+    );
+}
+
+/// Verifies a buffer property uses the same element mismatch diagnostic as a local buffer.
+#[test]
+fn test_error_buffer_property_scalar_assign_type_mismatch() {
+    expect_error(
+        r#"<?php
+class IntBufferStore { public buffer<int> $values; }
+$store = new IntBufferStore();
+$store->values = buffer_new<int>(1);
+$store->values[0] = "wrong";
+"#,
+        "Buffer element type mismatch: expected int, got string",
+    );
+}
+
+/// Verifies a statically known string index is rejected for a buffer property write.
+#[test]
+fn test_error_buffer_property_write_rejects_static_string_index() {
+    expect_error(
+        r#"<?php
+class IndexedBufferStore { public buffer<int> $values; }
+$store = new IndexedBufferStore();
+$store->values = buffer_new<int>(1);
+string $index = "0";
+$store->values[$index] = 1;
+"#,
+        "Buffer index must be integer",
+    );
+}
+
 /// Verifies a nested packed field rejects a scalar where a whole record is expected.
 #[test]
 fn test_error_nested_packed_field_rejects_scalar_record_assignment() {

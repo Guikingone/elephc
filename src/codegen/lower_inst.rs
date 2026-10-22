@@ -51,6 +51,8 @@ mod implicit_int_cast;
 mod enums;
 pub(super) mod exceptions;
 mod mixed_narrowing;
+mod numeric_payloads;
+mod numeric_comparisons;
 mod externs;
 mod floats;
 mod hashes;
@@ -148,6 +150,7 @@ pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
     class_method_body_exists, emit_runtime_descriptor_with_receiver_capture,
 };
+pub(super) use floats::{emit_fused_float_compare, float_branch_condition_suffix};
 pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
 };
@@ -449,6 +452,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::GcControl => lower_gc_control(ctx, &inst),
         Op::CoreBuiltin => lower_core_builtin(ctx, &inst),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
+        Op::EnsureOwned => ownership::lower_ensure_owned(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),

@@ -52,8 +52,11 @@ pub(super) fn lower_property_assign(
     let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     // Preserve the original PHP tag until the initialization probe has chosen its branch.
     // Only an authorized first write reaches the backend's weak typed-property guard.
+    // Native buffers, pointers, and packed record addresses keep their exact storage type;
+    // they have no PHP weak coercion or runtime tag for that guard to preserve.
     let lowered_value = if readonly_write.is_some()
-        && !matches!(ctx.builder.value_php_type(lowered_value.value).codegen_repr(), PhpType::Mixed)
+        && !matches!(ctx.builder.value_php_type(lowered_value.value).codegen_repr(),
+            PhpType::Mixed | PhpType::Buffer(_) | PhpType::Pointer(_) | PhpType::Packed(_))
     {
         ctx.box_value_as_mixed(lowered_value, PhpType::Mixed, Some(span))
     } else { lowered_value };
