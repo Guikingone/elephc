@@ -511,6 +511,12 @@ pub(super) fn emit_function_prologue_with_label(
         if !param.by_ref && ctx.owns_parameter_slot(slot) && !converted_to_owned_mixed {
             retain_owned_parameter_local(ctx.emitter, offset, &local_ty);
         }
+        if !param.by_ref
+            && crate::types::is_nullable_pointer_type(&param.php_type)
+            && matches!(local_ty.codegen_repr(), PhpType::Pointer(_))
+        {
+            normalize_nullable_pointer_param(ctx, offset);
+        }
     }
     zero_initialize_function_cleanup_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
@@ -523,6 +529,30 @@ pub(super) fn emit_function_prologue_with_label(
     // registers is safe. Callee-saved registers are already preserved above.
     emit_instr_enter(ctx);
     Ok(())
+}
+
+/// Rewrites a PHP null bound to a `?ptr<T>` parameter into the null pointer word.
+///
+/// Every call surface (methods, constructors, closures, callables, omitted `= null` defaults)
+/// binds a literal `null` as the shared null sentinel, which would read as a live address. The
+/// callee is the one place they all meet, so the slot is normalized here: the sentinel becomes
+/// address 0, the null of a `?ptr<T>`, and every real address is left alone.
+fn normalize_nullable_pointer_param(ctx: &mut FunctionContext<'_>, offset: usize) {
+    abi::emit_load(ctx.emitter, &PhpType::Int, offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // did the caller bind PHP null to this pointer parameter?
+            ctx.emitter.instruction("csel x0, xzr, x0, eq");                    // turn the null sentinel into the null pointer word
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r11", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rax, r11");                            // did the caller bind PHP null to this pointer parameter?
+            abi::emit_load_int_immediate(ctx.emitter, "r11", 0);
+            ctx.emitter.instruction("cmove rax, r11");                          // turn the null sentinel into the null pointer word
+        }
+    }
+    abi::emit_store(ctx.emitter, &PhpType::Int, offset);
 }
 
 /// Publishes one cleanup and/or backtrace activation for a PHP frame.

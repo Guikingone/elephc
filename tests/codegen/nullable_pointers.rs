@@ -362,3 +362,30 @@ var_dump($q, $q);
     );
     assert_eq!(out, "int|NULL\nN;|num||0|null|null|null\nNULL\nNULL\n");
 }
+
+/// Verifies a literal `null` or an omitted `= null` default bound to a `?ptr<T>` parameter is
+/// the null pointer in the callee on every call surface: methods, static methods, promoted
+/// constructor parameters, closures and `call_user_func` with a static or a runtime name.
+#[test]
+fn test_nullable_pointer_parameters_receive_null_on_every_call_surface() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+final class Box {
+    public function __construct(public ?ptr<Vec2> $p = null) {}
+    public function take(?ptr<Vec2> $p = null): string { return $p === null ? "null" : "set"; }
+    public static function stake(?ptr<Vec2> $p): string { return $p === null ? "null" : "set"; }
+}
+function take(?ptr<Vec2> $p): string { return $p === null ? "null" : "set"; }
+$v = buffer_new<Vec2>(1);
+$b = new Box();
+echo $b->take(null), $b->take(), $b->take($v[0]), "|", Box::stake(null), "|", $b->p === null ? "null" : "set", "|";
+echo call_user_func('take', null), "|";
+$f = function (?ptr<Vec2> $p): string { return $p === null ? "null" : "set"; };
+echo $f(null), $f($v[0]), "|";
+$name = $argc > 5 ? "nope" : "take";
+echo call_user_func($name, null), "\n";
+"#,
+    );
+    assert_eq!(out, "nullnullset|null|null|null|nullset|null\n");
+}
