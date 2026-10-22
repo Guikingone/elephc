@@ -329,6 +329,53 @@ but it can only be called through a runtime-resolved callable — `$holder->$nam
 `CallableDescriptorInvoke` — so a module containing one treats every getter as named. That cost
 falls only on programs that build a holder and make such a call.
 
+## Reflection `__toString()` Dumps
+
+`ReflectionMethod`, `ReflectionFunction` and `ReflectionParameter` answer `__toString()` from a
+`__string` slot filled when the owner object is materialized. The dump is rendered at compile time
+by `src/codegen/lower_inst/objects/reflection/callable_to_string.rs`, so a compiled program never
+walks metadata to print it. Eval materialization also fills the slot so casts work both inside
+and after the eval fragment:
+
+- The dumps omit the `@@ <file> <line> - <line>` header: a compiled binary cannot honestly name
+  a source that need not exist where it runs. Supported default forms and remaining source
+  spelling limits are listed in [the Reflection API documentation](../php/classes.md).
+- `elephc_builtin_contract::reflection_format` shares float, string and union formatting with
+  eval. Float defaults use 14 significant digits. Value strings escape control and non-ASCII bytes,
+  and `iterable` renders as `Traversable|array`.
+- Method headers distinguish the overwritten parent declaration from the root prototype.
+  `ClassInfo::declared_interfaces` retains the direct clauses separately from flattened interfaces:
+  the last newly implemented contract supplies the interface prototype, while an inherited method
+  keeps its parent's prototype when no new contract applies.
+  Deprecated declarations carry the `deprecated` marker, and internal method dumps label
+  tentative return types using the shared `reflection_methods` catalog.
+- A function or method is marked internal by the same answer `isInternal()` gives, and its module
+  comes from the builtin contract.
+- `getDeclaringFunction()` reflectors are built without parameters, to avoid an infinite
+  `ReflectionParameter` → declaring function → `ReflectionParameter` emission. Their dump is
+  rebuilt from the member's name and stored as a string, which carries no such cycle.
+
+A parameter default whose dump PHP prints from its written AST, rather than from its value
+(`new Foo(...)`, `Foo::BAR`), goes through
+`src/codegen/lower_inst/objects/reflection/default_export.rs`. It exports only the subset PHP
+8.5.11 was measured on; anything else falls back to the evaluated value.
+AST string exports preserve raw PHP bytes through the compiler's literal-byte representation.
+The dedicated dump property emitter decodes it at the final storage boundary; genuine private-use
+Unicode names are encoded first so they cannot be mistaken for escaped bytes.
+Array defaults are rendered from their source expression to distinguish folded values from ASTs.
+Folded values apply last-wins keys and compact lists recursively; arrays inside an AST export
+retain all folded keys. Null or fractional keys keep the array's written form instead.
+String key identity uses PHP bytes, so equivalent Unicode and byte-escape spellings overwrite
+the same key. Constant references left in the AST retain their names without being evaluated.
+Global and scoped array-valued constants fall back to that source export when the scalar-only
+constant metadata evaluator cannot retain a value, including inside object default arguments.
+Declaring-class constant metadata remains limited to scalar, null and enum-case values.
+Relative class-name defaults resolve in the method's declaring scope. Trait-relative class names
+remain written even through composition and aliases; the EIR module retains imported trait method
+keys separately so display scope does not change `getDefaultValue()` binding.
+An implicit item after the maximum integer key also retains its written form. The parser keeps
+that item as an append entry, and mixed-literal effects preserve its catchable runtime error.
+
 ## Eval Lowering Boundary
 
 Literal `eval()` calls reach EIR as `EvalLiteralCall`. The shared planner in

@@ -4474,6 +4474,7 @@ mod tests {
             abstract_static_methods: HashSet::new(),
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
+            declared_interfaces: Vec::new(),
             interfaces: Vec::new(),
             constructor_param_to_prop: Vec::new(),
         }

@@ -434,6 +434,9 @@ pub struct ClassInfo {
     pub abstract_static_methods: HashSet<String>,
     pub static_vtable_methods: Vec<String>,
     pub static_vtable_slots: HashMap<String, usize>,
+    /// Direct interface clauses in source order, including implicit enum contracts.
+    /// Reflection prototype selection needs this before inheritance flattening and deduplication.
+    pub declared_interfaces: Vec<String>,
     pub interfaces: Vec<String>,
     /// Maps constructor param index -> property name (for type propagation from new ClassName(args))
     pub constructor_param_to_prop: Vec<Option<String>>,

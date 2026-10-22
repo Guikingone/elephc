@@ -253,6 +253,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         abstract_static_methods: Default::default(),
         static_vtable_methods: Vec::new(),
         static_vtable_slots: HashMap::new(),
+        declared_interfaces: Vec::new(),
         interfaces: Vec::new(),
         constructor_param_to_prop: Vec::new(),
     }

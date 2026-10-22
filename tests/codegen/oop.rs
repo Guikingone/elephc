@@ -78,6 +78,12 @@ mod static_receiver_lifetime;
 mod static_receiver_dynamic;
 #[path = "oop/reflection_attribute_filter.rs"]
 mod reflection_attribute_filter;
+#[path = "oop/reflection_to_string.rs"]
+mod reflection_to_string;
+#[path = "oop/reflection_to_string_review.rs"]
+mod reflection_to_string_review;
+#[path = "oop/reflection_to_string_fallbacks.rs"]
+mod reflection_to_string_fallbacks;
 #[path = "oop/readonly_setter_review.rs"]
 mod readonly_setter_review;
 #[path = "oop/readonly_store_box_review.rs"]

@@ -43,15 +43,21 @@ pub(super) fn reflection_parameter_default_value(
         current_class: (!current_class.is_empty()).then_some(current_class),
     };
     if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
-        .and_then(crate::codegen::const_default_values::resolved_scalar_literal)
+        .and_then(crate::codegen::const_default_values::resolved_literal_default)
     {
         return Ok(reflection_literal_parameter_default_value(&Expr::new(kind, default.span)));
     }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
-            let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
-            Ok(reflection_parameter_default_from_constant_value(value))
-        }
+        // Constant metadata supports scalars but cannot represent array-valued constants.
+        // Keep their source export available without failing the whole compile, whether
+        // the constant is global or scoped. Scalar constants retain their folded value.
+        ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. } => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
         _ => Ok(None),
     }
 }
@@ -67,91 +73,6 @@ pub(super) fn reflection_deferred_default_value(default: &Expr) -> Option<Reflec
         .then(|| ReflectionParameterDefaultValue::DeferredError(message.clone()))
 }
 
-/// Converts a top-level object parameter default into Reflection metadata.
-pub(super) fn reflection_object_parameter_default_value(
-    ctx: &FunctionContext<'_>,
-    current_class: &str,
-    current_info: Option<&crate::types::ClassInfo>,
-    default: &Expr,
-) -> Result<Option<ReflectionParameterDefaultValue>> {
-    let ExprKind::NewObject { class_name, args } = &default.kind else {
-        return Ok(None);
-    };
-    let Some(args) = reflection_object_parameter_default_args(
-        ctx,
-        current_class,
-        current_info,
-        class_name.as_str(),
-        args,
-    )?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(ReflectionParameterDefaultValue::Object {
-        class_name: class_name.as_str().to_string(),
-        args,
-    }))
-}
-
-/// Returns constructor args for an object default, including supported omitted defaults.
-pub(super) fn reflection_object_parameter_default_args(
-    ctx: &FunctionContext<'_>,
-    current_class: &str,
-    current_info: Option<&crate::types::ClassInfo>,
-    class_name: &str,
-    args: &[Expr],
-) -> Result<Option<Vec<ReflectionParameterDefaultValue>>> {
-    if args.len() > 8 {
-        return Ok(None);
-    }
-    let mut values = Vec::with_capacity(args.len());
-    for arg in args {
-        let Some(value) =
-            reflection_parameter_default_non_object_value(ctx, current_class, current_info, arg)?
-        else {
-            return Ok(None);
-        };
-        values.push(value);
-    }
-    let Some((_, class_info)) = resolve_reflection_class(ctx, class_name) else {
-        return Ok(Some(values));
-    };
-    let constructor = class_info.methods.get(&php_symbol_key("__construct"));
-    let Some(constructor) = constructor else {
-        return if values.is_empty() {
-            Ok(Some(values))
-        } else {
-            Ok(None)
-        };
-    };
-    if constructor.variadic.is_some()
-        || values.len() > constructor.params.len()
-        || constructor.params.len() > 8
-    {
-        return Ok(None);
-    }
-    for default in constructor.defaults.iter().skip(values.len()) {
-        let Some(default) = default.as_ref() else {
-            return Ok(None);
-        };
-        let Some(value) = reflection_parameter_default_non_object_value(
-            ctx,
-            class_name,
-            Some(class_info),
-            default,
-        )?
-        else {
-            return Ok(None);
-        };
-        values.push(value);
-    }
-    if values.len() == constructor.params.len() {
-        Ok(Some(values))
-    } else {
-        Ok(None)
-    }
-}
-
 /// Converts a supported non-object parameter default expression into metadata.
 pub(super) fn reflection_parameter_default_non_object_value(
     ctx: &FunctionContext<'_>,
@@ -162,11 +83,24 @@ pub(super) fn reflection_parameter_default_non_object_value(
     if let Some(value) = reflection_literal_parameter_default_non_object_value(default) {
         return Ok(Some(value));
     }
+    let context = crate::codegen::const_default_values::ConstDefaultContext {
+        module: ctx.module,
+        current_class: (!current_class.is_empty()).then_some(current_class),
+    };
+    if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
+        .and_then(crate::codegen::const_default_values::resolved_literal_default)
+    {
+        return Ok(reflection_literal_parameter_default_non_object_value(&Expr::new(kind, default.span)));
+    }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
-            let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
-            Ok(reflection_parameter_default_from_constant_value(value))
-        }
+        // Object default arguments use the same scalar-only constant metadata fallback.
+        ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. } => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
         _ => Ok(None),
     }
 }
@@ -301,7 +235,10 @@ pub(super) fn reflection_parameter_default_from_constant_value(
 
 /// Returns PHP's constant-name metadata for parameter defaults that name a class constant.
 pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Option<String> {
-    crate::types::deferred_defaults::source_constant_name(default)
+    match &default.kind {
+        ExprKind::ConstRef(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
+        _ => crate::types::deferred_defaults::source_constant_name(default),
+    }
 }
 
 /// Converts a normalized parameter type into a supported `ReflectionType` subset.
@@ -411,12 +348,16 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
         PhpType::Float => Some(reflection_builtin_named_type("float", false)),
         PhpType::Str => Some(reflection_builtin_named_type("string", false)),
         PhpType::Bool => Some(reflection_builtin_named_type("bool", false)),
+        PhpType::False => Some(reflection_builtin_named_type("false", false)),
         PhpType::Iterable => Some(reflection_builtin_named_type("iterable", false)),
         PhpType::Mixed => Some(reflection_builtin_named_type("mixed", true)),
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             Some(reflection_builtin_named_type("array", false))
         }
         PhpType::Callable => Some(reflection_builtin_named_type("callable", false)),
+        PhpType::Object(name) if name.is_empty() => {
+            Some(reflection_builtin_named_type("object", false))
+        }
         PhpType::Object(name) => Some(ReflectionNamedTypeMetadata {
             name: name.clone(),
             allows_null: false,
