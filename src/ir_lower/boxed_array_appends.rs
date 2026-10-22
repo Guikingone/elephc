@@ -12,7 +12,7 @@
 
 use crate::ir::{
     Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind, Module, Op,
-    Ownership, ValueDef,
+    Ownership, ValueDef, LocalSlotId,
 };
 use crate::types::PhpType;
 
@@ -36,6 +36,7 @@ fn normalize_function(function: &mut Function) {
         || !function.instructions.iter().any(|inst| matches!(inst.op, Op::ArrayPush | Op::HashAppend))
     { return; }
     let uses = function.value_use_counts();
+    let native_layouts = observed_native_array_layouts(function);
     for block in &mut function.blocks {
         let appends: Vec<_> = block.instructions.iter().copied().filter(|id| {
             matches!(function.instructions[id.as_raw() as usize].op, Op::ArrayPush | Op::HashAppend)
@@ -55,6 +56,7 @@ fn normalize_function(function: &mut Function) {
             if local.kind != LocalKind::PhpLocal
                 || !matches!(local.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
                 || !matches!(load.result_php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+                || native_layouts.contains(&slot)
             { continue; }
 
             let load = &mut function.instructions[load_id.as_raw() as usize];
@@ -84,6 +86,27 @@ fn normalize_function(function: &mut Function) {
             }
         }
     }
+}
+
+/// Keeps native element layouts when another consumer observes a concrete array view.
+/// Boxed append converts every element to Mixed, which cannot feed a typed sort or builtin.
+fn observed_native_array_layouts(function: &Function) -> std::collections::HashSet<LocalSlotId> {
+    let observed: std::collections::HashSet<_> = function.instructions.iter()
+        .filter(|inst| !matches!(inst.op, Op::ArrayPush | Op::Release))
+        .flat_map(|inst| inst.operands.iter().copied()).collect();
+    function.instructions.iter().filter_map(|load| {
+        if !matches!(load.op, Op::LoadLocal | Op::LoadRefCell)
+            || !load.result.is_some_and(|value| observed.contains(&value))
+        { return None; }
+        let PhpType::Array(element) = load.result_php_type.codegen_repr() else { return None; };
+        if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Never | PhpType::Void) {
+            return None;
+        }
+        match load.immediate {
+            Some(Immediate::LocalSlot(slot)) => Some(slot),
+            _ => None,
+        }
+    }).collect()
 }
 
 /// Releases a final Mixed local's old box before an in-place element-layout conversion.

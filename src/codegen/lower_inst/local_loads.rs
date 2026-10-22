@@ -49,11 +49,6 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
 /// Lowers an explicit local ref-cell load into the result register and SSA slot.
 pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
-    if !ctx.function.params.get(slot.as_raw() as usize).is_some_and(|param| param.by_ref) {
-        // Promoted locals use their final storage type on both raw and reference paths.
-        // Coercing that storage to the requested value preserves any owned unbox lease.
-        return lower_load_local(ctx, inst);
-    }
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
@@ -64,7 +59,7 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
     }
     if !ctx.local_ref_cell_representation_is_dynamic(slot) {
         let source_ty = ctx.load_raw_local_to_result(slot)?;
-        coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+        coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
         return ctx.store_result_value(result);
     }
     let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
@@ -91,12 +86,30 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
         }
     }
     let source_ty = ctx.load_raw_local_to_result(slot)?;
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
     ctx.emit_branch(&done);
     ctx.emitter.label(&ref_cell);
     load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
     ctx.emitter.label(&done);
     ctx.store_result_value(result)
+}
+
+/// Keeps a ref-cell read borrowed on the raw side of a conditional promotion.
+/// The cell path already borrows its payload; an unpromoted Mixed box must not add a lease.
+fn coerce_borrowed_ref_cell_local(
+    ctx: &mut FunctionContext<'_>,
+    source_ty: &PhpType,
+    result_ty: &PhpType,
+) -> Result<()> {
+    if source_ty.codegen_repr() == PhpType::Mixed
+        && matches!(result_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }
+            | PhpType::Object(_) | PhpType::Callable | PhpType::Iterable)
+    {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+        return Ok(());
+    }
+    coerce_loaded_local_to_result_type(ctx, source_ty, result_ty)
 }
 
 /// Loads the value pointed to by a local ref-cell slot using the supplied alias type.

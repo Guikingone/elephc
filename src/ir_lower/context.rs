@@ -1864,12 +1864,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
         };
-        // A reference parameter borrows its pointee. A promoted local can instead unbox
-        // an owned payload from final Mixed storage, just like an ordinary local load.
-        let borrowed_ref_parameter = self.builder.function().params.get(slot.as_raw() as usize)
-            .is_some_and(|param| param.by_ref);
+        // Reference-cell reads borrow their pointee. Append normalization chooses the
+        // final boxed representation without changing other reference payload contracts.
         let ownership = if op == Op::LoadRefCell
-            && borrowed_ref_parameter
             && Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
             Ownership::Borrowed
@@ -3725,16 +3722,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
-        if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
+        if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
             return false;
         }
         let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
             return false;
         };
-        if inst.op == Op::LoadRefCell && self.builder.function().params.get(slot.as_raw() as usize)
-            .is_some_and(|param| param.by_ref) {
-            return false;
-        }
         if !matches!(
             self.builder.local_kind(slot),
             LocalKind::PhpLocal | LocalKind::StaticLocal

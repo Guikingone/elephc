@@ -287,3 +287,18 @@ buildAppendGuards();
 fn test_ref_local_append_rhs_parent_guards_without_ir_opt() {
     crate::support::without_ir_opt(test_ref_local_append_rhs_parent_guards);
 }
+
+/// Eval-boxed locals preserve native string layouts for sorting without leaking append owners.
+#[test]
+fn test_ref_local_append_native_layout_heap_balance() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [];
+foreach (["THREE", "ONE", "TWO"] as $name) { $items[] = strtolower($name); }
+sort($items);
+echo implode(",", $items), "\n";
+eval('echo "done\n";');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "one,three,two\ndone\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

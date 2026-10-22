@@ -210,12 +210,15 @@ compiler phase. See [Eval Runtime Architecture](eval-runtime.md).
 Before EIR validation, `src/ir_lower/boxed_array_appends.rs` reconciles single-use append
 receivers with their final local storage. A later reference call can widen a local from a
 native array to boxed `Mixed`; earlier appends then use `MixedArrayAppend` and a borrowed
-boxed read. Append lowering evaluates the RHS before loading the current local, so a reference
+boxed read when no consumer observes a concrete native element layout. Typed consumers such as
+string-array sorting keep native append; codegen retires the old box before mutation so the
+unboxed lease becomes the mutator's owner without forcing a copy. Append lowering evaluates the RHS before loading the current local, so a reference
 write on the RHS also selects the ordinary scalar/string parent guards. The final storage read
 stays after RHS evaluation, while the shared runtime keeps copy-on-write and reference aliases intact.
 Rejected append branches release an owned string RHS before raising the catchable parent error.
-Reads through a promoted local also use its final storage contract: a concrete value unboxed
-from `Mixed` owns a lease that the consumer releases, including on paths that never promote.
+Ordinary local loads unboxed from final `Mixed` storage own a lease that the consumer releases,
+including on paths that never promote. Reference-cell reads preserve their alias payload shape
+and remain borrowed. Indexed writes still detach a shared cell; only append bypasses that copy.
 
 ### Generated-artifact write policy
 

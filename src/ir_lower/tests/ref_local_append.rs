@@ -5,9 +5,9 @@
 //! - The AST-to-EIR unit test module.
 //!
 //! Key details:
-//! - Native array reads must not create an extra owner for append into a boxed local.
+//! - Boxed append borrows directly; native layouts transfer the unboxed lease on storeback.
 
-/// Final storage normalization selects boxed append on all five supported targets.
+/// Final storage normalization selects boxed or native append coherently on every target.
 #[test]
 fn ref_local_append_uses_final_storage_on_all_targets() {
     use crate::ir::{Immediate, Op};
@@ -74,6 +74,7 @@ touchUnknown($items); echo count($items);
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let mut boxed = 0;
+        let mut native = 0;
         for function in module.functions.iter()
             .chain(module.class_methods.iter())
             .chain(module.closures.iter())
@@ -127,12 +128,21 @@ touchUnknown($items); echo count($items);
                     let load = function.instruction(inst).unwrap();
                     let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
                     if function.locals[slot.as_raw() as usize].php_type.codegen_repr() != PhpType::Mixed { continue; }
-                    assert_eq!(append.op, Op::MixedArrayAppend, "{target}: avoid an owning native unbox");
-                    boxed += 1;
+                    if append.op == Op::ArrayPush {
+                        assert!(matches!(value.php_type.codegen_repr(), PhpType::Array(_)),
+                            "{target}: native consumers retain an indexed-array view");
+                        native += 1;
+                    } else {
+                        assert_eq!(append.op, Op::MixedArrayAppend, "{target}: boxed append uses final storage");
+                        assert_eq!(value.ownership, crate::ir::Ownership::Borrowed,
+                            "{target}: direct boxed append must borrow its receiver");
+                        boxed += 1;
+                    }
                 }
             }
         }
-        assert!(boxed >= 6, "{target}: cover methods, functions, closures and main: {boxed}");
+        assert!(boxed > 0 && native > 0 && boxed + native >= 6,
+            "{target}: cover boxed and native views in methods, functions, closures and main: {boxed}/{native}");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

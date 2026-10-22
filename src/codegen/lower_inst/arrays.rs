@@ -1395,6 +1395,11 @@ pub(super) fn lower_array_push_value(
     } else {
         elem_ty.codegen_repr()
     };
+    // A native view of final Mixed storage owns an unbox lease. Retire the old box
+    // before append so that lease becomes the mutator's owner instead of forcing COW.
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type)?;
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
