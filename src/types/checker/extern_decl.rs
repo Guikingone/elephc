@@ -80,7 +80,8 @@ impl Checker {
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
-                | PhpType::Packed(_) => {
+                | PhpType::Packed(_)
+                | PhpType::Narrow(_) => {
                     return Err(CompileError::new(
                         span,
                         &format!("Unsupported extern parameter type in {}()", name),
@@ -116,7 +117,8 @@ impl Checker {
 
     /// Validates an extern class field declaration's C type.
     ///
-    /// Rejects `void` and `callable` C types on extern fields; all other C types are permitted.
+    /// Rejects `void` and `callable`, which have no struct layout; every other extern type,
+    /// including the explicit C widths (`i8` to `u64`, `f32`), is laid out naturally.
     ///
     /// Inputs:
     /// - `class_name`: class name for error messages.
@@ -145,7 +147,7 @@ impl Checker {
     /// Checks:
     /// - Name is not `argc` or `argv` (reserved superglobals).
     /// - No duplicate extern global with the same name already registered.
-    /// - C type is not `void` or `callable`.
+    /// - C type is not `void`, `callable`, or an explicit C width (`i8`..`u64`, `f32`).
     ///
     /// Inputs:
     /// - `name`: variable name (without `$` prefix) for error messages.
@@ -170,6 +172,15 @@ impl Checker {
             return Err(CompileError::new(
                 span,
                 &format!("Duplicate extern global declaration: ${}", name),
+            ));
+        }
+        if matches!(c_type, CType::IntWidth(_) | CType::F32) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern global ${} uses an explicit C width; extern globals support int, float, bool, string, ptr, and ptr<T> only",
+                    name
+                ),
             ));
         }
         if matches!(c_type, CType::Void | CType::Callable) {

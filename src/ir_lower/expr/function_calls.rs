@@ -18,7 +18,18 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = constants::lower_static_constant_call(ctx, name, args, expr) {
         return value;
     }
-    let canonical = name.as_str();
+    // A generic call names its TEMPLATE in the source; the checker already decided which
+    // monomorphic instantiation this particular call resolves to, from argument types lowering
+    // cannot consult before it has a signature. Swap in that name before anything else looks at
+    // it, so every path below — the introspection shortcuts included — sees an ordinary user
+    // function.
+    // Keyed by the body's loop-storage scope, which the checker spells the same way; the EIR
+    // owner name differs from it inside a closure (`__eir_closure_…`).
+    let instantiated = ctx
+        .generic_call_sites
+        .get(&(ctx.loop_storage_scope.clone(), expr.span))
+        .cloned();
+    let canonical = instantiated.as_deref().unwrap_or_else(|| name.as_str());
     if let Some(value) = lower_class_introspection(ctx, canonical, args, expr) {
         return value;
     }
@@ -145,6 +156,19 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
+    // A packed record address passed where an extern or builtin signature declares a pointer
+    // parameter becomes that pointer word. The declared parameter type decides, never the name.
+    // Extern declarations are also registered as functions, so test `is_extern` first.
+    if is_extern || !is_user_function {
+        if let Some(signature) = sig.as_ref() {
+            for (operand, (_, expected)) in operands.iter_mut().zip(&signature.params) {
+                let value = lowered_value_from_id(ctx, *operand);
+                *operand = ctx
+                    .retype_packed_address_for_pointer_sink(value, expected, Some(expr.span))
+                    .value;
+            }
+        }
+    }
     let php_type = if is_extern || is_user_function {
         call_return_type(ctx, canonical, &operands)
     } else if let Some(php_type) =

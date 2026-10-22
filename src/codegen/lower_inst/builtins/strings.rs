@@ -7,7 +7,7 @@
 //! - Sibling IO builtin lowerers for shared hash and printf argument materialization.
 //!
 //! Key details:
-//! - Runtime helpers retain ownership of returned string storage.
+//! - Lowerers stabilize scratch results and retire independently owned temporaries.
 //! - Every backend path handles both AArch64 and x86_64 through the shared ABI layer.
 
 use crate::codegen::abi;
@@ -26,6 +26,8 @@ use super::{
 mod common;
 mod compression;
 mod hash;
+mod implode_owners;
+mod implode_source;
 mod mbstring;
 mod network;
 mod parse_url;
@@ -35,6 +37,8 @@ mod scalar;
 mod search;
 mod simple;
 mod split;
+mod strip_tags;
+mod strip_tags_owners;
 
 #[allow(unused_imports)]
 use common::*;
@@ -42,6 +46,8 @@ use common::*;
 use compression::*;
 #[allow(unused_imports)]
 use hash::*;
+#[allow(unused_imports)]
+use implode_source::*;
 #[allow(unused_imports)]
 use network::*;
 #[allow(unused_imports)]
@@ -83,6 +89,7 @@ pub(crate) use simple::{
     lower_binary_string_runtime, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,
     lower_trim_like, lower_ucfirst,
 };
+pub(crate) use strip_tags::lower_strip_tags;
 pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_split};
 
 #[allow(unused_imports)]

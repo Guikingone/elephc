@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - An `(array)` cast used as an element is typed by the shared `ArrayCast` classification
+//!   from the type lowering attaches to the source, so the literal stores that array.
 
 use super::*;
 use crate::parser::ast::ArrayEntry;
@@ -67,7 +69,7 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
 }
 
 /// Roots owned literal items across later evaluation and lends their stable slot value to insertion.
-fn root_array_literal_item(
+pub(super) fn root_array_literal_item(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
@@ -131,6 +133,7 @@ pub(super) fn lower_array_literal_without_spread(
     array_ty: PhpType,
 ) -> LoweredValue {
     let elem_ty = indexed_array_literal_element_type(&array_ty);
+    let result_ty = array_ty.clone();
     let array = ctx.emit_value(
         Op::ArrayNew,
         Vec::new(),
@@ -139,9 +142,13 @@ pub(super) fn lower_array_literal_without_spread(
         Op::ArrayNew.default_effects(),
         Some(expr.span),
     );
+    let owner = crate::ir_lower::function::contains_deferred_error(expr)
+        .then(|| publish_constructed_container(ctx, array, expr.span));
     for item in items {
         let value = lower_expr(ctx, item);
         let value = coerce_array_literal_element_to_storage_type(ctx, value, elem_ty.as_ref(), item);
+        let array = owner.map(|slot| load_published_container(ctx, slot, result_ty.clone(), item.span))
+            .unwrap_or(array);
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -151,7 +158,7 @@ pub(super) fn lower_array_literal_without_spread(
         );
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
-    array
+    owner.map(|slot| take_published_container(ctx, slot, result_ty, expr.span)).unwrap_or(array)
 }
 
 /// Coerces an array literal element to the contextual storage type when needed.
@@ -174,9 +181,10 @@ pub(super) fn coerce_array_literal_element_to_storage_type(
     };
     // The scalar coercers release owning heap-repr sources internally (see
     // `release_coerced_source_if_owned`); releasing those here again would
-    // double-free the element box. This caller-side release only covers the
-    // remaining reprs (e.g. an owned string temp narrowed through `StrToI`).
+    // double-free the element box. Integer string conversions also retire their
+    // source, while an identity string conversion keeps the same value below.
     if coerced.value != value.value
+        && !(value.ir_type == IrType::Str && coerced.ir_type == IrType::I64)
         && !coerced_source_repr_is_releasable(&ctx.builder.value_php_type(value.value))
         && ctx.value_is_owning_temporary(value)
     {
@@ -342,7 +350,7 @@ pub(super) fn assoc_array_literal_type_from_entries(
     for entry in entries {
         let next = match entry {
             ArrayEntry::Spread(inner) => {
-                match infer_expr_type_syntactic(inner).codegen_repr() {
+                match spread_source_storage_type_for_ir(ctx, inner).codegen_repr() {
                     PhpType::Array(elem) => elem.codegen_repr(),
                     PhpType::AssocArray { value, .. } => value.codegen_repr(),
                     _ => PhpType::Mixed,
@@ -565,7 +573,7 @@ pub(crate) fn array_literal_type_for_ir(
     }
     if items.iter().any(|item| {
         matches!(&item.kind, ExprKind::Spread(inner) if matches!(
-            array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr(),
+            spread_source_storage_type_for_ir(ctx, inner).codegen_repr(),
             PhpType::AssocArray { .. } | PhpType::Mixed
         ))
     }) {
@@ -581,6 +589,20 @@ pub(crate) fn array_literal_type_for_ir(
     PhpType::Array(Box::new(elem_ty))
 }
 
+/// Returns the EIR storage type of an `(array)` cast used as a literal element.
+///
+/// Classification goes through `ArrayCast`, using the source type `lower_array_cast` reads
+/// off the lowered inner value. A syntactic `Int` guess stamps the literal `array<int>` and
+/// either stores a property hash in that slot or refuses to compile the associative form.
+pub(super) fn array_cast_literal_element_type(
+    ctx: &LoweringContext<'_, '_>,
+    inner: &Expr,
+) -> PhpType {
+    ir_array_storage_type(crate::types::array_cast_result_type(
+        &super::array_cast_source::array_cast_source_type_for_ir(ctx, inner),
+    ))
+}
+
 /// Returns the best EIR storage element type for one indexed-array literal item.
 pub(super) fn array_literal_element_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
@@ -590,12 +612,21 @@ pub(super) fn array_literal_element_type_for_ir(
         return storage;
     }
     match &item.kind {
-        ExprKind::Null => PhpType::Mixed,
-        ExprKind::Ternary { .. } => {
-            // Keep array element ownership consistent with the lowered branch result.
+        ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
+        ExprKind::Cast {
+            target: CastType::Array,
+            expr: inner,
+        } => array_cast_literal_element_type(ctx, inner),
+        ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::Match { .. }
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::Assignment { .. } => {
+            // Keep the element stamp and ownership consistent with the lowered merge temp: the
+            // syntactic fallback widens an int/bool pair to one scalar the boxed temp is cast to.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, item))
         }
-        ExprKind::Spread(inner) => match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
+        ExprKind::Spread(inner) => match spread_source_storage_type_for_ir(ctx, inner).codegen_repr() {
             // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
             // bare-`array`-returning method) contributes no element constraint, so widen its
             // Void/Never element to Mixed rather than collapsing the outer literal to
@@ -614,6 +645,9 @@ pub(super) fn array_literal_element_type_for_ir(
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_value_type_for_ir(ctx, receiver, name, item)
+        }
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types
                 .get(name)
@@ -669,10 +703,14 @@ pub(super) fn array_literal_element_type_for_ir(
 /// `func_get_args()` at that span and mistakes the spread container for an element. Resolve the
 /// builtin's own contract without a checker span here so static spread classification agrees
 /// with the runtime value lowered below.
-fn array_literal_spread_source_type_for_ir(
+/// Shared by literal and call-argument unpacking; ordinary elements retain their logical type.
+pub(super) fn spread_source_storage_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     source: &Expr,
 ) -> PhpType {
+    if let ExprKind::ErrorSuppress(inner) = &source.kind {
+        return spread_source_storage_type_for_ir(ctx, inner);
+    }
     if let ExprKind::FunctionCall { name, args } = &source.kind {
         let canonical = name.as_str();
         if let Some(sig) = ctx.functions.get(canonical) {
@@ -692,7 +730,17 @@ fn array_literal_spread_source_type_for_ir(
             return ir_array_storage_type(result);
         }
     }
-    array_literal_element_type_for_ir(ctx, source)
+    let source_ty = array_literal_element_type_for_ir(ctx, source);
+    if matches!(source.kind, ExprKind::ArrayAccess { .. }) {
+        // A typed container read can miss, but that logical null does not change its native
+        // storage into a hash. Unpacking still checks the actual value and rejects the miss.
+        // Keep ordinary literal elements nullable so a missing object read remains PHP null.
+        let non_null = strip_void_from_union(source_ty.clone());
+        if matches!(non_null.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            return non_null;
+        }
+    }
+    source_ty
 }
 
 /// Returns the EIR array storage type for a resolved element type, or `None` when the type

@@ -37,6 +37,18 @@ pub(crate) fn lower_is_numeric(
             emit_string_is_numeric(ctx);
         }
         PhpType::Bool | PhpType::Void | PhpType::Never => emit_static_bool(ctx, false),
+        PhpType::TaggedScalar => {
+            // A tagged scalar is int|null: null is not numeric, an integer is (#1999).
+            let false_case = ctx.next_label("isnum_tagged_false");
+            let done = ctx.next_label("isnum_tagged_done");
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &false_case);
+            emit_static_bool(ctx, true);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&false_case);
+            emit_static_bool(ctx, false);
+            ctx.emitter.label(&done);
+        }
         PhpType::Mixed | PhpType::Union(_) => emit_mixed_is_numeric(ctx, value)?,
         other => {
             return Err(CodegenIrError::unsupported(format!(

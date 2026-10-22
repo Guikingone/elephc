@@ -19,18 +19,25 @@ mod array_keys;
 pub mod dynamic_params;
 /// Array storage-representation conversions shared by checking and lowering.
 mod array_storage;
+/// `(array)` cast classification shared by checking and lowering.
+mod array_cast;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
+/// Shared detection of lazy lexical errors in normalized default expression trees.
+pub(crate) mod deferred_defaults;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// C FFI type mapping utilities.
 mod ffi;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
+/// PHP type spelling shared by parameter and property diagnostics.
+pub(crate) mod diagnostic_names;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
+pub(crate) mod object_operators;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;
 /// Type checker result types and the `check` entry point.
@@ -56,12 +63,18 @@ mod defined;
 mod warnings;
 
 pub(crate) use array_keys::{
-    array_key_type_from_value_type, is_php_integer_array_key, merge_array_key_types,
-    normalized_array_key_type, parse_php_string_offset_literal,
+    array_key_contiguity_is_unproven, array_key_type_from_value_type,
+    empty_array_key_requires_hash_storage, is_php_integer_array_key,
+    merge_array_key_types, normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
+pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayCast};
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
-pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
+pub use ffi::{
+    align_up, ctype_field_layout, ctype_to_abi_type, ctype_to_php_type, packed_type_layout,
+    packed_type_size, width_spelling_hint, width_type_from_type_expr,
+    ExternAbiType, ScalarWidth,
+};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
@@ -72,7 +85,7 @@ pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.
 #[allow(unused_imports)]
-pub use result::check_with_target;
+pub use result::{check_with_options_and_bounds, check_with_target, check_with_target_and_bounds};
 pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
 pub use schema::{

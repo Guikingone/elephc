@@ -183,6 +183,18 @@ pub(super) fn lower_array_access_with_missing_warning(
     } else {
         lower_subscript_receiver_silently(ctx, array)
     };
+    lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Lowers array access over an already evaluated receiver, taking the null-safe route when
+/// the receiver may be null.
+pub(super) fn lower_array_access_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
     if value_is_nullable(ctx, array_value.value) {
         return lower_nullable_array_access(ctx, array_value, index, expr, warn_on_missing);
     }
@@ -209,9 +221,43 @@ pub(super) fn lower_array_access_from_value(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
-    let mut index_value = lower_expr(ctx, index);
+    lower_array_access_from_value_with_null_preservation(ctx, array_value, index, expr, warn_on_missing, false)
+}
+
+/// Keeps scalar misses boxed at merge boundaries while ordinary typed reads retain their ABI.
+pub(super) fn lower_array_access_from_value_with_null_preservation(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+    preserve_null: bool,
+) -> LoweredValue {
+    let index_value = lower_expr(ctx, index);
+    lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing, preserve_null)
+}
+
+/// Reads an already evaluated receiver and key, preserving their normal read cleanup.
+pub(crate) fn lower_array_access_from_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    mut index_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+    preserve_null: bool,
+) -> LoweredValue {
+    // Key coercion and missing-key warnings can invoke a throwing user handler. Keep an
+    // owning intermediate receiver reachable until the read finishes; the normal release
+    // below still retires it after the independent result has been stabilized.
+    let receiver_pins = super::pin_in_flight_owners(ctx, &[array_value.value], expr.span);
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
+            // Nullable scalar keys carry an inline tag. Preserve null as the empty-string
+            // key instead of coercing its payload to integer zero before the runtime lookup.
+            if index_value.ir_type == IrType::TaggedScalar {
+                index_value = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index.span));
+            }
             let index_ty = lowered_index_expr_key_type(ctx, index, index_value.value);
             // A genuinely boxed Mixed key is materialized by array codegen. Do not coerce it
             // here: string keys would become integer zero, while checked integer loop counters
@@ -275,7 +321,23 @@ pub(super) fn lower_array_access_from_value(
         }
         _ => Op::RuntimeCall,
     };
-    let result_type = array_access_result_type(ctx, array_value.value, op, expr);
+    let mut result_type = array_access_result_type(ctx, array_value.value, op, expr);
+    if preserve_null
+        && matches!(op, Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent)
+        && matches!(result_type.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str | PhpType::Callable)
+    {
+        // The boxed getter distinguishes a miss before scalar conversion destroys its marker.
+        // Object/container getters already preserve null and retain their typed fast paths.
+        result_type = PhpType::Mixed;
+    }
+    let index_owner = if op == Op::RuntimeCall
+        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Callable
+    {
+        let (rooted, owner) = root_owned_call_operand(ctx, index_value, index.span);
+        index_value = rooted;
+        owner
+    } else { None };
     let mut operands = vec![array_value.value, index_value.value];
     if matches!(op, Op::RuntimeCall) {
         let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
@@ -289,13 +351,20 @@ pub(super) fn lower_array_access_from_value(
         op.default_effects(),
         Some(expr.span),
     );
+    super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
     // path) is consumed by the read without any runtime refcount operation on
     // the key, and the result is freshly allocated storage that never aliases
     // it — release it here or it leaks per read (issue #500). Int-coerced
     // index paths rebound `index_value` to a non-owning raw cast, so the
     // owning-temporary gate makes this a no-op for them.
-    release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+    if let Some(owner) = index_owner {
+        guard_descriptor_container(ctx, result, expr.span);
+        retire_owned_call_operand(ctx, owner, expr.span);
+        ctx.unguard_call_argument(result.value, expr.span);
+    } else {
+        release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+    }
     // Array access consumes an owning receiver produced by an earlier read,
     // call, or one-shot temp. Preserve borrowed string/callable payloads before
     // dropping that receiver; boxed and retained container reads are already
@@ -325,7 +394,7 @@ fn coerce_string_offset_to_int(
     }
 }
 
-/// Lowers nullable receiver indexing without evaluating the index on a null receiver.
+/// Lowers nullable indexing while preserving offset evaluation and ordinary warning behavior.
 pub(super) fn lower_nullable_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
@@ -361,7 +430,20 @@ pub(super) fn lower_nullable_array_access(
     });
 
     ctx.builder.position_at_end(null_block);
-    let null_value = lower_boxed_null(ctx, expr);
+    // Undefined roots and native nullable containers may carry a raw null word, not a Mixed
+    // cell. The getter's dynamic ABI requires a real boxed null while evaluating the offset
+    // and delivering its ordinary/silent warning. A proven-null source has no destructor,
+    // so retire its owner first and protect the canonical receiver across throwing user code.
+    release_owning_receiver_temporary(ctx, array_value, expr.span);
+    let null_receiver = lower_boxed_null(ctx, expr);
+    // This pin covers only offset evaluation: the shared read publishes its own receiver
+    // record, and two live records over one reference would release it twice on a throw.
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[null_receiver.value], expr.span);
+    let index_value = lower_expr(ctx, index);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, expr.span);
+    let null_value = lower_array_access_from_values(
+        ctx, null_receiver, index_value, index, expr, warn_on_missing, false,
+    );
     store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
     branch_to(ctx, merge);
 
@@ -454,7 +536,7 @@ pub(super) fn array_access_result_type(
             _ => fallback_expr_type(expr),
         },
         Op::BufferGet => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::Buffer(elem_ty) => normalize_value_php_type(*elem_ty),
+            PhpType::Buffer(elem_ty) => normalize_value_php_type(elem_ty.storage_value_type()),
             _ => fallback_expr_type(expr),
         },
         Op::RuntimeCall => array_access_runtime_call_result_type(ctx, array, expr),

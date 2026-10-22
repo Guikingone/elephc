@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use super::ScalarWidth;
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // Callable used in match arms, constructed when closures are added
@@ -32,6 +33,12 @@ pub enum PhpType {
         value: Box<PhpType>,
     },
     Buffer(Box<PhpType>),
+    /// Storage format of a `buffer<T>` element declared with a C width name (`buffer<i32>`,
+    /// `buffer<u8>`, `buffer<f32>`). It only ever appears as the element type inside `Buffer`:
+    /// an element read yields `storage_value_type()` (`int` or `float`), and a write takes
+    /// that same type, so no value is ever typed `Narrow`. Packed class fields keep the same
+    /// widths in their field metadata instead (`PackedFieldInfo::width`).
+    Narrow(ScalarWidth),
     Callable,
     Object(String),
     Packed(String),
@@ -62,6 +69,17 @@ impl PhpType {
             && members.iter().any(|member| matches!(member, Self::Array(value) if **value == Self::Mixed))
             && members.iter().any(|member| matches!(member, Self::AssocArray { key, value }
                 if **key == Self::Mixed && **value == Self::Mixed)))
+    }
+
+    /// Returns the type a packed field or buffer element of this storage type reads as.
+    ///
+    /// A width (`PhpType::Narrow`) reads as its value type, `int` or `float`; every other
+    /// element type is its own value type.
+    pub fn storage_value_type(&self) -> PhpType {
+        match self {
+            PhpType::Narrow(width) => width.value_type(),
+            other => other.clone(),
+        }
     }
 
     /// Returns a `PhpType::Resource(Some("stream"))` representing a stream resource.
@@ -106,6 +124,7 @@ impl PhpType {
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Buffer(_)
+            | PhpType::Narrow(_)
             | PhpType::Callable
             | PhpType::Packed(_)
             | PhpType::Pointer(_)
@@ -127,6 +146,7 @@ impl PhpType {
             PhpType::Array(_) => 8,          // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
             PhpType::Buffer(_) => 8,         // pointer to buffer header
+            PhpType::Narrow(_) => 8,         // never a value; its element reads as a word
             PhpType::Callable => 8,          // callable descriptor address
             PhpType::Object(_) => 8,         // pointer to heap
             PhpType::Packed(_) => 8,         // metadata-only nominal type, usually accessed by pointer
@@ -151,6 +171,7 @@ impl PhpType {
             PhpType::Array(_) => 1,
             PhpType::AssocArray { .. } => 1,
             PhpType::Buffer(_) => 1,
+            PhpType::Narrow(_) => 1,
             PhpType::Callable => 1,
             PhpType::Object(_) => 1,
             PhpType::Packed(_) => 1,
@@ -164,6 +185,16 @@ impl PhpType {
     /// Returns true if this type uses a floating-point register (d0-d7).
     pub fn is_float_reg(&self) -> bool {
         matches!(self, PhpType::Float)
+    }
+
+    /// Reports whether an integer must widen to satisfy this declared numeric contract.
+    pub(crate) fn coerces_integer_to_float(&self) -> bool {
+        match self {
+            Self::Float => true,
+            Self::Union(members) => members.contains(&Self::Float)
+                && !members.iter().any(|member| matches!(member, Self::Int | Self::Mixed)),
+            _ => false,
+        }
     }
 
     /// Returns true for heap values whose lifetime is tracked with runtime refcounts.
@@ -216,6 +247,25 @@ impl PhpType {
                 && actual_value.reference_payload_compatible(&expected_value),
             (actual, expected) => actual == expected,
         }
+    }
+
+    /// Returns true for the `int|float` union PHP's arithmetic produces at the overflow boundary.
+    ///
+    /// This is what `$i++` leaves in an integer local: `PHP_INT_MAX++` is a float in php-src and
+    /// in elephc, so the local afterwards is one or the other. It is a genuine type rather than
+    /// a fallback, which is why it gets a name: `mixed` would say the same thing about a counter
+    /// as about a `json_decode` result, and every value derived from the counter would inherit
+    /// that.
+    ///
+    /// Exact and order-independent: a WIDER union (`int|float|string`, `int|false`) is not this
+    /// type and must keep reaching the ordinary rules — in particular the `X|false` diagnostics,
+    /// which exist to catch an unchecked sentinel.
+    pub fn is_int_float_union(&self) -> bool {
+        let PhpType::Union(members) = self else {
+            return false;
+        };
+        members.len() == 2 && members.contains(&PhpType::Int) && members.contains(&PhpType::Float)
+
     }
 
     /// Returns true if this is an indexed array of a scalar (int/float/bool) element type.
@@ -332,7 +382,11 @@ impl fmt::Display for PhpType {
             PhpType::Array(inner) => write!(f, "array<{}>", inner),
             PhpType::AssocArray { key, value } => write!(f, "array<{}, {}>", key, value),
             PhpType::Buffer(inner) => write!(f, "buffer<{}>", inner),
+            PhpType::Narrow(width) => write!(f, "{}", width.name()),
             PhpType::Callable => write!(f, "callable"),
+            // An EMPTY class name is the `object` type hint: any object, no particular class.
+            // Rendering it as the empty string produced "expects , got int".
+            PhpType::Object(name) if name.is_empty() => write!(f, "object"),
             PhpType::Object(name) => write!(f, "{}", name),
             PhpType::Packed(name) => write!(f, "packed {}", name),
             PhpType::Pointer(Some(name)) => write!(f, "ptr<{}>", name),

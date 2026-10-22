@@ -88,6 +88,16 @@ fn interned_span_end(index: u32) -> (u32, u32) {
 
 std::thread_local! {
     static NEXT_SOURCE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+    /// Source identities for synthetic parses (literal `eval` fragments).
+    ///
+    /// A SEPARATE counter from [`NEXT_SOURCE_ID`], which [`Span::reset_source_ids`] rewinds per
+    /// include-resolution unit: sharing it let a fragment parsed after a reset alias an included
+    /// file's identity in span-keyed maps such as `builtin_call_types` (issue #1291). Starting
+    /// above [`SOURCE_ID_MASK`] keeps every synthetic id clear of the include range for any
+    /// realistic include count (an include id only reaches that range after 16_383 includes in
+    /// one resolution unit, which is pathological).
+    static NEXT_SYNTHETIC_SOURCE_ID: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(SOURCE_ID_MASK + 1) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -161,6 +171,23 @@ impl Span {
     /// Resets source identities at the beginning of a new include-resolution unit.
     pub fn reset_source_ids() {
         NEXT_SOURCE_ID.with(|next| next.set(1));
+    }
+
+    /// Returns a source identity for a synthetic parse that [`Span::reset_source_ids`] must not
+    /// rewind.
+    ///
+    /// Used for literal `eval` fragments: an included file's identity is only unique WITHIN one
+    /// include-resolution unit, so a fragment sharing that counter could alias an already-stored
+    /// include id in span-keyed maps such as `builtin_call_types` (issue #1291).
+    pub fn fresh_synthetic_source_id() -> u32 {
+        NEXT_SYNTHETIC_SOURCE_ID.with(|next| {
+            let id = next.get();
+            next.set(
+                id.checked_add(1)
+                    .expect("synthetic source identity counter overflowed u32"),
+            );
+            id
+        })
     }
 
     /// Returns the source end column without the included-file identity bits.
@@ -272,8 +299,12 @@ impl Span {
     }
 
     /// Returns the union of two spans: the earlier start and the later end.
-    /// A dummy operand (line 0) is ignored so merging with a synthetic child
-    /// never drags a real span to 0:0.
+    ///
+    /// The merged span carries the EARLIER start's source identity and DROPS the other
+    /// operand's, so a merge across an included file keys as the file that supplied the earlier
+    /// start. A `dummy()` operand (line 0) is ignored so merging with a node built without a
+    /// source location never drags a real span to 0:0; a `synthetic()` span is NOT ignored,
+    /// because its line starts at `SYNTHETIC_LINE_BASE`.
     pub fn merge(self, other: Span) -> Span {
         if other.line == 0 {
             return self;
@@ -314,6 +345,18 @@ mod tests {
     #[test]
     fn span_stays_16_bytes() {
         assert_eq!(std::mem::size_of::<Span>(), 16);
+    }
+
+    /// A synthetic source id survives an include-resolution reset and stays clear of the include
+    /// range, so an eval fragment cannot alias an included file's identity (issue #1291).
+    #[test]
+    fn synthetic_source_ids_survive_an_include_reset() {
+        let first = Span::fresh_synthetic_source_id();
+        Span::reset_source_ids();
+        let second = Span::fresh_synthetic_source_id();
+        assert_ne!(first, second);
+        assert!(first > SOURCE_ID_MASK, "synthetic ids stay clear of the include range");
+        assert!(second > SOURCE_ID_MASK);
     }
 
     /// A column past the inline 16 bits keeps its value and its source identity (#1292), and
@@ -377,6 +420,45 @@ mod tests {
         assert!(extended.has_extent());
     }
 
+    /// An included-file end past the inline 16-bit field keeps its exact column and identity.
+    ///
+    /// It used to abort the compile (#1292); a saturating fallback would put a token that
+    /// STARTS past that column before its own end, so `has_extent()` would be false and source
+    /// maps would drop the end (#1306).
+    #[test]
+    fn an_included_end_past_the_packed_field_stays_exact() {
+        let point = Span::new_in_source(2, 70_000, 5);
+        assert_eq!(point.source_id(), 5);
+        assert_eq!(point.end_column(), 70_000);
+        assert!(!point.has_extent());
+
+        let token = Span::with_end_from(point, Span::new_in_source(2, 70_010, 5));
+        assert_eq!(token.source_id(), 5);
+        assert_eq!(token.end_column(), 70_010);
+        assert!(token.has_extent(), "an end past the start is an extent");
+
+        let wide = Span::with_end_from(Span::new_in_source(2, 6, 5), Span::new_in_source(2, 70_008, 5));
+        assert_eq!(wide.end_column(), 70_008, "a span straddling column 65535 keeps its end");
+
+        let merged = Span::new_in_source(2, 6, 5).merge(token);
+        assert_eq!(merged.end_column(), 70_010);
+        assert_eq!(merged.source_id(), 5);
+    }
+
+    /// Interned wide ends stay distinct map keys exactly as inline ones do.
+    #[test]
+    fn overflowing_ends_keep_spans_distinct_and_equal_where_they_should() {
+        let a = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_004, 9));
+        let same = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_004, 9));
+        let longer = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_009, 9));
+        let other_file = Span::with_end_from(Span::new_in_source(3, 70_000, 10), Span::new_in_source(3, 70_004, 10));
+        assert_eq!(a, same, "equal ends are one table entry, so the spans compare equal");
+        assert_ne!(a, longer);
+        assert_ne!(a, other_file, "the same coordinates in another included file stay distinct");
+        assert_eq!(other_file.source_id(), 10);
+        assert_ne!(a, Span::with_end(3, 70_000, 3, 70_004), "an included span is never a root one");
+    }
+
     /// Verifies merge takes the earlier start and later end across lines.
     #[test]
     fn merge_unions_start_and_end() {
@@ -384,6 +466,29 @@ mod tests {
         let b = Span::with_end(2, 10, 3, 4);
         let merged = a.merge(b);
         assert_eq!(merged, Span::with_end(2, 5, 3, 4));
+    }
+
+    /// A merged span keys as the EARLIER start's source and drops the other operand's: merging
+    /// spans from two included sources must not read back as root, and with distinct starts the
+    /// surviving identity is independent of the operand order; a root operand on the start side
+    /// still yields root (issue #1293). Two starts at identical coordinates tie-break to the
+    /// receiver, which no parser path can produce across files.
+    #[test]
+    fn merge_keeps_the_earlier_starts_source_identity() {
+        let first = Span::new_in_source(2, 4, 5);
+        let later = Span::new_in_source(9, 7, 9);
+        let merged = first.merge(later);
+        assert_eq!(merged.source_id(), 5, "the earlier start's identity survives the merge");
+        assert_eq!((merged.line, merged.col), (2, 4));
+        assert_eq!((merged.end_line, merged.end_column()), (9, 7));
+        assert_eq!(later.merge(first), merged, "operand order does not change the earlier start");
+
+        assert_eq!(Span::new(2, 4).merge(later).source_id(), 0, "a root start stays root");
+        assert_eq!(
+            first.merge(Span::new(9, 7)).source_id(),
+            5,
+            "an included start keeps its identity against a root end"
+        );
     }
 
     /// Verifies merging with a dummy span keeps the real span unchanged in

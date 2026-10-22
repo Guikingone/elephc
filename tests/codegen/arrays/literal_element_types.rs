@@ -11,6 +11,26 @@
 
 use crate::support::*;
 
+/// An int-returning closure uses the closure ABI and must retain its array result in a literal.
+#[test]
+fn test_indexed_literal_of_closure_array_map_result() {
+    let out = compile_and_run(r#"<?php
+$outer = [array_map(fn(int $value): int => $value + 1, [1, 2, 3])];
+echo count($outer[0]), ':', $outer[0][0], ',', $outer[0][1], ',', $outer[0][2];
+"#);
+    assert_eq!(out, "3:2,3,4");
+}
+
+/// Associative literal insertion must keep the mapped array, not a scalar cast of its box.
+#[test]
+fn test_assoc_literal_of_closure_array_map_result() {
+    let out = compile_and_run(r#"<?php
+$outer = ['values' => array_map(fn(int $value): int => $value * 2, [2, 3])];
+echo count($outer['values']), ':', $outer['values'][0], ',', $outer['values'][1];
+"#);
+    assert_eq!(out, "2:4,6");
+}
+
 /// Keeps an `array_map()` result as an array inside an indexed literal.
 #[test]
 fn test_indexed_literal_of_array_map_result() {

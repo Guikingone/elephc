@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - Construction and owned operands remain rooted across later expressions and hash writes.
 
 use super::*;
 
@@ -18,22 +19,31 @@ pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs
 pub(super) fn lower_assoc_array_literal_with_guard(
     ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr, guarded: bool,
 ) -> LoweredValue {
+    let hash_ty = assoc_array_literal_type_for_ir(ctx, pairs, expr);
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(pairs.len() as u32)),
-        assoc_array_literal_type_for_ir(ctx, pairs, expr),
+        hash_ty.clone(),
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    let owner = publish_constructed_container(ctx, hash, expr.span);
     if guarded { guard_descriptor_container(ctx, hash, expr.span); }
     for (key, value) in pairs {
-        let key = lower_expr(ctx, key);
-        let value = lower_expr(ctx, value);
+        let mut roots = Vec::new();
+        let key_value = lower_expr(ctx, key);
+        let key = root_array_literal_item(ctx, key_value, key.span, &mut roots);
+        let value_operand = lower_expr(ctx, value);
+        let value = root_array_literal_item(ctx, value_operand, value.span, &mut roots);
+        let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
         if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
+        for slot in roots.into_iter().rev() {
+            retire_owned_call_operand(ctx, slot, expr.span);
+        }
     }
-    hash
+    take_published_container(ctx, owner, hash_ty, expr.span)
 }
 
 /// Returns the associative-array type for a literal that contains at least one associative
@@ -109,8 +119,16 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         return storage;
     }
     match &value.kind {
-        ExprKind::Null => PhpType::Mixed,
-        ExprKind::Ternary { .. } => {
+        ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
+        ExprKind::Cast {
+            target: CastType::Array,
+            expr: inner,
+        } => array_cast_literal_element_type(ctx, inner),
+        ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::Match { .. }
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::Assignment { .. } => {
             // Use the actual branch-merge representation before choosing hash storage.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
         }
@@ -206,12 +224,28 @@ pub(super) fn scoped_constant_value_type_for_ir(
         return PhpType::Mixed;
     }
     if let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) {
-        return ir_array_storage_type(infer_expr_type_syntactic(&const_expr));
+        // Keep the existing scalar classification, but resolve containers through the same
+        // literal helpers that lower them. Syntactic inference reports Void for null and can
+        // mistake nested scoped constants for strings inside an array initializer.
+        return match &const_expr.kind {
+            ExprKind::Null => PhpType::Mixed,
+            ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, &const_expr),
+            ExprKind::ArrayLiteralAssoc(pairs) => {
+                assoc_array_literal_type_for_ir(ctx, pairs, &const_expr)
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                assoc_array_literal_type_from_entries(ctx, entries, &const_expr)
+            }
+            _ => ir_array_storage_type(infer_expr_type_syntactic(&const_expr)),
+        };
     }
     ir_array_storage_type(infer_expr_type_syntactic(value))
 }
 
-/// Returns the element/value type for an array-access expression used inside a literal.
+/// Returns the PHP value shape of an array access before merge or literal storage is selected.
+///
+/// A PHP array read can yield null on a missing key even when its elements are non-nullable.
+/// Keep that logical null here; the read itself retains its existing typed fast path.
 pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
@@ -223,20 +257,67 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         }
         ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, array)),
         ExprKind::ArrayLiteralAssoc(pairs) => Some(assoc_array_literal_type_for_ir(ctx, pairs, array)),
-        _ => None,
+        // Any other receiver that loads a buffer (`make()[0]`, `($b ?? $c)[0]`) is typed from
+        // what its own lowering loads; other receivers keep the previous syntactic answer.
+        _ => buffer_receiver_type_for_ir(ctx, array),
     }?
     .codegen_repr();
     match array_ty {
-        PhpType::Array(elem_ty) => {
-            Some(array_access_element_result_type(normalize_value_php_type(*elem_ty).codegen_repr()))
-        }
-        PhpType::AssocArray { value, .. } => {
-            Some(array_access_element_result_type(normalize_value_php_type(*value).codegen_repr()))
-        }
+        PhpType::Array(element) | PhpType::AssocArray { value: element, .. } => Some(
+            nullable_aware_branch_merge_type(&normalize_value_php_type(*element), &PhpType::Void),
+        ),
         PhpType::Str => Some(PhpType::Str),
         PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),
+        // A packed buffer element reads as its record address, which the checker types `ptr<T>`.
+        // A scalar element keeps its own type: the syntactic fallback answers `int`, which
+        // truncated a `buffer<float>` element in merges and literals.
+        PhpType::Buffer(elem_ty) => match normalize_value_php_type(*elem_ty).codegen_repr() {
+            PhpType::Packed(class_name) => Some(PhpType::Pointer(Some(class_name))),
+            scalar @ (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_)) => {
+                Some(scalar)
+            }
+            _ => None,
+        },
         _ => None,
     }
+}
+
+/// Returns the buffer type a receiver expression loads, or `None` when it is not a buffer.
+///
+/// A call, `??`, ternary, match or assignment answers through the merge predictor, which agrees
+/// with the type their lowering materializes. Only a buffer answer is returned: the syntactic
+/// fallback the caller keeps for everything else types an element read `int`, which truncated
+/// `buffer<float>` elements read through these receivers.
+fn buffer_receiver_type_for_ir(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -> Option<PhpType> {
+    let loaded = super::merge_temps::materialized_expr_type_for_merge(ctx, receiver);
+    matches!(loaded.codegen_repr(), PhpType::Buffer(_)).then_some(loaded)
+}
+
+/// Returns the packed class whose record an expression addresses, if the lowering knows it.
+///
+/// Covers a packed buffer element, a nested packed field read, a call returning a `ptr<T>` to
+/// a packed record, and a local holding any of them.
+fn packed_record_class_of_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<String> {
+    let ty = match &expr.kind {
+        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+        }
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned(),
+        // A call returning `ptr<T>` to a packed record (`first($b)->pos`).
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. } => {
+            Some(super::merge_temps::materialized_expr_type_for_merge(ctx, expr))
+        }
+        _ => None,
+    }?;
+    let class_name = match ty.codegen_repr() {
+        PhpType::Pointer(Some(class_name)) | PhpType::Packed(class_name) => class_name,
+        _ => return None,
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    ctx.packed_classes.contains_key(normalized).then(|| normalized.to_string())
 }
 
 /// Returns the declared type for an object property expression used inside a literal.
@@ -245,6 +326,17 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
     object: &Expr,
     property: &str,
 ) -> Option<PhpType> {
+    // A nested packed field reads as the address of the embedded record (`ptr<T>` to the
+    // checker) and a `ptr<T>` field as its pointer; scalar packed fields keep the previous
+    // syntactic answer.
+    if let Some(record) = packed_record_class_of_expr(ctx, object) {
+        let field = ctx.packed_classes.get(&record)?.fields.iter().find(|field| field.name == property)?;
+        return match field.php_type.codegen_repr() {
+            PhpType::Packed(inner) => Some(PhpType::Pointer(Some(inner))),
+            pointer @ PhpType::Pointer(_) => Some(pointer),
+            _ => None,
+        };
+    }
     let class_name = instance_callable_object_class(ctx, object)?;
     let normalized = class_name.trim_start_matches('\\');
     if is_builtin_stdclass_name(normalized) {
