@@ -160,6 +160,62 @@ fn test_parse_extern_block() {
     }
 }
 
+/// Parses extern functions, classes, globals, and an expanding library block inside braced
+/// namespaces while preserving each namespace body's declaration list.
+#[test]
+fn test_parse_extern_declarations_inside_braced_namespaces() {
+    let stmts = parse_source(
+        r#"<?php
+namespace App {
+    extern function abs(i32 $value): i32;
+    extern class Point { public int $x; }
+    extern global int $errno;
+    extern "c" { function labs(int $value): int; function llabs(int $value): int; }
+}
+namespace Other {
+    extern function getpid(): i32;
+}
+"#,
+    );
+    assert_eq!(stmts.len(), 2);
+
+    let StmtKind::NamespaceBlock { name, body } = &stmts[0].kind else {
+        panic!("expected first namespace block, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(name.as_ref().map(Name::as_str), Some("App"));
+    assert_eq!(body.len(), 5);
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::ExternFunctionDecl { name, library, .. }
+            if name == "abs" && library.is_none()
+    ));
+    assert!(matches!(
+        &body[1].kind,
+        StmtKind::ExternClassDecl { name, .. } if name == "Point"
+    ));
+    assert!(matches!(
+        &body[2].kind,
+        StmtKind::ExternGlobalDecl { name, .. } if name == "errno"
+    ));
+    for stmt in &body[3..] {
+        assert!(matches!(
+            &stmt.kind,
+            StmtKind::ExternFunctionDecl { library, .. }
+                if library.as_deref() == Some("c")
+        ));
+    }
+
+    let StmtKind::NamespaceBlock { name, body } = &stmts[1].kind else {
+        panic!("expected second namespace block, got {:?}", stmts[1].kind);
+    };
+    assert_eq!(name.as_ref().map(Name::as_str), Some("Other"));
+    assert_eq!(body.len(), 1);
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::ExternFunctionDecl { name, .. } if name == "getpid"
+    ));
+}
+
 /// Parses `extern class Point { public int $x; public float $y; }` as an `ExternClassDecl`.
 /// Verifies name and field list (name, type-kind) are captured correctly.
 #[test]

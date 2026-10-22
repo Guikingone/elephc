@@ -99,6 +99,7 @@ impl Checker {
             extern_functions: HashMap::new(),
             extern_classes: HashMap::new(),
             packed_classes: HashMap::new(),
+            declared_native_records: HashSet::new(),
             extern_globals: HashMap::new(),
             required_libraries: Vec::new(),
             top_level_env: HashMap::new(),

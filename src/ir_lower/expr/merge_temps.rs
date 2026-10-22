@@ -59,7 +59,11 @@ pub(super) fn branch_merge_result_type(
     let then_ty = materialized_expr_type_for_merge(ctx, then_expr);
     let else_ty = materialized_expr_type_for_merge(ctx, else_expr);
     let branch_ty = nullable_aware_branch_merge_type(&then_ty, &else_ty);
-    if php_type_allows_null(&branch_ty) {
+    // A pointer merge (a `ptr<T>` or packed record address on both sides) is already exact; the
+    // syntactic fallback would answer `int` for the ternary and widen the word into `Mixed`.
+    if php_type_allows_null(&branch_ty)
+        || matches!(branch_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_))
+    {
         return branch_ty;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
@@ -86,7 +90,10 @@ pub(super) fn match_merge_result_type(
     let Some(merged) = merged else {
         return fallback_expr_type(expr);
     };
-    if php_type_allows_null(&merged) {
+    // As for a ternary, an exact pointer merge must not be widened by the syntactic fallback.
+    if php_type_allows_null(&merged)
+        || matches!(merged.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_))
+    {
         return merged;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
@@ -261,6 +268,9 @@ pub(super) fn coerce_value_for_temp(
     }
     match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
+        PhpType::Pointer(_) if matches!(source_ty, PhpType::Packed(_)) => {
+            ctx.retype_packed_address_for_pointer_sink(value, &target_ty, Some(span))
+        }
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             coerce_to_int_at_span(ctx, value, Some(span))
         }

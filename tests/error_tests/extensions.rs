@@ -204,6 +204,15 @@ fn test_error_packed_classes_embedding_each_other_are_rejected() {
     );
 }
 
+/// Verifies predeclared native record names do not make an actually missing pointer target valid.
+#[test]
+fn test_error_packed_pointer_field_rejects_unknown_target() {
+    expect_error(
+        "<?php packed class Holder { public ptr<Missing> $value; }",
+        "Unknown pointer target type: Missing",
+    );
+}
+
 /// Verifies reading an undefined field of a nested record names the inner packed class.
 #[test]
 fn test_error_nested_packed_field_read_of_undefined_inner_field() {
@@ -388,6 +397,26 @@ fn test_error_extern_global_rejects_int_width() {
 #[test]
 fn test_error_extern_block_empty() {
     expect_error("<?php extern \"lib\" { }", "Empty extern block");
+}
+
+/// Verifies a malformed extern inside a braced namespace keeps the extern-specific diagnostic
+/// and recovers far enough to collect the following malformed statement too.
+#[test]
+fn test_error_braced_namespace_extern_uses_extern_recovery() {
+    let tokens = tokenize("<?php namespace App { extern badkw; echo ; }").unwrap();
+    let errors = parse_with_recovery(&tokens).unwrap_err();
+    assert!(
+        errors.iter().any(|error| error.message.contains(
+            "Expected 'function', string literal, 'class', or 'global' after 'extern'"
+        )),
+        "expected extern-specific error, got {:?}",
+        errors,
+    );
+    assert!(
+        errors.len() >= 2,
+        "expected namespace recovery to collect both errors, got {:?}",
+        errors,
+    );
 }
 
 /// Verifies that calling an extern function with too few arguments is rejected.

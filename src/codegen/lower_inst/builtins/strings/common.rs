@@ -171,7 +171,8 @@ pub(in crate::codegen::lower_inst::builtins) fn load_value_as_string_to_regs(
             move_string_result_to_regs(ctx, ptr_reg, len_reg);
             Ok(())
         }
-        PhpType::Pointer(_) => {
+        // A packed record address is the same pointer word a `ptr<T>` holds.
+        PhpType::Pointer(_) | PhpType::Packed(_) => {
             // Same "0x..." text `echo $ptr` prints, so `sprintf("%s", $p)` agrees with it.
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_ptoa");

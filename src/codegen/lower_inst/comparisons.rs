@@ -87,11 +87,16 @@ pub(super) fn lower_strict_eq(
         emit_array_deep_eq_call(ctx, lhs, rhs, is_equal)?;
         return store_if_result(ctx, inst);
     }
+    // A packed record address (a buffer element or a nested record read) is a raw pointer word
+    // like a `ptr<T>`, so both compare by address identity in either combination.
     if matches!(
         (&lhs_ty, &rhs_ty),
         (PhpType::Object(_), PhpType::Object(_))
             | (PhpType::Iterable, PhpType::Iterable)
-            | (PhpType::Pointer(_), PhpType::Pointer(_))
+            | (
+                PhpType::Pointer(_) | PhpType::Packed(_),
+                PhpType::Pointer(_) | PhpType::Packed(_)
+            )
     ) {
         emit_pointer_compare(ctx, lhs, rhs, is_equal)?;
         return store_if_result(ctx, inst);
