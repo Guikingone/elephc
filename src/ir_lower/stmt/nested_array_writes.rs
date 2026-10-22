@@ -252,10 +252,12 @@ fn lower_boxed_static_nested_update(
         key,
         Some(write_key.span),
     );
+    let key_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], write_key.span);
     // A warning handler may replace the stored parent. The pending update still
     // targets the old pinned cell, not a fresh traversal of the static property.
     ctx.emit_void(Op::RuntimeCall, vec![pinned.value, key.value, value.value],
         Some(Immediate::Bool(true)), effects_lookup::runtime_effects(), Some(span));
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, write_key.span);
     release_persisted_string_operand(ctx, key, span);
     if let ExprKind::Assignment { target, .. } = &source_value.kind {
         if let ExprKind::Variable(name) = &target.kind {
@@ -365,9 +367,11 @@ fn lower_static_update_array_parent(
         key,
         Some(write_key.span),
     );
+    let key_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], write_key.span);
     let parent = ctx.emit_value(Op::RuntimeCall, vec![pinned.value, key.value],
         Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, write_key.span);
     release_persisted_string_operand(ctx, key, span);
     parent
 }
@@ -634,6 +638,8 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
             key,
             Some(index.span),
         );
+        let key_pins =
+            crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], index.span);
         let pending_append = matches!(&array.kind,
             ExprKind::Variable(name) if ctx.append_update_cell_aliases.contains(name));
         let target = match (pending_append, key_already_diagnosed) {
@@ -650,6 +656,7 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
             effects_lookup::runtime_effects(),
             Some(expr.span),
         );
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, index.span);
         release_persisted_string_operand(ctx, key, span);
         if ctx.value_is_owning_temporary(receiver) {
             crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
@@ -814,6 +821,7 @@ fn lower_indexed_parent_fetch_for_write(
 ) -> LoweredValue {
     let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
     ctx.prepare_mutated_local_owner(name, array, ensured_ty.clone(), Some(span));
+    let key_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], span);
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![array.value, key.value],
@@ -827,14 +835,16 @@ fn lower_indexed_parent_fetch_for_write(
         Some(span),
     );
     ctx.store_prepared_mutated_local(name, ensured, ensured_ty, Some(span));
-    ctx.emit_value(
+    let cell = ctx.emit_value(
         Op::ArrayGetForWrite,
         vec![ensured.value, key.value],
         None,
         PhpType::Mixed,
         Op::ArrayGetForWrite.default_effects(),
         Some(span),
-    )
+    );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, span);
+    cell
 }
 
 /// Ensures a hash element exists for a nested write parent, stores the
@@ -874,6 +884,7 @@ fn lower_hash_parent_fetch_for_write_with_key(
     key_already_diagnosed: bool,
 ) -> LoweredValue {
     let key = crate::ir_lower::ownership::persist_string_byte_view(ctx, key, Some(span));
+    let key_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], span);
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![hash_value.value, key.value],
@@ -895,6 +906,7 @@ fn lower_hash_parent_fetch_for_write_with_key(
         Op::HashGetForWrite.default_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, span);
     crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
     cell
 }

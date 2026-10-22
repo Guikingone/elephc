@@ -10,7 +10,7 @@
 /// An offset view is copied before an owned receiver can be released on every target.
 #[test]
 fn string_offset_lifetime_stabilizes_views_on_all_targets() {
-    use crate::ir::Op;
+    use crate::ir::{Immediate, Op};
     let source = r#"<?php
 class OffsetReader {
     public string $bytes;
@@ -203,6 +203,36 @@ offsetBoundaries("\x07aaaaaaaZ");
                 }).count();
                 assert_eq!(stabilized, 1,
                     "{target}: persist only the nested write key that can reach hash insertion");
+                let pinned = byte_results.iter().filter(|result| {
+                    let mut acquired = vec![**result];
+                    for inst in &function.instructions {
+                        if inst.op == Op::Acquire && inst.operands.iter().any(|value| acquired.contains(value)) {
+                            if let Some(value) = inst.result { acquired.push(value); }
+                        }
+                    }
+                    if acquired.len() == 1 { return false; }
+                    let slots = function.instructions.iter().filter_map(|inst| {
+                        (inst.op == Op::StoreLocal
+                            && inst.operands.iter().any(|value| acquired.contains(value)))
+                            .then_some(inst.immediate.as_ref())
+                            .flatten()
+                            .and_then(|immediate| match immediate {
+                                Immediate::LocalSlot(slot) => Some(*slot),
+                                _ => None,
+                            })
+                    });
+                    slots.into_iter().any(|slot| {
+                        function.instructions.iter().any(|inst| {
+                            inst.op == Op::PushCallOperandOwner
+                                && inst.immediate == Some(Immediate::LocalSlot(slot))
+                        }) && function.instructions.iter().any(|inst| {
+                            inst.op == Op::PopCallOperandOwner
+                                && inst.immediate == Some(Immediate::LocalSlot(slot))
+                        })
+                    })
+                }).count();
+                assert_eq!(pinned, 1,
+                    "{target}: publish the persisted nested key through every throwing writer");
                 reads += byte_results.len();
                 persisted_reads += stabilized;
                 continue;

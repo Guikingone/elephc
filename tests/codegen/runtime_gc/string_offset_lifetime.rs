@@ -444,3 +444,32 @@ offsetBoundaryRun("\x07\x00\x00\x00HPLEZ" . str_repeat("q", 4000));
         "default|matched|90:1|90:1|0:Z|Z:no|1|no|no|no\n".repeat(2), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Persisted byte copies remain unwind-visible while later calls and writes can throw.
+#[test]
+fn test_string_offset_lifetime_throwing_consumers() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function offsetAliasOrThrow(string $byte): string {
+    if (strlen($byte) === 1) { throw new Exception("alias"); }
+    return $byte;
+}
+function offsetThrowString(): string { throw new Exception("string"); }
+function offsetThrowInt(): int { throw new Exception("int"); }
+function offsetWriteOrThrow(array &$items, string $payload): void {
+    $items[$payload[0]] = offsetThrowInt();
+}
+function runOffsetThrows(): void {
+    $payload = str_repeat("Zq", 2000);
+    try { offsetAliasOrThrow($payload[0]); } catch (Exception $e) { echo "A"; }
+    try { $concat = $payload[0] . offsetThrowString(); } catch (Exception $e) { echo "C"; }
+    try { $equal = $payload[0] === offsetThrowString(); } catch (Exception $e) { echo "E"; }
+    $items = [];
+    try { offsetWriteOrThrow($items, $payload); } catch (Exception $e) { echo "W"; }
+    echo "|", count($items), "\n";
+}
+runOffsetThrows();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ACEW|0\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
