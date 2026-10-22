@@ -124,7 +124,11 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             target: CastType::Array,
             expr: inner,
         } => array_cast_literal_element_type(ctx, inner),
-        ExprKind::Ternary { .. } => {
+        ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::Match { .. }
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::Assignment { .. } => {
             // Use the actual branch-merge representation before choosing hash storage.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
         }
@@ -238,7 +242,10 @@ pub(super) fn scoped_constant_value_type_for_ir(
     ir_array_storage_type(infer_expr_type_syntactic(value))
 }
 
-/// Returns the element/value type for an array-access expression used inside a literal.
+/// Returns the PHP value shape of an array access before merge or literal storage is selected.
+///
+/// A PHP array read can yield null on a missing key even when its elements are non-nullable.
+/// Keep that logical null here; the read itself retains its existing typed fast path.
 pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
@@ -250,34 +257,40 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         }
         ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, array)),
         ExprKind::ArrayLiteralAssoc(pairs) => Some(assoc_array_literal_type_for_ir(ctx, pairs, array)),
-        // A call returning a buffer (`make()[0]`) is typed from the same return metadata merges
-        // use; calls returning anything else keep the previous syntactic answer.
-        ExprKind::FunctionCall { .. }
-        | ExprKind::MethodCall { .. }
-        | ExprKind::StaticMethodCall { .. } => {
-            let returned = super::merge_temps::materialized_expr_type_for_merge(ctx, array);
-            matches!(returned.codegen_repr(), PhpType::Buffer(_)).then_some(returned)
-        }
-        _ => None,
+        // Any other receiver that loads a buffer (`make()[0]`, `($b ?? $c)[0]`) is typed from
+        // what its own lowering loads; other receivers keep the previous syntactic answer.
+        _ => buffer_receiver_type_for_ir(ctx, array),
     }?
     .codegen_repr();
     match array_ty {
-        PhpType::Array(elem_ty) => {
-            Some(array_access_element_result_type(normalize_value_php_type(*elem_ty).codegen_repr()))
-        }
-        PhpType::AssocArray { value, .. } => {
-            Some(array_access_element_result_type(normalize_value_php_type(*value).codegen_repr()))
-        }
+        PhpType::Array(element) | PhpType::AssocArray { value: element, .. } => Some(
+            nullable_aware_branch_merge_type(&normalize_value_php_type(*element), &PhpType::Void),
+        ),
         PhpType::Str => Some(PhpType::Str),
         PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),
         // A packed buffer element reads as its record address, which the checker types `ptr<T>`.
-        // Scalar elements keep the previous syntactic answer.
+        // A scalar element keeps its own type: the syntactic fallback answers `int`, which
+        // truncated a `buffer<float>` element in merges and literals.
         PhpType::Buffer(elem_ty) => match normalize_value_php_type(*elem_ty).codegen_repr() {
             PhpType::Packed(class_name) => Some(PhpType::Pointer(Some(class_name))),
+            scalar @ (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_)) => {
+                Some(scalar)
+            }
             _ => None,
         },
         _ => None,
     }
+}
+
+/// Returns the buffer type a receiver expression loads, or `None` when it is not a buffer.
+///
+/// A call, `??`, ternary, match or assignment answers through the merge predictor, which agrees
+/// with the type their lowering materializes. Only a buffer answer is returned: the syntactic
+/// fallback the caller keeps for everything else types an element read `int`, which truncated
+/// `buffer<float>` elements read through these receivers.
+fn buffer_receiver_type_for_ir(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -> Option<PhpType> {
+    let loaded = super::merge_temps::materialized_expr_type_for_merge(ctx, receiver);
+    matches!(loaded.codegen_repr(), PhpType::Buffer(_)).then_some(loaded)
 }
 
 /// Returns the packed class whose record an expression addresses, if the lowering knows it.

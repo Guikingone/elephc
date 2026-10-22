@@ -116,7 +116,21 @@ pub(super) fn null_coalesce_result_type(
     value: ValueId,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = strip_void_from_union(ctx.builder.value_php_type(value)).codegen_repr();
+    null_coalesce_merge_type(ctx, ctx.builder.value_php_type(value), default)
+}
+
+/// Merges the type of the value side of `??` with the materialized type of its default.
+///
+/// Shared by the lowering, which knows the lowered value's type, and by the merge prediction
+/// of an enclosing ternary, match or array literal, which estimates it from the expression.
+/// Both must agree, or the outer temp is typed from a narrower guess and casts the boxed
+/// `??` result back (an int/bool pair boxed here would be read back as integer 0).
+pub(super) fn null_coalesce_merge_type(
+    ctx: &LoweringContext<'_, '_>,
+    value_ty: PhpType,
+    default: &Expr,
+) -> PhpType {
+    let value_ty = strip_void_from_union(value_ty).codegen_repr();
     let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
     // `$o ?? null` can still be null. An object or callable slot has no null of its own, so a
     // default that may be null keeps the merge nullable (boxed) instead of letting the non-null
@@ -124,7 +138,24 @@ pub(super) fn null_coalesce_result_type(
     if matches!(value_ty, PhpType::Object(_) | PhpType::Callable) && php_type_allows_null(&default_ty) {
         return nullable_aware_branch_merge_type(&value_ty, &default_ty);
     }
-    wider_type_for_merge(&value_ty, &default_ty)
+    materialized_merge_type(&value_ty, &default_ty)
+}
+
+/// Merges the materialized types of two branches whose values are both known.
+///
+/// Unlike the syntactic fallback widening, an int and a bool stay apart in a boxed `Mixed`
+/// temp: storing an int in a bool slot (or the reverse) changes what PHP prints, so
+/// `0 ?? false` must echo `0` and `false` must echo nothing.
+pub(super) fn materialized_merge_type(left: &PhpType, right: &PhpType) -> PhpType {
+    let left = left.codegen_repr();
+    let right = right.codegen_repr();
+    if matches!(
+        (&left, &right),
+        (PhpType::Int, PhpType::Bool | PhpType::False) | (PhpType::Bool | PhpType::False, PhpType::Int)
+    ) {
+        return PhpType::Mixed;
+    }
+    wider_type_for_merge(&left, &right)
 }
 
 /// Chooses the wider materialized type for branch-local merge storage.
@@ -221,8 +252,14 @@ pub(super) fn lower_short_ternary(
 ) -> LoweredValue {
     let condition_span = value.span;
     let result_type = short_ternary_merge_result_type(ctx, value, default);
-    let value = lower_expr(ctx, value);
-    let cond = ctx.truthy(value, Some(condition_span));
+    let value = lower_array_value_for_merge(ctx, value).unwrap_or_else(|| lower_expr(ctx, value));
+    // A retained constant-null branch uses the raw I64 null sentinel. It is PHP-falsy,
+    // while `truthy` deliberately forwards ordinary I64 conditions without converting them.
+    let cond = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Void {
+        emit_bool_literal(ctx, false, Some(condition_span))
+    } else {
+        ctx.truthy(value, Some(condition_span))
+    };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let value_block = ctx

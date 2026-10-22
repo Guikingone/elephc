@@ -544,6 +544,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             _ => PhpType::Int,
         },
         ExprKind::InstanceOf { .. } => PhpType::Bool,
+        // `!` always yields a bool, as the checker and `lower_not` type it; the `int` default
+        // made a merge of `!$flag` with an int collapse into an int slot.
+        ExprKind::Not(_) => PhpType::Bool,
         _ => PhpType::Int,
     }
 }

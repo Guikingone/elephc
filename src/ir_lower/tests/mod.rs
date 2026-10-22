@@ -18,6 +18,7 @@ mod aggregate_operand_owners;
 mod argument_evaluation_owners;
 mod arrays;
 mod append_writes;
+mod nullable_array_merges;
 mod array_reference_outputs;
 mod array_implode;
 mod array_membership;

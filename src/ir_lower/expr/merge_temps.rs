@@ -17,6 +17,12 @@ pub(super) fn store_expr_into_temp(
     expr: &Expr,
     span: crate::span::Span,
 ) {
+    if temp_type.codegen_repr() == PhpType::Mixed {
+        if let Some(value) = lower_array_value_for_merge(ctx, expr) {
+            store_value_into_temp(ctx, temp_name, temp_type, value, span);
+            return;
+        }
+    }
     let value = lower_expr(ctx, expr);
     store_value_into_temp(ctx, temp_name, temp_type, value, span);
 }
@@ -109,7 +115,7 @@ pub(super) fn short_ternary_merge_result_type(
 ) -> PhpType {
     let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
     let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
-    wider_type_for_merge(&value_ty, &default_ty)
+    materialized_merge_type(&value_ty, &default_ty)
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.
@@ -120,7 +126,7 @@ pub(super) fn nullable_aware_branch_merge_type(left: &PhpType, right: &PhpType) 
         return normalize_union_members(vec![PhpType::Void, left_non_null, right_non_null])
             .unwrap_or(PhpType::Void);
     }
-    wider_type_for_merge(&left.codegen_repr(), &right.codegen_repr())
+    materialized_merge_type(left, right)
 }
 
 /// Returns true when a PHP type can materialize PHP null at runtime.
@@ -136,6 +142,11 @@ pub(super) fn php_type_allows_null(php_type: &PhpType) -> bool {
 
 /// Estimates the value type an expression will materialize during branch lowering.
 pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    // A nullsafe postfix chain lowers to its boxed chain temp whatever its last segment reads,
+    // so `$o?->floats[0]` must not be predicted as the syntactic `int` and cast back.
+    if let Some(storage) = super::nullsafe_chain::result_storage_type(expr) {
+        return storage;
+    }
     match &expr.kind {
         ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name).codegen_repr()),
         ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
@@ -161,8 +172,25 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ShortTernary { value, default } => {
             short_ternary_merge_result_type(ctx, value, default)
         }
+        ExprKind::NullCoalesce { value, default } => {
+            null_coalesce_merge_type(ctx, null_coalesce_value_type_for_merge(ctx, value), default)
+        }
+        ExprKind::Assignment {
+            value,
+            result_target,
+            prelude,
+            ..
+        } => materialized_expr_type_for_merge(
+            ctx,
+            assignment_result_expr(value, result_target.as_deref(), prelude),
+        ),
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),
+        // Typed the way `lower_buffer_new` stamps the allocation, so `buffer_new<float>(1)[0]`
+        // is read as a float element rather than the syntactic `int`.
+        ExprKind::BufferNew { element_type, .. } => {
+            PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)))
+        }
         ExprKind::PropertyAccess { object, property } => {
             property_access_expr_type_for_ir(ctx, object, property)
                 .unwrap_or_else(|| fallback_expr_type(expr))
@@ -186,6 +214,43 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
         ExprKind::ExprCall { .. } => PhpType::Mixed,
         _ => fallback_expr_type(expr),
+    }
+}
+
+/// Returns the expression an assignment expression evaluates to, for type prediction.
+///
+/// That is its result target, or the assigned value when there is none. A non-local assignment
+/// binds a value it cannot replay into a generated local in its prelude and reads that local
+/// back; a merge or literal is typed before the prelude runs, when the local is still unknown,
+/// so the local resolves to the value the prelude binds into it.
+pub(super) fn assignment_result_expr<'e>(
+    value: &'e Expr,
+    result_target: Option<&'e Expr>,
+    prelude: &'e [Stmt],
+) -> &'e Expr {
+    let result = result_target.unwrap_or(value);
+    let ExprKind::Variable(name) = &result.kind else {
+        return result;
+    };
+    prelude
+        .iter()
+        .rev()
+        .find_map(|stmt| match &stmt.kind {
+            StmtKind::Assign { name: bound, value } if bound == name => Some(value),
+            _ => None,
+        })
+        .unwrap_or(result)
+}
+
+/// Estimates the type the value side of `??` materializes before its null arm is removed.
+///
+/// A local keeps its declared PHP type here: `?int` stays `int|null`, so stripping the null
+/// leaves `int`, the same answer `null_coalesce_result_type` reads from the lowered load. The
+/// codegen representation (`TaggedScalar`) would hide the int behind the nullable carrier.
+fn null_coalesce_value_type_for_merge(ctx: &LoweringContext<'_, '_>, value: &Expr) -> PhpType {
+    match &value.kind {
+        ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name)),
+        _ => materialized_expr_type_for_merge(ctx, value),
     }
 }
 

@@ -696,6 +696,16 @@ pub(super) fn instance_callable_object_class_and_nullability(
                 static_callable_return_type(ctx, &target)
             }
         }
+        // `($t = $s)->buf` reads through the value the assignment evaluates to.
+        ExprKind::Assignment {
+            value,
+            result_target,
+            prelude,
+            ..
+        } => {
+            let result = assignment_result_expr(value, result_target.as_deref(), prelude);
+            return instance_callable_object_class_and_nullability(ctx, result);
+        }
         _ => infer_expr_type_syntactic(object),
     };
     let (class_name, nullable) = singular_object_class(&object_type)?;
