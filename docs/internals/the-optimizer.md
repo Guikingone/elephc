@@ -582,6 +582,26 @@ excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixe
 The backend's [frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells)
 are a separate storage optimization and do not require this pass to run.
 
+Lowering also uses a discarded trial to decide whether a potentially promoting
+local can retain scalar storage when the body is lowered again. For instance
+methods, `src/ir_lower/numeric_storage.rs::readonly_calls()` uses the ordinary
+method-signature resolver and accepts only a concrete user-class receiver with a
+final class or final method. Variadic, generator and by-reference-return methods
+are excluded. Physical arity and reference flags must match the signature; the
+receiver at operand zero is excluded and only by-value argument positions qualify.
+This records storage observations without changing call effects or dispatch.
+
+Within that storage trial only, method arguments are detached as scalar copies
+and unchanged integer join parameters are folded before loop/range analysis.
+Every parallel incoming edge must agree on the same non-self value with identical
+`I64`/PHP `int`/nonheap metadata, and that value must strictly dominate the join.
+The shared rewrite helpers preserve value identity and edge arguments. Missing
+entry values, disagreeing edges or uncertain metadata reject the fold. The trial
+is discarded after every counter update is proven nonoverflowing; it authorizes
+ordinary lowering again, including with IR optimization disabled, rather than
+installing speculative trial instructions in the executable function. Integer
+storage and buffer bounds remain independent proofs.
+
 ## EIR buffer resolution hoisting
 
 `src/ir_passes/buffer_access.rs` runs once after the module fixed point (and

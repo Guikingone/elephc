@@ -413,7 +413,7 @@ impl CounterProof {
                 if function.instructions[id.as_raw() as usize].op == Op::Call
                     || (self.copy_readonly_calls
                         && matches!(function.instructions[id.as_raw() as usize].op,
-                            Op::RuntimeCall | Op::ArrayPush))
+                            Op::RuntimeCall | Op::ArrayPush | Op::MethodCall))
                 {
                     let operands = function.instructions[id.as_raw() as usize].operands.clone();
                     for (position, source) in operands.into_iter().enumerate() {

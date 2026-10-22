@@ -38,6 +38,8 @@ mod control_flow_normalization;
 mod checked_int_sink;
 #[path = "optimizer/bounded_mixed_counter.rs"]
 mod bounded_mixed_counter;
+#[path = "optimizer/method_loop_counters.rs"]
+mod method_loop_counters;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
 #[path = "optimizer/concat_reset.rs"]

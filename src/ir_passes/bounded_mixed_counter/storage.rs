@@ -93,10 +93,118 @@ fn trial_safe(function: &Function, slots: &HashSet<LocalSlotId>, proof: &Counter
             && matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if slots.contains(&slot))
     }) { return false; }
     for _ in 0..16 {
-        if !super::super::loop_optimize::LoopOptimize.run(&mut trial, data) { break; }
+        let changed = fold_trivial_parameters(&mut trial);
+        if !super::super::loop_optimize::LoopOptimize.run(&mut trial, data) && !changed { break; }
     }
     super::super::integer_range::IntegerRange.run(&mut trial, data);
     proof.updates.iter().all(|id| trial.instruction(*id)
         .is_some_and(|inst| matches!(inst.op, Op::IAdd | Op::ISub)))
         && crate::ir::validate_function(&trial).is_ok()
+}
+
+/// Removes unchanged scalar joins only on the discarded trial before induction recognition.
+fn fold_trivial_parameters(function: &mut Function) -> bool {
+    use crate::ir::BlockId;
+    let dominance = super::super::compute_dominance(function);
+    let mut incoming: HashMap<BlockId, Vec<Vec<ValueId>>> = HashMap::new();
+    for block in &function.blocks {
+        if let Some(mut term) = block.terminator.clone() {
+            for (target, args) in super::super::cfg::successor_edges(&mut term) {
+                incoming.entry(*target).or_default().push(args.clone());
+            }
+        }
+    }
+    let mut replacements = HashMap::new();
+    let mut removed = Vec::new();
+    for block in &function.blocks {
+        if block.id == function.entry || !dominance.is_reachable(block.id) { continue; }
+        let Some(edges) = incoming.get(&block.id) else { continue; };
+        let mut positions = Vec::new();
+        for (index, &parameter) in block.params.iter().enumerate() {
+            let Some(metadata) = function.value(parameter) else { continue; };
+            if metadata.ir_type != IrType::I64 || metadata.php_type != PhpType::Int
+                || metadata.ownership != Ownership::NonHeap
+                || edges.iter().any(|args| args.get(index).is_none())
+            { continue; }
+            let mut sources = edges.iter().map(|args| args[index]).filter(|&value| value != parameter);
+            let Some(source) = sources.next() else { continue; };
+            if sources.any(|value| value != source) { continue; }
+            let Some(value) = function.value(source) else { continue; };
+            if value.ir_type != metadata.ir_type || value.php_type != metadata.php_type
+                || value.ownership != metadata.ownership
+            { continue; }
+            let source_block = match value.def {
+                ValueDef::Instruction { block, .. } | ValueDef::BlockParam { block, .. } => block,
+            };
+            // A replacement must be available before this join. A seedless parameter
+            // cycle or a same-block backedge result cannot supply an entry value.
+            if !dominance.strictly_dominates(source_block, block.id) { continue; }
+            replacements.insert(parameter, source);
+            positions.push(index);
+        }
+        if !positions.is_empty() { removed.push((block.id, positions)); }
+    }
+    if replacements.is_empty() { return false; }
+    super::replace_all_uses(function, &super::resolve_chains(&replacements));
+    for (block, positions) in removed {
+        super::super::loop_cfg::remove_parameters(function, block, &positions);
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{Builder, Terminator};
+
+    /// Builds two parallel conditional edges carrying equal or different scalar join values.
+    fn parallel_join(same: bool) -> Function {
+        let mut function = Function::new("parallel_join".into(), IrType::I64, PhpType::Int);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let join = builder.create_named_block("join", vec![(IrType::I64, PhpType::Int)]);
+        let result = builder.block_param(join, 0);
+        builder.set_entry(entry); builder.position_at_end(entry);
+        let left = builder.emit_const_i64(7);
+        let right = if same { left } else { builder.emit_const_i64(9) };
+        let condition = builder.emit_const_bool(true);
+        builder.terminate(Terminator::CondBr { cond: condition,
+            then_target: join, then_args: vec![left], else_target: join, else_args: vec![right] });
+        builder.position_at_end(join);
+        builder.terminate(Terminator::Return { value: Some(result) });
+        crate::ir::validate_function(&function).unwrap();
+        function
+    }
+
+    /// A common dominating input may replace a scalar phi only when every parallel edge agrees.
+    #[test]
+    fn method_counter_trial_join_checks_every_parallel_edge() {
+        for same in [false, true] {
+            let mut function = parallel_join(same);
+            let before = crate::ir::print_function(&function);
+            assert_eq!(fold_trivial_parameters(&mut function), same);
+            crate::ir::validate_function(&function).unwrap();
+            if same { assert!(function.blocks[1].params.is_empty()); }
+            else { assert_eq!(crate::ir::print_function(&function), before); }
+        }
+    }
+
+    /// Equal payload words do not authorize replacing a PHP boolean phi as an integer counter.
+    #[test]
+    fn method_counter_trial_join_preserves_noninteger_tags() {
+        let mut function = parallel_join(true);
+        function.return_php_type = PhpType::Bool;
+        for metadata in &mut function.values {
+            if metadata.php_type == PhpType::Int { metadata.php_type = PhpType::Bool; }
+        }
+        for inst in &mut function.instructions {
+            if inst.result_php_type == PhpType::Int { inst.result_php_type = PhpType::Bool; }
+            if inst.op == Op::ConstI64 {
+                inst.op = Op::ConstBool; inst.immediate = Some(Immediate::Bool(true));
+            }
+        }
+        crate::ir::validate_function(&function).unwrap();
+        assert!(!fold_trivial_parameters(&mut function));
+        assert_eq!(function.blocks[1].params.len(), 1);
+    }
 }
