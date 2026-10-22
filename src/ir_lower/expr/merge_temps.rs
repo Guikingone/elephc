@@ -169,6 +169,15 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::NullCoalesce { value, default } => {
             null_coalesce_merge_type(ctx, null_coalesce_value_type_for_merge(ctx, value), default)
         }
+        ExprKind::Assignment {
+            value,
+            result_target,
+            prelude,
+            ..
+        } => materialized_expr_type_for_merge(
+            ctx,
+            assignment_result_expr(value, result_target.as_deref(), prelude),
+        ),
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),
         ExprKind::PropertyAccess { object, property } => {
@@ -195,6 +204,31 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ExprCall { .. } => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
+}
+
+/// Returns the expression an assignment expression evaluates to, for type prediction.
+///
+/// That is its result target, or the assigned value when there is none. A non-local assignment
+/// binds a value it cannot replay into a generated local in its prelude and reads that local
+/// back; a merge or literal is typed before the prelude runs, when the local is still unknown,
+/// so the local resolves to the value the prelude binds into it.
+pub(super) fn assignment_result_expr<'e>(
+    value: &'e Expr,
+    result_target: Option<&'e Expr>,
+    prelude: &'e [Stmt],
+) -> &'e Expr {
+    let result = result_target.unwrap_or(value);
+    let ExprKind::Variable(name) = &result.kind else {
+        return result;
+    };
+    prelude
+        .iter()
+        .rev()
+        .find_map(|stmt| match &stmt.kind {
+            StmtKind::Assign { name: bound, value } if bound == name => Some(value),
+            _ => None,
+        })
+        .unwrap_or(result)
 }
 
 /// Estimates the type the value side of `??` materializes before its null arm is removed.

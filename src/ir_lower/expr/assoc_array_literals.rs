@@ -127,7 +127,8 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         ExprKind::Ternary { .. }
         | ExprKind::ShortTernary { .. }
         | ExprKind::Match { .. }
-        | ExprKind::NullCoalesce { .. } => {
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::Assignment { .. } => {
             // Use the actual branch-merge representation before choosing hash storage.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
         }
@@ -283,20 +284,12 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
 
 /// Returns the buffer type a receiver expression loads, or `None` when it is not a buffer.
 ///
-/// A call, `??`, ternary or match answers through the merge predictor, which agrees with the
-/// type their lowering materializes, and an assignment answers the type of the value it
-/// evaluates to. Only a buffer answer is returned: the syntactic fallback the caller keeps for
-/// everything else types an element read `int`, which truncated `buffer<float>` elements read
-/// through these receivers.
+/// A call, `??`, ternary, match or assignment answers through the merge predictor, which agrees
+/// with the type their lowering materializes. Only a buffer answer is returned: the syntactic
+/// fallback the caller keeps for everything else types an element read `int`, which truncated
+/// `buffer<float>` elements read through these receivers.
 fn buffer_receiver_type_for_ir(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -> Option<PhpType> {
-    let loaded = match &receiver.kind {
-        ExprKind::Assignment {
-            value,
-            result_target,
-            ..
-        } => return buffer_receiver_type_for_ir(ctx, result_target.as_deref().unwrap_or(value)),
-        _ => super::merge_temps::materialized_expr_type_for_merge(ctx, receiver),
-    };
+    let loaded = super::merge_temps::materialized_expr_type_for_merge(ctx, receiver);
     matches!(loaded.codegen_repr(), PhpType::Buffer(_)).then_some(loaded)
 }
 

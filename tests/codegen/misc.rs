@@ -237,6 +237,28 @@ echo "|", $w["k"], ":", gettype($w["k"]), "\n";
     );
 }
 
+/// Regression for task b4024b9a: an assignment expression used as a ternary arm or an array
+/// literal element is typed from the value it evaluates to, so `($tmp = false)` merged with an
+/// int stays `false`, and `[$x = "a", "k" => $y = 2.5]` stores the string and the float instead
+/// of their raw words stamped as integers.
+#[test]
+fn test_assignment_expressions_keep_their_type_in_merges_and_literals() {
+    let out = compile_and_run(
+        r#"<?php
+function show(bool $flag, int $argc): void {
+    echo ($argc > 0) ? ($tmp = $flag) : 0, ":";
+    echo gettype(($argc > 0) ? ($tmp = $flag) : 0), "|";
+    $list = [$tmp = $flag];
+    echo $list[0], ":", gettype($list[0]), "|";
+    $mixed = [$x = "a", "k" => $y = 2.5];
+    echo $mixed[0], ":", $mixed["k"], "\n";
+}
+show(false, $argc);
+"#,
+    );
+    assert_eq!(out, ":boolean|:boolean|a:2.5\n");
+}
+
 /// Verifies null-coalescing a null variable with a string literal default allocates the string
 /// and does not evaluate the default eagerly.
 #[test]

@@ -153,6 +153,30 @@ echo $list[0], "|", $list[1], "|", ($argc > 0) ? ($alias = $floats)[0] : 0, "\n"
     assert_eq!(out, "1.5||1.5|1.5|1.5\n");
 }
 
+/// Regression for task b4024b9a: inside a function, a buffer element read through a property
+/// assignment receiver (`($s->buf = make())[0]`, whose call is bound in the assignment's prelude)
+/// keeps the buffer's element type in a literal and a ternary.
+#[test]
+fn test_buffer_element_through_property_assignment_keeps_its_type_in_merges() {
+    let out = compile_and_run(
+        r#"<?php
+function make(): buffer<float> {
+    $b = buffer_new<float>(1);
+    $b[0] = 1.5;
+    return $b;
+}
+class S { public buffer<float> $buf; }
+function show(S $s, int $argc): void {
+    $list = [($s->buf = make())[0]];
+    echo $list[0], "|";
+    echo ($argc > 0) ? ($s->buf = make())[0] : 0, "\n";
+}
+show(new S(), $argc);
+"#,
+    );
+    assert_eq!(out, "1.5|1.5\n");
+}
+
 /// Verifies declared buffer properties accept both literal and runtime integer index writes.
 #[test]
 fn test_buffer_property_declared_literal_and_runtime_index_writes() {
