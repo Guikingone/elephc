@@ -11,6 +11,9 @@ trap 'rm -rf "$fixture_dir"' EXIT HUP INT TERM
 #   exit_late    both pass, and the process exits 0 after 3s: past the 2s budget but inside
 #                the watchdog's 5s sleep (the CI failure shape)
 #   crash_after  both pass, and the process exits 3 after 3s
+#   crash_racing both pass, then the process lingers and answers the watchdog's TERM by exiting
+#                3: to the runner, the same as a crash landing between the watchdog's liveness
+#                check and its signal, which no sleep can time reliably
 #   slow_exit    both pass, then the process lingers holding stdout
 #   stall_before only the first passes, then the process lingers
 cat > "$fixture_dir/codegen_tests" <<'EOF'
@@ -41,6 +44,12 @@ case "$FAKE_MODE" in
         echo "test result: ok. 2 passed; 0 failed"
         sleep 3
         exit 3
+        ;;
+    crash_racing)
+        echo "test codegen::eval::second ... ok"
+        echo "test result: ok. 2 passed; 0 failed"
+        trap 'exit 3' TERM
+        while :; do sleep 1; done
         ;;
     stall_before)
         sleep 30
@@ -98,6 +107,16 @@ test ! -e "$fixture_dir/nextest-args"
 status=$(run_shard crash_after)
 if [ "$status" -ne 3 ]; then
     echo "crash after every test passed exited $status, expected 3" >&2
+    cat "$fixture_dir/out" >&2
+    exit 1
+fi
+test ! -e "$fixture_dir/nextest-args"
+
+# A status the pass returns by itself while the watchdog stops it is kept, not replaced by the
+# watchdog's 124 and then waved through by the all-passed warning.
+status=$(run_shard crash_racing)
+if [ "$status" -ne 3 ]; then
+    echo "a crash racing the watchdog's stop exited $status, expected 3" >&2
     cat "$fixture_dir/out" >&2
     exit 1
 fi

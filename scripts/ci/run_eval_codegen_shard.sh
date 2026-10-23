@@ -158,7 +158,16 @@ done
 wait "$tee_pid" || true
 pass1_status=$(cat "$pass1_status_file" 2>/dev/null || echo 1)
 if [[ -n $watchdog_reason ]]; then
-    pass1_status=124
+    # 143 and 137 are the watchdog's own TERM and KILL. Any other status is one the pass returned
+    # by itself after the liveness check above but before the signal landed, and it stands: a
+    # crash racing the budget must not become the all-passed warning below.
+    case $pass1_status in
+        137 | 143) pass1_status=124 ;;
+        *)
+            echo "eval shard: the single-process pass exited with status $pass1_status before the watchdog's signal; keeping that status" >&2
+            watchdog_reason=""
+            ;;
+    esac
 fi
 
 # --- pass 1 JUnit report ------------------------------------------------------
