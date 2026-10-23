@@ -133,12 +133,18 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             predicates::emit_array_truthiness(ctx, value)?;
         }
-        // PHP WARNS and answers 1 for every ordinary object, enums included. The object
-        // handle `spl_object_id()` returns is NOT the cast value: a second live object used
-        // to answer 2 where php answers 1.
-        PhpType::Object(_) => {
-            emit_object_to_number_warning(ctx, value, 0)?;
-            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        // php WARNS and answers 1 for an ordinary object (enums included), but its
+        // `CurlHandle` and `CurlMultiHandle` install a cast handler that answers the OBJECT
+        // HANDLE with no warning (php-src's `curl_int_cast.phpt` pins it; measured on
+        // 8.5.10). `CurlShareHandle` does not — it warns and answers 1 like any other.
+        PhpType::Object(class) => {
+            if int_cast_yields_the_object_handle(&class) {
+                ctx.load_value_to_result(value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_object_handle_of");
+            } else {
+                emit_object_to_number_warning(ctx, value, 0)?;
+                abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+            }
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -515,6 +521,15 @@ fn lower_object_to_string(
     }
     emit_missing_tostring_fatal(ctx, normalized);
     Ok(())
+}
+
+/// Returns whether `(int)` on this class answers the object handle instead of warning.
+///
+/// Only php's two curl handle classes install a `cast_object` handler for the integer cast;
+/// `CurlShareHandle` and every userland object warn and answer 1.
+fn int_cast_yields_the_object_handle(class_name: &str) -> bool {
+    let name = class_name.trim_start_matches('\\');
+    name.eq_ignore_ascii_case("CurlHandle") || name.eq_ignore_ascii_case("CurlMultiHandle")
 }
 
 /// Emits php's "Object of class X could not be converted to int|float" warning for a cast.
