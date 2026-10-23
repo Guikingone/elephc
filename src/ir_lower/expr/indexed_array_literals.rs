@@ -127,8 +127,8 @@ pub(crate) fn lower_array_literal_with_expected_type(
 /// A literal of only `null`s (`[null]`, `["k" => null]`) has no pointer of its own to choose
 /// pointer storage from and is built with boxed `mixed` slots, which a later pointer append
 /// and read misinterpret. When the destination's element or value type is a pointer, the
-/// literal takes that type instead, so each `null` is the null pointer word. Every other
-/// expression lowers as usual.
+/// literal takes that type instead, so each `null` is the null pointer word. A literal with a
+/// spread and every other expression lower as usual and are then converted to pointer storage.
 pub(crate) fn lower_expr_for_destination(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
@@ -155,7 +155,10 @@ pub(crate) fn lower_expr_for_destination(
         (PhpType::Array(elem), ExprKind::ArrayLiteral(_))
             if matches!(elem.codegen_repr(), PhpType::Pointer(_)) =>
         {
-            lower_array_literal_with_expected_type(ctx, expr, *elem)
+            // A literal with a spread keeps its own element type, so `[...[null]]` still
+            // builds boxed cells and needs the same conversion as any other array source.
+            let value = lower_array_literal_with_expected_type(ctx, expr, *elem);
+            convert_array_to_pointer_storage(ctx, value, destination, expr.span)
         }
         (PhpType::AssocArray { key, value }, ExprKind::ArrayLiteralAssoc(pairs))
             if matches!(value.codegen_repr(), PhpType::Pointer(_)) =>

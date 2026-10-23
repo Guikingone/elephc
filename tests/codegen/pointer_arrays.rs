@@ -920,3 +920,37 @@ echo $r, take(r());
     assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
+
+/// Verifies a spread literal of only `null`s (`[...[null]]`) bound to a pointer-array return or
+/// ternary branch is converted to pointer storage: the caller reads the returned array directly
+/// in `foreach` and `isset()` (no typed parameter repairs it on the way), every element is null,
+/// and the conversion keeps the heap-debug leak summary unchanged.
+#[test]
+fn test_pointer_array_destinations_convert_null_spread_literals() {
+    let prelude = r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function sp(): array<ptr<Vec2>|null> { return [...[null]]; }
+function spt(bool $b): array<ptr<Vec2>|null> { return $b ? [...[null], ...[null]] : [null]; }
+function walk(): string {
+    $s = "";
+    foreach (sp() as $p) { $s .= $p === null ? "N" : "L"; }
+    foreach (spt(true) as $p) { $s .= $p === null ? "N" : "L"; }
+    $l = sp();
+    $t = spt(true);
+    return $s . (isset($l[0]) ? "s" : "u") . (isset($t[1]) ? "s" : "u");
+}
+"#;
+    let calls = "echo walk();\n";
+    let tail = "echo \"\\n\";\n";
+    let baseline = compile_and_run_with_heap_debug(&format!("{prelude}{tail}"));
+    let called = compile_and_run_with_heap_debug(&format!("{prelude}{calls}{tail}"));
+    let summary = |stderr: &str| {
+        stderr
+            .lines()
+            .find(|line| line.contains("HEAP DEBUG: leak summary"))
+            .map(str::to_string)
+    };
+    assert_eq!(called.stdout, "NNNuu\n", "{}", called.stderr);
+    assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
+    assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
+}
