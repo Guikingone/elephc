@@ -249,6 +249,24 @@ fn test_error_buffer_len_requires_buffer_argument() {
     );
 }
 
+/// Verifies that buffer_ptr rejects a non-buffer argument (int).
+#[test]
+fn test_error_buffer_ptr_requires_buffer_argument() {
+    expect_error(
+        "<?php $p = buffer_ptr(1);",
+        "buffer_ptr() argument must be buffer<T>",
+    );
+}
+
+/// Verifies that buffer_ptr rejects calls with more than one argument.
+#[test]
+fn test_error_buffer_ptr_wrong_arg_count() {
+    expect_error(
+        "<?php buffer<int> $b = buffer_new<int>(1); $p = buffer_ptr($b, 1);",
+        "buffer_ptr() takes exactly 1 argument",
+    );
+}
+
 /// Verifies that buffer_free rejects a non-buffer argument (int).
 #[test]
 fn test_error_buffer_free_requires_buffer_argument() {

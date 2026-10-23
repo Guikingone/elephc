@@ -167,6 +167,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 |---|---|---|
 | `buffer_free()` | Buffer | Frees a buffer<T> and nulls the local variable that held it. |
 | `buffer_len()` | Buffer | Returns the logical element count of a buffer<T>. |
+| `buffer_ptr()` | Buffer | Returns the payload address of a buffer<T>, valid until the buffer is freed. |
 | `class_attribute_args()` | Class | Returns the constructor arguments of a named attribute applied to a class. |
 | `class_attribute_names()` | Class | Returns the list of attribute names applied to a class. |
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |

@@ -2682,7 +2682,10 @@ fn coerce_result_to_type(
     }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         match target_ty.codegen_repr() {
-            PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) => {
+            // A buffer handle is boxed as an integer like a pointer word, so the integer cast
+            // recovers it for a `buffer<T>` parameter (the `buffer_len(...)` and
+            // `buffer_ptr(...)` wrappers forwarded through a `callable`).
+            PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) | PhpType::Buffer(_) => {
                 abi::emit_call_label(emitter, "__rt_mixed_cast_int");
             }
             PhpType::Bool => {
@@ -2737,6 +2740,7 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
             PhpType::Int
                 | PhpType::Resource(_)
                 | PhpType::Pointer(_)
+                | PhpType::Buffer(_)
                 | PhpType::Bool
                 | PhpType::Float
                 | PhpType::Str
