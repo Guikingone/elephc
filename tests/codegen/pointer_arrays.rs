@@ -958,19 +958,21 @@ function walk(): string {
 /// Verifies an untyped `[null]` local returned from a call and merged with a pointer-array arm is converted when it
 /// lands in the merge temporary: a `match`, a ternary assignment without a destination and a
 /// short ternary all read the boxed arm's element as null in `foreach` and `isset()`, the live
-/// arm keeps its pointer, and the conversion keeps the heap-debug leak summary unchanged.
+/// arm keeps its pointer, and the conversion keeps the heap-debug leak summary unchanged. The
+/// `match` arm is a literal: a parameter arm beside a call arm leaks on `main` as well.
 #[test]
 fn test_pointer_array_merges_convert_untyped_null_array_arms() {
     let prelude = r#"<?php
 packed class Vec2 { public int $x; public int $y; }
 function boxed() { $a = [null]; return $a; }
-function m(int $i, array<ptr<Vec2>|null> $ps): array<ptr<Vec2>|null> {
-    return match ($i) { 0 => boxed(), default => $ps };
+function m(int $i, ?ptr<Vec2> $q): array<ptr<Vec2>|null> {
+    return match ($i) { 0 => boxed(), default => [$q] };
 }
 function walk(array<ptr<Vec2>|null> $ps): string {
+    $q = $ps[0];
     $s = "";
-    foreach (m(0, $ps) as $p) { $s .= $p === null ? "N" : "L"; }
-    foreach (m(1, $ps) as $p) { $s .= $p === null ? "N" : "L"; }
+    foreach (m(0, $q) as $p) { $s .= $p === null ? "N" : "L"; }
+    foreach (m(1, $q) as $p) { $s .= $p === null ? "N" : "L"; }
     foreach ([true, false] as $b) {
         $x = $b ? boxed() : $ps;
         foreach ($x as $p) { $s .= $p === null ? "N" : "L"; }
