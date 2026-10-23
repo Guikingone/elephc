@@ -168,6 +168,7 @@ mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
 mod heap_alloc;
+pub(crate) mod heap_live_bases;
 mod heap_grow_tail;
 mod heap_debug_check_live;
 mod heap_debug_fail;

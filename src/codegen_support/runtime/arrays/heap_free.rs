@@ -102,6 +102,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address after validation
     emitter.label("__rt_heap_free_debug_checked");
 
+    super::heap_live_bases::emit_update(emitter, false);
     // -- compute header address and block end --
     emitter.instruction("sub x9, x0, #16");                                     // x9 = header address (block_size lives here)
     emitter.instruction("ldr w11, [x9]");                                       // x11 = block size (32-bit, zero-extends)
@@ -424,6 +425,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
         emitter.label("__rt_heap_free_mbstring_done");
     }
 
+    super::heap_live_bases::emit_update(emitter, false);
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");

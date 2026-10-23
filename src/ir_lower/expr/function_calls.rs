@@ -317,6 +317,7 @@ pub(super) fn emit_builtin_call_value(
             ) && ctx.builder.value_php_type(raw_call.value).codegen_repr() == PhpType::Str
                 && operands.first().is_some_and(|operand| {
                     value_is_call_argument_evaluation_pin(ctx, *operand)
+                        || ctx.borrowed_string_call_operands.contains(operand)
                 });
             let call = if stabilizes_evaluation_pin {
                 ctx.emit_owned_value(

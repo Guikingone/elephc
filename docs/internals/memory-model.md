@@ -358,6 +358,14 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 - **The buffer can safely reset** without invalidating stored values
 - **Hash table keys** are also persisted to heap (via `str_persist`)
 
+Transient adoption accepts only an exact live allocation base. The allocator records each
+8-byte payload granule in `_heap_live_bases`, a bitmap using one byte per 64 heap bytes.
+Allocation sets the base bit, free clears it before reuse or coalescing, and web arena reset
+clears the used bitmap range before resetting `_heap_off`. The probe checks alignment, range,
+the complete transient kind and the live-base bit in constant time. User-controlled bytes
+before an interior substring cannot impersonate a heap header, and unrelated heap blocks
+never need to be scanned.
+
 ### Outgrowing the buffer
 
 64KB is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.

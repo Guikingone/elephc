@@ -12,10 +12,96 @@
 //!   `$s .= ...` accumulation loop does not leave one oversized block behind per append.
 //! - `__rt_str_claim` retags such a temporary as owned without copying it, so a value that a
 //!   user call may hand back has exactly one releasing owner before any persist can adopt it.
+//! - The allocator's live-base bitmap rejects interior pointers in constant time.
 //! - Optional INI metadata records fresh lazy origins and preserves complete copies without native heap references.
 
 use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+
+/// Emits a probe that accepts only the exact payload base of a live transient concat block.
+///
+/// A range check plus `[pointer - 8]` kind load is insufficient for string slices because their
+/// interior pointer can be preceded by user-controlled bytes that resemble a heap header. The
+/// allocator's live-base bitmap rejects interior pointers without scanning unrelated blocks.
+fn emit_transient_base_probe(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.blank();
+        emitter.comment("--- runtime: str_transient_base ---");
+        emitter.label("__rt_str_transient_base");
+        emitter.instruction("test rax, rax");                                   // null pointers cannot name a managed payload base
+        emitter.instruction("jz __rt_str_transient_base_zero_x86");             // reject null before reading allocator state
+        crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+        emitter.instruction("lea rcx, [r8 + 16]");                              // compute the first possible payload base
+        emitter.instruction("cmp rax, rcx");                                    // is the candidate below the first payload?
+        emitter.instruction("jb __rt_str_transient_base_zero_x86");             // static and foreign pointers are not transient blocks
+        crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
+        emitter.instruction("mov r9, QWORD PTR [r9]");                          // load the live bump extent
+        emitter.instruction("add r9, r8");                                      // derive the current heap end
+        emitter.instruction("cmp rax, r9");                                     // is the candidate outside the live heap window?
+        emitter.instruction("jae __rt_str_transient_base_zero_x86");            // reject pointers at or beyond the heap end
+        emitter.instruction("test al, 7");                                      // every real payload base has eight-byte alignment
+        emitter.instruction("jnz __rt_str_transient_base_zero_x86");            // reject unaligned interior byte pointers
+        emitter.instruction("mov r10, QWORD PTR [rax - 8]");                    // cheaply reject ordinary strings before probing the side table
+        emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND))); // materialize the complete transient kind word
+        emitter.instruction("cmp r10, r11");                                    // do the candidate's preceding bytes even carry the full marker?
+        emitter.instruction("jne __rt_str_transient_base_zero_x86");            // ordinary strings avoid all side-table work
+        emitter.instruction("mov r9, rax");                                     // copy the candidate before deriving its heap-relative offset
+        emitter.instruction("sub r9, r8");                                      // derive the candidate's heap-relative byte offset
+        emitter.instruction("mov rcx, r9");                                     // preserve the offset for the granule-bit calculation
+        emitter.instruction("shr r9, 6");                                       // select one bitmap byte for each 64 heap bytes
+        emitter.instruction("shr rcx, 3");                                      // convert the byte offset to its 8-byte granule index
+        emitter.instruction("and ecx, 7");                                      // select the candidate bit within that bitmap byte
+        emitter.instruction("mov r11d, 1");                                     // begin with the low bit set
+        emitter.instruction("shl r11d, cl");                                    // move the mask to the candidate payload-base bit
+        crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_live_bases");
+        emitter.instruction("test BYTE PTR [r10 + r9], r11b");                  // did the allocator publish this exact live payload base?
+        emitter.instruction("jz __rt_str_transient_base_zero_x86");             // forged markers inside a payload have no live-base bit
+        emitter.instruction("cmp DWORD PTR [rax - 12], 0");                     // is the exact matching block still live?
+        emitter.instruction("je __rt_str_transient_base_zero_x86");             // free blocks cannot be adopted
+        emitter.instruction("mov eax, 1");                                      // report the exact live transient payload base
+        emitter.instruction("ret");                                             // return the exact-base classification
+        emitter.label("__rt_str_transient_base_zero_x86");
+        emitter.instruction("xor eax, eax");                                    // report a nonmatching or interior pointer
+        emitter.instruction("ret");                                             // return false to the caller
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: str_transient_base ---");
+    emitter.label_shared("__rt_str_transient_base");
+    emitter.instruction("cbz x0, __rt_str_transient_base_zero");                // null pointers cannot name a managed payload base
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    emitter.instruction("add x13, x9, #16");                                    // compute the first possible payload base
+    emitter.instruction("cmp x0, x13");                                         // is the candidate below the first payload?
+    emitter.instruction("b.lo __rt_str_transient_base_zero");                   // static and foreign pointers are not transient blocks
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
+    emitter.instruction("ldr x10, [x10]");                                      // load the live bump extent
+    emitter.instruction("add x10, x9, x10");                                    // derive the current heap end
+    emitter.instruction("cmp x0, x10");                                         // is the candidate outside the live heap window?
+    emitter.instruction("b.hs __rt_str_transient_base_zero");                   // reject pointers at or beyond the heap end
+    emitter.instruction("tst x0, #7");                                          // every real payload base has eight-byte alignment
+    emitter.instruction("b.ne __rt_str_transient_base_zero");                   // reject unaligned interior byte pointers
+    emitter.instruction("ldr x11, [x0, #-8]");                                  // cheaply reject ordinary strings before probing the side table
+    emitter.instruction(&format!("cmp x11, #{}", CONCAT_TEMP_HEAP_KIND));       // do the candidate's preceding bytes carry the complete transient kind?
+    emitter.instruction("b.ne __rt_str_transient_base_zero");                   // ordinary strings avoid all side-table work
+    emitter.instruction("sub x11, x0, x9");                                     // derive the candidate's heap-relative byte offset
+    emitter.instruction("lsr x12, x11, #6");                                    // select one bitmap byte for each 64 heap bytes
+    emitter.instruction("lsr x11, x11, #3");                                    // convert the byte offset to its 8-byte granule index
+    emitter.instruction("and x11, x11, #7");                                    // select the candidate bit within that bitmap byte
+    emitter.instruction("mov w13, #1");                                         // begin with the low bit set
+    emitter.instruction("lsl w13, w13, w11");                                   // move the mask to the candidate payload-base bit
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_heap_live_bases");
+    emitter.instruction("ldrb w14, [x14, x12]");                                // load the side-table byte for this candidate granule
+    emitter.instruction("tst w14, w13");                                        // did the allocator publish this exact live payload base?
+    emitter.instruction("b.eq __rt_str_transient_base_zero");                   // forged markers inside a payload have no live-base bit
+    emitter.instruction("ldr w14, [x0, #-12]");                                 // load the exact matching block's live refcount
+    emitter.instruction("cbz w14, __rt_str_transient_base_zero");               // free blocks cannot be adopted
+    emitter.instruction("mov x0, #1");                                          // report the exact live transient payload base
+    emitter.instruction("ret");                                                 // return the exact-base classification
+    emitter.label("__rt_str_transient_base_zero");
+    emitter.instruction("mov x0, #0");                                          // report a nonmatching or interior pointer
+    emitter.instruction("ret");                                                 // return false to the caller
+}
 
 
 /// str_claim: give a possibly transient string one owner without copying it.
@@ -28,6 +114,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// user call that may hand it back: from then on `__rt_str_persist` duplicates the block instead
 /// of adopting it, so the caller's eventual release is the only one that frees it.
 pub fn emit_str_claim(emitter: &mut Emitter, mbstring: bool) {
+    emit_transient_base_probe(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_str_claim_linux_x86_64(emitter, mbstring);
         return;
@@ -47,9 +134,8 @@ pub fn emit_str_claim(emitter: &mut Emitter, mbstring: bool) {
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the frame pointer and return address across the heap-kind probe
     emitter.instruction("mov x29, sp");                                         // establish the claim-helper probe frame pointer
     emitter.instruction("mov x0, x1");                                          // pass the payload pointer to the uniform heap-kind probe
-    emitter.instruction("bl __rt_heap_kind");                                   // classify the storage without disturbing the x1/x2 string pair
-    emitter.instruction(&format!("cmp x0, #{}", CONCAT_TEMP_HEAP_KIND));        // is the payload an unclaimed transient heap block?
-    emitter.instruction("b.ne __rt_str_claim_keep");                            // scratch, literals and owned strings are already safe to share
+    emitter.instruction("bl __rt_str_transient_base");                          // require the exact base of a live transient block
+    emitter.instruction("cbz x0, __rt_str_claim_keep");                         // scratch, slices, literals and owned strings are already safe to share
     emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned elephc string
     emitter.instruction("str x9, [x1, #-8]");                                   // retag the transient block as owned so later persists duplicate it
     if mbstring {
@@ -82,9 +168,9 @@ fn emit_str_claim_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
     emitter.instruction("sub rsp, 16");                                         // reserve aligned slots for the payload pointer and length
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the payload pointer across the heap-kind probe
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // keep the payload length across the heap-kind probe
-    emitter.instruction("call __rt_heap_kind");                                 // classify the storage (rax already holds the payload pointer)
-    emitter.instruction(&format!("cmp eax, {}", CONCAT_TEMP_HEAP_KIND));        // is the payload an unclaimed transient heap block?
-    emitter.instruction("jne __rt_str_claim_keep_x86");                         // scratch, literals and owned strings are already safe to share
+    emitter.instruction("call __rt_str_transient_base");                        // require the exact base of a live transient block
+    emitter.instruction("test eax, eax");                                       // did the exact-base probe accept this payload?
+    emitter.instruction("jz __rt_str_claim_keep_x86");                          // scratch, slices, literals and owned strings are already safe to share
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the transient block pointer for the in-place retag
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // retag the transient block as owned so later persists duplicate it
@@ -133,10 +219,9 @@ pub fn emit_str_persist(emitter: &mut Emitter, mbstring: bool) {
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the frame pointer and return address across the heap-kind probe
     emitter.instruction("mov x29, sp");                                         // establish the persist-helper probe frame pointer
     emitter.instruction("mov x0, x1");                                          // pass the source payload pointer to the uniform heap-kind probe
-    emitter.instruction("bl __rt_heap_kind");                                   // classify the source storage without disturbing the x1/x2 string pair
-    emitter.instruction(&format!("cmp x0, #{}", CONCAT_TEMP_HEAP_KIND));        // is the source an unowned heap-backed concat temporary?
+    emitter.instruction("bl __rt_str_transient_base");                          // require the exact base of a live transient block
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the frame pointer and return address after the probe
-    emitter.instruction("b.ne __rt_str_persist_duplicate");                     // every other source still gets a fresh owned duplicate
+    emitter.instruction("cbz x0, __rt_str_persist_duplicate");                  // every other source, including slices, gets a fresh owned duplicate
     emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
     emitter.instruction("str x9, [x1, #-8]");                                   // retag the concat temporary as an owned string in place
     if mbstring {
@@ -236,11 +321,11 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source length across the heap allocation helper call
 
     // -- take over a transient `.` operator temporary instead of duplicating it --
-    emitter.instruction("call __rt_heap_kind");                                 // classify the source storage (rax already holds the source pointer)
-    emitter.instruction(&format!("cmp eax, {}", CONCAT_TEMP_HEAP_KIND));        // is the source an unowned heap-backed concat temporary?
-    emitter.instruction("jne __rt_str_persist_duplicate");                      // every other source still gets a fresh owned duplicate
+    emitter.instruction("call __rt_str_transient_base");                        // require the exact base of a live transient block
+    emitter.instruction("test eax, eax");                                       // did the exact-base probe accept this payload?
+    emitter.instruction("jz __rt_str_persist_duplicate");                       // every other source, including slices, gets a fresh owned duplicate
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the concat temporary payload pointer for the in-place retag
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1)));// materialize the owned-string heap kind word with the x86_64 heap magic marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap magic marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // retag the concat temporary as an owned string in place
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the original string length for the x86_64 string result pair
     if mbstring {
@@ -253,7 +338,7 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
     emitter.label("__rt_str_persist_duplicate");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the byte length into the x86_64 heap helper input register
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned string storage and return the payload pointer in rax
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1)));// materialize the owned-string heap kind word with the x86_64 heap magic marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap magic marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a persisted elephc string in the uniform heap header
     emitter.instruction("mov r8, rax");                                         // preserve the destination heap pointer for the byte-copy loop and final return value
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source pointer after the allocator helper returns
@@ -307,8 +392,8 @@ mod tests {
         }
     }
 
-    /// Every target emits the non-copying claim helper next to persist: it probes the heap kind,
-    /// retags only a transient concat block as an owned string, and never allocates.
+    /// Every target emits the non-copying claim helper next to persist: it requires an exact
+    /// transient block base, retags that block as an owned string, and never allocates.
     #[test]
     fn str_claim_retags_only_transient_blocks_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -319,14 +404,45 @@ mod tests {
             let start = asm.find("__rt_str_claim:\n").unwrap_or_else(|| panic!("{name}: no claim helper"));
             let end = asm[start..].find("__rt_str_persist:\n").map(|end| start + end).unwrap_or(asm.len());
             let claim = &asm[start..end];
-            assert!(claim.contains("__rt_heap_kind"), "{name}: {claim}");
+            assert!(claim.contains("__rt_str_transient_base"), "{name}: {claim}");
             assert!(!claim.contains("__rt_heap_alloc"), "{name}: {claim}");
             if target.arch == Arch::X86_64 {
-                assert!(claim.contains(&format!("cmp eax, {}", CONCAT_TEMP_HEAP_KIND)), "{name}: {claim}");
                 assert!(claim.contains("mov QWORD PTR [rax - 8], r10"), "{name}: {claim}");
             } else {
-                assert!(claim.contains(&format!("cmp x0, #{}", CONCAT_TEMP_HEAP_KIND)), "{name}: {claim}");
                 assert!(claim.contains("str x9, [x1, #-8]"), "{name}: {claim}");
+            }
+        }
+    }
+
+    /// Exact bases come from the bitmap without a heap walk, with live and complete headers.
+    #[test]
+    fn transient_base_probe_rejects_interior_pointers_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_str_persist(&mut emitter, false);
+            let asm = emitter.output();
+            let start = asm.find("__rt_str_transient_base:\n")
+                .unwrap_or_else(|| panic!("{name}: no exact transient-base probe"));
+            let end = asm[start..].find("__rt_str_claim:\n")
+                .map(|end| start + end)
+                .unwrap_or(asm.len());
+            let probe = &asm[start..end];
+            assert!(probe.contains("_heap_buf"), "{name}: {probe}");
+            assert!(probe.contains("_heap_off"), "{name}: {probe}");
+            assert!(probe.contains("_heap_live_bases"), "{name}: {probe}");
+            assert!(!probe.contains("transient_base_scan"), "{name}: {probe}");
+            if target.arch == Arch::X86_64 {
+                assert!(probe.contains("test BYTE PTR [r10 + r9], r11b"), "{name}: {probe}");
+                assert!(probe.contains("cmp DWORD PTR [rax - 12], 0"), "{name}: {probe}");
+                assert!(probe.contains(&format!(
+                    "mov r11, 0x{:x}",
+                    crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND)
+                )), "{name}: {probe}");
+            } else {
+                assert!(probe.contains("tst w14, w13"), "{name}: {probe}");
+                assert!(probe.contains("ldr w14, [x0, #-12]"), "{name}: {probe}");
+                assert!(probe.contains(&format!("cmp x11, #{}", CONCAT_TEMP_HEAP_KIND)), "{name}: {probe}");
             }
         }
     }
