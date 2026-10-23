@@ -14,6 +14,8 @@ trap 'rm -rf "$fixture_dir"' EXIT HUP INT TERM
 #   .../compare/B...H     the status FAKE_COMPARE gives B ("aaa=ahead bbb=identical ...")
 #   .../runs/N/cancel     an empty object
 # FAKE_FAIL names a path fragment that fails, as the API does with a 502 or a 409.
+# FAKE_MOVE=STATE:ID:TO moves run ID to status TO right after the STATE runs are listed, the
+# way a run starts while the cleanup is still listing.
 mkdir "$fixture_dir/bin"
 cat > "$fixture_dir/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -45,6 +47,13 @@ case "$path" in
         body=$(jq -c --arg state "$state" --argjson size "$size" \
             '{workflow_runs: ([.workflow_runs[] | select($state == "" or .status == $state)] | .[:$size])}' \
             "$FAKE_DIR/runs-${workflow%%/*}.json")
+        if [[ -n ${FAKE_MOVE:-} && $state == "${FAKE_MOVE%%:*}" ]]; then
+            move=${FAKE_MOVE#*:}
+            file="$FAKE_DIR/runs-${workflow%%/*}.json"
+            jq --argjson id "${move%%:*}" --arg to "${move#*:}" \
+                '.workflow_runs |= map(if .id == $id then .status = $to else . end)' "$file" > "$file.next"
+            mv "$file.next" "$file"
+        fi
         ;;
     */compare/*)
         base=${path#*/compare/}
@@ -98,6 +107,12 @@ cat > "$fixture_dir/runs-paged.yml.json" <<'EOF'
 ]}
 EOF
 
+# Writes the fixture of the cases where a run starts during the listing: run 37, on an entry
+# that landed, still waiting for a runner when the cleanup begins.
+write_moving() {
+    echo '{"workflow_runs": [{"id": 37, "head_sha": "aaa", "status": "queued"}]}' > "$fixture_dir/runs-moving.yml.json"
+}
+
 # Runs the cleanup for WORKFLOW_FILES with the remaining NAME=VALUE overrides. Prints the
 # exit status and the IDs of the runs it asked to cancel; its own output goes to out.
 cleanup() {
@@ -129,6 +144,14 @@ if grep -q 'compare/eee' "$fixture_dir/calls"; then
 fi
 expect "no active runs" "exit=0 cancel=" "$(cleanup empty.yml)"
 expect "active runs past the first page" "exit=0 cancel=35 36" "$(cleanup paged.yml FAKE_PAGE_SIZE=1)"
+# Run 37 starts right after the in_progress request: an order that lists in_progress before
+# queued finds it under neither status.
+write_moving
+expect "a run starts after in_progress is listed" "exit=0 cancel=37" \
+    "$(cleanup moving.yml FAKE_MOVE=in_progress:37:in_progress)"
+# Run 37 starts right after the queued request, so it is listed under both statuses.
+write_moving
+expect "a run listed under two statuses" "exit=0 cancel=37" "$(cleanup moving.yml FAKE_MOVE=queued:37:in_progress)"
 expect "listing failure" "exit=0 cancel=21" "$(cleanup "ci.yml pdo-live.yml" FAKE_FAIL=workflows/ci.yml)"
 grep -q '::warning::could not list the in_progress merge_group runs of ci.yml' "$fixture_dir/out"
 expect "one status fails to list" "exit=0 cancel=21" "$(cleanup "ci.yml pdo-live.yml" FAKE_FAIL=status=in_progress)"
