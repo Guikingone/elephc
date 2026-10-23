@@ -91,3 +91,31 @@ echo f(), "\n";
         out.stderr
     );
 }
+
+/// An owned callable key is pinned across the warning and retired afterwards, so a scalar
+/// receiver read neither leaks the closure nor its captures (#2025 review).
+#[test]
+fn test_scalar_array_offset_read_releases_a_callable_key() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public function __construct(public int $v) {} }
+function f(): string {
+    $i = 42;
+    $seen = 0;
+    for ($n = 0; $n < 50; $n++) {
+        $o = new Box($n);
+        $y = $i[function () use ($o) { return $o->v; }];
+        $seen += ($y === null) ? 1 : 0;
+    }
+    return (string) $seen;
+}
+echo f(), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "50\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}

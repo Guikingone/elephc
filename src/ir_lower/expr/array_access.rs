@@ -261,12 +261,29 @@ pub(crate) fn lower_array_access_from_values(
         receiver_php,
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Resource(_)
     ) {
+        // An owned callable key is pinned across the warning (a user handler may throw) and
+        // retired afterwards, exactly like the container read path pins it across its runtime
+        // call. `release_coerced_source_if_owned` never releases a callable, so without this
+        // the closure and its captures leaked per read (#2025 review).
+        let callable_owner = if ctx.builder.value_php_type(index_value.value).codegen_repr()
+            == PhpType::Callable
+        {
+            let (rooted, owner) = root_owned_call_operand(ctx, index_value, index.span);
+            index_value = rooted;
+            owner
+        } else {
+            None
+        };
         if warn_on_missing {
             emit_scalar_offset_warning(ctx, array_value, &receiver_php, expr.span);
         }
         let result = lower_expr(ctx, &Expr::new(ExprKind::Null, expr.span));
         super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
-        release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+        if let Some(owner) = callable_owner {
+            retire_owned_call_operand(ctx, owner, index.span);
+        } else {
+            release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+        }
         return stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span);
     }
     let op = match array_value.ir_type {
