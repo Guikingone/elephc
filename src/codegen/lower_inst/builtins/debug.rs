@@ -538,13 +538,7 @@ fn emit_var_dump_float(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// Emits `var_dump` output for a string payload in the string result register pair.
 fn emit_var_dump_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    let scratch = abi::secondary_scratch_reg(ctx.emitter);
-    let null_label = ctx.next_label("var_dump_null_string");
     let done_label = ctx.next_label("var_dump_string_done");
-    abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::NULL_SENTINEL);
-    ctx.emitter
-        .instruction(&format!("cmp {}, {}", ptr_reg, scratch));               // is this the in-band null-string sentinel?
-    abi::emit_branch_if_equal_wide(ctx.emitter, &null_label);                   // nullable results print NULL, not an empty string
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     emit_write_literal(ctx, b"string(");
     match ctx.emitter.target.arch {
@@ -561,9 +555,6 @@ fn emit_var_dump_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
     emit_write_current_string(ctx);
     emit_write_literal(ctx, b"\"\n");
-    abi::emit_jump(ctx.emitter, &done_label);
-    ctx.emitter.label(&null_label);
-    emit_write_literal(ctx, b"NULL\n");
     ctx.emitter.label(&done_label);
     Ok(())
 }
