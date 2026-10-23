@@ -476,7 +476,7 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     if inst.result_php_type.codegen_repr() == PhpType::Mixed
         && target.return_ty.codegen_repr() != PhpType::Mixed
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &target.return_ty.codegen_repr());
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(&target.return_ty));
     }
     // THE WRITEBACKS RUN ON THE CALL ARM, BEFORE THE JUMP, because that is the only arm that
     // pushed the by-reference cell block: releasing it after `done_label` would also run on

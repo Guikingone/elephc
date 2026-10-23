@@ -48,7 +48,10 @@ pub(super) fn lower_static_property_assign(
         return;
     }
     let source = static_property_type(ctx, receiver, property)
-        .map(|slot_ty| coerce_typed_assign_value(ctx, source, &slot_ty, span))
+        .map(|slot_ty| {
+            let source = ctx.retype_packed_address_for_pointer_sink(source, &slot_ty, Some(span));
+            coerce_typed_assign_value(ctx, source, &slot_ty, span)
+        })
         .unwrap_or(source);
     if static_property_store_retains_independent_value(ctx, receiver, property, source) {
         store_static_property(ctx, receiver, property, source.value, span);
@@ -147,6 +150,7 @@ pub(super) fn static_property_store_retains_independent_value(
             slot_ty,
             PhpType::Str
                 | PhpType::Int
+                | PhpType::Pointer(_)
                 | PhpType::Bool
                 | PhpType::Float
                 | PhpType::Object(_)

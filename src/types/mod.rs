@@ -76,6 +76,9 @@ pub use ffi::{
     ExternAbiType, ScalarWidth,
 };
 pub use model::{PhpType, TypeEnv};
+pub(crate) use model::{
+    eir_value_php_type, is_nullable_pointer_type, mixed_box_php_type, pointer_param_display,
+};
 pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,

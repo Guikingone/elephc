@@ -383,6 +383,20 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
+    /// Returns the type a value is boxed into `mixed` as.
+    ///
+    /// That is its codegen type, except for a `?ptr<T>`: its codegen form is the bare pointer,
+    /// and only the declared union tells the boxer that address 0 is PHP null (a plain `ptr`
+    /// boxes 0 as the integer it is).
+    pub(super) fn mixed_box_type(&self, value: ValueId) -> Result<PhpType> {
+        let raw = self.raw_value_php_type(value)?;
+        if crate::types::is_nullable_pointer_type(&raw) {
+            Ok(raw)
+        } else {
+            self.value_php_type(value)
+        }
+    }
+
     /// Returns a function value's source PHP metadata before codegen representation erasure.
     pub(super) fn raw_value_php_type(&self, value: ValueId) -> Result<PhpType> {
         self.function
@@ -417,6 +431,18 @@ impl<'a> FunctionContext<'a> {
             .locals
             .get(slot.as_raw() as usize)
             .map(|metadata| metadata.php_type.codegen_repr())
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
+    }
+
+    /// Returns the type a local slot's value is boxed into `mixed` as.
+    ///
+    /// Like `mixed_box_type`, the slot's codegen type except for a `?ptr<T>` slot, which keeps
+    /// its declared union so address 0 boxes as PHP null.
+    pub(super) fn local_mixed_box_type(&self, slot: LocalSlotId) -> Result<PhpType> {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .map(|metadata| crate::types::mixed_box_php_type(&metadata.php_type))
             .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
     }
 
@@ -1060,10 +1086,12 @@ impl<'a> FunctionContext<'a> {
         if target_ty.codegen_repr() == PhpType::Mixed
             && source_ty.codegen_repr() != PhpType::Mixed
         {
+            // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
+            let box_ty = self.mixed_box_type(value)?;
             if self.value_can_own_mixed_box_source(value)? {
-                emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+                emit_box_current_owned_value_as_mixed(self.emitter, &box_ty);
             } else {
-                emit_box_current_value_as_mixed(self.emitter, &source_ty);
+                emit_box_current_value_as_mixed(self.emitter, &box_ty);
             }
         }
         // Narrow Mixed to Int when the local slot is typed Int but the value
@@ -1134,7 +1162,8 @@ impl<'a> FunctionContext<'a> {
         if target_ty.codegen_repr() == PhpType::Mixed
             && source_ty.codegen_repr() != PhpType::Mixed
         {
-            emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
+            emit_box_current_value_as_mixed(self.emitter, &self.mixed_box_type(value)?);
         }
         coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
         let offset = self.local_offset(slot)?;

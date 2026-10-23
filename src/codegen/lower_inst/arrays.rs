@@ -3203,10 +3203,17 @@ fn box_value_for_mixed_container(
     value_ty: &PhpType,
 ) -> Result<()> {
     ctx.load_value_to_result(value)?;
-    if ctx.value_can_own_mixed_box_source(value)? {
-        emit_box_current_owned_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+    // A `?ptr<T>` boxes by its declared type, so address 0 is stored as PHP null.
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    let box_ty = if crate::types::is_nullable_pointer_type(&raw_ty) {
+        raw_ty
     } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+        value_ty.codegen_repr()
+    };
+    if ctx.value_can_own_mixed_box_source(value)? {
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
     Ok(())
 }

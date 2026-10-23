@@ -124,7 +124,8 @@ pub(super) fn lower_generator_yield_from(ctx: &mut FunctionContext<'_>, inst: &I
 pub(super) fn emit_value_as_owned_mixed(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ty = ctx.load_value_to_result(value)?;
     let repr = ty.codegen_repr();
-    emit_box_current_value_as_mixed(ctx.emitter, &ty);
+    // The declared type for a `?ptr<T>`, so address 0 is yielded as PHP null.
+    emit_box_current_value_as_mixed(ctx.emitter, &ctx.mixed_box_type(value)?);
     if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(ctx.emitter, "__rt_incref"); // own the borrowed Mixed cell handed to the generator
     }

@@ -188,6 +188,9 @@ pub(super) fn contextualize_local_assignment(
         ctx.local_type(name)
     };
     let contextual_repr = contextual_ty.codegen_repr();
+    if let Some(retyped) = retype_value_for_pointer_local(ctx, name, lowered, span) {
+        return retyped;
+    }
     if contextual_ty.is_php_array() {
         let converted = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
         return (converted, contextual_ty);
@@ -272,6 +275,41 @@ pub(super) fn contextualize_local_assignment(
     // local's recorded type feeds `is_resource`/`gettype` and nullable-union lowering, so the
     // collapsed form must stay confined to the storage-contract comparisons above.
     (lowered, source_ty)
+}
+
+/// Retypes a value stored into a local whose type is a pointer word, or returns `None`.
+///
+/// `null` stored into a local that already holds a pointer word is the null pointer word, and
+/// the local stays a `?ptr<T>`: the raw-word slot must not hold the null sentinel, which a
+/// later `=== null` or by-reference binding would read as a live address. A packed record
+/// address is that pointer word too, so the slot keeps one raw-word representation instead of
+/// widening to a boxed `mixed`. Statement and expression assignments share this rule.
+pub(in crate::ir_lower) fn retype_value_for_pointer_local(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    lowered: LoweredValue,
+    span: Span,
+) -> Option<(LoweredValue, PhpType)> {
+    let local_ty = ctx.local_type(name);
+    let local_repr = local_ty.codegen_repr();
+    if !matches!(local_repr, PhpType::Pointer(_)) {
+        return None;
+    }
+    let source_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
+    if ctx.has_local_slot(name) && matches!(source_repr, PhpType::Void | PhpType::Never) {
+        let retyped = ctx.retype_packed_address_for_pointer_sink(lowered, &local_ty, Some(span));
+        let nullable_ty = if crate::types::is_nullable_pointer_type(&local_ty) {
+            local_ty
+        } else {
+            PhpType::Union(vec![local_repr, PhpType::Void])
+        };
+        return Some((retyped, nullable_ty));
+    }
+    if matches!(source_repr, PhpType::Packed(_)) {
+        let retyped = ctx.retype_packed_address_for_pointer_sink(lowered, &local_ty, Some(span));
+        return Some((retyped, local_ty));
+    }
+    None
 }
 
 /// Returns whether this function-like scope records `target` for `name` on any loop header.

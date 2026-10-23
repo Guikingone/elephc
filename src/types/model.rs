@@ -221,6 +221,10 @@ impl PhpType {
             {
                 PhpType::TaggedScalar
             }
+            // `?ptr<T>` is one raw pointer word where 0 is null, like a C pointer.
+            PhpType::Union(members) if nullable_pointer_union_member(members).is_some() => {
+                nullable_pointer_union_member(members).expect("checked above")
+            }
             PhpType::Union(_) => PhpType::Mixed,
             PhpType::False => PhpType::Bool,
             PhpType::Resource(_) => PhpType::Int,
@@ -345,6 +349,61 @@ impl PhpType {
             key: Box::new(PhpType::widen(t1.hash_key_type(), t2.hash_key_type())),
             value: Box::new(PhpType::widen(t1.hash_value_type(), t2.hash_value_type())),
         }
+    }
+}
+
+/// Returns the pointer of a `?ptr<T>` union: exactly one pointer member plus `null`.
+///
+/// Such a union is stored as that pointer word with 0 meaning null (decision recorded for task
+/// 6da89f60), so a null pointer and PHP `null` are the same value.
+pub(crate) fn nullable_pointer_union_member(members: &[PhpType]) -> Option<PhpType> {
+    let mut pointer = None;
+    let mut has_null = false;
+    for member in members {
+        match member {
+            PhpType::Pointer(_) if pointer.is_none() => pointer = Some(member.clone()),
+            PhpType::Void | PhpType::Never => has_null = true,
+            _ => return None,
+        }
+    }
+    pointer.filter(|_| has_null)
+}
+
+/// Returns whether a type is a `?ptr<T>` union, stored as a pointer word where 0 is null.
+pub(crate) fn is_nullable_pointer_type(php_type: &PhpType) -> bool {
+    matches!(php_type, PhpType::Union(members) if nullable_pointer_union_member(members).is_some())
+}
+
+/// Returns the type a value of a declared type is boxed into `mixed` as: its codegen type, except
+/// that a `?ptr<T>` keeps its union, so address 0 boxes as PHP null instead of the integer 0.
+pub(crate) fn mixed_box_php_type(php_type: &PhpType) -> PhpType {
+    if is_nullable_pointer_type(php_type) {
+        php_type.clone()
+    } else {
+        php_type.codegen_repr()
+    }
+}
+
+/// Spells a pointer parameter type for a diagnostic: `?ptr<T>` for the nullable union, which
+/// otherwise prints as `ptr<T>|null`.
+pub(crate) fn pointer_param_display(php_type: &PhpType) -> String {
+    if is_nullable_pointer_type(php_type) {
+        format!("?{}", php_type.codegen_repr())
+    } else {
+        php_type.to_string()
+    }
+}
+
+/// Returns the PHP type an EIR value carries for a declared type.
+///
+/// That is the codegen representation, except for a `?ptr<T>`: its representation is the bare
+/// pointer word, and a value typed without the null member would make `=== null`, `is_null()`,
+/// `isset()`, `??` and `echo` treat a null result as a set pointer.
+pub(crate) fn eir_value_php_type(php_type: &PhpType) -> PhpType {
+    if is_nullable_pointer_type(php_type) {
+        php_type.clone()
+    } else {
+        php_type.codegen_repr()
     }
 }
 

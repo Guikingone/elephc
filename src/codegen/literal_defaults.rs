@@ -221,6 +221,12 @@ pub(crate) fn literal_default_value(
         (php_type, ExprKind::Null) if php_type.codegen_repr() == PhpType::TaggedScalar => {
             Ok(LiteralDefaultValue::TaggedNull)
         }
+        // A `?ptr<T>` slot holds a raw pointer word whose null is address 0, so its null
+        // default is the zero word. This arm must precede the `Union(_)` boxing arms: boxing
+        // would store a non-zero Mixed cell address that every later `=== null` reads as set.
+        (php_type, ExprKind::Null) if crate::types::is_nullable_pointer_type(php_type) => {
+            Ok(LiteralDefaultValue::Null)
+        }
         (PhpType::Mixed | PhpType::Union(_), ExprKind::StringLiteral(value)) => {
             Ok(LiteralDefaultValue::BoxedStr(value.clone()))
         }

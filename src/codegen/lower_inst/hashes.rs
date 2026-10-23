@@ -336,7 +336,11 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
-    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
+    let value_ty = require_supported_hash_value(
+        hash_payload_value_type(ctx, value, &ctx.value_php_type(value)?, &storage_value_ty)?,
+        &storage_value_ty,
+        inst,
+    )?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     receiver.prepare_consuming_storeback(ctx, hash)?;
     let normalization = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
@@ -385,7 +389,11 @@ pub(super) fn lower_descriptor_arg_set(
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
-    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
+    let value_ty = require_supported_hash_value(
+        hash_payload_value_type(ctx, value, &ctx.value_php_type(value)?, &storage_value_ty)?,
+        &storage_value_ty,
+        inst,
+    )?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     receiver.prepare_consuming_storeback(ctx, hash)?;
     match ctx.emitter.target.arch {
@@ -512,7 +520,11 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
-    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
+    let value_ty = require_supported_hash_value(
+        hash_payload_value_type(ctx, value, &ctx.value_php_type(value)?, &storage_value_ty)?,
+        &storage_value_ty,
+        inst,
+    )?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     receiver.prepare_consuming_storeback(ctx, hash)?;
     match ctx.emitter.target.arch {
@@ -752,6 +764,7 @@ fn lower_hash_set_aarch64_with(
     storage_value_ty: &PhpType,
     normalization: HashKeyNormalization,
 ) -> Result<()> {
+    let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     materialize_hash_key_aarch64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
@@ -770,6 +783,7 @@ fn lower_hash_append_aarch64(
     value_ty: &PhpType,
     storage_value_ty: &PhpType,
 ) -> Result<()> {
+    let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve temporary slots for the hash pointer and computed append key
     ctx.load_value_to_reg(hash, "x0")?;
     ctx.emitter.instruction("str x0, [sp, #0]");                                // preserve the hash pointer across value materialization
@@ -809,6 +823,7 @@ fn lower_hash_set_x86_64_with(
     storage_value_ty: &PhpType,
     normalization: HashKeyNormalization,
 ) -> Result<()> {
+    let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     materialize_hash_key_x86_64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
@@ -827,6 +842,7 @@ fn lower_hash_append_x86_64(
     value_ty: &PhpType,
     storage_value_ty: &PhpType,
 ) -> Result<()> {
+    let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("sub rsp, 32");                                     // reserve aligned slots for the hash pointer and computed append key
     ctx.load_value_to_reg(hash, "rdi")?;
     ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");                        // preserve the hash pointer across value materialization
@@ -1371,11 +1387,11 @@ fn materialize_hash_mixed_value_aarch64(
         return Ok(());
     }
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable)
-        && value_ty == &PhpType::TaggedScalar
+        && (value_ty == &PhpType::TaggedScalar || crate::types::is_nullable_pointer_type(value_ty))
     {
         box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
-        ctx.emitter.instruction("mov x3, x0");                                  // pass the boxed tagged-scalar Mixed cell as the hash value low word
-        ctx.emitter.instruction("mov x4, xzr");                                 // boxed tagged-scalar Mixed cells do not use the high payload word
+        ctx.emitter.instruction("mov x3, x0");                                  // pass the boxed tagged-scalar or ?ptr Mixed cell as the hash value low word
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed Mixed cells do not use the high payload word
         return Ok(());
     }
     materialize_hash_concrete_value_aarch64(ctx, value, value_ty)
@@ -1402,11 +1418,11 @@ fn materialize_hash_mixed_value_x86_64(
         return Ok(());
     }
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable)
-        && value_ty == &PhpType::TaggedScalar
+        && (value_ty == &PhpType::TaggedScalar || crate::types::is_nullable_pointer_type(value_ty))
     {
         box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
-        ctx.emitter.instruction("mov rcx, rax");                                // pass the boxed tagged-scalar Mixed cell as the hash value low word
-        ctx.emitter.instruction("xor r8, r8");                                  // boxed tagged-scalar Mixed cells do not use the high payload word
+        ctx.emitter.instruction("mov rcx, rax");                                // pass the boxed tagged-scalar or ?ptr Mixed cell as the hash value low word
+        ctx.emitter.instruction("xor r8, r8");                                  // boxed Mixed cells do not use the high payload word
         return Ok(());
     }
     materialize_hash_concrete_value_x86_64(ctx, value, value_ty)
@@ -1419,18 +1435,45 @@ fn box_hash_value_for_mixed_storage(
     value_ty: &PhpType,
 ) -> Result<()> {
     ctx.load_value_to_result(value)?;
-    if ctx.value_can_own_mixed_box_source(value)? {
-        emit_box_current_owned_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+    // A `?ptr<T>` keeps its declared union, so address 0 boxes as PHP null.
+    let box_ty = if crate::types::is_nullable_pointer_type(value_ty) {
+        value_ty.clone()
     } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+        value_ty.codegen_repr()
+    };
+    if ctx.value_can_own_mixed_box_source(value)? {
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
     Ok(())
+}
+
+/// Returns the type a hash payload is stored as.
+///
+/// A `?ptr<T>` entering `mixed` storage keeps its declared union, so it is boxed with address 0
+/// as PHP null (and a live address as an integer) instead of being tagged as a raw pointer.
+fn hash_payload_value_type(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+) -> Result<PhpType> {
+    if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable) {
+        let raw_ty = ctx.raw_value_php_type(value)?;
+        if crate::types::is_nullable_pointer_type(&raw_ty) {
+            return Ok(raw_ty);
+        }
+    }
+    Ok(value_ty.clone())
 }
 
 /// Returns the runtime value tag to store for one hash-set payload.
 fn hash_set_value_tag(value_ty: &PhpType, storage_value_ty: &PhpType) -> i64 {
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable) {
-        if value_ty.codegen_repr() == PhpType::TaggedScalar {
+        if value_ty.codegen_repr() == PhpType::TaggedScalar
+            || crate::types::is_nullable_pointer_type(value_ty)
+        {
             return crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
         }
         crate::codegen::runtime_value_tag(&value_ty.codegen_repr()) as i64
@@ -1967,6 +2010,12 @@ fn require_supported_hash_value(
     storage_value_ty: &PhpType,
     inst: &Instruction,
 ) -> Result<PhpType> {
+    // A `?ptr<T>` reaches `mixed` storage as its declared union and is boxed there.
+    if crate::types::is_nullable_pointer_type(&value_ty)
+        && matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable)
+    {
+        return Ok(value_ty);
+    }
     let value_ty = value_ty.codegen_repr();
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable)
         && (matches!(

@@ -76,7 +76,31 @@ pub(super) fn lower_strict_eq(
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?.codegen_repr();
     let rhs_ty = ctx.value_php_type(rhs)?.codegen_repr();
-    if needs_mixed_strict_compare(&lhs_ty) || needs_mixed_strict_compare(&rhs_ty) {
+    // A `?ptr<T>` against `null` tests its pointer word for 0.
+    for (pointer, other_ty) in [(lhs, &rhs_ty), (rhs, &lhs_ty)] {
+        if matches!(other_ty, PhpType::Void | PhpType::Never)
+            && crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(pointer)?)
+        {
+            ctx.load_value_to_result(pointer)?;
+            if is_equal {
+                super::builtins::emit_int_result_zero_bool(ctx);
+            } else {
+                super::predicates::emit_int_result_nonzero_bool(ctx);
+            }
+            return store_if_result(ctx, inst);
+        }
+    }
+    // A `?ptr<T>` against any other value (but a packed record address) compares as the PHP
+    // value it boxes to, null for address 0 and the integer address otherwise: a live pointer
+    // is `=== (int)$p`, and a null one is not a plain `ptr_null()`, whose 0 is no PHP null.
+    // Two `?ptr<T>` words compare directly below.
+    let lhs_nullable_pointer = crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(lhs)?);
+    let rhs_nullable_pointer = crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(rhs)?);
+    let other_ty = if lhs_nullable_pointer { &rhs_ty } else { &lhs_ty };
+    if (lhs_nullable_pointer != rhs_nullable_pointer && !matches!(other_ty, PhpType::Packed(_)))
+        || needs_mixed_strict_compare(&lhs_ty)
+        || needs_mixed_strict_compare(&rhs_ty)
+    {
         emit_mixed_strict_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
         return store_if_result(ctx, inst);
     }
@@ -274,6 +298,10 @@ fn materialize_value_as_mixed(
         }
         _ => {
             ctx.load_value_to_result(value)?;
+            // The declared type, so a `?ptr<T>` operand boxes address 0 as PHP null.
+            let box_ty = ctx.mixed_box_type(value)?;
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+            return Ok(());
         }
     }
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &ty);
@@ -303,7 +331,11 @@ pub(super) fn lower_loose_eq(
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
-    if lhs_ty == PhpType::Str && rhs_ty == PhpType::Str {
+    if has_nullable_pointer_operand(ctx, lhs, rhs)? {
+        // A `?ptr<T>` boxes as PHP null for address 0 and as its integer address otherwise,
+        // and goes through PHP's full `==` table like the Mixed value it used to be.
+        emit_mixed_loose_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
+    } else if lhs_ty == PhpType::Str && rhs_ty == PhpType::Str {
         emit_string_eq_call(ctx, lhs, rhs, is_equal, "__rt_str_loose_eq")?;
     } else if string_bool_comparable(&lhs_ty, &rhs_ty) {
         emit_bool_string_loose_eq(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
@@ -329,6 +361,13 @@ pub(super) fn lower_loose_eq(
         )));
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns true when either comparison operand is a `?ptr<T>`, compared through PHP's runtime
+/// tables (a plain pointer keeps its unsupported diagnostic).
+fn has_nullable_pointer_operand(ctx: &FunctionContext<'_>, lhs: ValueId, rhs: ValueId) -> Result<bool> {
+    Ok(crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(lhs)?)
+        || crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(rhs)?))
 }
 
 /// Returns true when a PHP type can be boxed into a `Mixed` cell and handed to
@@ -886,6 +925,7 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     if needs_runtime_ordering_compare(&lhs_ty)
         || needs_runtime_ordering_compare(&rhs_ty)
         || is_string_ordering_pair(&lhs_ty, &rhs_ty)
+        || has_nullable_pointer_operand(ctx, lhs, rhs)?
     {
         emit_runtime_ordering_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
         return store_if_result(ctx, inst);
@@ -921,9 +961,10 @@ pub(super) fn lower_php_rel_cmp(
     if !needs_runtime_ordering_compare(&lhs_ty)
         && !needs_runtime_ordering_compare(&rhs_ty)
         && !is_string_ordering_pair(&lhs_ty, &rhs_ty)
+        && !has_nullable_pointer_operand(ctx, lhs, rhs)?
     {
         return Err(CodegenIrError::invalid_module(format!(
-            "php_rel_cmp requires a runtime-tagged operand or two strings, got {:?} and {:?}",
+            "php_rel_cmp requires a runtime-tagged operand, a nullable pointer or two strings, got {:?} and {:?}",
             lhs_ty, rhs_ty
         )));
     }

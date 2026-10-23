@@ -115,6 +115,10 @@ pub(super) fn lower_assignment_expr(
         } else {
             value_php_type
         };
+        // `($p = null)` into a pointer-word local stores address 0, as the statement form does.
+        let (lowered, php_type) =
+            crate::ir_lower::stmt::retype_value_for_pointer_local(ctx, name, lowered, expr.span)
+                .unwrap_or((lowered, php_type));
         ctx.store_local(name, lowered, php_type, Some(expr.span));
         result = ctx.load_local(name, Some(expr.span));
         let static_callable = callable_array
