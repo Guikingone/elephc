@@ -881,16 +881,16 @@ echo $r;
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
 
-/// Verifies `[null]` returned by functions without a return type (typed `array<void>` but built
-/// with boxed cells) is converted when it reaches a pointer-array destination: both ternary
+/// Verifies a `[null]` local returned by functions without a return type (typed `array<void>` at
+/// the call site but built with boxed cells) is converted when it reaches a pointer-array destination: both ternary
 /// orders, a `match`, a plain return and a call argument all read the element as null in
 /// `foreach` and `isset()`, and the conversion keeps the heap-debug leak summary unchanged.
 #[test]
 fn test_pointer_array_destinations_convert_untyped_null_array_results() {
     let prelude = r#"<?php
 packed class Vec2 { public int $x; public int $y; }
-function boxed() { return [null]; }
-function boxedn(int $n) { return [null]; }
+function boxed() { $a = [null]; return $a; }
+function boxedn(int $n) { $a = [null]; return $a; }
 function t1(bool $b): array<ptr<Vec2>|null> { return $b ? boxed() : [null]; }
 function t2(bool $b): array<ptr<Vec2>|null> { return $b ? [null] : boxedn(1); }
 function m(int $i): array<ptr<Vec2>|null> { return match ($i) { 0 => boxed(), default => [null] }; }
@@ -955,7 +955,7 @@ function walk(): string {
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
 
-/// Verifies an untyped `[null]` call result merged with a pointer-array arm is converted when it
+/// Verifies an untyped `[null]` local returned from a call and merged with a pointer-array arm is converted when it
 /// lands in the merge temporary: a `match`, a ternary assignment without a destination and a
 /// short ternary all read the boxed arm's element as null in `foreach` and `isset()`, the live
 /// arm keeps its pointer, and the conversion keeps the heap-debug leak summary unchanged.
@@ -963,7 +963,7 @@ function walk(): string {
 fn test_pointer_array_merges_convert_untyped_null_array_arms() {
     let prelude = r#"<?php
 packed class Vec2 { public int $x; public int $y; }
-function boxed() { return [null]; }
+function boxed() { $a = [null]; return $a; }
 function m(int $i, array<ptr<Vec2>|null> $ps): array<ptr<Vec2>|null> {
     return match ($i) { 0 => boxed(), default => $ps };
 }

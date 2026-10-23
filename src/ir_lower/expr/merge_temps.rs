@@ -544,9 +544,9 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
             }
             return unboxed;
         }
-        // An indexed array of boxed cells (`function boxed() { return [null]; }` is
-        // `array<void>`) merged into a pointer-array temporary would hand those cells to
-        // pointer-word readers, whichever way the merging arm was lowered.
+        // An indexed array of boxed cells (`function boxed() { $a = [null]; return $a; }` is
+        // `array<void>` at the call site) merged into a pointer-array temporary would hand those
+        // cells to pointer-word readers, whichever way the merging arm was lowered.
         return super::indexed_array_literals::convert_array_to_pointer_storage(
             ctx, value, target_ty, span,
         );
