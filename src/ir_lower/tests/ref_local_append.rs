@@ -79,6 +79,14 @@ function earlyNativeForeach(int $flag): void {
     foreach ($items as &$v) { $v = "z"; }
     echo "each:", $items[0], "\n";
 }
+class DynamicForeachOwner {}
+function earlyDynamicForeach(int $flag): void {
+    $items = [new DynamicForeachOwner(), "a"];
+    if ($flag < 0) { touchUnknown($items); return; }
+    foreach ($items as &$v) { $v = 1; }
+    unset($v);
+    echo "dynamic-each:", $items[0], "\n";
+}
 function earlyNativeIndex(int $flag): void {
     $items = ["b", "a"];
     if ($flag < 0) { touchUnknown($items); return; }
@@ -115,6 +123,7 @@ class AppendTarget {
 buildUnknown($argc); buildArray($argc); buildAssoc($argc); (new AppendTarget())->build($argc);
 buildMaybe($argc, $argc < 0);
 buildClosure($argc);
+earlyDynamicForeach($argc);
 appendReplaced();
 $items = [];
 for ($i = 0; $i < $argc; $i++) { $items[] = $i; }

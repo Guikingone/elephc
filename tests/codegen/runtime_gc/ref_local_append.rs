@@ -417,6 +417,32 @@ joinNativeNested(1); joinNativeNested(-1);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Dynamic by-reference iteration retakes and republishes a borrowed Mixed-array payload.
+#[test]
+fn test_ref_local_append_dynamic_foreach_heap_balance() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class DynamicForeachOwner {
+    public static int $destroyed = 0;
+    public function __destruct() { self::$destroyed++; }
+}
+function touchDynamicForeachItems(&$items): void {}
+function runDynamicForeach(int $flag): void {
+    for ($round = 0; $round < 3; $round++) {
+        $items = [new DynamicForeachOwner(), "x"];
+        if ($flag < 0) { touchDynamicForeachItems($items); return; }
+        foreach ($items as &$value) { $value = $round; }
+        unset($value);
+        echo count($items), ":", $items[0], ":", $items[1], "|";
+    }
+    echo DynamicForeachOwner::$destroyed, "\n";
+}
+runDynamicForeach($argc);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:0:0|2:1:1|2:2:2|3\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Repeated string reads on an untaken reference branch borrow the boxed payload without copies.
 #[test]
 fn test_ref_local_string_reads_borrow_mixed_payload() {

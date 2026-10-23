@@ -460,6 +460,9 @@ fn initialize_dynamic_iterable_iterator(
 
     ctx.emitter.label(&indexed_case);
     if by_ref {
+        if let Some(slot) = source_load_local_slot(ctx, source)? {
+            ctx.prepare_mutated_source_local_owner(slot, source)?;
+        }
         convert_dynamic_indexed_source_for_ref(ctx, offset)?;
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
@@ -471,6 +474,9 @@ fn initialize_dynamic_iterable_iterator(
 
     ctx.emitter.label(&hash_case);
     if by_ref {
+        if let Some(slot) = source_load_local_slot(ctx, source)? {
+            ctx.prepare_mutated_source_local_owner(slot, source)?;
+        }
         convert_dynamic_hash_source_for_ref(ctx, offset)?;
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
@@ -1123,7 +1129,7 @@ fn store_iter_source_to_origin_if_local(
         }
     }
     ctx.store_result_value(source)?;
-    ctx.store_container_writeback_to_local(slot, source)
+    ctx.store_mutated_container_writeback_to_local(slot, source)
 }
 
 /// Resolves a source SSA value back to its direct or reference-bound local origin.
