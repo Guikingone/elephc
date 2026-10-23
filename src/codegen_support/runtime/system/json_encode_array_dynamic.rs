@@ -120,6 +120,9 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("and x12, x19, #16");                                   // isolate JSON_FORCE_OBJECT from the cached flag bitmask
     emitter.instruction("cbz x12, __rt_json_arr_dyn_elem_no_key");              // skip the key prefix when the flag is clear
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current concat-buffer write pointer
+    emitter.instruction("mov x0, x11");                                         // guard the synthetic key and its integer digits after indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);                  // reserve a quoted integer key at the post-indentation cursor
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     emitter.instruction("mov w13, #34");                                        // ASCII '"'
     emitter.instruction("strb w13, [x11]");                                     // emit the opening quote of the synthetic key
     emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
@@ -152,6 +155,10 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_json_pretty_colon_space");                     // append the pretty-print key/value space when requested
     emitter.instruction("str x11, [sp, #16]");                                  // persist the updated write pointer
     emitter.label("__rt_json_arr_dyn_elem_no_key");
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current write pointer after the key prefix
+    emitter.instruction("mov x0, x11");                                         // guard the scalar value after separators and indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);                  // reserve one scalar value at the post-indentation cursor
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
 
     // -- update concat_off so nested encoders append from the current write position --
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current write pointer
@@ -390,6 +397,9 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rcx, rcx");                                       // is the flag clear?
     emitter.instruction("jz __rt_json_arr_dyn_elem_no_key_x");                  // skip the key prefix when the flag is clear
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer
+    emitter.instruction("mov rdi, r11");                                        // guard the synthetic key and its integer digits after indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);                  // reserve a quoted integer key at the post-indentation cursor
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov BYTE PTR [r11], 34");                              // emit the opening quote of the synthetic key
     emitter.instruction("add r11, 1");                                          // advance past the opening quote
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer
@@ -419,6 +429,10 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_json_pretty_colon_space");                   // append the pretty-print key/value space when requested
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer
     emitter.label("__rt_json_arr_dyn_elem_no_key_x");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer after the key prefix
+    emitter.instruction("mov rdi, r11");                                        // guard the scalar value after separators and indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);                  // reserve one scalar value at the post-indentation cursor
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the guard clobbers r10
 
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before a nested JSON helper appends data
     abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer for the global offset update

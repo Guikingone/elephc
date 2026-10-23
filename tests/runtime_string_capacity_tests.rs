@@ -437,3 +437,37 @@ echo str_repeat("x", 62000), json_encode([1, 2, 3]), "|", json_encode(["k" => 1]
     assert!(stdout.ends_with("[1,2,3]|{\"k\":1}"), "tail: {:?}", &stdout[61990..]);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A small serialized value must fit beside a large echo instead of reserving 64 bytes.
+#[test]
+fn small_serialized_results_fit_after_a_large_echo() {
+    let dir = make_test_dir("serialize-headroom");
+    let php = dir.join("main.php");
+    fs::write(
+        &php,
+        r#"<?php
+echo str_repeat("x", 65500), "|", serialize(1);
+"#,
+    )
+    .expect("write serialize-headroom fixture");
+    let compile = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .args(["-q", "--heap-size=65536"])
+        .arg(&php)
+        .output()
+        .expect("compile serialize-headroom fixture");
+    assert!(
+        compile.status.success(),
+        "serialize-headroom fixture must compile: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let output = Command::new(dir.join("main"))
+        .output()
+        .expect("run serialize-headroom fixture");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "unexpected fatal: {stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.len(), 65505, "unexpected output length");
+    assert!(stdout.ends_with("|i:1;"), "tail: {:?}", &stdout[65490..]);
+    let _ = fs::remove_dir_all(&dir);
+}

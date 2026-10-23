@@ -116,6 +116,9 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload write pos before optional pretty indentation
     emitter.instruction("bl __rt_json_pretty_line");                            // append newline and indentation for this element when pretty-printing
     emitter.instruction("str x11, [sp, #16]");                                  // save the write pos after any pretty indentation
+    emitter.instruction("mov x0, x11");                                         // guard the integer formatter against the arena end after indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);                  // reserve one signed integer at the post-indentation cursor
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array ptr
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload index
     emitter.instruction("add x4, x4, #3");                                      // skip 24-byte header (3 * 8 bytes)
@@ -251,6 +254,9 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current write pointer before optional pretty indentation
     emitter.instruction("call __rt_json_pretty_line");                          // append newline and indentation for this element when pretty-printing
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the write pointer after any pretty indentation
+    emitter.instruction("mov rdi, r11");                                        // guard the integer formatter against the arena end after indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);                  // reserve one signed integer at the post-indentation cursor
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source integer-array pointer before loading the current element payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current integer-array element index before computing the payload slot address
     emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first integer payload slot
