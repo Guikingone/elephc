@@ -337,3 +337,63 @@ echo id($t["v"]) === $v[0] ? "same" : "diff", id($t["a"]) === $a[0] ? "same" : "
     );
     assert_eq!(out, "null|10|samesame\n");
 }
+
+/// Verifies spread and mixed literals keep pointer-word storage when they combine pointers with
+/// different targets or packed record addresses: an associative spread beside a keyed or a plain
+/// pointer keeps both addresses, and a packed address beside a spread reaches its record.
+///
+/// Top level on purpose, like the hash literal test: `main` follows the checker's types.
+#[test]
+fn test_pointer_spread_literals_keep_targets_and_record_addresses() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+packed class A { public int $x; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+function ida(buffer<A> $a, int $i): ptr<A> { return $a[$i]; }
+function id(?ptr $p): ?ptr { return $p; }
+$v = buffer_new<Vec2>(2);
+$v[0]->x = 4;
+$v[1]->x = 5;
+$a = buffer_new<A>(1);
+$tail = ["a" => ida($a, 0)];
+$h = ["v" => at($v, 0), ...$tail];
+echo id($h["v"]) === $v[0] ? "same" : "diff", id($h["a"]) === $a[0] ? "same" : "diff", "|";
+$b = [at($v, 0), ...$tail];
+echo id($b[0]) === $v[0] ? "same" : "diff", id($b["a"]) === $a[0] ? "same" : "diff", "|";
+$t = [$v[1]];
+$c = [$v[0], ...$t];
+echo $c[0]->x, $c[1]->x, "|";
+$th = ["b" => $v[1]];
+$d = ["a" => $v[0], ...$th];
+echo $d["a"]->x, $d["b"]->x, "\n";
+"#,
+    );
+    assert_eq!(out, "samesame|samesame|45|45\n");
+}
+
+/// Verifies `null` in a spread or mixed literal of pointers is the null pointer word: a spread of
+/// a null-only literal (indexed or associative), a keyed `null` beside a spread, and a `null`
+/// element before a spread of record addresses all read back as PHP null.
+#[test]
+fn test_pointer_spread_literals_store_null_as_the_null_pointer() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 10;
+$p = at($v, 0);
+$a = [$p, ...[null]];
+echo $a[1] === null ? "null" : "wild", $a[0]->x, "|";
+$h = ["a" => $p, ...["b" => null]];
+echo $h["b"] === null ? "null" : "wild", $h["a"]->x, "|";
+$tail = ["c" => $p];
+$m = ["a" => $p, "b" => null, ...$tail];
+echo $m["b"] === null ? "null" : "wild", $m["c"]->x, "|";
+$n = [$v[0], null, ...[$v[0]]];
+echo $n[1] === null ? "null" : "wild", $n[2]->x, "\n";
+"#,
+    );
+    assert_eq!(out, "null10|null10|null10|null10\n");
+}

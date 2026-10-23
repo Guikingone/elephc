@@ -135,7 +135,9 @@ call: if the callee stored `null`, it is address 0, not PHP `null`.
 
 Indexed arrays and hashes can hold pointers: `ptr`, `ptr<T>`, packed record addresses such
 as `$buffer[$i]`, and `null`. Each element is the raw pointer word, a `null` element is the
-null pointer, and the array keeps pointer storage instead of boxing its elements:
+null pointer, and the array keeps pointer storage instead of boxing its elements. That holds
+for literals (including spreads such as `[$p, ...$more]` and `["a" => $p, ...$rest]`),
+appends, index and key writes, and `array_push()`:
 
 ```php
 <?php

@@ -32,10 +32,11 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
     let mut lowered: Vec<SpreadItem> = Vec::with_capacity(items.len());
     let mut roots = Vec::new();
     let mut any_assoc_spread = false;
+    let pointer_elem = literal_pointer_element_type(&array_literal_type_for_ir(ctx, items, expr));
     for item in items {
         match &item.kind {
             ExprKind::Spread(inner) => {
-                let source = lower_expr(ctx, inner);
+                let source = lower_spread_source(ctx, inner, pointer_elem.as_ref());
                 let source = if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
                     lower_boxed_array_spread_source(ctx, source, item.span)
                 } else {
@@ -52,6 +53,7 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
             }
             _ => {
                 let value = lower_expr(ctx, item);
+                let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), item.span);
                 let value = root_array_literal_item(ctx, value, item.span, &mut roots);
                 lowered.push(SpreadItem::Element(value));
             }
@@ -319,6 +321,7 @@ pub(super) fn lower_mixed_array_literal(
         PhpType::AssocArray { value, .. } => value.codegen_repr(),
         _ => PhpType::Mixed,
     };
+    let pointer_elem = literal_pointer_element_type(&hash_ty);
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
@@ -331,7 +334,7 @@ pub(super) fn lower_mixed_array_literal(
         match entry {
             ArrayEntry::Spread(source) => {
                 let span = source.span;
-                let source = lower_expr(ctx, source);
+                let source = lower_spread_source(ctx, source, pointer_elem.as_ref());
                 // A boxed source (a declared `array` parameter, a `mixed` value) has to be
                 // unboxed and validated before the hash spread reads its layout.
                 let source = if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
@@ -345,7 +348,9 @@ pub(super) fn lower_mixed_array_literal(
                 let span = key.span;
                 let key = lower_expr(ctx, key);
                 let (key, key_owner) = root_owned_call_operand(ctx, key, span);
+                let value_span = value.span;
                 let value = lower_expr(ctx, value);
+                let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), value_span);
                 ctx.emit_void(
                     Op::HashSet,
                     vec![hash.value, key.value, value.value],
@@ -360,6 +365,7 @@ pub(super) fn lower_mixed_array_literal(
             ArrayEntry::Value(value) => {
                 let span = value.span;
                 let value = lower_expr(ctx, value);
+                let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), span);
                 ctx.emit_void(
                     Op::RuntimeCall,
                     vec![hash.value, value.value],
@@ -383,6 +389,22 @@ pub(super) fn assoc_array_literal_type_from_entries(
     entries: &[ArrayEntry],
     expr: &Expr,
 ) -> PhpType {
+    // An entry of only pointers, pointer spreads and `null`s is a pointer hash, with or without a
+    // `null`: the merge below sees a spread entry's element type where it expects the source's
+    // container, so it would widen every spread to `mixed`.
+    if let Some(pointer) = pointer_literal_entries_element_type(
+        ctx,
+        entries.iter().map(|entry| match entry {
+            ArrayEntry::Spread(source) => (spread_entry_source(source), true),
+            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => (value, false),
+        }),
+        false,
+    ) {
+        return PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(pointer),
+        };
+    }
     let mut value_ty = PhpType::Never;
     for entry in entries {
         let next = match entry {
@@ -629,6 +651,77 @@ pub(crate) fn array_literal_type_for_ir(
     PhpType::Array(Box::new(elem_ty))
 }
 
+/// Returns the pointer element type of an array or hash literal type, if its elements are pointers.
+pub(super) fn literal_pointer_element_type(literal_ty: &PhpType) -> Option<PhpType> {
+    let elem = match literal_ty.codegen_repr() {
+        PhpType::Array(elem) => *elem,
+        PhpType::AssocArray { value, .. } => *value,
+        _ => return None,
+    };
+    matches!(elem, PhpType::Pointer(_)).then_some(elem)
+}
+
+/// Rewrites a packed record address or `null` stored into a pointer-element literal into the word.
+fn retype_pointer_literal_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    pointer_elem: Option<&PhpType>,
+    span: crate::span::Span,
+) -> LoweredValue {
+    match pointer_elem {
+        Some(elem) => ctx.retype_packed_address_for_pointer_sink(value, elem, Some(span)),
+        None => value,
+    }
+}
+
+/// Returns true for an array literal whose every element (or value) is a literal `null`.
+fn is_null_only_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ArrayLiteral(items) => {
+            !items.is_empty() && items.iter().all(|item| matches!(item.kind, ExprKind::Null))
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            !pairs.is_empty() && pairs.iter().all(|(_, value)| matches!(value.kind, ExprKind::Null))
+        }
+        _ => false,
+    }
+}
+
+/// Returns the source of a mixed-literal spread entry, which holds the `ExprKind::Spread` node.
+fn spread_entry_source(entry: &Expr) -> &Expr {
+    match &entry.kind {
+        ExprKind::Spread(source) => source,
+        _ => entry,
+    }
+}
+
+/// Lowers a spread source, giving a literal of only `null`s pointer storage when the enclosing
+/// literal holds pointers, so its elements are null pointer words rather than boxed nulls.
+fn lower_spread_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+    pointer_elem: Option<&PhpType>,
+) -> LoweredValue {
+    let literal = spread_entry_source(source);
+    let Some(elem) = pointer_elem.filter(|_| is_null_only_literal(literal)) else {
+        return lower_expr(ctx, source);
+    };
+    let source = literal;
+    match &source.kind {
+        ExprKind::ArrayLiteral(items) => {
+            lower_array_literal_without_spread(ctx, items, source, PhpType::Array(Box::new(elem.clone())))
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let hash_ty = match assoc_array_literal_type_for_ir(ctx, pairs, source) {
+                PhpType::AssocArray { key, .. } => PhpType::AssocArray { key, value: Box::new(elem.clone()) },
+                other => other,
+            };
+            super::assoc_array_literals::lower_assoc_array_literal_as(ctx, pairs, source, false, hash_ty)
+        }
+        _ => lower_expr(ctx, source),
+    }
+}
+
 /// Returns the pointer element type of literal values that are pointers and `null`s, if any.
 ///
 /// A `null` beside pointers is stored as the null pointer word, and a pointer element read is
@@ -639,14 +732,44 @@ pub(super) fn pointer_literal_element_type<'e>(
     ctx: &LoweringContext<'_, '_>,
     values: impl IntoIterator<Item = &'e Expr>,
 ) -> Option<PhpType> {
+    pointer_literal_entries_element_type(
+        ctx,
+        values.into_iter().map(|value| match &value.kind {
+            ExprKind::Spread(source) => (source.as_ref(), true),
+            _ => (value, false),
+        }),
+        true,
+    )
+}
+
+/// Returns the pointer element type of literal entries given as `(value, is_spread)` pairs.
+///
+/// A spread contributes its source's element type, and a spread of a literal holding only
+/// `null`s contributes a `null`, as the type checker's literal merge does. With `require_null`
+/// a literal without any `null` returns `None`, leaving it to the caller's ordinary merge.
+pub(super) fn pointer_literal_entries_element_type<'e>(
+    ctx: &LoweringContext<'_, '_>,
+    entries: impl IntoIterator<Item = (&'e Expr, bool)>,
+    require_null: bool,
+) -> Option<PhpType> {
     let mut has_null = false;
     let mut pointer: Option<PhpType> = None;
-    for value in values {
-        if matches!(value.kind, ExprKind::Null) {
+    for (value, is_spread) in entries {
+        if (!is_spread && matches!(value.kind, ExprKind::Null))
+            || (is_spread && is_null_only_literal(value))
+        {
             has_null = true;
             continue;
         }
-        let elem_ty = array_literal_element_type_for_ir(ctx, value);
+        let elem_ty = if is_spread {
+            match spread_source_storage_type_for_ir(ctx, value).codegen_repr() {
+                PhpType::Array(elem) => elem.codegen_repr(),
+                PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                _ => PhpType::Mixed,
+            }
+        } else {
+            array_literal_element_type_for_ir(ctx, value)
+        };
         if !matches!(elem_ty, PhpType::Pointer(_)) {
             return None;
         }
@@ -655,7 +778,7 @@ pub(super) fn pointer_literal_element_type<'e>(
             None => elem_ty,
         });
     }
-    pointer.filter(|merged| has_null && matches!(merged, PhpType::Pointer(_)))
+    pointer.filter(|merged| (has_null || !require_null) && matches!(merged, PhpType::Pointer(_)))
 }
 
 /// Returns the EIR storage type of an `(array)` cast used as a literal element.

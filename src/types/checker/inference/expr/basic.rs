@@ -178,7 +178,9 @@ impl Checker {
                     };
                     val_ty = Some(match val_ty {
                         Some(acc) if acc == next => acc,
-                        Some(_) => PhpType::Mixed,
+                        // Pointers and `null` share one pointer-word element.
+                        Some(acc) => crate::types::merge_pointer_elements(&acc, &next)
+                            .unwrap_or(PhpType::Mixed),
                         None => next,
                     });
                 }

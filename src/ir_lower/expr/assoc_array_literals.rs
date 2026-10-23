@@ -75,6 +75,13 @@ pub(super) fn assoc_array_literal_type_from_spreads(
     items: &[Expr],
     expr: &Expr,
 ) -> PhpType {
+    // Pointers and `null`s (direct, or a spread of a null-only literal) share pointer storage.
+    if let Some(pointer) = pointer_literal_element_type(ctx, items) {
+        return PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(pointer),
+        };
+    }
     let mut value_ty = PhpType::Never;
     for item in items {
         let next = match &item.kind {
