@@ -1,0 +1,74 @@
+//! Purpose:
+//! Regression tests for reading an array offset on a scalar receiver.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - PHP warns "Trying to access array offset on <type>" and answers null. The warning is an
+//!   ordinary suppressible warning, so `isset` and `??` reads stay silent.
+
+use crate::support::*;
+
+/// A scalar receiver answers PHP's null and names its runtime type in the warning instead of
+/// handing the scalar to the container runtime as a pointer (#2025).
+#[test]
+fn test_scalar_array_offset_read_warns_and_returns_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function f(): string {
+    $i = 42; $fl = 4.5; $t = true; $fa = false; $n = null;
+    return gettype($i["a"]) . "|" . gettype($fl["a"]) . "|" . gettype($t["a"]) . "|"
+        . gettype($fa["a"]) . "|" . gettype($n["a"]);
+}
+echo f(), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "NULL|NULL|NULL|NULL|NULL\n");
+    for kind in ["int", "float", "true", "false", "null"] {
+        assert!(
+            out.stderr.contains(&format!("Trying to access array offset on {kind}")),
+            "missing {kind} warning: {}",
+            out.stderr
+        );
+    }
+}
+
+/// The offset warning is suppressible: `isset` and `??` must not emit it.
+#[test]
+fn test_scalar_array_offset_read_is_silent_under_isset_and_coalesce() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function f(): string {
+    $i = 42;
+    return (isset($i["a"]) ? "set" : "unset") . "|" . ($i["a"] ?? "dflt");
+}
+echo f(), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "unset|dflt\n");
+    assert!(
+        !out.stderr.contains("array offset"),
+        "unexpected warning: {}",
+        out.stderr
+    );
+}
+
+/// A chained read keeps PHP's order: the scalar receiver warns and yields null, then the null
+/// intermediate warns again.
+#[test]
+fn test_scalar_array_offset_chain_warns_twice() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function f(): string { $i = 42; return gettype($i["a"]["b"]); }
+echo f(), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "NULL\n");
+    assert_eq!(
+        out.stderr.matches("Trying to access array offset on").count(),
+        2,
+        "{}",
+        out.stderr
+    );
+}
