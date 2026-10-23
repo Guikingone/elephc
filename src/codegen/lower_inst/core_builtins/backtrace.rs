@@ -1144,19 +1144,40 @@ fn load_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Returns class, function, and call-type strings for the current frame.
+///
+/// Generic type arguments are erased: the shape merge folds every instantiation of one generic
+/// method into a single emitted body, and that body's inline frame reader can only name ONE
+/// class. Keeping `Box<User>`/`Box<Order>` here made the two readers' `.ascii` payloads differ,
+/// which correctly blocked the fold and left every throwing program with duplicated bodies — so
+/// the reader names the generic SHAPE instead, the same way the folded body does.
 fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &'static str) {
     match ctx.function.display_name().rsplit_once("::") {
         Some((class, function)) => (
-            Some(class.trim_start_matches('\\').to_string()),
-            function.to_string(),
+            Some(erase_type_arguments(class.trim_start_matches('\\'))),
+            erase_type_arguments(function),
             if ctx.function.flags.is_static { "::" } else { "->" },
         ),
         None => (
             None,
-            ctx.function.display_name().trim_start_matches('\\').to_string(),
+            erase_type_arguments(ctx.function.display_name().trim_start_matches('\\')),
             "",
         ),
     }
+}
+
+/// Removes `<...>` type-argument groups from a class or function name.
+fn erase_type_arguments(name: &str) -> String {
+    let mut erased = String::with_capacity(name.len());
+    let mut depth = 0usize;
+    for ch in name.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' if depth > 0 => depth -= 1,
+            _ if depth == 0 => erased.push(ch),
+            _ => {}
+        }
+    }
+    erased
 }
 
 /// Returns the compact callable spelling used by `debug_print_backtrace()`.

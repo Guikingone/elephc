@@ -837,12 +837,16 @@ fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Optio
 pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "is_resource", 1)?;
     let value = expect_operand(inst, 0)?;
-    // `value_php_type`, not `raw_value_php_type`: the RAW type of a tagged nullable scalar
-    // is the boxed `Mixed` representation, so the raw match took the unbox branch and
-    // dereferenced the tagged payload as a Mixed pointer (`is_resource($nullableInt)` was a
-    // segfault). A tagged scalar is never a resource, and the `_` arm answers false.
-    match ctx.value_php_type(value)? {
-        PhpType::Resource(_) => {
+    // BOTH types are needed. `value_php_type` applies `codegen_repr`, which maps a resource
+    // to its integer storage (`PhpType::Resource(_) -> Int`) and a tagged nullable int
+    // (`?int`) to `TaggedScalar`; the RAW type is what still spells the semantic type.
+    // Matching the stripped type alone made every resource answer false, and matching the
+    // raw type alone dereferenced a tagged scalar's integer payload as a Mixed pointer
+    // (`is_resource($nullableInt)` segfaulted).
+    let raw = ctx.raw_value_php_type(value)?;
+    let repr = ctx.value_php_type(value)?;
+    match (raw, repr) {
+        (PhpType::Resource(_), _) => {
             // A closed resource carries the negative `-id` sentinel — the same sign bit
             // `__rt_resource_type_name` reads to answer `"Unknown"` — and PHP's
             // `is_resource()` is `false` for it. Load the payload and test the sign instead
@@ -860,7 +864,7 @@ pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 }
             }
         }
-        PhpType::Mixed | PhpType::Union(_) => {
+        (PhpType::Mixed | PhpType::Union(_), PhpType::Mixed) => {
             // A boxed resource still carries tag 9 when closed; the closed-ness is only in
             // the payload's sign. Unbox and require BOTH `tag == 9` and a non-negative
             // payload, so a boxed closed resource answers `false` like a bare one.
