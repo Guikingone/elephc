@@ -347,3 +347,32 @@ fn a_caught_builtin_throw_does_not_leak_its_frame_into_a_later_report() {
         out.stdout
     );
 }
+
+/// php-src `curl_file_serialize.phpt`, rethrow variants: the synthetic builtin frame travels
+/// WITH its throwable.
+///
+/// The frame is printed only while the throwable that published it is the one escaping, so a
+/// caught exception cannot lend it to a later failure (see the test above) while `finally`
+/// and an explicit catch-and-rethrow keep it.
+#[test]
+fn a_rethrown_builtin_throw_keeps_its_synthetic_frame() {
+    if skip_without_curl_native("a_rethrown_builtin_throw_keeps_its_synthetic_frame") {
+        return;
+    }
+    for source in [
+        r#"<?php
+        try { serialize(new CURLFile(__FILE__)); } finally { echo "finally\n"; }
+        "#,
+        r#"<?php
+        try { serialize(new CURLFile(__FILE__)); } catch (Throwable $e) { throw $e; }
+        "#,
+    ] {
+        let out = compile_and_run_capture(source);
+        assert!(!out.success, "the throw must stay uncaught");
+        assert!(
+            out.stdout.contains("serialize(Object(CURLFile))"),
+            "a rethrown builtin error must keep its synthetic frame: {}",
+            out.stdout
+        );
+    }
+}

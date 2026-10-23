@@ -851,6 +851,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _uncaught_internal_serialize_name\n_uncaught_internal_serialize_name:\n    .ascii \"serialize\"\n");
     for symbol in [
         "_uncaught_internal_frame_valid",
+        "_uncaught_internal_frame_owner",
         "_uncaught_internal_frame_name_ptr",
         "_uncaught_internal_frame_name_len",
         "_uncaught_internal_frame_line",

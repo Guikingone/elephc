@@ -190,6 +190,12 @@ fn emit_class_named_throw_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow)
     emit_throwable_creation_line_unknown(emitter, "x0");
     emitter.instruction("str xzr, [x0, #40]");                                  // previous = null
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the Throwable for the unwinder
+    if spec.frame_name.is_some() {
+        // The synthetic frame belongs to THIS throwable: the report prints it only while this
+        // object is the one escaping, so a caught (or rethrown-later) exception can never lend
+        // its frame to an unrelated failure.
+        abi::emit_store_reg_to_symbol(emitter, "x0", "_uncaught_internal_frame_owner", 0);
+    }
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("b __rt_throw_current");                                // unwind, or report it uncaught and exit like PHP
@@ -317,6 +323,10 @@ fn emit_class_named_throw_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) 
     emit_throwable_creation_line_unknown(emitter, "rax");
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous = null
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the Throwable for the unwinder
+    if spec.frame_name.is_some() {
+        // See the AArch64 arm: the frame is printed only for the throwable that published it.
+        abi::emit_store_reg_to_symbol(emitter, "rax", "_uncaught_internal_frame_owner", 0);
+    }
     emitter.instruction("mov rsp, rbp");                                        // release the local frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_throw_current");                              // unwind, or report it uncaught and exit like PHP

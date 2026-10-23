@@ -144,6 +144,12 @@ function __elephc_filter_ip_v6_groups(string $ip): mixed {
     if (strlen($ip) === 0 || strlen($ip) > 45) {
         return false;
     }
+    // `-v4-` is THIS parser's private placeholder for a verified IPv4 tail. An address that
+    // spells it literally is not an IPv6 address, and accepting it let
+    // `1:2:3:4:5:6:7:8:-v4-` pass as valid.
+    if (strpos($ip, "-v4-") !== false) {
+        return false;
+    }
     $hasV4 = false;
     $rest = $ip;
     $lastColon = strrpos($rest, ":");
@@ -324,7 +330,9 @@ function filter_var($value, $filter = 516, $options = 0) {
     // The family comes from the content, php-src style: a ':' anywhere means IPv6,
     // otherwise a '.' means IPv4, otherwise nothing validates.
     $isV6 = strpos($ip, ":") !== false;
-    $isV4 = strpos($ip, ".") !== false;
+    // An IPv4-mapped IPv6 address (`::ffff:192.0.2.1`) has a dotted tail but IS an IPv6
+    // address: a colon anywhere decides IPv6, and only a colon-free dotted string is IPv4.
+    $isV4 = !$isV6 && strpos($ip, ".") !== false;
     if (!$isV6 && !$isV4) {
         return false;
     }

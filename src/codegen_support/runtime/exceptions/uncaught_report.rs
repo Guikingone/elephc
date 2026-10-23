@@ -188,6 +188,14 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     let no_internal = "__rt_uncaught_no_internal_frame";
     abi::emit_load_symbol_to_reg(emitter, "x9", "_uncaught_internal_frame_valid", 0);
     emitter.instruction(&format!("cbz x9, {no_internal}"));                     // no builtin frame is pending
+    // The frame belongs to the throwable that published it. A caught exception must not lend
+    // it to a later failure, and a rethrown one must keep it — the pointer identifies both.
+    // Load the OWNER first: `emit_load_symbol_to_reg` resolves an AArch64 symbol through
+    // x9, so loading `_exc_value` into x9 before it would be clobbered by the second load.
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_uncaught_internal_frame_owner", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
+    emitter.instruction("cmp x9, x10");                                         // is the escaping throwable the frame's owner?
+    emitter.instruction(&format!("b.ne {no_internal}"));                        // another exception: no synthetic frame
     abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_hash");
     emitter.instruction("mov x2, #1");                                          // "#"
     emitter.instruction("mov x0, #1");                                          // fd = stdout
@@ -425,6 +433,11 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_uncaught_internal_frame_valid", 0);
     emitter.instruction("test r10, r10");                                       // no builtin frame is pending
     emitter.instruction(&format!("jz {no_internal}"));                          // skip the synthetic frame
+    // See the AArch64 arm: only the throwable that published the frame may print it.
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_uncaught_internal_frame_owner", 0);
+    emitter.instruction("cmp r10, r11");                                        // is the escaping throwable the frame's owner?
+    emitter.instruction(&format!("jne {no_internal}"));                         // another exception: no synthetic frame
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_hash");
     emitter.instruction("mov edx, 1");                                          // "#"
     emitter.instruction("mov edi, 1");                                          // fd = stdout
@@ -634,6 +647,9 @@ mod tests {
         assert!(asm.contains("bl __rt_itoa"));
         // The trace block reuses the filename/line the location block saved, and never
         // fabricates a line: with no resolved line it drops only the " on line N" half.
+        // The synthetic builtin frame is gated on the throwable that published it, so a
+        // caught exception cannot lend its frame to a later failure.
+        assert!(asm.contains("_uncaught_internal_frame_owner"));
         assert!(asm.contains("_uncaught_trace_header"));
         assert!(asm.contains("_uncaught_thrown_in"));
         assert!(asm.contains("ldr x2, [sp, #8]"));

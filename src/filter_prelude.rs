@@ -308,6 +308,16 @@ fn decl_fn_elephc_filter_ip_v6_groups() -> Stmt {
                 vec![],
                 None,
             ),
+            // `-v4-` is this parser's private placeholder for a verified IPv4 tail; an
+            // address that spells it literally is not an IPv6 address.
+            s_if(
+                e_binop(e_call("strpos", vec![e_var("ip"), e_str("-v4-")]), BinOp::StrictNotEq, e_bool(false)),
+                vec![
+                    s_return(e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
             s_assign("hasV4", e_bool(false)),
             s_assign("rest", e_var("ip")),
             s_assign("lastColon", e_call("strrpos", vec![e_var("rest"), e_str(":")])),
@@ -622,7 +632,7 @@ fn decl_fn_filter_var() -> Stmt {
             s_assign("ip", e_cast(CastType::String, e_var("value"))),
             s_assign("flags", e_var("options")),
             s_assign("isV6", e_binop(e_call("strpos", vec![e_var("ip"), e_str(":")]), BinOp::StrictNotEq, e_bool(false))),
-            s_assign("isV4", e_binop(e_call("strpos", vec![e_var("ip"), e_str(".")]), BinOp::StrictNotEq, e_bool(false))),
+            s_assign("isV4", e_binop(e_not(e_var("isV6")), BinOp::And, e_binop(e_call("strpos", vec![e_var("ip"), e_str(".")]), BinOp::StrictNotEq, e_bool(false)))),
             s_if(
                 e_binop(e_not(e_var("isV6")), BinOp::And, e_not(e_var("isV4"))),
                 vec![

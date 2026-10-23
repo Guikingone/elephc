@@ -540,6 +540,13 @@ fn builtin_array_output(name: &str, index: usize) -> bool {
     )
 }
 
+/// Records by-reference output variables in supported calls and recursively scans their child
+/// expressions.
+///
+/// Covers the statement/expression shapes this pass walks (calls, `new`, array access, casts,
+/// assignments, ternaries, closures, and interpolated strings), so a by-reference output such as
+/// `curl_multi_exec($mh, $active)` auto-vivifies its caller variable even when the call is nested
+/// inside one of them.
 fn collect_expr(expr: &Expr, refs: &HashMap<String, FnRefs>, scope: &mut ScopeInfo) {
     match &expr.kind {
         ExprKind::FunctionCall { name, args } => {

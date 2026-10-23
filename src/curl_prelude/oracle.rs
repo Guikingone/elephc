@@ -277,13 +277,36 @@ function __elephc_curl_path_within_open_basedir(string $path): bool {
     if ($allowed === "") {
         return true;
     }
-    if ($path === $allowed) {
-        return true;
+    // Judge the FILE THE PATH NAMES, not its text: php-src's `php_check_open_basedir` runs
+    // the path through the realpath expansion, so `/srv/app/../private/x` and a symlink
+    // inside the allowed tree are judged by what they resolve to.
+    $resolved = realpath($path);
+    if ($resolved === false) {
+        // A file that does not exist yet (a cookie jar) is judged by its parent directory.
+        $parent = realpath(dirname($path));
+        if ($parent === false) {
+            return false;
+        }
+        $resolved = $parent . "/" . basename($path);
     }
-    if (substr($path, 0, strlen($allowed)) !== $allowed) {
-        return false;
+    // Both supported platforms use ':' as PATH_SEPARATOR, and the directive lists its roots
+    // separated by it (`PATH_SEPARATOR` is not in this compiler's constant catalog).
+    foreach (explode(":", $allowed) as $root) {
+        $real = realpath($root);
+        if ($real === false) {
+            $real = $root;
+        }
+        if ($real === "/") {
+            return true;
+        }
+        if (strlen($real) > 1 && substr($real, strlen($real) - 1) === "/") {
+            $real = substr($real, 0, strlen($real) - 1);
+        }
+        if ($resolved === $real || str_starts_with($resolved, $real . "/")) {
+            return true;
+        }
     }
-    return substr($allowed, strlen($allowed) - 1) === "/" || substr($path, strlen($allowed), 1) === "/";
+    return false;
 }
 
 // php-src's `php_curl_option_url()` strip: every URL set while open_basedir is in effect

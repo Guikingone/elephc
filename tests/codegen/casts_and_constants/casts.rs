@@ -72,10 +72,12 @@ fn test_cast_int_from_bool() {
 
 /// Casting an object to int yields its object handle, the same small dense id
 /// `spl_object_id()` returns. A fresh object is `1`, the next is `2`, and the id is reused
-/// after the second object is freed.
+/// PHP warns and answers 1 for EVERY ordinary object, including enums; the dense object
+/// handle is what `spl_object_id()` returns, not the cast. The display copy of the warning
+/// goes to stdout like php CLI's `display_errors=1`.
 #[test]
-fn test_cast_int_from_object_is_the_object_handle() {
-    let out = compile_and_run(
+fn test_cast_int_from_object_warns_and_answers_one() {
+    let out = compile_and_run_capture(
         r#"<?php
 class Widget {}
 $a = new Widget();
@@ -88,7 +90,17 @@ $c = new Widget();
 echo (int) $c;
 "#,
     );
-    assert_eq!(out, "1:2:2:2");
+    // The display copy of each warning is split back onto stderr by the test harness, the
+    // way the phpt suite does it; the VALUES are what php prints.
+    assert_eq!(out.stdout, "1:1:2:1");
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Object of class Widget could not be converted to int")
+            .count(),
+        3,
+        "each object cast must warn once: {}",
+        out.stderr
+    );
 }
 
 /// Compiles `<?php echo (float)42;` and asserts stdout is `"42"` — int widens to float without truncation.

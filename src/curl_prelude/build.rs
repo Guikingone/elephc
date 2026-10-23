@@ -328,29 +328,86 @@ fn decl_fn_elephc_curl_path_within_open_basedir() -> Stmt {
             s_assign("allowed", e_call("__elephc_curl_open_basedir", vec![])),
             s_if(
                 e_binop(e_var("allowed"), BinOp::StrictEq, e_str("")),
-                vec![
-                    s_return(e_bool(true)),
-                ],
+                vec![s_return(e_bool(true))],
                 vec![],
                 None,
             ),
+            // Judge the FILE THE PATH NAMES, not its text: php-src's
+            // `php_check_open_basedir` runs the path through the realpath expansion, so
+            // `/srv/app/../private/x` and a symlink inside the allowed tree are judged by
+            // what they resolve to.
+            s_assign("resolved", e_call("realpath", vec![e_var("path")])),
             s_if(
-                e_binop(e_var("path"), BinOp::StrictEq, e_var("allowed")),
+                e_binop(e_var("resolved"), BinOp::StrictEq, e_bool(false)),
                 vec![
-                    s_return(e_bool(true)),
+                    // A file that does not exist yet (a cookie jar) is judged by its
+                    // parent directory.
+                    s_assign("parent", e_call("realpath", vec![e_call("dirname", vec![e_var("path")])])),
+                    s_if(
+                        e_binop(e_var("parent"), BinOp::StrictEq, e_bool(false)),
+                        vec![s_return(e_bool(false))],
+                        vec![],
+                        None,
+                    ),
+                    s_assign(
+                        "resolved",
+                        e_binop(
+                            e_binop(e_var("parent"), BinOp::Concat, e_str("/")),
+                            BinOp::Concat,
+                            e_call("basename", vec![e_var("path")]),
+                        ),
+                    ),
                 ],
                 vec![],
                 None,
             ),
-            s_if(
-                e_binop(e_call("substr", vec![e_var("path"), e_int(0), e_call("strlen", vec![e_var("allowed")])]), BinOp::StrictNotEq, e_var("allowed")),
-                vec![
-                    s_return(e_bool(false)),
-                ],
-                vec![],
+            // Both supported platforms use ':' as PATH_SEPARATOR, and the directive lists
+            // its roots separated by it (`PATH_SEPARATOR` is not in the constant catalog).
+            s_foreach(
+                e_call("explode", vec![e_str(":"), e_var("allowed")]),
                 None,
+                "root",
+                vec![
+                    s_assign("real", e_call("realpath", vec![e_var("root")])),
+                    s_if(
+                        e_binop(e_var("real"), BinOp::StrictEq, e_bool(false)),
+                        vec![s_assign("real", e_var("root"))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("real"), BinOp::StrictEq, e_str("/")),
+                        vec![s_return(e_bool(true))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(
+                            e_binop(e_call("strlen", vec![e_var("real")]), BinOp::Gt, e_int(1)),
+                            BinOp::And,
+                            e_binop(
+                                e_call("substr", vec![e_var("real"), e_binop(e_call("strlen", vec![e_var("real")]), BinOp::Sub, e_int(1))]),
+                                BinOp::StrictEq,
+                                e_str("/"),
+                            ),
+                        ),
+                        vec![s_assign("real", e_call("substr", vec![e_var("real"), e_int(0), e_binop(e_call("strlen", vec![e_var("real")]), BinOp::Sub, e_int(1))]))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(
+                            e_binop(e_var("resolved"), BinOp::StrictEq, e_var("real")),
+                            BinOp::Or,
+                            e_call("str_starts_with", vec![e_var("resolved"), e_binop(e_var("real"), BinOp::Concat, e_str("/"))]),
+                        ),
+                        vec![s_return(e_bool(true))],
+                        vec![],
+                        None,
+                    ),
+                ],
             ),
-            s_return(e_binop(e_binop(e_call("substr", vec![e_var("allowed"), e_binop(e_call("strlen", vec![e_var("allowed")]), BinOp::Sub, e_int(1))]), BinOp::StrictEq, e_str("/")), BinOp::Or, e_binop(e_call("substr", vec![e_var("path"), e_call("strlen", vec![e_var("allowed")]), e_int(1)]), BinOp::StrictEq, e_str("/")))),
+            s_return(e_bool(false)),
         ])
         .build()
 }

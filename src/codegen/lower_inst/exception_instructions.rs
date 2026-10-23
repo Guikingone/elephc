@@ -113,10 +113,6 @@ pub(super) fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &result_ty);
     ctx.store_result_value(result)?;
     abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_value", 0);
-    // The synthetic builtin frame published with this throwable belongs to IT: a later
-    // uncaught throw must not inherit `#0 file(line): serialize(Object(CURLFile))` from an
-    // exception the program caught and handled.
-    abi::emit_store_zero_to_symbol(ctx.emitter, "_uncaught_internal_frame_valid", 0);
     Ok(())
 }
 
