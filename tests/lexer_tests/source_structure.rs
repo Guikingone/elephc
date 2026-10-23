@@ -35,6 +35,31 @@ fn test_close_tag_at_eof() {
     );
 }
 
+/// Verifies `?>` swallows php's whole NEWLINE sequence (`\r\n`, `\n`, and a lone `\r`).
+///
+/// PHP's lexer eats ONE newline after a close tag, and NEWLINE includes CRLF and a bare CR;
+/// consuming only `\n` leaked the `\r` into the inline HTML of every CRLF-terminated file
+/// (`<?php echo "A"; ?>\r\nB` printed `A\r\nB` where php prints `AB`).
+#[test]
+fn test_close_tag_swallows_crlf_and_cr() {
+    for terminator in ["\r\n", "\n", "\r"] {
+        let source = format!("<?php echo 1; ?>{terminator}B");
+        let t = tokens(&source);
+        assert_eq!(
+            t,
+            vec![
+                Token::OpenTag,
+                Token::Echo,
+                Token::IntLiteral(1),
+                Token::Semicolon,
+                Token::InlineHtml("B".to_string()),
+                Token::Eof,
+            ],
+            "close tag must swallow the {terminator:?} terminator"
+        );
+    }
+}
+
 /// Verifies mid-file close/open pairs: the text between `?>` and the next `<?php` is
 /// inline HTML, and the re-entry tag puts the stream back in code mode.
 #[test]

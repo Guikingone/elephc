@@ -82,8 +82,20 @@ pub(super) fn scan_tokens_in_source(
             // very end of a file, the convention most PHP files follow) emits nothing.
             cursor.advance();
             cursor.advance();
-            if cursor.peek() == Some('\n') {
-                cursor.advance();
+            // PHP consumes one NEWLINE after `?>`, and NEWLINE is `\r\n`, `\n` OR a lone
+            // `\r` (measured: `<?php echo "A"; ?>\r\nB` and `?>\rB` both print `AB`).
+            // Consuming only `\n` leaked the `\r` into the inline HTML of every CRLF file.
+            match cursor.peek() {
+                Some('\r') => {
+                    cursor.advance();
+                    if cursor.peek() == Some('\n') {
+                        cursor.advance();
+                    }
+                }
+                Some('\n') => {
+                    cursor.advance();
+                }
+                _ => {}
             }
             let html_start = cursor.span();
             let before = cursor.remaining();

@@ -311,3 +311,39 @@ fn curl_close_and_share_close_are_deprecated_but_not_multi_close() {
         output.stderr
     );
 }
+
+/// php-src `curl_file_serialize.phpt`, caught variant: the synthetic builtin frame belongs
+/// to the throwable that published it.
+///
+/// `serialize(new CURLFile(...))` raises an Exception whose trace php names as
+/// `#0 file(line): serialize(Object(CURLFile))`. When the program CATCHES that exception, a
+/// later unrelated uncaught throw must not inherit the frame — the flag that publishes it is
+/// cleared with the bound exception.
+#[test]
+fn a_caught_builtin_throw_does_not_leak_its_frame_into_a_later_report() {
+    if skip_without_curl_native("a_caught_builtin_throw_does_not_leak_its_frame_into_a_later_report") {
+        return;
+    }
+    let out = compile_and_run_capture(
+        r#"<?php
+        try { serialize(new CURLFile(__FILE__)); } catch (Throwable $e) {}
+        throw new RuntimeException("later");
+        "#,
+    );
+    assert!(!out.success, "the second throw must stay uncaught");
+    assert!(
+        out.stdout.contains("Fatal error: Uncaught RuntimeException: later"),
+        "unexpected report: {}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("#0 {main}"),
+        "the report must still carry the trace block: {}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains("serialize(Object(CURLFile))"),
+        "a caught exception's synthetic builtin frame leaked into a later report: {}",
+        out.stdout
+    );
+}
