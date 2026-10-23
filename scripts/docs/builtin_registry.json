@@ -27141,12 +27141,13 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 704,
+      "codegen_line": 705,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.buffer_ptr` through `BuiltinLoweringContext`.",
         "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
       ],
+      "prelude_label": null,
       "runtime_helpers": [],
       "sig_arm": null,
       "sig_file": "src/builtins/pointers/buffer_ptr.rs",

@@ -2,7 +2,7 @@
 title: "memory_get_peak_usage()"
 description: "Returns the peak of memory allocated by PHP."
 sidebar:
-  order: 637
+  order: 638
 ---
 
 ## memory_get_peak_usage()

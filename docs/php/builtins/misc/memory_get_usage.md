@@ -2,7 +2,7 @@
 title: "memory_get_usage()"
 description: "Returns the amount of memory allocated to PHP."
 sidebar:
-  order: 638
+  order: 639
 ---
 
 ## memory_get_usage()
