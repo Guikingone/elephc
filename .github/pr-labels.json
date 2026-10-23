@@ -232,7 +232,7 @@
     },
     "ci:pdo-live": {
       "color": "5319E7",
-      "description": "Run the live database suites on this PR even when no PDO or mysqli code changed."
+      "description": "Run the optional-driver live database suites on this PR without a PDO or mysqli change."
     }
   },
   "areas": [

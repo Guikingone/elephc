@@ -180,7 +180,8 @@ which tiers a run executes and writes its reason to the run summary.
 | Build and archive on every platform, doctests, the macOS xml bridge tests, repository checks (docs sync, action pins, audit, ...) | yes | yes | yes |
 | Linux x86_64 and ARM64 test matrix, managed native smoke on all three hosts | yes | yes | only if the queue did not test that commit |
 | macOS test matrix (non-codegen, CLI, web, codegen, eval, PDO, curl) and the iOS compile and link jobs | with `ci:macos`, or when the PR changes CI scheduling | yes | only if the queue did not test that commit |
-| Live database suites (`pdo-live.yml`) | when the PR changes PDO or mysqli code or `Cargo.lock`, or with `ci:pdo-live` | yes | only if the queue did not test that commit |
+| Core live database suites (`pdo-live.yml`: PostgreSQL 16 and MySQL 8.4) | yes | yes | only if the queue did not test that commit |
+| Optional-driver live database suites (`pdo-live.yml`: `sqlsrv-oci`, `cubrid-dblib`, `firebird-odbc`, `informix-ibm`) | when the PR changes PDO or mysqli code or `Cargo.lock`, or with `ci:pdo-live` | yes | only if the queue did not test that commit |
 | Benchmark suite | no | no | yes |
 
 The live database suites also run every night. "CI scheduling" means
@@ -189,7 +190,7 @@ those change how every platform's tests are scheduled, so they run the macOS tie
 itself.
 
 A green `Build & Test` on a Pull Request therefore means the PR tier passed. The macOS tier
-and the live database suites run when you add the PR to the queue:
+and the optional-driver live database suites run when you add the PR to the queue:
 
 1. When the PR tier is green, use **Merge when ready** (or `gh pr merge <number>`), which
    adds the PR to the queue. You do not need to update the branch with `main` first.
@@ -210,7 +211,7 @@ system calls, the iOS targets) or reproduces a failure the queue reported:
 | Label | Runs on the Pull Request |
 |---|---|
 | `ci:macos` | The macOS test matrix and the iOS compile and link jobs of `ci.yml`. |
-| `ci:pdo-live` | The live database suites of `pdo-live.yml`. |
+| `ci:pdo-live` | The optional-driver live database suites of `pdo-live.yml` (the core PostgreSQL and MySQL suites already run on every PR). |
 
 The `plan` job reads the labels when it runs, so adding a label does not start a run by
 itself. After adding it, push a commit or re-run the whole workflow: **Re-run all jobs** in

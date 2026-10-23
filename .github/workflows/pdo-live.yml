@@ -1,11 +1,12 @@
 name: PDO Live Databases
 
 # The live suites are ignored by the ordinary codegen matrix because they need
-# database services and native client libraries. They run in the merge queue, on
-# the nightly schedule, and on pull requests that change PDO or mysqli code or carry
-# the `ci:pdo-live` label (see the `plan` job and CONTRIBUTING.md § "CI tiers and
-# the merge queue"). The embedded drivers and the optional system-client profiles
-# stay split so neither serial group holds the other on the workflow's critical path.
+# database services and native client libraries. The core PostgreSQL and MySQL suites
+# run on every pull request; the optional-driver suites run on pull requests that change
+# PDO or mysqli code or carry the `ci:pdo-live` label. Both run in the merge queue and
+# on the nightly schedule (see the `plan` job and CONTRIBUTING.md § "CI tiers and the
+# merge queue"). The embedded drivers and the optional system-client profiles stay
+# split so neither serial group holds the other on the workflow's critical path.
 on:
   push:
     branches: [main]
@@ -34,8 +35,9 @@ env:
   ELEPHC_PDO_LIVE_REQUIRED: '1'
 
 jobs:
-  # Chooses whether the live suites run (scripts/ci/plan_tiers.sh). The push to main that
-  # the merge queue produces skips them, because the queue already ran them on that commit.
+  # Chooses whether the live suites run (scripts/ci/plan_tiers.sh): `run` gates the core
+  # suites and `extended` the optional-driver suites. The push to main that the merge queue
+  # produces skips both, because the queue already ran them on that commit.
   plan:
     name: Plan PDO live tiers
     runs-on: ubuntu-latest
@@ -44,6 +46,7 @@ jobs:
       actions: read
       pull-requests: read
     outputs:
+      run: ${{ steps.plan.outputs.run }}
       extended: ${{ steps.plan.outputs.extended }}
     steps:
       - uses: actions/checkout@v7
@@ -67,7 +70,7 @@ jobs:
   pdo-core:
     name: PDO core live suite (${{ matrix.suite }})
     needs: plan
-    if: needs.plan.outputs.extended == 'true'
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -285,15 +288,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Confirm every core PDO suite passed
-        # A pull request that does not touch the database code skips the suites; then they
-        # must be skipped, and otherwise every one of them must pass.
+        # Only the push to main whose commit the merge queue already tested skips the core
+        # suites; then they must be skipped, and otherwise every one of them must pass.
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
-          EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
+          RUN_TIER: ${{ needs.plan.outputs.run }}
           MATRIX_RESULT: ${{ needs.pdo-core.result }}
         run: |
           test "$PLAN_RESULT" = success
-          if [ "$EXTENDED_TIER" = true ]; then
+          if [ "$RUN_TIER" = true ]; then
             test "$MATRIX_RESULT" = success
           else
             test "$MATRIX_RESULT" = skipped
@@ -629,7 +632,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Confirm every optional PDO suite passed
-        # A pull request that does not touch the database code skips the suites; then they
+        # A pull request that does not touch the database code skips these suites; then they
         # must be skipped, and otherwise every one of them must pass.
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
