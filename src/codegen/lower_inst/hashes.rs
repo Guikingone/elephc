@@ -91,16 +91,9 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
         )));
     }
     let hash = expect_operand(inst, 0)?;
-    let hash_ty = ctx.value_php_type(hash)?.codegen_repr();
-    require_hash(hash_ty.clone(), inst)?;
+    require_hash(ctx.value_php_type(hash)?.codegen_repr(), inst)?;
     require_hash_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
-    // Pointer words carry entry tag 0 like ints, so the value type selects the pointer entry.
-    let helper = match &hash_ty {
-        PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Pointer(_)) => {
-            "__rt_hash_to_mixed_pointer"
-        }
-        _ => "__rt_hash_to_mixed",
-    };
+    let helper = "__rt_hash_to_mixed";
     let done = ctx.next_label("hash_to_mixed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -1489,6 +1482,9 @@ fn hash_set_value_tag(value_ty: &PhpType, storage_value_ty: &PhpType) -> i64 {
             return crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
         }
         crate::codegen::runtime_value_tag(&value_ty.codegen_repr()) as i64
+    } else if matches!(storage_value_ty.codegen_repr(), PhpType::Pointer(_)) {
+        // A pointer hash entry is a raw `?ptr<T>` word that dynamic readers show as null for 0.
+        crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE
     } else {
         crate::codegen::runtime_value_tag(storage_value_ty) as i64
     }

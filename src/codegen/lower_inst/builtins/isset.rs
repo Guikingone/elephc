@@ -341,6 +341,12 @@ fn emit_isset_hash_found_null_check_aarch64(
         let concrete_non_null = ctx.next_label("isset_hash_concrete_non_null");
         ctx.emitter.instruction("cmp x3, #8");                                  // detect an unboxed per-entry null tag before inspecting its payload
         ctx.emitter.instruction(&format!("b.eq {}", missing));                  // concrete null entries make isset return false
+        let not_pointer = ctx.next_label("isset_hash_not_pointer_word");
+        ctx.emitter.instruction(&format!("cmp x3, #{}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // is this entry a raw ?ptr<T> word?
+        ctx.emitter.instruction(&format!("b.ne {}", not_pointer));              // other tags keep the boxed-entry checks
+        ctx.emitter.instruction(&format!("cbz x1, {}", missing));               // the null pointer word is PHP null for isset
+        ctx.emitter.instruction(&format!("b {}", concrete_non_null));           // a live pointer word is set
+        ctx.emitter.label(&not_pointer);
         ctx.emitter.instruction("cmp x3, #7");                                  // tag 7 means value_lo points to an already-boxed Mixed cell
         ctx.emitter.instruction(&format!("b.ne {}", concrete_non_null));        // every other concrete runtime tag is non-null
         ctx.emitter.instruction("mov x0, x1");                                  // pass the boxed Mixed hash value to the unbox helper
@@ -373,6 +379,13 @@ fn emit_isset_hash_found_null_check_x86_64(
         let concrete_non_null = ctx.next_label("isset_hash_concrete_non_null");
         ctx.emitter.instruction("cmp rcx, 8");                                  // detect an unboxed per-entry null tag before inspecting its payload
         ctx.emitter.instruction(&format!("je {}", missing));                    // concrete null entries make isset return false
+        let not_pointer = ctx.next_label("isset_hash_not_pointer_word");
+        ctx.emitter.instruction(&format!("cmp rcx, {}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // is this entry a raw ?ptr<T> word?
+        ctx.emitter.instruction(&format!("jne {}", not_pointer));               // other tags keep the boxed-entry checks
+        ctx.emitter.instruction("test rdi, rdi");                               // is this entry the null pointer word?
+        ctx.emitter.instruction(&format!("jz {}", missing));                    // the null pointer word is PHP null for isset
+        ctx.emitter.instruction(&format!("jmp {}", concrete_non_null));         // a live pointer word is set
+        ctx.emitter.label(&not_pointer);
         ctx.emitter.instruction("cmp rcx, 7");                                  // tag 7 means value_lo points to an already-boxed Mixed cell
         ctx.emitter.instruction(&format!("jne {}", concrete_non_null));         // every other concrete runtime tag is non-null
         ctx.emitter.instruction("mov rax, rdi");                                // pass the boxed Mixed hash value to the unbox helper

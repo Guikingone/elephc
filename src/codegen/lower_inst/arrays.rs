@@ -2696,14 +2696,14 @@ fn emit_scalar_slot_element_tag(ctx: &mut FunctionContext<'_>, tag: Option<PhpTy
 /// not reachable here -- a `mixed` element type boxes instead of taking this path.
 fn scalar_slot_element_tag(elem_ty: &PhpType, value_ty: &PhpType) -> Option<PhpType> {
     let from_array = elem_ty.codegen_repr();
-    if matches!(from_array, PhpType::Float | PhpType::Bool) {
+    if matches!(from_array, PhpType::Float | PhpType::Bool | PhpType::Pointer(_)) {
         return Some(from_array);
     }
     if !matches!(from_array, PhpType::Never | PhpType::Void) {
         return None;
     }
     let from_value = value_ty.codegen_repr();
-    matches!(from_value, PhpType::Float | PhpType::Bool).then_some(from_value)
+    matches!(from_value, PhpType::Float | PhpType::Bool | PhpType::Pointer(_)).then_some(from_value)
 }
 
 /// Lowers an indexed-array append for x86_64 targets.

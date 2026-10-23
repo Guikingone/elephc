@@ -12,13 +12,12 @@
 //!   skipped whole, so a repeated by-reference foreach cannot restamp a live reference set.
 //! - The owned-box entry point is shared so `__rt_hash_set` can reuse it when writing a
 //!   non-boxed replacement through an existing reference cell.
-//! - `__rt_hash_to_mixed_pointer` converts a hash of raw pointer words: a tag-0 entry whose word
-//!   is 0 boxes as PHP null, as a `?ptr<T>` element reads. The owned-box helper is unchanged, so
-//!   an integer 0 written through `__rt_hash_set` stays an integer.
+//! - A tag-13 entry (a raw `?ptr<T>` word) boxes as PHP null for 0 and an integer otherwise. The
+//!   owned-box helper is unchanged, so an integer 0 written through `__rt_hash_set` stays one.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::sentinels::{emit_branch_if_null_container, POINTER_ARRAY_VALUE_TYPE};
 
 
 /// Emits the `__rt_hash_to_mixed` runtime helper.
@@ -37,16 +36,10 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_to_mixed ---");
     emitter.label_global("__rt_hash_to_mixed");
-    emitter.instruction("mov x9, #0");                                          // ordinary entries keep their stored runtime tag
-    emitter.instruction("b __rt_hash_to_mixed_entry");                          // share the conversion with the pointer-hash entry
-    emitter.label_global("__rt_hash_to_mixed_pointer");
-    emitter.instruction("mov x9, #1");                                          // a pointer hash boxes a 0 word as PHP null
-    emitter.label_shared("__rt_hash_to_mixed_entry");
 
     emitter.instruction("sub sp, sp, #96");                                     // reserve conversion frame slots and saved return state
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // establish a stable conversion frame
-    emitter.instruction("str x9, [sp, #48]");                                   // save the pointer-hash conversion mode
     emitter.instruction("bl __rt_hash_ensure_unique");                          // split shared hashes before rewriting entry payloads
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique hash pointer
     emit_branch_if_null_container(
@@ -84,12 +77,12 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // restore the payload after key comparison
     emitter.instruction("ldr x4, [sp, #24]");                                   // restore the high payload word
     emitter.instruction("ldr x5, [sp, #32]");                                   // restore the runtime tag
-    // -- a null pointer word of a pointer hash boxes as PHP null --
-    emitter.instruction("ldr x9, [sp, #48]");                                   // reload the pointer-hash conversion mode
-    emitter.instruction("cbz x9, __rt_hash_to_mixed_box_value");                // ordinary conversions box the stored tag
-    emitter.instruction("cbnz x5, __rt_hash_to_mixed_box_value");               // only tag-0 entries are raw pointer words
-    emitter.instruction("cbnz x3, __rt_hash_to_mixed_box_value");               // a live address stays an integer
-    emitter.instruction("mov x5, #8");                                          // runtime tag 8 = PHP null for the null pointer word
+    // -- a ?ptr<T> entry boxes 0 as PHP null and any other address as an integer --
+    emitter.instruction(&format!("cmp x5, #{}", POINTER_ARRAY_VALUE_TYPE));     // is this entry a raw ?ptr<T> word?
+    emitter.instruction("b.ne __rt_hash_to_mixed_box_value");                   // every other entry keeps its stored tag
+    emitter.instruction("mov x9, #8");                                          // runtime tag 8 = PHP null for the null pointer word
+    emitter.instruction("cmp x3, #0");                                          // is this entry the null pointer word?
+    emitter.instruction("csel x5, x9, xzr, eq");                                // box 0 as PHP null and any address as an integer
     emitter.label("__rt_hash_to_mixed_box_value");
     emitter.instruction("mov x0, x5");                                          // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov x1, x3");                                          // pass the entry low payload word to the owned-box helper
@@ -180,16 +173,10 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_to_mixed ---");
     emitter.label_global("__rt_hash_to_mixed");
-    emitter.instruction("xor r11d, r11d");                                      // ordinary entries keep their stored runtime tag
-    emitter.instruction("jmp __rt_hash_to_mixed_x86_entry");                    // share the conversion with the pointer-hash entry
-    emitter.label_global("__rt_hash_to_mixed_pointer");
-    emitter.instruction("mov r11d, 1");                                         // a pointer hash boxes a 0 word as PHP null
-    emitter.label_shared("__rt_hash_to_mixed_x86_entry");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before converting entries
     emitter.instruction("mov rbp, rsp");                                        // establish a stable conversion frame
     emitter.instruction("sub rsp, 64");                                         // reserve slots for hash pointer, cursor, payload, and entry address
-    emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the pointer-hash conversion mode
     emitter.instruction("call __rt_hash_ensure_unique");                        // split shared hashes before rewriting entry payloads
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique hash pointer
     emit_branch_if_null_container(
@@ -228,14 +215,13 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // restore the payload after key comparison
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // restore the high payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // restore the runtime tag
-    // -- a null pointer word of a pointer hash boxes as PHP null --
-    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // is this a pointer-hash conversion?
-    emitter.instruction("je __rt_hash_to_mixed_x86_box_value");                 // ordinary conversions box the stored tag
-    emitter.instruction("test r9, r9");                                         // only tag-0 entries are raw pointer words
-    emitter.instruction("jne __rt_hash_to_mixed_x86_box_value");                // keep every other runtime tag
+    // -- a ?ptr<T> entry boxes 0 as PHP null and any other address as an integer --
+    emitter.instruction(&format!("cmp r9, {}", POINTER_ARRAY_VALUE_TYPE));      // is this entry a raw ?ptr<T> word?
+    emitter.instruction("jne __rt_hash_to_mixed_x86_box_value");                // every other entry keeps its stored tag
+    emitter.instruction("xor r9d, r9d");                                        // runtime tag 0 = integer for a live pointer address
+    emitter.instruction("mov r10, 8");                                          // runtime tag 8 = PHP null for the null pointer word
     emitter.instruction("test rcx, rcx");                                       // is this entry the null pointer word?
-    emitter.instruction("jne __rt_hash_to_mixed_x86_box_value");                // a live address stays an integer
-    emitter.instruction("mov r9, 8");                                           // runtime tag 8 = PHP null for the null pointer word
+    emitter.instruction("cmovz r9, r10");                                       // box 0 as PHP null
     emitter.label("__rt_hash_to_mixed_x86_box_value");
     emitter.instruction("mov rax, r9");                                         // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov rdi, rcx");                                        // pass the entry low payload word to the owned-box helper

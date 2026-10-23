@@ -11,6 +11,8 @@
 //!   `array_push`/`array_pop` (task 6da89f60).
 //! - Hash literals that mix pointers with `null` or with other targets are tested at top level,
 //!   where `main` is lowered from the checker's finished environment.
+//! - Pointer containers stamp runtime value type 13, so introspection, `mixed` views and runtime
+//!   array readers show a null element as PHP null and a live one as an integer address.
 
 use crate::support::*;
 
@@ -577,4 +579,78 @@ echo hm($h), "|", am($l), "|", isset($h["a"]) ? "set" : "unset", $h["b"] === nul
 "#,
     );
     assert_eq!(out, "unsetnullinteger|unsetnullinteger|unsetlive\n");
+}
+
+/// Verifies `json_encode`, `var_dump`, `print_r`, `var_export` and `serialize` show a null element
+/// of a pointer array or hash as PHP null and a live one as its integer address.
+#[test]
+fn test_pointer_containers_introspect_null_words_as_php_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+function m(string $s, string $addr): string { return str_replace("\n", "/", str_replace($addr, "ADDR", $s)); }
+$v = buffer_new<Vec2>(1);
+$l = [null, at($v, 0)];
+$h = ["a" => null, "b" => at($v, 0)];
+$addr = (string) (int) $l[1];
+echo m((string) json_encode($l), $addr), m((string) json_encode($h), $addr), "\n";
+ob_start(); var_dump($l); var_dump($h); echo m((string) ob_get_clean(), $addr), "\n";
+echo m(print_r($l, true), $addr), m(print_r($h, true), $addr), "\n";
+echo m(var_export($l, true), $addr), "|", m(var_export($h, true), $addr), "\n";
+echo m(serialize($l), $addr), "|", m(serialize($h), $addr), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[null,ADDR]{\"a\":null,\"b\":ADDR}\n",
+            "array(2) {/  [0]=>/  NULL/  [1]=>/  int(ADDR)/}/",
+            "array(2) {/  [\"a\"]=>/  NULL/  [\"b\"]=>/  int(ADDR)/}/\n",
+            "Array/(/    [0] => /    [1] => ADDR/)/Array/(/    [a] => /    [b] => ADDR/)/\n",
+            "array (/  0 => NULL,/  1 => ADDR,/)|array (/  'a' => NULL,/  'b' => ADDR,/)\n",
+            "a:2:{i:0;N;i:1;i:ADDR;}|a:2:{s:1:\"a\";N;s:1:\"b\";i:ADDR;}\n",
+        )
+    );
+}
+
+/// Verifies a pointer array or hash read through `mixed` (a parameter, a merged conditional and
+/// a nested literal) gives PHP null for a null element and an integer for a live one.
+#[test]
+fn test_pointer_containers_read_null_words_through_mixed_views() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+function mx(mixed $m): string { return gettype($m[0]) . gettype($m[1]); }
+function hx(mixed $m): string { return gettype($m["a"]) . gettype($m["b"]) . (isset($m["a"]) ? "set" : "unset"); }
+$v = buffer_new<Vec2>(1);
+$l = [null, at($v, 0)];
+$h = ["a" => null, "b" => at($v, 0)];
+echo mx($l), "|", hx($h), "|";
+$hh = $argc > 100 ? ["a" => at($v, 0)] : ["a" => null];
+$m = $argc > 0 ? $hh : ["a" => 1];
+echo isset($m["a"]) ? "set" : "unset", "|", gettype([$l, "x"][0][0]), "\n";
+"#,
+    );
+    assert_eq!(out, "NULLinteger|NULLintegerunset|unset|NULL\n");
+}
+
+/// Verifies runtime array readers see a null pointer word as PHP null: strict and loose
+/// `in_array(null, ...)`, `array_sum` and `vsprintf` operands.
+#[test]
+fn test_pointer_arrays_builtin_readers_see_null_words_as_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+$v = buffer_new<Vec2>(1);
+$l = [null, at($v, 0)];
+$addr = (string) (int) $l[1];
+echo in_array(null, $l, true) ? "strict" : "-", in_array(null, $l) ? "loose" : "-", "|";
+echo array_sum($l) === (int) $l[1] ? "sum" : "nosum", "|";
+echo str_replace($addr, "ADDR", vsprintf("[%s]|%d", $l)), "\n";
+"#,
+    );
+    assert_eq!(out, "strictloose|sum|[]|ADDR\n");
 }

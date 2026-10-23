@@ -157,8 +157,13 @@ echo $byName["origin"]->x;            // 1
 
 Reading an element gives a `?ptr<T>`: a `null` element and a missing key both read as
 `null`, so check `!== null` before reaching a field. `array_pop()` and `array_shift()`
-return a `?ptr<T>` the same way. Introspection (`var_dump`, `print_r`, `json_encode`)
-shows each element as its integer address.
+return a `?ptr<T>` the same way. Introspection (`var_dump`, `print_r`, `var_export`,
+`json_encode`, `serialize`), a `mixed` or `array<mixed>` view of the array, and builtins
+that read its elements at run time (`in_array()`, `array_sum()`, `vsprintf()`) see a `null`
+element as PHP `null` and a live one as its integer address.
+
+Some array builtins (`array_merge()`, `array_slice()`, `array_map()`, `sort()` and similar) do
+not accept arrays of pointers yet and report an unsupported-feature error at compile time.
 
 ## Raw string copies
 
