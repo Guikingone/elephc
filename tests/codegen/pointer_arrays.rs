@@ -397,3 +397,30 @@ echo $n[1] === null ? "null" : "wild", $n[2]->x, "\n";
     );
     assert_eq!(out, "null10|null10|null10|null10\n");
 }
+
+/// Verifies an indexed pointer array spread into a pointer hash keeps its raw words: the
+/// promotion to hash storage must not box them, so a `null` element that came from an indexed
+/// spread is still unset for `isset()` (a boxed null cell is a set value), and record addresses
+/// beside a key or after an associative spread read back correctly.
+#[test]
+fn test_indexed_pointer_spreads_into_pointer_hashes_keep_raw_words() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+$v = buffer_new<Vec2>(2);
+$v[0]->x = 4;
+$v[1]->x = 5;
+$p = at($v, 0);
+$t = [$v[1], null];
+$d = ["a" => $v[0], ...$t];
+echo $d["a"]->x, $d[0]->x, isset($d[1]) ? "set" : "unset", "|";
+$h = ["a" => $p, ...[null]];
+echo isset($h[0]) ? "set" : "unset", $h["a"]->x, "|";
+$th = ["b" => $v[0]];
+$e = [...$th, ...$t];
+echo $e["b"]->x, $e[0]->x, isset($e[1]) ? "set" : "unset", "\n";
+"#,
+    );
+    assert_eq!(out, "45unset|unset4|45unset\n");
+}

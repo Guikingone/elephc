@@ -462,13 +462,19 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
         // of the ledger -- the promotion's decref then consumes the only reference a BORROWED
         // local has, which segfaults -- so the two cases are separated at the release, not here.
         let owned_source = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
+        // A pointer hash takes the promoted elements as raw pointer words: a `mixed` promotion
+        // would box each word into a cell that the pointer hash then reads as the address.
+        let promoted_value = match ctx.builder.value_php_type(hash.value).codegen_repr() {
+            PhpType::AssocArray { value, .. } if matches!(*value, PhpType::Pointer(_)) => *value,
+            _ => PhpType::Mixed,
+        };
         let promoted = ctx.emit_value(
             Op::ArrayToHash,
             vec![owned_source.value],
             None,
             PhpType::AssocArray {
                 key: Box::new(PhpType::Int),
-                value: Box::new(PhpType::Mixed),
+                value: Box::new(promoted_value),
             },
             Op::ArrayToHash.default_effects(),
             Some(span),
