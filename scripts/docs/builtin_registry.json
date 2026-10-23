@@ -36688,7 +36688,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_close",
-      "codegen_line": 1564,
+      "codegen_line": 1587,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -36773,7 +36773,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_copy_handle",
-      "codegen_line": 1718,
+      "codegen_line": 1741,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -36858,7 +36858,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_errno",
-      "codegen_line": 1527,
+      "codegen_line": 1550,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -36943,7 +36943,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_error",
-      "codegen_line": 1542,
+      "codegen_line": 1565,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37042,7 +37042,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_escape",
-      "codegen_line": 1797,
+      "codegen_line": 1820,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37134,7 +37134,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_exec",
-      "codegen_line": 1508,
+      "codegen_line": 1531,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37233,7 +37233,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_getinfo",
-      "codegen_line": 1589,
+      "codegen_line": 1612,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37424,7 +37424,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_add_handle",
-      "codegen_line": 1985,
+      "codegen_line": 2008,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37516,7 +37516,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_close",
-      "codegen_line": 2113,
+      "codegen_line": 2136,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37601,7 +37601,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_errno",
-      "codegen_line": 2259,
+      "codegen_line": 2285,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37700,7 +37700,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_exec",
-      "codegen_line": 2033,
+      "codegen_line": 2056,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37792,7 +37792,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_get_handles",
-      "codegen_line": 2408,
+      "codegen_line": 2434,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37877,7 +37877,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_getcontent",
-      "codegen_line": 2124,
+      "codegen_line": 2147,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -37976,7 +37976,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_info_read",
-      "codegen_line": 2078,
+      "codegen_line": 2101,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38052,7 +38052,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_init",
-      "codegen_line": 1974,
+      "codegen_line": 1997,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38143,7 +38143,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_remove_handle",
-      "codegen_line": 2009,
+      "codegen_line": 2032,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38249,7 +38249,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_select",
-      "codegen_line": 2047,
+      "codegen_line": 2070,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38369,7 +38369,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_setopt",
-      "codegen_line": 2194,
+      "codegen_line": 2220,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38468,7 +38468,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_multi_strerror",
-      "codegen_line": 2268,
+      "codegen_line": 2294,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38567,7 +38567,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_pause",
-      "codegen_line": 1819,
+      "codegen_line": 1842,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38659,7 +38659,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_reset",
-      "codegen_line": 1679,
+      "codegen_line": 1702,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38772,7 +38772,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_setopt",
-      "codegen_line": 301,
+      "codegen_line": 324,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38885,7 +38885,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_setopt_array",
-      "codegen_line": 1491,
+      "codegen_line": 1514,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -38977,7 +38977,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_share_close",
-      "codegen_line": 2378,
+      "codegen_line": 2404,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -39062,7 +39062,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_share_errno",
-      "codegen_line": 2388,
+      "codegen_line": 2414,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -39131,7 +39131,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_share_init",
-      "codegen_line": 2333,
+      "codegen_line": 2359,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -39208,7 +39208,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_share_init_persistent",
-      "codegen_line": 2481,
+      "codegen_line": 2507,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -39321,7 +39321,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_share_setopt",
-      "codegen_line": 2355,
+      "codegen_line": 2381,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -39420,7 +39420,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_share_strerror",
-      "codegen_line": 2396,
+      "codegen_line": 2422,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -39505,7 +39505,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_strerror",
-      "codegen_line": 1835,
+      "codegen_line": 1858,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -39604,7 +39604,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_unescape",
-      "codegen_line": 1806,
+      "codegen_line": 1829,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -39696,7 +39696,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_upkeep",
-      "codegen_line": 1824,
+      "codegen_line": 1847,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -39765,7 +39765,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude/oracle.rs",
       "codegen_function": "curl_version",
-      "codegen_line": 1848,
+      "codegen_line": 1871,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
