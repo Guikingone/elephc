@@ -554,3 +554,27 @@ echo "|", walk($a), walk(nul()), walk(items: $a), walk($b->items), "|", first($a
     );
     assert_eq!(out, "N|NNNN|NuNu\n");
 }
+
+/// Verifies a pointer array or hash passed to an `array<mixed>` or `array<string, mixed>`
+/// parameter is widened to boxed elements, so through that parameter a null element is PHP null
+/// (unset, `json_encode` null) and a live one an integer address.
+#[test]
+fn test_pointer_containers_widen_into_mixed_element_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+function hm(array<string, mixed> $a): string {
+    return (isset($a["a"]) ? "set" : "unset") . json_encode($a["a"]) . gettype($a["b"]);
+}
+function am(array<mixed> $a): string {
+    return (isset($a[0]) ? "set" : "unset") . json_encode($a[0]) . gettype($a[1]);
+}
+$v = buffer_new<Vec2>(1);
+$h = ["a" => null, "b" => at($v, 0)];
+$l = [null, at($v, 0)];
+echo hm($h), "|", am($l), "|", isset($h["a"]) ? "set" : "unset", $h["b"] === null ? "null" : "live", "\n";
+"#,
+    );
+    assert_eq!(out, "unsetnullinteger|unsetnullinteger|unsetlive\n");
+}

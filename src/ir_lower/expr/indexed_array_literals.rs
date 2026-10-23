@@ -168,7 +168,19 @@ pub(crate) fn lower_expr_for_destination(
         }
         _ => {
             let value = lower_expr(ctx, expr);
-            convert_array_to_pointer_storage(ctx, value, destination, expr.span)
+            let value = convert_array_to_pointer_storage(ctx, value, destination, expr.span);
+            // A pointer container bound to `array<mixed>` storage widens its words the way
+            // boxing does, so a null element is PHP null there as well.
+            let mixed_payload = match destination.codegen_repr() {
+                PhpType::Array(elem) => elem.codegen_repr() == PhpType::Mixed,
+                PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+                _ => false,
+            };
+            if mixed_payload {
+                ctx.widen_pointer_container_to_mixed(value, Some(expr.span))
+            } else {
+                value
+            }
         }
     }
 }

@@ -91,8 +91,16 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
         )));
     }
     let hash = expect_operand(inst, 0)?;
-    require_hash(ctx.value_php_type(hash)?.codegen_repr(), inst)?;
+    let hash_ty = ctx.value_php_type(hash)?.codegen_repr();
+    require_hash(hash_ty.clone(), inst)?;
     require_hash_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
+    // Pointer words carry entry tag 0 like ints, so the value type selects the pointer entry.
+    let helper = match &hash_ty {
+        PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Pointer(_)) => {
+            "__rt_hash_to_mixed_pointer"
+        }
+        _ => "__rt_hash_to_mixed",
+    };
     let done = ctx.next_label("hash_to_mixed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -101,7 +109,7 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
             abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp x0, x9");                              // does the hash carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through unconverted
-            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            abi::emit_call_label(ctx.emitter, helper);
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(hash, "rdi")?;
@@ -111,7 +119,7 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
             abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp rdi, r10");                            // does the hash carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through unconverted
-            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            abi::emit_call_label(ctx.emitter, helper);
         }
     }
     ctx.emitter.label(&done);

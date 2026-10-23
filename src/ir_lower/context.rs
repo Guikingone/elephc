@@ -4665,6 +4665,40 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         boxed
     }
 
+    /// Widens a pointer array or hash to boxed Mixed elements, leaving any other value as it is.
+    ///
+    /// Each null pointer word becomes PHP null and each live word its integer address, so a view
+    /// of the container through `mixed` agrees with its `?ptr<T>` element reads. A borrowed
+    /// source is copied first, so the pointer container itself keeps its storage.
+    pub(crate) fn widen_pointer_container_to_mixed(
+        &mut self,
+        value: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let source_ty = self.builder.value_php_type(value.value).codegen_repr();
+        let target_ty = match &source_ty {
+            PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_)) => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            PhpType::AssocArray { key, value: elem }
+                if matches!(elem.codegen_repr(), PhpType::Pointer(_)) =>
+            {
+                PhpType::AssocArray {
+                    key: key.clone(),
+                    value: Box::new(PhpType::Mixed),
+                }
+            }
+            _ => return value,
+        };
+        crate::ir_lower::expr::coerce_container_to_mixed_payload(
+            self,
+            value,
+            &source_ty,
+            &target_ty,
+            span.unwrap_or_else(Span::dummy),
+        )
+    }
+
     /// Emits a value-producing opcode with computed storage and ownership metadata.
     pub(crate) fn emit_value(
         &mut self,
