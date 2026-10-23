@@ -218,13 +218,13 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #32]");                                  // initialize the property loop index to zero
 
     emitter.label("__rt_json_obj_loop");
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
-    emitter.instruction("mov x1, #4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
-    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared scratch arena
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the current property loop index
     emitter.instruction("ldr x14, [sp, #40]");                                  // reload the total public property count
     emitter.instruction("cmp x10, x14");                                        // are there more properties to encode?
-    emitter.instruction("b.ge __rt_json_obj_close");                            // emit the closing brace once every property is encoded
+    emitter.instruction("b.ge __rt_json_obj_close");                            // finish before requiring property headroom
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);           // reserve a separator, property syntax, and one scalar value
+    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the property index after the guard clobbers x10
 
     // Compute descriptor entry address: descriptor + 24 + index * 32
     emitter.instruction("ldr x13, [sp, #24]");                                  // reload the descriptor pointer for the current iteration
@@ -398,7 +398,11 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [sp, #40]");                                  // reload public property count to decide whether closing needs its own line
     emitter.instruction("cbz x14, __rt_json_obj_close_emit");                   // empty objects stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("bl __rt_json_pretty_line");                            // append the closing-line indentation for non-empty pretty objects
+    emitter.instruction("str x11, [sp, #16]");                                  // persist the closing-line write pointer before the close guard
     emitter.label("__rt_json_obj_close_emit");
+    emitter.instruction("mov x0, x11");                                         // guard the closing brace write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     emitter.instruction("mov w12, #125");                                       // ASCII '}'
     emitter.instruction("strb w12, [x11]");                                     // emit the closing brace after the last property
     emitter.instruction("add x11, x11, #1");                                    // advance past the closing brace
@@ -613,13 +617,12 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the property loop index to zero
 
     emitter.label("__rt_json_obj_loop_x");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
-    emitter.instruction("mov rsi, 4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
-    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared scratch arena
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the current property loop index
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the total public property count
     emitter.instruction("cmp rcx, rdx");                                        // are there more properties to encode?
-    emitter.instruction("jae __rt_json_obj_close_x");                           // emit the closing brace once every property is encoded
+    emitter.instruction("jae __rt_json_obj_close_x");                           // finish before requiring property headroom
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);           // reserve a separator, property syntax, and one scalar value
 
     // Compute descriptor entry address: descriptor + 24 + index * 32
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the descriptor pointer for the current iteration
@@ -786,6 +789,8 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_obj_close_emit_x");                       // empty objects stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("call __rt_json_pretty_line");                          // append the closing-line indentation for non-empty pretty objects
     emitter.label("__rt_json_obj_close_emit_x");
+    emitter.instruction("mov rdi, r11");                                        // guard the closing brace write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
     emitter.instruction("mov BYTE PTR [r11], 125");                             // emit the closing brace after the last property
     emitter.instruction("add r11, 1");                                          // advance past the closing brace
 

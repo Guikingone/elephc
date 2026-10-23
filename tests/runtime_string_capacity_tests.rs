@@ -398,3 +398,42 @@ echo $before === md5($s) ? "src-ok\n" : "src-CORRUPT\n";
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A small JSON result must fit beside a large echo instead of reserving a fixed 4 KiB margin.
+///
+/// The container loop used to demand 4096 free bytes before checking whether any
+/// element remained, so `[1]` fataled even though it needs only three bytes. The
+/// loop now checks completion first and asks the capacity guard for the bytes the
+/// next element actually needs.
+#[test]
+fn small_json_results_fit_after_a_large_echo() {
+    let dir = make_test_dir("json-headroom");
+    let php = dir.join("main.php");
+    fs::write(
+        &php,
+        r#"<?php
+echo str_repeat("x", 62000), json_encode([1, 2, 3]), "|", json_encode(["k" => 1]);
+"#,
+    )
+    .expect("write json-headroom fixture");
+    let compile = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .args(["-q", "--heap-size=65536"])
+        .arg(&php)
+        .output()
+        .expect("compile json-headroom fixture");
+    assert!(
+        compile.status.success(),
+        "json-headroom fixture must compile: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let output = Command::new(dir.join("main"))
+        .output()
+        .expect("run json-headroom fixture");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "unexpected fatal: {stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.len(), 62000 + 7 + 1 + 7, "unexpected output length");
+    assert!(stdout.ends_with("[1,2,3]|{\"k\":1}"), "tail: {:?}", &stdout[61990..]);
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -96,13 +96,12 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
 
     // -- loop through elements --
     emitter.label("__rt_json_arr_int_loop");
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
-    emitter.instruction("mov x1, #4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
-    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared scratch arena
     emitter.instruction("ldr x4, [sp, #32]");                                   // load index
     emitter.instruction("ldr x3, [sp, #24]");                                   // load length
     emitter.instruction("cmp x4, x3");                                          // check if done
-    emitter.instruction("b.ge __rt_json_arr_int_close");                        // done
+    emitter.instruction("b.ge __rt_json_arr_int_close");                        // finish before requiring element headroom
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);           // reserve a separator and one signed integer
 
     // -- add comma separator if not first element --
     emitter.instruction("cbz x4, __rt_json_arr_int_elem");                      // skip comma for first element
@@ -153,7 +152,11 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload array length to decide whether closing needs its own line
     emitter.instruction("cbz x3, __rt_json_arr_int_close_emit");                // empty arrays stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("bl __rt_json_pretty_line");                            // append the closing-line indentation for non-empty pretty arrays
+    emitter.instruction("str x11, [sp, #16]");                                  // persist the closing-line write pointer before the close guard
     emitter.label("__rt_json_arr_int_close_emit");
+    emitter.instruction("mov x0, x11");                                         // guard the closing bracket write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     emitter.instruction("mov w12, #93");                                        // ASCII ']'
     emitter.instruction("strb w12, [x11]");                                     // write ']'
     emitter.instruction("add x11, x11, #1");                                    // advance
@@ -231,12 +234,12 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the integer-array element loop counter to zero
 
     emitter.label("__rt_json_arr_int_loop");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
-    emitter.instruction("mov rsi, 4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
-    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared scratch arena
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current integer-array element index at the top of the JSON loop
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have we already encoded every integer-array element?
-    emitter.instruction("jae __rt_json_arr_int_close");                         // finish by writing the closing bracket once the loop index reaches the array length
+    emitter.instruction("jae __rt_json_arr_int_close");                         // finish before requiring element headroom
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);           // reserve a separator and one signed integer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the element index after the guard clobbers r10
     emitter.instruction("test r10, r10");                                       // is this the first integer-array element in the JSON output?
     emitter.instruction("jz __rt_json_arr_int_elem");                           // skip the comma separator before the first encoded integer element
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before appending a comma separator
@@ -281,6 +284,8 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_arr_int_close_emit_x");                   // empty arrays stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("call __rt_json_pretty_line");                          // append the closing-line indentation for non-empty pretty arrays
     emitter.label("__rt_json_arr_int_close_emit_x");
+    emitter.instruction("mov rdi, r11");                                        // guard the closing bracket write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
     emitter.instruction("mov BYTE PTR [r11], 93");                              // append the closing JSON bracket to complete the encoded integer array slice
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing bracket
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // checkpoint the write pointer across the depth-exit helper call

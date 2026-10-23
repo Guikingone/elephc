@@ -97,13 +97,12 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize the loop index to zero
 
     emitter.label("__rt_json_arr_dyn_loop");
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
-    emitter.instruction("mov x1, #4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
-    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared scratch arena
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload the array length
     emitter.instruction("cmp x4, x3");                                          // have we encoded every element?
-    emitter.instruction("b.ge __rt_json_arr_dyn_close");                        // finish once the loop index reaches the array length
+    emitter.instruction("b.ge __rt_json_arr_dyn_close");                        // finish before requiring element headroom
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);           // reserve a separator and one scalar element
 
     // -- emit comma separators between elements --
     emitter.instruction("cbz x4, __rt_json_arr_dyn_elem");                      // skip the comma before the first element
@@ -277,12 +276,16 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload array length to decide whether closing needs its own line
     emitter.instruction("cbz x3, __rt_json_arr_dyn_close_choose");              // empty containers stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("bl __rt_json_pretty_line");                            // append the closing-line indentation for non-empty pretty containers
+    emitter.instruction("str x11, [sp, #16]");                                  // persist the closing-line write pointer before the close guard
     emitter.label("__rt_json_arr_dyn_close_choose");
     emitter.instruction("and x12, x19, #16");                                   // isolate JSON_FORCE_OBJECT from the cached flag bitmask
     emitter.instruction("mov w13, #93");                                        // ASCII ']' (default for indexed arrays)
     emitter.instruction("cbz x12, __rt_json_arr_dyn_close_emit");               // skip the brace override when the flag is clear
     emitter.instruction("mov w13, #125");                                       // ASCII '}' (force-object form closes with a brace)
     emitter.label("__rt_json_arr_dyn_close_emit");
+    emitter.instruction("mov x0, x11");                                         // guard the closing delimiter write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     emitter.instruction("strb w13, [x11]");                                     // write the chosen closing byte
     emitter.instruction("add x11, x11, #1");                                    // advance past the closing byte
     emitter.instruction("str x11, [sp, #16]");                                  // checkpoint the write pointer across the depth-exit helper call
@@ -364,12 +367,12 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the indexed-array element loop counter to zero
 
     emitter.label("__rt_json_arr_dyn_loop");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
-    emitter.instruction("mov rsi, 4096");                                       // reserve headroom for separators, pretty indentation, and one scalar
-    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared scratch arena
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index at the top of the JSON loop
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have we already encoded every indexed-array element?
-    emitter.instruction("jae __rt_json_arr_dyn_close");                         // finish by writing the closing bracket once the loop index reaches the array length
+    emitter.instruction("jae __rt_json_arr_dyn_close");                         // finish before requiring element headroom
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);           // reserve a separator and one scalar element
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the element index after the guard clobbers r10
     emitter.instruction("test r10, r10");                                       // is this the first indexed-array element in the JSON output?
     emitter.instruction("jz __rt_json_arr_dyn_elem");                           // skip the comma separator before the first encoded element
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before appending a comma separator
@@ -544,6 +547,8 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_json_arr_dyn_close_emit_x");                   // skip the brace override on the default path
     emitter.instruction("mov rax, 125");                                        // ASCII '}' (force-object form closes with a brace)
     emitter.label("__rt_json_arr_dyn_close_emit_x");
+    emitter.instruction("mov rdi, r11");                                        // guard the closing delimiter write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
     emitter.instruction("mov BYTE PTR [r11], al");                              // emit the chosen closing byte
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing byte
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // checkpoint the write pointer across the depth-exit helper call
