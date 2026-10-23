@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Focused tests for the merge queue cleanup, with a fake `gh` on PATH, so no API access is
-# needed. The fake applies `--jq` with the real `jq`, so the run filter is tested too.
+# needed. The fake applies `--jq` with the real `jq`, and filters and pages the run listing
+# the way the API does, so the listing itself is tested too.
 set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -8,18 +9,20 @@ fixture_dir=$(mktemp -d "$PWD/.queue-cleanup-test.XXXXXX")
 trap 'rm -rf "$fixture_dir"' EXIT HUP INT TERM
 
 # The fake gh answers by API path and records each call as "METHOD PATH" in calls:
-#   .../workflows/W/runs  the body of runs-W.json
+#   .../workflows/W/runs  the runs of runs-W.json with the requested status, at most
+#                         FAKE_PAGE_SIZE of them (default 100) unless --paginate is passed
 #   .../compare/B...H     the status FAKE_COMPARE gives B ("aaa=ahead bbb=identical ...")
 #   .../runs/N/cancel     an empty object
 # FAKE_FAIL names a path fragment that fails, as the API does with a 502 or a 409.
 mkdir "$fixture_dir/bin"
 cat > "$fixture_dir/bin/gh" <<'EOF'
 #!/usr/bin/env bash
-method=GET path="" filter=""
+method=GET path="" filter="" paginate=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --method) method=$2; shift ;;
         --jq) filter=$2; shift ;;
+        --paginate) paginate=true ;;
         repos/*) path=$1 ;;
     esac
     shift
@@ -32,7 +35,16 @@ fi
 case "$path" in
     */actions/workflows/*/runs*)
         workflow=${path#*/workflows/}
-        body=$(cat "$FAKE_DIR/runs-${workflow%%/*}.json")
+        state=""
+        if [[ $path == *status=* ]]; then
+            state=${path#*status=}
+            state=${state%%&*}
+        fi
+        size=${FAKE_PAGE_SIZE:-100}
+        $paginate && size=1000000
+        body=$(jq -c --arg state "$state" --argjson size "$size" \
+            '{workflow_runs: ([.workflow_runs[] | select($state == "" or .status == $state)] | .[:$size])}' \
+            "$FAKE_DIR/runs-${workflow%%/*}.json")
         ;;
     */compare/*)
         base=${path#*/compare/}
@@ -72,6 +84,19 @@ cat > "$fixture_dir/runs-pdo-live.yml.json" <<'EOF'
 ]}
 EOF
 echo '{"workflow_runs": []}' > "$fixture_dir/runs-empty.yml.json"
+# Newest first, as the API lists them: four finished runs, then two older ones still waiting
+# on an entry that landed. With pages of one run, the status filter reaches the first of them
+# and only paging reaches the second.
+cat > "$fixture_dir/runs-paged.yml.json" <<'EOF'
+{"workflow_runs": [
+  {"id": 31, "head_sha": "eee", "status": "completed"},
+  {"id": 32, "head_sha": "eee", "status": "completed"},
+  {"id": 33, "head_sha": "eee", "status": "completed"},
+  {"id": 34, "head_sha": "eee", "status": "completed"},
+  {"id": 35, "head_sha": "aaa", "status": "queued"},
+  {"id": 36, "head_sha": "aaa", "status": "queued"}
+]}
+EOF
 
 # Runs the cleanup for WORKFLOW_FILES with the remaining NAME=VALUE overrides. Prints the
 # exit status and the IDs of the runs it asked to cancel; its own output goes to out.
@@ -103,8 +128,10 @@ if grep -q 'compare/eee' "$fixture_dir/calls"; then
     exit 1
 fi
 expect "no active runs" "exit=0 cancel=" "$(cleanup empty.yml)"
+expect "active runs past the first page" "exit=0 cancel=35 36" "$(cleanup paged.yml FAKE_PAGE_SIZE=1)"
 expect "listing failure" "exit=0 cancel=21" "$(cleanup "ci.yml pdo-live.yml" FAKE_FAIL=workflows/ci.yml)"
-grep -q '::warning::could not list the merge_group runs of ci.yml' "$fixture_dir/out"
+grep -q '::warning::could not list the in_progress merge_group runs of ci.yml' "$fixture_dir/out"
+expect "one status fails to list" "exit=0 cancel=21" "$(cleanup "ci.yml pdo-live.yml" FAKE_FAIL=status=in_progress)"
 expect "compare failure" "exit=0 cancel=" "$(cleanup "ci.yml pdo-live.yml" FAKE_FAIL=compare/aaa)"
 grep -q '::warning::could not compare ci.yml run 11' "$fixture_dir/out"
 expect "cancel failure" "exit=0 cancel=11 21" "$(cleanup "ci.yml pdo-live.yml" FAKE_FAIL=runs/11/cancel)"
