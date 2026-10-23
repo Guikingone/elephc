@@ -59,16 +59,16 @@ echo count($items), "\n";
 fn test_ref_local_append_closure_heap_balance() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function keepClosureAppendItems(&$items): void {}
-function run(): void {
+function run(int $run): void {
     $build = function (int $run): void {
         $items = [];
         for ($i = 0; $i < 3000; $i++) { $items[] = $i; }
         if ($run < 0) { keepClosureAppendItems($items); }
         echo count($items), "|", $items[2999], "\n";
     };
-    $build($argc);
+    $build($run);
 }
-run();
+run($argc);
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "3000|2999\n", "{}", out.stderr);
@@ -81,13 +81,13 @@ fn test_ref_local_append_call_string_heap_balance() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function makeAppendString(int $length): string { return str_repeat("x", $length); }
 function keepCallStringItems(&$items): void {}
-function run(): void {
+function run(int $run): void {
     $items = ["seed"];
     $items[] = makeAppendString(32);
-    if ($argc < 0) { keepCallStringItems($items); }
+    if ($run < 0) { keepCallStringItems($items); }
     echo strlen($items[1]), "|", $items[1], "\n";
 }
-run();
+run($argc);
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, format!("32|{}\n", "x".repeat(32)), "{}", out.stderr);
