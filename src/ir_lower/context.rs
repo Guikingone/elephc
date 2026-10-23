@@ -1169,7 +1169,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 Op::MixedClone, vec![borrowed.value], None, PhpType::Mixed,
                 Op::MixedClone.default_effects(), span,
             )
-        } else if is_pointer_element_indexed_array(php_type) {
+        } else if crate::types::is_pointer_element_indexed_array(php_type) {
             // A runtime bridge (callable invoker, eval binding) can pass an array of boxed Mixed
             // cells; the conversion consumes this owned reference and returns raw pointer words.
             let owned = crate::ir_lower::ownership::acquire_if_refcounted(self, borrowed, span);
@@ -5496,12 +5496,4 @@ fn ref_cell_array_element_type(ty: &PhpType) -> Option<PhpType> {
         PhpType::AssocArray { value, .. } => Some(value.codegen_repr()),
         _ => None,
     }
-}
-
-/// Returns whether `ty` is an indexed array whose elements are stored as raw pointer words.
-fn is_pointer_element_indexed_array(ty: &PhpType) -> bool {
-    matches!(
-        ty.codegen_repr(),
-        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_))
-    )
 }

@@ -5,11 +5,15 @@
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //! - `crate::codegen::lower_inst::arrays::lower_array_to_pointer_words` for `Op::ArrayToPointerWords`.
+//! - The Mixed-to-array unbox in `crate::codegen::lower_inst::array_access_runtime` when the
+//!   contract is a pointer-element array (`ReflectionProperty::setValue()` and similar).
+//! - Eval static-property stores in `crate::codegen::eval_static_property_helpers`.
 //!
 //! Key details:
-//! - Runtime bridges (the callable descriptor invoker, eval argument binding) hand a function a
-//!   PHP array whose slots are boxed Mixed cells. A pointer-array parameter must hold raw words,
-//!   because typed reads, `isset()` and writes treat each slot as the pointer itself.
+//! - Runtime bridges (the callable descriptor invoker, eval argument binding and writebacks,
+//!   reflection setters) hand pointer-array storage a PHP array whose slots are boxed Mixed
+//!   cells. That storage must hold raw words, because typed reads, `isset()` and writes treat
+//!   each slot as the pointer itself.
 //! - Only arrays whose header value type is 7 (Mixed) are converted. Pointer arrays (13), empty
 //!   arrays and null containers return unchanged.
 //! - The helper consumes one owned reference and returns an owned array: a shared array is split

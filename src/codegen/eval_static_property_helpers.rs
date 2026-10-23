@@ -1003,6 +1003,19 @@ fn emit_x86_64_store_cast_scalar(
     clear_uninitialized_marker_after_static_store(emitter, slot);
 }
 
+/// Converts an eval-built array stored into a pointer-array static property into raw pointer
+/// words. `__rt_array_to_pointer_words` consumes the reference just retained for the slot and
+/// returns the owner to publish, splitting first so eval keeps its own boxed array.
+fn emit_static_pointer_array_conversion(emitter: &mut Emitter, slot_ty: &PhpType) {
+    if !crate::types::is_pointer_element_indexed_array(slot_ty) {
+        return;
+    }
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("mov rdi, rax");                                    // pass the retained array to the pointer-word conversion
+    }
+    abi::emit_call_label(emitter, "__rt_array_to_pointer_words");
+}
+
 /// Stores a boxed ARM64 eval heap value into an array-like static property symbol.
 fn emit_aarch64_store_heap_static_property_slot(
     emitter: &mut Emitter,
@@ -1017,6 +1030,7 @@ fn emit_aarch64_store_heap_static_property_slot(
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject heap values with an incompatible ABI shape
     emitter.instruction("mov x0, x1");                                          // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
+    emit_static_pointer_array_conversion(emitter, &slot.ty);
     abi::emit_store_reg_to_symbol(emitter, "x0", &slot.symbol, 0);
     clear_uninitialized_marker_after_static_store(emitter, slot);
 }
@@ -1057,6 +1071,7 @@ fn emit_x86_64_store_heap_static_property_slot(
     emitter.instruction(&format!("jne {}", fail_label));                        // reject heap values with an incompatible ABI shape
     emitter.instruction("mov rax, rdi");                                        // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
+    emit_static_pointer_array_conversion(emitter, &slot.ty);
     abi::emit_store_reg_to_symbol(emitter, "rax", &slot.symbol, 0);
     clear_uninitialized_marker_after_static_store(emitter, slot);
 }

@@ -809,3 +809,40 @@ eval('$x = 123; $items = [&$x]; echo take($items), "|", take([123]), "|", $x, js
     );
     assert_eq!(out, "123,[123,null]unset|123,[123,null]unset|123[123]\n");
 }
+
+/// Verifies arrays of boxed cells written into pointer-array properties from outside AOT code
+/// hold raw pointer words: an eval assignment to a static property, then `foreach`, an append,
+/// `isset()` and `json_encode`; and `ReflectionProperty::setValue()` of a Mixed `[null]` on an
+/// instance property, which used to stop with the boxed-slot fatal.
+#[test]
+fn test_pointer_array_properties_convert_eval_and_reflection_writes() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+class C {
+    public array<ptr<Vec2>|null> $items = [];
+    public static array<ptr<Vec2>|null> $shared = [];
+}
+function st(): string {
+    eval('C::$shared = [null];');
+    $r = "";
+    foreach (C::$shared as $p) { $r .= $p === null ? "null" : "live"; }
+    $w = buffer_new<Vec2>(1);
+    C::$shared[] = $w[0];
+    return $r . (isset(C::$shared[0]) ? "set" : "unset")
+        . str_replace((string) (int) C::$shared[1], "ADDR", (string) json_encode(C::$shared));
+}
+function mixnull(): mixed { return [null]; }
+function rp(): string {
+    $o = new C();
+    $ri = new ReflectionProperty('C', 'items');
+    $ri->setValue($o, mixnull());
+    $r = "";
+    foreach ($o->items as $p) { $r .= $p === null ? "null" : "live"; }
+    return $r . (isset($o->items[0]) ? "set" : "unset");
+}
+echo st(), "|", rp(), "\n";
+"#,
+    );
+    assert_eq!(out, "nullunset[null,ADDR]|nullunset\n");
+}

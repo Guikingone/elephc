@@ -422,6 +422,15 @@ pub(crate) fn is_nullable_pointer_type(php_type: &PhpType) -> bool {
     matches!(php_type, PhpType::Union(members) if nullable_pointer_union_member(members).is_some())
 }
 
+/// Returns whether `ty` is an indexed array whose elements are stored as raw pointer words
+/// (`array<ptr<T>>` or `array<ptr<T>|null>`), as opposed to boxed Mixed cells.
+pub(crate) fn is_pointer_element_indexed_array(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_))
+    )
+}
+
 /// Returns the type a value of a declared type is boxed into `mixed` as: its codegen type, except
 /// that a `?ptr<T>` keeps its union, so address 0 boxes as PHP null instead of the integer 0.
 pub(crate) fn mixed_box_php_type(php_type: &PhpType) -> PhpType {
