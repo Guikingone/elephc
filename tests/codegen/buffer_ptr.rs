@@ -175,29 +175,31 @@ echo function_exists("buffer_ptr") ? "yes" : "no", "\n";
 }
 
 /// Verifies the first-class callables `buffer_ptr(...)` and `buffer_len(...)` take every buffer
-/// type (their wrapper parameter is the any-buffer handle), for a width buffer and a buffer of
-/// packed records; through the callable the pointer is the untyped `ptr`, read with the raw
-/// pointer builtins.
+/// type: their wrapper parameter is the any-buffer handle, so a callable forwarded through a
+/// declared `callable` parameter (where only the wrapper signature is known) accepts a width
+/// buffer and a buffer of packed records, as does a callable local. Through the callable the
+/// pointer is the untyped `ptr`, read with the raw pointer builtins.
 #[test]
 fn test_buffer_ptr_and_buffer_len_as_first_class_callables_take_any_buffer() {
     let out = compile_and_run(
         r#"<?php
 packed class Vec2 { public f32 $x; public f32 $y; }
+function indexPayload(callable $f, buffer<u16> $b): ptr { return $f($b); }
+function recordPayload(callable $f, buffer<Vec2> $b): ptr { return $f($b); }
+function indexLength(callable $f, buffer<u16> $b): int { return $f($b); }
+function recordLength(callable $f, buffer<Vec2> $b): int { return $f($b); }
 buffer<u16> $idx = buffer_new<u16>(2);
 $idx[1] = 700;
 buffer<Vec2> $pts = buffer_new<Vec2>(1);
 $pts[0]->y = 2.5;
+echo ptr_read16(ptr_offset(indexPayload(buffer_ptr(...), $idx), 2)), " ", indexLength(buffer_len(...), $idx), "\n";
+echo ptr_read_f32(ptr_offset(recordPayload(buffer_ptr(...), $pts), 4)), " ", recordLength(buffer_len(...), $pts), "\n";
 $addr = buffer_ptr(...);
 $len = buffer_len(...);
-echo ptr_read16(ptr_offset($addr($idx), 2)), " ", $len($idx), "
-";
-echo ptr_read_f32(ptr_offset($addr($pts), 4)), " ", $len($pts), "
-";
+echo ptr_read16(ptr_offset($addr($idx), 2)), " ", $len($idx), " ", ptr_read_f32(ptr_offset($addr($pts), 4)), " ", $len($pts), "\n";
 "#,
     );
-    assert_eq!(out, "700 2
-2.5 1
-");
+    assert_eq!(out, "700 2\n2.5 1\n700 2 2.5 1\n");
 }
 
 /// Verifies `buffer_ptr()` of a freed buffer reports the use-after-free diagnostic instead of
