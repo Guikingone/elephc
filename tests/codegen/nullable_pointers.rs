@@ -839,3 +839,34 @@ echo json_encode($o->ip === null), read($o), "\n";
     );
     assert_eq!(out, "{\"sp\":null}null|nullnull|nullnullnull|integerinteger|true|truenull\n");
 }
+
+/// Verifies reflection writes into `?ptr<T>` properties compile and store the pointer word: PHP
+/// null and a `mixed` null become address 0, a `mixed` live pointer its address, through
+/// `ReflectionProperty::setValue()` and `ReflectionClass::setStaticPropertyValue()` on a static
+/// property, and a packed buffer element written into an instance property is its address.
+#[test]
+fn test_nullable_pointer_properties_written_through_reflection() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+class S { public static ?ptr $sp = null; public ?ptr<Vec2> $ip = null; }
+function first(buffer<Vec2> $v): ?ptr<Vec2> { return $v[0]; }
+function mixnull(): mixed { return null; }
+function mixlive(buffer<Vec2> $v): mixed { return first($v); }
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 7;
+$rs = new ReflectionProperty('S', 'sp');
+$c = new ReflectionClass('S');
+S::$sp = first($v); $rs->setValue(null, null); echo json_encode(S::$sp === null), "|";
+S::$sp = first($v); $c->setStaticPropertyValue('sp', null); echo json_encode(S::$sp === null), "|";
+S::$sp = first($v); $rs->setValue(null, mixnull()); echo json_encode(S::$sp === null), "|";
+$rs->setValue(null, mixlive($v)); echo gettype(S::$sp), "|";
+$c->setStaticPropertyValue('sp', mixnull()); echo json_encode(S::$sp === null), "|";
+$o = new S();
+(new ReflectionProperty('S', 'ip'))->setValue($o, $v[0]);
+$p = $o->ip;
+echo $p === null ? "null" : $p->x, "\n";
+"#,
+    );
+    assert_eq!(out, "true|true|true|integer|true|7\n");
+}

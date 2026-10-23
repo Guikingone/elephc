@@ -845,13 +845,19 @@ fn is_empty_array_for_array_static_property(value_ty: &PhpType, slot_ty: &PhpTyp
     matches!(value_elem.codegen_repr(), PhpType::Never | PhpType::Void)
 }
 
-/// Returns true when a boxed Mixed value can be coerced before a scalar static-property store.
+/// Returns true when a boxed Mixed value can be coerced before a scalar or `?ptr<T>`
+/// static-property store.
+///
+/// A `?ptr<T>` slot casts the value like an int, so PHP null becomes address 0 (reflection
+/// setters pass Mixed values through); a plain `ptr<T>` slot stays refused, as for instance
+/// properties.
 fn can_coerce_mixed_to_scalar_static_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && matches!(
-            slot_ty.codegen_repr(),
-            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
-        )
+        && (crate::types::is_nullable_pointer_type(slot_ty)
+            || matches!(
+                slot_ty.codegen_repr(),
+                PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+            ))
 }
 
 /// Returns true when a value can materialize the inline nullable-int static-property shape.
@@ -917,7 +923,8 @@ fn load_static_property_store_value_to_result(
         }
         load_value_to_first_int_arg(ctx, value)?;
         match slot_ty.codegen_repr() {
-            PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
+            // A `?ptr<T>` slot stores the address word, cast like an int: PHP null becomes 0.
+            PhpType::Int | PhpType::Pointer(_) => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
             // An object slot stores the unboxed object POINTER, retained on its own, so the

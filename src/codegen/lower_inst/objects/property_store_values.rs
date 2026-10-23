@@ -136,7 +136,7 @@ fn load_accepted_property_store_value_to_result(
             }
             // A scalar slot stores the payload word the cast extracted, so the box's own
             // reference has no owner left; retire it once the cast has copied the value out.
-            // A pointer slot stores the address word, cast like an int: PHP null becomes 0.
+            // A `?ptr<T>` slot stores the address word, cast like an int: PHP null becomes 0.
             PhpType::Int | PhpType::Pointer(_) => {
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
                 release_adopted_mixed_source(ctx, value, &PhpType::Int)?;

@@ -150,6 +150,7 @@ pub(super) fn static_property_store_retains_independent_value(
             slot_ty,
             PhpType::Str
                 | PhpType::Int
+                | PhpType::Pointer(_)
                 | PhpType::Bool
                 | PhpType::Float
                 | PhpType::Object(_)

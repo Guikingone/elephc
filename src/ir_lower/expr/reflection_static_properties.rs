@@ -90,8 +90,11 @@ pub(super) fn lower_reflection_class_set_static_property_value(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let (property, value) = reflection_class_set_static_property_value_args(args)?;
-    let (declaring_class, _) = reflection_class_static_property_target(ctx, class_name, &property)?;
+    let (declaring_class, property_ty) =
+        reflection_class_static_property_target(ctx, class_name, &property)?;
     let value = lower_expr(ctx, &value);
+    // PHP null or a packed record address bound for a pointer slot becomes the stored word.
+    let value = ctx.retype_packed_address_for_pointer_sink(value, &property_ty, Some(expr.span));
     store_reflection_static_property_by_class_name(
         ctx,
         &declaring_class,
@@ -332,6 +335,23 @@ pub(super) fn store_reflection_static_property_by_class_name(
         span,
         Op::StoreReflectionStaticProperty,
     );
+}
+
+/// Rewrites a PHP null or packed record address bound for a pointer static property into the
+/// pointer word its slot stores, as a direct `Class::$prop = ...` assignment does.
+pub(super) fn retype_reflection_static_property_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    match reflection_class_static_property_target(ctx, class_name, property) {
+        Some((_, property_ty)) => {
+            ctx.retype_packed_address_for_pointer_sink(value, &property_ty, Some(span))
+        }
+        None => value,
+    }
 }
 
 /// Emits a static-property write using the requested static-property opcode.

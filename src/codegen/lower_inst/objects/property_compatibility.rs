@@ -265,14 +265,20 @@ pub(super) fn can_store_boxed_value_for_mixed_property(value_ty: &PhpType, slot_
         && matches!(slot_ty.codegen_repr(), PhpType::Mixed)
 }
 
-/// Returns true when a boxed Mixed value can be coerced before a scalar or pointer typed-property
-/// store (a pointer slot casts the value like an int, so PHP null becomes address 0).
+/// Returns true when a boxed Mixed value can be coerced before a scalar or `?ptr<T>`
+/// typed-property store.
+///
+/// A `?ptr<T>` slot casts the value like an int, so PHP null becomes address 0; it held a Mixed
+/// cell before it became a pointer word, and `ReflectionProperty::setValue()` dispatches a Mixed
+/// write over every declared property. A plain `ptr<T>` slot stays refused at compile time
+/// (`test_declared_types_without_a_runtime_shaped_write_are_refused_at_compile_time`).
 pub(super) fn can_coerce_mixed_to_scalar_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && matches!(
-            slot_ty.codegen_repr(),
-            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Pointer(_)
-        )
+        && (crate::types::is_nullable_pointer_type(slot_ty)
+            || matches!(
+                slot_ty.codegen_repr(),
+                PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+            ))
 }
 
 /// Returns true when a concrete value satisfies a declared `iterable` property.
