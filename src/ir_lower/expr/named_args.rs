@@ -138,7 +138,21 @@ fn lower_planned_source_arg(
         )
         .value
     } else {
-        lower_call_source_arg(ctx, &plan.source_args[source_index])
+        // A regular parameter shapes its literal argument as a positional one does: a null-only
+        // literal bound to `array<ptr<T>|null>` keeps pointer storage.
+        let param_ty = plan
+            .source_values
+            .iter()
+            .find(|source| source.source_index() == source_index)
+            .and_then(|source| source.param_idx())
+            .and_then(|param_index| sig.params.get(param_index))
+            .map(|(_, param_ty)| param_ty.clone());
+        match param_ty {
+            Some(param_ty) => {
+                lower_expr_for_destination(ctx, &plan.source_args[source_index], &param_ty).value
+            }
+            None => lower_call_source_arg(ctx, &plan.source_args[source_index]),
+        }
     };
     if capture_values {
         let parameter = plan.source_values.iter()

@@ -134,6 +134,10 @@ pub(crate) fn lower_expr_for_destination(
     expr: &Expr,
     destination: &PhpType,
 ) -> LoweredValue {
+    // A named argument (`f(items: [null])`) binds its value to the same destination.
+    if let ExprKind::NamedArg { value, .. } = &expr.kind {
+        return lower_expr_for_destination(ctx, value, destination);
+    }
     match (destination.codegen_repr(), &expr.kind) {
         (PhpType::Array(elem), ExprKind::ArrayLiteral(_))
             if matches!(elem.codegen_repr(), PhpType::Pointer(_)) =>

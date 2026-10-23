@@ -424,3 +424,21 @@ echo $e["b"]->x, $e[0]->x, isset($e[1]) ? "set" : "unset", "\n";
     );
     assert_eq!(out, "45unset|unset4|45unset\n");
 }
+
+/// Verifies a null-only literal passed as a named argument to an `array<ptr<T>|null>` parameter
+/// keeps pointer storage like a positional one, so `isset()` of its null element is false for a
+/// function and a method call alike.
+#[test]
+fn test_pointer_array_named_argument_null_only_literal() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function probe(array<ptr<Vec2>|null> $items): string { return isset($items[0]) ? "set" : "unset"; }
+class Box {
+    public function probe(array<ptr<Vec2>|null> $items): string { return isset($items[0]) ? "set" : "unset"; }
+}
+echo probe([null]), probe(items: [null]), (new Box())->probe(items: [null]), "\n";
+"#,
+    );
+    assert_eq!(out, "unsetunsetunset\n");
+}
