@@ -837,7 +837,11 @@ fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Optio
 pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "is_resource", 1)?;
     let value = expect_operand(inst, 0)?;
-    match ctx.raw_value_php_type(value)? {
+    // `value_php_type`, not `raw_value_php_type`: the RAW type of a tagged nullable scalar
+    // is the boxed `Mixed` representation, so the raw match took the unbox branch and
+    // dereferenced the tagged payload as a Mixed pointer (`is_resource($nullableInt)` was a
+    // segfault). A tagged scalar is never a resource, and the `_` arm answers false.
+    match ctx.value_php_type(value)? {
         PhpType::Resource(_) => {
             // A closed resource carries the negative `-id` sentinel — the same sign bit
             // `__rt_resource_type_name` reads to answer `"Unknown"` — and PHP's
