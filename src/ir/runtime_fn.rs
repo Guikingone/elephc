@@ -1069,15 +1069,20 @@ impl RuntimeFnId {
                 }
                 sig.return_type = PhpType::Void;
             }
+            // The wrapper takes the raw buffer handle, whatever the element type: `buffer<mixed>`
+            // is the internal any-buffer shape (no program can declare it) that
+            // `types_compatible` accepts for every `buffer<T>` argument. `buffer_ptr(...)`
+            // answers the untyped `ptr` for every buffer, since the callable has no call-site
+            // element type to refine it to `ptr<T>`.
             RuntimeFnId::BufferLen => {
                 if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
-                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Int));
+                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Mixed));
                 }
                 sig.return_type = PhpType::Int;
             }
             RuntimeFnId::BufferPtr => {
                 if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
-                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Int));
+                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Mixed));
                 }
                 sig.return_type = PhpType::Pointer(None);
             }

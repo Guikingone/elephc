@@ -174,6 +174,32 @@ echo function_exists("buffer_ptr") ? "yes" : "no", "\n";
     assert_eq!(out, "500 600\n500\nyes\n");
 }
 
+/// Verifies the first-class callables `buffer_ptr(...)` and `buffer_len(...)` take every buffer
+/// type (their wrapper parameter is the any-buffer handle), for a width buffer and a buffer of
+/// packed records; through the callable the pointer is the untyped `ptr`, read with the raw
+/// pointer builtins.
+#[test]
+fn test_buffer_ptr_and_buffer_len_as_first_class_callables_take_any_buffer() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public f32 $x; public f32 $y; }
+buffer<u16> $idx = buffer_new<u16>(2);
+$idx[1] = 700;
+buffer<Vec2> $pts = buffer_new<Vec2>(1);
+$pts[0]->y = 2.5;
+$addr = buffer_ptr(...);
+$len = buffer_len(...);
+echo ptr_read16(ptr_offset($addr($idx), 2)), " ", $len($idx), "
+";
+echo ptr_read_f32(ptr_offset($addr($pts), 4)), " ", $len($pts), "
+";
+"#,
+    );
+    assert_eq!(out, "700 2
+2.5 1
+");
+}
+
 /// Verifies `buffer_ptr()` of a freed buffer reports the use-after-free diagnostic instead of
 /// answering a dangling payload address.
 #[test]

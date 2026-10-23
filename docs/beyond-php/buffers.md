@@ -172,7 +172,10 @@ result is a `ptr<T>`, as `$buf[0]` is; for every other element type it is the un
 The address stays valid until `buffer_free()`: `buffer_ptr()` of a freed buffer, or of an alias
 of one, aborts with the use-after-free error below, and a pointer taken earlier dangles once
 the payload is released. Unlike `buffer_free()`, `buffer_ptr()` accepts any buffer expression,
-including a property or a call result.
+including a property or a call result. Inside `eval()`, where a buffer is a raw allocation
+rather than a registry handle, no buffer operation has that diagnostic: `buffer_free()` releases
+the memory and nulls its own variable, and another copy of the handle dangles for
+`buffer_ptr()` exactly as it does for `buffer_len()` and the element reads.
 
 ## Freeing buffers
 
