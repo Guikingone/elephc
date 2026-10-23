@@ -16,6 +16,8 @@ mod borrowed_numeric;
 mod borrowed_string_reads;
 #[path = "runtime_gc/ref_local_append.rs"]
 mod ref_local_append;
+#[path = "runtime_gc/string_offset_lifetime.rs"]
+mod string_offset_lifetime;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]

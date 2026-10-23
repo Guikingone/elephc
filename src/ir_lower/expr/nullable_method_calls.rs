@@ -343,12 +343,15 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     for (parameter_index, value) in args.iter().enumerate() {
         ctx.unguard_call_argument(*value, span);
         if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
-            if ctx.builder.value_defining_op(*value) != Some(Op::EnsureOwned) {
+            let pin_only = ctx.builder.value_defining_op(*value) == Some(Op::EnsureOwned)
+                || (ctx.builder.value_defining_op(*value) == Some(Op::Acquire)
+                    && ctx.builder.local_kind(*slot) == LocalKind::OwnedTemp);
+            if !pin_only {
                 retire_owned_call_operand(ctx, *slot, span);
                 continue;
             }
-            // A claimed string is only PINNED for the call: retire the pin without releasing,
-            // then decide the release against the result below like any other argument.
+            // Claimed strings and persisted byte views are only PINNED for the call: retire the
+            // pin without releasing, then decide the release against the result below.
             unregister_owned_call_operand(ctx, *slot, span);
             ctx.emit_void(
                 Op::UnsetLocal,

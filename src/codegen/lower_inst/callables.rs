@@ -3075,7 +3075,14 @@ fn emit_box_invoker_arg(ctx: &mut FunctionContext<'_>, arg: ValueId) -> Result<(
     } else if ctx.value_can_own_mixed_box_source(arg)? {
         emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
     } else {
+        let staged = if arg_ty == PhpType::Str {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            super::ownership::stage_string_byte_view(ctx, arg, pointer_reg, length_reg)
+        } else {
+            false
+        };
         emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        super::ownership::release_string_byte_stage(ctx, staged);
     }
     Ok(())
 }

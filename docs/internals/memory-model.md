@@ -317,6 +317,29 @@ Generator switches replace the active value with their guarded-stack floor and
 restore the main value on return. Reaching the floor raises the compiler's
 maximum-call-stack fatal instead of falling through to a raw guard-page fault.
 
+String offset reads return a borrowed one-byte view into their receiver. If the receiver is an
+owned temporary, EIR lowering acquires the selected byte before releasing the receiver, so a
+property, array element, or call result can be indexed without leaving a dangling view.
+A byte needed after another expression is materialized before that expression runs, so
+replacing the source cannot invalidate a pending key, comparison, dispatch, or call operand.
+When acquiring or persisting a present byte view, the backend stages that byte on the stack
+before calling the string helper. This prevents preceding payload bytes from masquerading as
+a transferable concat allocation header. Empty and missing views bypass byte staging so the
+string helper preserves its sentinel behavior.
+For a byte selected from a heap-backed concat temporary, acquisition copies that byte
+independently and the receiver release frees the concat block only while it still carries
+`CONCAT_TEMP_HEAP_KIND`. A full-string store that already adopted and retagged the block
+keeps its owner. Explicit yielded keys are boxed before their temporary byte owner retires;
+the resulting single-use Mixed box transfers into the generator before suspension.
+Silent `empty()` string probes use PHP string truthiness, including the one-byte string `"0"`.
+
+Pending concat operands and computed array keys are published across an operand window when
+its EIR effects include a catchable throw or a warning that can call a throwing user error
+handler, or the window contains a direct throw terminator. Lowering
+first discovers those effects, then persists fresh transient strings and places the owner
+records before the window, retiring them after the consumer. This covers whole strings as well as persisted byte views;
+non-throwing scalar windows introduce no owner slots that could inhibit integer sinking or CSE.
+
 ## The string buffer (scratch pad)
 
 ```asm

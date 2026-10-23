@@ -18,6 +18,7 @@ mod aggregate_operand_owners;
 mod argument_evaluation_owners;
 mod borrowed_string_reads;
 mod ref_local_append;
+mod string_offset_lifetime;
 mod arrays;
 mod append_writes;
 mod nullable_array_merges;

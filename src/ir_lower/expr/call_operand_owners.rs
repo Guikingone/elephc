@@ -459,6 +459,27 @@ pub(super) fn root_user_call_operands(
         if !independent_result
             && !signature.is_some_and(|sig| sig.returned_parameter_has_independent_owner(index))
         {
+            // An alias-returning callee may hand this exact argument back to the caller.
+            // A selected string byte still needs real storage before that transfer, because
+            // the call result no longer exposes the StrCharAt producer to later consumers.
+            let original = *operand;
+            let value =
+                LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
+            let value = crate::ir_lower::ownership::persist_string_byte_view(
+                ctx,
+                value,
+                Some(span),
+            );
+            *operand = value.value;
+            if *operand != original {
+                // Persisting a direct byte view creates a real owning copy. Keep it visible to
+                // the unwinder while the alias-returning callee runs; normal control still uses
+                // ReleaseUnlessAliases below to transfer the owner when it comes back unchanged.
+                for pin in pin_in_flight_owners(ctx, &[*operand], span) {
+                    roots.push((index, pin.slot));
+                }
+            }
+
             // One SSA value in two operand positions would be claimed, pinned and released
             // twice; it keeps the unclaimed path instead.
             let repeated = original_operands.iter().filter(|other| **other == *operand).count() > 1;
@@ -699,7 +720,14 @@ pub(crate) fn root_owned_call_operand(
     value: LoweredValue,
     span: Span,
 ) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
-    if !ctx.value_needs_release_after_use(value) {
+    let value = crate::ir_lower::ownership::persist_string_byte_view(ctx, value, Some(span));
+    let explicit_lifetime_pin = ctx
+        .builder
+        .value_defining_instruction(value.value)
+        .is_some_and(|inst| {
+            inst.op == Op::Acquire && inst.immediate == Some(Immediate::Bool(true))
+        });
+    if !explicit_lifetime_pin && !ctx.value_needs_release_after_use(value) {
         return (value, None);
     }
     let ty = ctx.builder.value_php_type(value.value);
@@ -808,13 +836,21 @@ pub(crate) fn pin_in_flight_owners(
             value: *operand,
             ir_type: ctx.builder.value_type(*operand),
         };
+        let explicit_lifetime_pin = ctx
+            .builder
+            .value_defining_instruction(value.value)
+            .is_some_and(|inst| {
+                inst.op == Op::Acquire && inst.immediate == Some(Immediate::Bool(true))
+            });
         // The test is ownership of INDEPENDENT storage, not "this path emits a release".
         // `value_needs_release_after_use` also answers yes for a plain `Str` load out of a PHP
         // local, whose payload the local slot still owns: parking that pointer would let the
         // record free storage the frame cleanup frees again (`explode("", $local)` double-freed
         // exactly that way). Rooting can use the wider test because it acquires first; a pin
-        // acquires nothing, so it must see a temporary that owns what it parks.
-        if !ctx.value_is_owning_temporary(value) {
+        // acquires nothing, so it must see a temporary that owns what it parks. An explicit
+        // lifetime-pin acquire remains independent even while a container write temporarily
+        // marks its ordinary value operand borrowed.
+        if !explicit_lifetime_pin && !ctx.value_is_owning_temporary(value) {
             continue;
         }
         // A load out of a variable is never such a temporary, whatever the provisional
