@@ -116,9 +116,22 @@ fn validate_constant_declaration(
     // declared type is checked against its real value type; a name that is declared nowhere
     // still fails with the undefined-constant diagnostic.
     let mut seeded = Vec::new();
-    for (name, (_, ty)) in declared_constants {
+    for (name, (kind, ty)) in declared_constants {
         if !checker.constants.contains_key(name) {
-            checker.constants.insert(name.clone(), ty.clone());
+            // The prescan maps an initializer it cannot fold to `Int`; trust its type only for a
+            // literal that proves it, and seed `Mixed` otherwise, which the declared-type check
+            // accepts. Otherwise an array or expression constant would fabricate an `Int` and
+            // reject a valid declaration (#1827 review).
+            let proven = match kind {
+                ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::StringLiteral(_)
+                | ExprKind::BoolLiteral(_) | ExprKind::Null => ty.clone(),
+                // An array literal is provable too, and seeding its shape keeps a declared
+                // scalar from accepting it by accident.
+                ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
+                | ExprKind::ArrayLiteralMixed(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+                _ => PhpType::Mixed,
+            };
+            checker.constants.insert(name.clone(), proven);
             seeded.push(name.clone());
         }
     }

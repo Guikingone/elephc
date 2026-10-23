@@ -95,3 +95,18 @@ namespace {
     );
     assert_eq!(out, "57\n");
 }
+
+/// An array-valued top-level constant can back a typed array class constant. The prescan maps
+/// an initializer it cannot fold to `Int`, so the declared-type check must not trust that
+/// fallback (#1827 review).
+#[test]
+fn test_typed_array_constant_accepts_a_declared_array_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class C { const array A = LATER; }
+const LATER = [1, 2, 3];
+echo count(C::A), "\n";
+"#,
+    );
+    assert_eq!(out, "3\n");
+}
