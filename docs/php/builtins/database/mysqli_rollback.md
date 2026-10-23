@@ -2,7 +2,7 @@
 title: "mysqli_rollback()"
 description: "Rolls back the open transaction."
 sidebar:
-  order: 153
+  order: 154
 ---
 
 ## mysqli_rollback()

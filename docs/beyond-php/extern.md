@@ -119,8 +119,9 @@ returns and on `extern class` fields, so a C struct that holds `float` fields
 by name; see [Extern classes](#extern-classes-c-structs). Packed classes and
 `buffer<T>` elements take the same width names for data elephc owns: a
 `buffer<Vertex>` of `f32` fields hands its elements to C as `ptr<Vertex>`, and
-`buffer<u16>` index data keeps its width in memory; see
-[Packed classes](packed-classes.md#field-widths). Raw memory without a
+`buffer_ptr()` hands a `buffer<u16>` index list or a `buffer<f32>` stream to C
+at its width; see [Packed classes](packed-classes.md#field-widths) and
+[Buffers](buffers.md#payload-pointer). Raw memory without a
 declared struct uses `ptr_read_f32()` and `ptr_write_f32()`; see
 [Pointers](pointers.md).
 

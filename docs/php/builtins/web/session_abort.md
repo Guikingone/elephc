@@ -2,7 +2,7 @@
 title: "session_abort()"
 description: "Discards the session changes made in this request and closes the session."
 sidebar:
-  order: 987
+  order: 986
 ---
 
 ## session_abort()
@@ -19,7 +19,7 @@ Discards the session changes made in this request and closes the session.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected web prelude.
+- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

@@ -2,7 +2,7 @@
 title: "setrawcookie()"
 description: "Adds a Set-Cookie header without URL-encoding the value."
 sidebar:
-  order: 1011
+  order: 1010
 ---
 
 ## setrawcookie()
@@ -26,7 +26,7 @@ Adds a Set-Cookie header without URL-encoding the value.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected web prelude.
+- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

@@ -2,7 +2,7 @@
 title: "session_create_id()"
 description: "Generates a new session id, optionally with a prefix."
 sidebar:
-  order: 991
+  order: 990
 ---
 
 ## session_create_id()
@@ -20,7 +20,7 @@ Generates a new session id, optionally with a prefix.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected web prelude.
+- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

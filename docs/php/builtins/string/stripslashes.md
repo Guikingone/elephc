@@ -2,7 +2,7 @@
 title: "stripslashes()"
 description: "Removes backslashes from a string previously escaped by addslashes."
 sidebar:
-  order: 930
+  order: 929
 ---
 
 ## stripslashes()

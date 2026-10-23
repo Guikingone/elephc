@@ -2,7 +2,7 @@
 title: "xmlwriter_full_end_element()"
 description: "Ends the current element with an explicit end tag."
 sidebar:
-  order: 1045
+  order: 1044
 ---
 
 ## xmlwriter_full_end_element()
@@ -20,7 +20,7 @@ Ends the current element with an explicit end tag.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
+- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_full_end_element.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_full_end_element.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

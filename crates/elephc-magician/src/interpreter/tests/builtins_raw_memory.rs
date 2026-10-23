@@ -40,13 +40,14 @@ return is_callable("ptr_write_string");"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies eval can allocate buffers and use pointer memory helpers on their payload.
+/// Verifies eval can allocate buffers, take their payload address with `buffer_ptr()`, and use
+/// pointer memory helpers on that payload.
 #[test]
 fn execute_program_dispatches_buffer_and_pointer_memory_builtins() {
     let program = parse_fragment(
         br#"$buf = buffer_new(4);
-$payload = ptr_offset($buf, 16);
-echo buffer_len($buf) . ":";
+$payload = buffer_ptr($buf);
+echo buffer_len($buf) . ":" . ($payload === ptr_offset($buf, 16) ? "payload" : "bad") . ":";
 ptr_set($payload, 123456789);
 echo ptr_get($payload) . ":";
 ptr_write8($payload, 255);
@@ -71,7 +72,7 @@ return function_exists("buffer_free");"#,
 
     assert_eq!(
         values.output,
-        "4:123456789:255,1:4660:305419896:5:GET /:0:freed"
+        "4:payload:123456789:255,1:4660:305419896:5:GET /:0:freed"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

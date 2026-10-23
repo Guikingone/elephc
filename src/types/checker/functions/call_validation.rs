@@ -517,6 +517,14 @@ impl Checker {
             (PhpType::Int, PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
             (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Void) => true,
+            // `buffer<mixed>` is the internal any-buffer parameter of the `buffer_len(...)` and
+            // `buffer_ptr(...)` callable wrappers, which take the raw handle of every buffer; a
+            // program cannot declare it, so it never widens a user signature.
+            (PhpType::Buffer(expected_elem), PhpType::Buffer(_))
+                if **expected_elem == PhpType::Mixed =>
+            {
+                true
+            }
             (PhpType::Resource(_), PhpType::Resource(_)) => {
                 PhpType::resource_types_compatible(expected, actual)
             }

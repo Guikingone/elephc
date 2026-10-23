@@ -2,7 +2,7 @@
 title: "xmlwriter_write_dtd_entity()"
 description: "Writes a complete DTD entity declaration."
 sidebar:
-  order: 1071
+  order: 1070
 ---
 
 ## xmlwriter_write_dtd_entity()
@@ -26,7 +26,7 @@ Writes a complete DTD entity declaration.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
+- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_write_dtd_entity.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_write_dtd_entity.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

@@ -2,7 +2,7 @@
 title: "mb_strimwidth()"
 description: "Trims a string to a display width and appends a marker when needed."
 sidebar:
-  order: 881
+  order: 880
 ---
 
 ## mb_strimwidth()
